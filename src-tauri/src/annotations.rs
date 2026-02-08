@@ -1,6 +1,7 @@
 use crate::pdf_engine::PdfState;
-use micropdf::pdf::{PdfAnnotationType, PdfDocument};
-use micropdf::Rect;
+use micropdf::enhanced::pdf_reader::PdfDocument;
+use micropdf::fitz::annotation::AnnotationType;
+use micropdf::fitz::geometry::Rect;
 
 #[tauri::command]
 pub fn create_highlight(
@@ -16,8 +17,8 @@ pub fn create_highlight(
         for (x0, y0, x1, y1) in rects {
             let rect = Rect::new(x0, y0, x1, y1);
             let mut annot = page
-                .create_annotation(PdfAnnotationType::Highlight)
-                .map_err(|e: micropdf::Error| e.to_string())?;
+                .create_annotation(AnnotationType::Highlight)
+                .map_err(|e| e.to_string())?;
             annot.set_rect(rect);
         }
 

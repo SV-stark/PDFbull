@@ -5,6 +5,9 @@ description = "A lightweight PDF reader"
 authors = ["SV-stark"]
 edition = "2021"
 license = "MIT"
+homepage = "https://github.com/SV-stark/PDFbull"
+repository = "https://github.com/SV-stark/PDFbull"
+readme = "../README.md"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 

@@ -1,7 +1,9 @@
 use crate::pdf_engine::PdfState;
 use base64::Engine as _;
 use image::DynamicImage;
-use micropdf::pdf::PdfDocument;
+use micropdf::enhanced::pdf_reader::PdfDocument;
+use micropdf::fitz::colorspace::Colorspace;
+use micropdf::fitz::geometry::Matrix;
 use std::io::Cursor;
 
 #[tauri::command]
@@ -34,15 +36,13 @@ pub fn auto_crop(state: tauri::State<PdfState>, page_num: i32) -> Result<(), Str
     let mut guard = state.doc.lock().unwrap();
     if let Some(wrapper) = guard.as_mut() {
         let doc = &mut wrapper.0;
-        let page = doc
-            .load_page(page_num)
-            .map_err(|e: micropdf::Error| e.to_string())?;
+        let page = doc.load_page(page_num).map_err(|e| e.to_string())?;
 
         // Render small version for edge detection to save speed
-        let matrix = micropdf::Matrix::new_scale(0.5, 0.5);
+        let matrix = Matrix::new_scale(0.5, 0.5);
         let _pixmap = page
-            .to_pixmap(&matrix, &micropdf::Colorspace::device_gray(), false)
-            .map_err(|e: micropdf::Error| e.to_string())?;
+            .to_pixmap(&matrix, &Colorspace::device_gray(), false)
+            .map_err(|e| e.to_string())?;
 
         // Placeholder for auto-crop implementation
         // Real implementation requires analysis of pixmap
