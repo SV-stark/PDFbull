@@ -158,6 +158,34 @@ button.primary:hover {
   display: flex;
   justify-content: center;
   padding: 20px;
+  transition: all 0.3s ease;
+}
+
+.viewer-container.drag-over {
+  background: var(--accent-color);
+  background-image: repeating-linear-gradient(
+    45deg,
+    transparent,
+    transparent 10px,
+    rgba(255, 255, 255, 0.1) 10px,
+    rgba(255, 255, 255, 0.1) 20px
+  );
+  border: 3px dashed var(--accent-hover);
+  transform: scale(0.98);
+}
+
+.viewer-container.drag-over::before {
+  content: 'Drop PDF file here';
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  font-size: 24px;
+  font-weight: bold;
+  color: white;
+  text-shadow: 0 2px 4px rgba(0, 0, 0, 0.5);
+  pointer-events: none;
+  z-index: 1000;
 }
 
 #pdf-canvas {

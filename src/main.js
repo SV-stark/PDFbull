@@ -1037,11 +1037,87 @@ function createLayer(layerName) {
   showToast(`Layer "${layerName}" created`);
 }
 
+// Drag and Drop support
+const viewerContainer = document.getElementById('viewer-container');
+
+document.addEventListener('dragover', (e) => {
+  e.preventDefault();
+  viewerContainer.classList.add('drag-over');
+});
+
+document.addEventListener('dragleave', (e) => {
+  if (e.target === document.body || e.target === viewerContainer) {
+    viewerContainer.classList.remove('drag-over');
+  }
+});
+
+document.addEventListener('drop', async (e) => {
+  e.preventDefault();
+  viewerContainer.classList.remove('drag-over');
+  
+  const files = e.dataTransfer.files;
+  if (files.length === 0) return;
+  
+  const file = files[0];
+  
+  if (file.name.toLowerCase().endsWith('.pdf')) {
+    try {
+      const arrayBuffer = await file.arrayBuffer();
+      const uint8Array = new Uint8Array(arrayBuffer);
+      
+      showToast(`Loading ${file.name}...`);
+      
+      const docId = await invoke('load_document_from_bytes', {
+        fileName: file.name,
+        data: Array.from(uint8Array)
+      });
+      
+      await openNewTabFromDrop(docId, file.name);
+      showToast(`Loaded ${file.name}`, 'success');
+    } catch (err) {
+      console.error('Failed to load dropped file:', err);
+      showToast('Failed to load PDF file', 'error');
+    }
+  } else {
+    showToast('Only PDF files are supported', 'error');
+  }
+});
+
+async function openNewTabFromDrop(docId, fileName) {
+  tabCounter++;
+  const tabId = `tab-${tabCounter}`;
+  
+  openDocuments.set(tabId, {
+    id: docId,
+    path: fileName,
+    name: fileName,
+    page: 0,
+    totalPages: 0,
+    zoom: 1.0,
+    cache: new Map()
+  });
+  
+  try {
+    showLoading();
+    const pageCount = await invoke('get_page_count', { docId });
+    openDocuments.get(tabId).totalPages = pageCount;
+    hideLoading();
+    
+    switchToTab(tabId);
+    updateTabBar();
+    addToRecentFiles(fileName);
+  } catch (e) {
+    console.error('Failed to get page count:', e);
+    hideLoading();
+    showToast('Error loading PDF', 'error');
+  }
+}
+
 // Initialize
 updateRecentFilesDropdown();
 updateStatusBar();
 updateUndoRedoButtons();
-setStatusMessage('Ready - Press Ctrl+O to open a PDF');
+setStatusMessage('Ready - Drag and drop PDFs or press Ctrl+O to open');
 
 // Initialize first document if opened directly
 async function openDocumentWithDialog() {

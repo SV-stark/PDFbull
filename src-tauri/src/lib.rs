@@ -23,6 +23,8 @@ pub fn run() {
             save_file,
             // PDF Engine
             pdf_engine::open_document,
+            pdf_engine::load_document_from_bytes,
+            pdf_engine::get_page_count,
             pdf_engine::render_page,
             pdf_engine::get_page_text,
             pdf_engine::search_text,

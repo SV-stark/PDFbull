@@ -15,6 +15,48 @@ pub fn open_document(state: tauri::State<PdfState>, path: String) -> Result<i32,
 }
 
 #[tauri::command]
+pub fn load_document_from_bytes(
+    state: tauri::State<PdfState>,
+    file_name: String,
+    data: Vec<u8>,
+) -> Result<String, String> {
+    use std::env;
+    use std::io::Write;
+    use std::path::PathBuf;
+
+    let temp_dir = env::temp_dir();
+    let temp_file = temp_dir.join(&file_name);
+
+    let mut file = std::fs::File::create(&temp_file).map_err(|e| e.to_string())?;
+    file.write_all(&data).map_err(|e| e.to_string())?;
+
+    let doc = PdfDocument::open(temp_file.to_str().unwrap()).map_err(|e| e.to_string())?;
+    let page_count = doc.page_count().map_err(|e| e.to_string())?;
+
+    let doc_id = format!(
+        "doc_{}",
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_millis()
+    );
+
+    *state.doc.lock().unwrap() = Some(doc);
+
+    Ok(doc_id)
+}
+
+#[tauri::command]
+pub fn get_page_count(state: tauri::State<PdfState>) -> Result<i32, String> {
+    let guard = state.doc.lock().unwrap();
+    if let Some(doc) = guard.as_ref() {
+        doc.page_count().map_err(|e| e.to_string())
+    } else {
+        Err("No document open".to_string())
+    }
+}
+
+#[tauri::command]
 pub fn get_page_text(state: tauri::State<PdfState>, page_num: i32) -> Result<String, String> {
     let guard = state.doc.lock().unwrap();
     if let Some(doc) = guard.as_ref() {
