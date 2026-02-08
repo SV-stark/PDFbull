@@ -4,6 +4,7 @@
 <head>
   <meta charset="UTF-8" />
   <link rel="stylesheet" href="styles.css" />
+  <link rel="stylesheet" href="https://unpkg.com/@phosphor-icons/web@2.1.1/src/regular/style.css" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>PDFbull</title>
   <script type="module" src="/main.js" defer></script>
@@ -12,43 +13,198 @@
 <body>
   <!-- Top Toolbar -->
   <div class="toolbar">
-    <button id="btn-open" class="primary">Open PDF</button>
+    <div class="recent-files-container">
+      <button id="btn-open" class="primary" tooltip="Open PDF file (Ctrl+O)">
+        <i class="ph ph-file-pdf"></i>
+        <span>Open PDF</span>
+        <i class="ph ph-caret-down" style="margin-left: 4px; font-size: 12px;"></i>
+      </button>
+      <div id="recent-files-dropdown" class="recent-files-dropdown">
+        <div class="recent-file-empty">
+          <i class="ph ph-clock" style="font-size: 24px; margin-bottom: 8px;"></i>
+          <div>No recent files</div>
+        </div>
+      </div>
+    </div>
+    
+    <button id="btn-recent-toggle" tooltip="Recent files">
+      <i class="ph ph-clock-counter-clockwise"></i>
+    </button>
+
+    <div class="toolbar-separator"></div>
+
+    <button id="btn-undo" tooltip="Undo (Ctrl+Z)">
+      <i class="ph ph-arrow-u-up-left"></i>
+    </button>
+    <button id="btn-redo" tooltip="Redo (Ctrl+Y)">
+      <i class="ph ph-arrow-u-up-right"></i>
+    </button>
+    
     <div class="spacer"></div>
 
-    <button id="btn-prev" title="Previous Page">◀</button>
-    <span id="page-indicator">0 / 0</span>
-    <button id="btn-next" title="Next Page">▶</button>
+    <button id="btn-prev" tooltip="Previous Page (←)">
+      <i class="ph ph-caret-left"></i>
+    </button>
+    <span id="page-indicator" tooltip="Current page">0 / 0</span>
+    <button id="btn-next" tooltip="Next Page (→)">
+      <i class="ph ph-caret-right"></i>
+    </button>
 
     <div class="spacer"></div>
 
-    <input type="text" id="ipt-search" placeholder="Search..."
-      style="background: rgba(255,255,255,0.1); border: 1px solid #444; color: white; padding: 4px 8px; border-radius: 4px;">
-    <button id="btn-search">🔍</button>
+    <input type="text" id="ipt-search" class="search-input" placeholder="Search...">
+    <button id="btn-search" tooltip="Search (Ctrl+F)">
+      <i class="ph ph-magnifying-glass"></i>
+    </button>
 
     <div class="spacer"></div>
 
-    <button id="btn-zoom-out">-</button>
+    <button id="btn-zoom-out" tooltip="Zoom Out (Ctrl+-)">
+      <i class="ph ph-minus"></i>
+    </button>
     <span id="zoom-level">100%</span>
-    <button id="btn-zoom-in">+</button>
+    <button id="btn-zoom-in" tooltip="Zoom In (Ctrl++)">
+      <i class="ph ph-plus"></i>
+    </button>
+    <button id="btn-reset-zoom" tooltip="Reset Zoom (Ctrl+0)">
+      <i class="ph ph-arrows-in"></i>
+    </button>
 
     <div class="spacer"></div>
 
-    <button id="btn-sidebar-toggle" title="Toggle Sidebar">☰</button>
+    <button id="btn-export" tooltip="Export page (Ctrl+E)">
+      <i class="ph ph-export"></i>
+    </button>
+
+    <button id="btn-fullscreen" tooltip="Fullscreen (F11)">
+      <i class="ph ph-corners-out"></i>
+    </button>
+    
+    <button id="btn-sidebar-toggle" tooltip="Toggle Sidebar (Ctrl+B)">
+      <i class="ph ph-sidebar"></i>
+    </button>
+    
+    <button id="btn-theme" tooltip="Change theme">
+      <i class="ph ph-paint-brush"></i>
+    </button>
+  </div>
+
+  <!-- Tab Bar -->
+  <div class="tab-bar" id="tab-bar">
+    <div class="tabs-container" id="tabs-container">
+      <!-- Tabs will be injected here -->
+    </div>
+    <button id="btn-new-tab" class="new-tab-btn" tooltip="Open new tab (Ctrl+O)">
+      <i class="ph ph-plus"></i>
+    </button>
   </div>
 
   <!-- Main Content -->
   <div class="main-container">
     <!-- Sidebar -->
     <div class="sidebar" id="sidebar">
-      <div class="sidebar-header">Tools</div>
-      <div style="padding: 10px; display: flex; flex-direction: column; gap: 8px;">
-        <button id="btn-filter-gray">Greyscale</button>
-        <button id="btn-filter-invert">Invert</button>
-        <button id="btn-crop">Auto Crop</button>
-        <button id="btn-highlight">Highlight Tool</button>
-        <button id="btn-forms">Scan Forms</button>
-        <button id="btn-compress">Compress PDF</button>
+      <!-- Color Picker -->
+      <div class="sidebar-section">
+        <div class="sidebar-header">Color</div>
+        <div class="color-picker">
+          <button class="color-btn active" data-color="#ffeb3b" style="background: #ffeb3b;"></button>
+          <button class="color-btn" data-color="#ff5252" style="background: #ff5252;"></button>
+          <button class="color-btn" data-color="#448aff" style="background: #448aff;"></button>
+          <button class="color-btn" data-color="#69f0ae" style="background: #69f0ae;"></button>
+          <button class="color-btn" data-color="#e040fb" style="background: #e040fb;"></button>
+          <button class="color-btn" data-color="#ffffff" style="background: #ffffff;"></button>
+          <input type="color" id="custom-color" class="color-input" value="#ffeb3b">
+        </div>
       </div>
+
+      <!-- Drawing Tools -->
+      <div class="sidebar-section">
+        <div class="sidebar-header">Drawing Tools</div>
+        <div class="tools-container">
+          <button id="btn-highlight" class="tool-btn" data-tool="highlight" tooltip="Highlight (H)">
+            <i class="ph ph-highlighter"></i>
+            <span>Highlight</span>
+          </button>
+          <button id="btn-rectangle" class="tool-btn" data-tool="rectangle" tooltip="Rectangle (R)">
+            <i class="ph ph-square"></i>
+            <span>Rectangle</span>
+          </button>
+          <button id="btn-circle" class="tool-btn" data-tool="circle" tooltip="Circle (C)">
+            <i class="ph ph-circle"></i>
+            <span>Circle</span>
+          </button>
+          <button id="btn-line" class="tool-btn" data-tool="line" tooltip="Line (L)">
+            <i class="ph ph-minus"></i>
+            <span>Line</span>
+          </button>
+          <button id="btn-arrow" class="tool-btn" data-tool="arrow" tooltip="Arrow (A)">
+            <i class="ph ph-arrow-up-right"></i>
+            <span>Arrow</span>
+          </button>
+          <button id="btn-text" class="tool-btn" data-tool="text" tooltip="Text (T)">
+            <i class="ph ph-text-t"></i>
+            <span>Text</span>
+          </button>
+          <button id="btn-sticky" class="tool-btn" data-tool="sticky" tooltip="Sticky Note (N)">
+            <i class="ph ph-note"></i>
+            <span>Sticky Note</span>
+          </button>
+        </div>
+      </div>
+
+      <!-- Layers -->
+      <div class="sidebar-section">
+        <div class="sidebar-header">Layers</div>
+        <div class="layers-container" id="layers-container">
+          <label class="layer-item">
+            <input type="checkbox" checked data-layer="default">
+            <span>Default Layer</span>
+          </label>
+        </div>
+        <button id="btn-add-layer" class="tool-btn" style="margin-top: 8px;">
+          <i class="ph ph-plus-circle"></i>
+          <span>Add Layer</span>
+        </button>
+      </div>
+
+      <!-- Filters -->
+      <div class="sidebar-section">
+        <div class="sidebar-header">Filters</div>
+        <div class="tools-container">
+          <button id="btn-filter-gray" class="tool-btn" data-filter="none" tooltip="Toggle greyscale filter">
+            <i class="ph ph-drop"></i>
+            <span>Greyscale</span>
+          </button>
+          <button id="btn-filter-invert" class="tool-btn" data-filter="none" tooltip="Toggle color inversion">
+            <i class="ph ph-swap"></i>
+            <span>Invert</span>
+          </button>
+        </div>
+      </div>
+
+      <!-- Actions -->
+      <div class="sidebar-section">
+        <div class="sidebar-header">Actions</div>
+        <div class="tools-container">
+          <button id="btn-crop" class="tool-btn" tooltip="Auto-crop whitespace">
+            <i class="ph ph-crop"></i>
+            <span>Auto Crop</span>
+          </button>
+          <button id="btn-forms" class="tool-btn" tooltip="Scan for form fields">
+            <i class="ph ph-textbox"></i>
+            <span>Scan Forms</span>
+          </button>
+          <button id="btn-compress" class="tool-btn" tooltip="Compress PDF file">
+            <i class="ph ph-file-zip"></i>
+            <span>Compress PDF</span>
+          </button>
+          <button id="btn-batch" class="tool-btn" tooltip="Batch processing">
+            <i class="ph ph-stack"></i>
+            <span>Batch Mode</span>
+          </button>
+        </div>
+      </div>
+
       <div class="sidebar-header">Thumbnails</div>
       <div class="thumbnail-list" id="thumbnail-list">
         <!-- Thumbnails injected here -->
@@ -59,10 +215,95 @@
     <div class="viewer-container" id="viewer-container">
       <canvas id="pdf-canvas"></canvas>
 
+      <!-- Skeleton Loading -->
+      <div id="skeleton-loader" class="skeleton-overlay hidden">
+        <div class="skeleton-page"></div>
+      </div>
+
+      <!-- Loading Spinner -->
+      <div id="loading-spinner" class="loading-overlay hidden">
+        <div class="spinner"></div>
+        <span class="loading-text">Loading...</span>
+      </div>
+
       <!-- Floating Controls -->
       <div class="overlay">
-        <button id="btn-fit-width">Fit Width</button>
-        <button id="btn-fit-page">Fit Page</button>
+        <button id="btn-fit-width" class="tool-btn">
+          <i class="ph ph-arrows-out-horizontal"></i>
+          <span>Fit Width</span>
+        </button>
+        <button id="btn-fit-page" class="tool-btn">
+          <i class="ph ph-arrows-out"></i>
+          <span>Fit Page</span>
+        </button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Status Bar -->
+  <div class="status-bar">
+    <div class="status-item" id="status-doc">
+      <i class="ph ph-file-text"></i>
+      <span>No document open</span>
+    </div>
+    <div class="status-separator"></div>
+    <div class="status-item">
+      <i class="ph ph-file-pdf"></i>
+      <span id="status-pages">0 pages</span>
+    </div>
+    <div class="status-separator"></div>
+    <div class="status-item">
+      <i class="ph ph-corners-out"></i>
+      <span id="status-dimensions">-</span>
+    </div>
+    <div class="status-separator"></div>
+    <div class="status-item" id="status-tool">
+      <i class="ph ph-cursor"></i>
+      <span id="current-tool">View</span>
+    </div>
+    <div class="spacer"></div>
+    <div class="status-item" id="status-message">
+      <span>Ready</span>
+    </div>
+  </div>
+
+  <!-- Toast Container -->
+  <div id="toast-container" class="toast-container"></div>
+  
+  <!-- Theme Selector Dropdown -->
+  <div id="theme-dropdown" class="theme-dropdown">
+    <div class="theme-option" data-theme="dark">
+      <i class="ph ph-moon"></i>
+      <span>Dark</span>
+    </div>
+    <div class="theme-option" data-theme="light">
+      <i class="ph ph-sun"></i>
+      <span>Light</span>
+    </div>
+    <div class="theme-option" data-theme="high-contrast">
+      <i class="ph ph-circle-half-tilt"></i>
+      <span>High Contrast</span>
+    </div>
+  </div>
+
+  <!-- Export Options Modal -->
+  <div id="export-modal" class="modal hidden">
+    <div class="modal-content">
+      <div class="modal-header">
+        <h3>Export Options</h3>
+        <button class="modal-close" id="btn-close-export">
+          <i class="ph ph-x"></i>
+        </button>
+      </div>
+      <div class="modal-body">
+        <button class="export-option" id="btn-export-image">
+          <i class="ph ph-image"></i>
+          <span>Export as Image (PNG)</span>
+        </button>
+        <button class="export-option" id="btn-export-text">
+          <i class="ph ph-text-t"></i>
+          <span>Extract Text</span>
+        </button>
       </div>
     </div>
   </div>

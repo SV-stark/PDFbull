@@ -10,7 +10,7 @@ pub fn get_form_fields(
         let _page = doc.load_page(page_num).map_err(|e| e.to_string())?;
 
         // Placeholder until mupdf-rs bindings verified
-        Ok(vec![]) 
+        Ok(vec![])
     } else {
         Err("No document open".to_string())
     }
