@@ -1,0 +1,71 @@
+<!doctype html>
+<html lang="en">
+
+<head>
+  <meta charset="UTF-8" />
+  <link rel="stylesheet" href="styles.css" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>PDFbull</title>
+  <script type="module" src="/main.js" defer></script>
+</head>
+
+<body>
+  <!-- Top Toolbar -->
+  <div class="toolbar">
+    <button id="btn-open" class="primary">Open PDF</button>
+    <div class="spacer"></div>
+
+    <button id="btn-prev" title="Previous Page">◀</button>
+    <span id="page-indicator">0 / 0</span>
+    <button id="btn-next" title="Next Page">▶</button>
+
+    <div class="spacer"></div>
+
+    <input type="text" id="ipt-search" placeholder="Search..."
+      style="background: rgba(255,255,255,0.1); border: 1px solid #444; color: white; padding: 4px 8px; border-radius: 4px;">
+    <button id="btn-search">🔍</button>
+
+    <div class="spacer"></div>
+
+    <button id="btn-zoom-out">-</button>
+    <span id="zoom-level">100%</span>
+    <button id="btn-zoom-in">+</button>
+
+    <div class="spacer"></div>
+
+    <button id="btn-sidebar-toggle" title="Toggle Sidebar">☰</button>
+  </div>
+
+  <!-- Main Content -->
+  <div class="main-container">
+    <!-- Sidebar -->
+    <div class="sidebar" id="sidebar">
+      <div class="sidebar-header">Tools</div>
+      <div style="padding: 10px; display: flex; flex-direction: column; gap: 8px;">
+        <button id="btn-filter-gray">Greyscale</button>
+        <button id="btn-filter-invert">Invert</button>
+        <button id="btn-crop">Auto Crop</button>
+        <button id="btn-highlight">Highlight Tool</button>
+        <button id="btn-forms">Scan Forms</button>
+        <button id="btn-compress">Compress PDF</button>
+      </div>
+      <div class="sidebar-header">Thumbnails</div>
+      <div class="thumbnail-list" id="thumbnail-list">
+        <!-- Thumbnails injected here -->
+      </div>
+    </div>
+
+    <!-- PDF Canvas -->
+    <div class="viewer-container" id="viewer-container">
+      <canvas id="pdf-canvas"></canvas>
+
+      <!-- Floating Controls -->
+      <div class="overlay">
+        <button id="btn-fit-width">Fit Width</button>
+        <button id="btn-fit-page">Fit Page</button>
+      </div>
+    </div>
+  </div>
+</body>
+
+</html>
