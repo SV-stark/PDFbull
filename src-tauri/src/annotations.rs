@@ -1,7 +1,7 @@
 use crate::pdf_engine::PdfState;
-use micropdf::enhanced::pdf_reader::PdfDocument;
-use micropdf::fitz::annotation::AnnotationType;
 use micropdf::fitz::geometry::Rect;
+use micropdf::pdf::annotation::AnnotationType;
+use micropdf::pdf::document::PdfDocument;
 
 #[tauri::command]
 pub fn create_highlight(

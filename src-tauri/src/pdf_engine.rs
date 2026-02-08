@@ -1,6 +1,6 @@
-use micropdf::enhanced::pdf_reader::PdfDocument;
 use micropdf::fitz::colorspace::Colorspace;
-use micropdf::fitz::geometry::{Matrix, Rect};
+use micropdf::fitz::geometry::Matrix;
+use micropdf::pdf::document::PdfDocument;
 use std::sync::Mutex;
 
 pub struct PdfWrapper(pub PdfDocument);
@@ -23,7 +23,8 @@ impl PdfState {
 #[tauri::command]
 pub fn open_document(state: tauri::State<PdfState>, path: String) -> Result<i32, String> {
     let doc = PdfDocument::open(&path).map_err(|e| e.to_string())?;
-    let page_count = doc.page_count().map_err(|e| e.to_string())?;
+    // page_count() returns usize, cast to i32
+    let page_count = doc.page_count().map_err(|e| e.to_string())? as i32;
     *state.doc.lock().unwrap() = Some(PdfWrapper(doc));
     Ok(page_count)
 }
@@ -44,7 +45,7 @@ pub fn load_document_from_bytes(
     file.write_all(&data).map_err(|e| e.to_string())?;
 
     let doc = PdfDocument::open(temp_file.to_str().unwrap()).map_err(|e| e.to_string())?;
-    let page_count = doc.page_count().map_err(|e| e.to_string())?;
+    let _page_count = doc.page_count().map_err(|e| e.to_string())?;
 
     let doc_id = format!(
         "doc_{}",
@@ -63,7 +64,11 @@ pub fn load_document_from_bytes(
 pub fn get_page_count(state: tauri::State<PdfState>) -> Result<i32, String> {
     let guard = state.doc.lock().unwrap();
     if let Some(wrapper) = guard.as_ref() {
-        wrapper.0.page_count().map_err(|e| e.to_string())
+        wrapper
+            .0
+            .page_count()
+            .map(|c| c as i32)
+            .map_err(|e| e.to_string())
     } else {
         Err("No document open".to_string())
     }
@@ -112,7 +117,7 @@ pub fn render_page(
         let doc = &mut wrapper.0;
         let page = doc.load_page(page_num).map_err(|e| e.to_string())?;
 
-        let matrix = Matrix::new_scale(scale, scale);
+        let matrix = Matrix::scale(scale, scale);
 
         let pixmap = page
             .to_pixmap(&matrix, &Colorspace::device_rgb(), false)

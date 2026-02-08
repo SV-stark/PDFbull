@@ -1,4 +1,5 @@
 use crate::pdf_engine::PdfState;
+use micropdf::pdf::document::PdfDocument;
 
 #[tauri::command]
 pub fn compress_pdf(state: tauri::State<PdfState>, output_path: String) -> Result<(), String> {
