@@ -36,7 +36,7 @@ jobs:
         with:
           tagName: nightly
           releaseName: 'PDFbull Nightly Build'
-          body: 'This is an automated nightly build. It contains the latest changes.'
-          draft: false
+          releaseBody: 'This is an automated nightly build. It contains the latest changes.'
+          releaseDraft: false
           prerelease: true
           args: --target x86_64-pc-windows-msvc
