@@ -4,44 +4,64 @@
 ![License: AGPL-3.0](https://img.shields.io/badge/License-AGPL%203.0-blue.svg)
 ![Tauri](https://img.shields.io/badge/Built%20with-Tauri%202.0-orange)
 
-**PDFbull** is a modern, high-performance PDF editor for Windows that respects your privacy and your time. Built with **Tauri** and **Rust**, it delivers the raw speed of **MuPDF** in a lightweight, secure package.
+**PDFbull** is a high-performance, lightweight PDF reader and editor built for Windows. It leverages the raw speed of **MuPDF** combined with the safety of **Rust** and the flexibility of **Tauri**.
 
-## 🚀 Why PDFbull?
+Unlike other Electron-based readers that consume massive RAM, PDFbull is optimized for efficiency, using direct binary data transfer for rendering and native Rust bindings for heavy lifting.
 
-Stop paying monthly subscriptions for bloatware. PDFbull is designed to be the only PDF tool you'll ever need.
+## 🚀 Key Features
 
-| Feature | 🐂 PDFbull | 🏢 Industry Standard |
-| :--- | :--- | :--- |
-| **Startup Speed** | **Instant (< 0.5s)** | Sluggish (5s - 15s) |
-| **Installer Size** | **~10 MB** | ~1 GB+ |
-| **RAM Usage** | **Minimal (~50 MB)** | Heavy (500 MB+) |
-| **Privacy** | **100% Offline & Local** | Telemetry & Cloud Tracking |
-| **Cost** | **Free & Open Source** | $15 - $20 / month |
-| **Bloatware** | **None** | Background Services & Updates |
+### ⚡ Performance & Core
+-   **Zero-Copy Rendering**: Pages are rendered by MuPDF in Rust and transferred to the UI as raw binary streams (`Uint8Array` -> `Blob`) for maximum speed.
+-   **Multi-Tab Interface**: Open and switch between multiple PDFs instantly.
+-   **Anti-Aliased Zoom**: Crisp text at any zoom level with smooth scaling.
 
-## ✨ Key Features
+### ✏️ Annotation Suite
+-   **Comprehensive Tools**:
+    -   Highlight (Yellow, Green, Blue, Pink)
+    -   Shapes (Rectangle, Circle, Line, Arrow)
+    -   Text Box
+    -   Sticky Notes
+-   **Layer Management**: Create multiple annotation layers and toggle their visibility independently.
+-   **Undo/Redo**: Full history support for all annotation actions (`Ctrl+Z` / `Ctrl+Y`).
+-   **Auto-Save**: Annotations are automatically saved to local storage every 30 seconds.
 
-### ⚡ Blazing Fast Performance
--   **Zero-Copy Rendering**: Native binary data transfer ensures pages load instantly without lag.
--   **Anti-Aliased Zoom**: Crystal clear text at any zoom level.
--   **Instant Navigation**: Jump to any page with zero delay.
+### 🛠️ Advanced Tools
+-   **Search**: Fast text search using MuPDF's structured text engine.
+-   **Export Options**:
+    -   **Export Page as Image**: Save current view as high-quality PNG.
+    -   **Extract Text**: Save page text to `.txt` file.
+-   **Form Scanning**: Automatically detect and identify form fields.
+-   **Auto-Crop**: Remove whitespace margins automatically to focus on content.
+-   **Compression**: Re-save PDFs with maximum compression to reduce file size.
 
-### 🛠️ Powerful Tools
--   **Smart Form Detection**: Automatically identifies and lists form fields for easy editing.
--   **Auto-Crop**: Remove useless margins with a single click to focus on content.
--   **Advanced Compression**: Reduce file size significantly without losing quality.
--   **Text Search**: Lightning-fast search powered by MuPDF's structured text engine.
+### 🎨 Visual customization
+-   **Themes**: Light, Dark, and High Contrast modes.
+-   **Filters**:
+    -   **Greyscale**: For distraction-free reading.
+    -   **Invert Colors**: High contrast mode for night reading.
+-   **Fullscreen Mode**: Immersive reading experience (`F11`).
 
-### 🎨 Modern & Customizable
--   **Dark Mode**: Sleek, native dark theme with glassmorphism support.
--   **Reading Modes**: Toggle **Greyscale** or **High Contrast** (Invert Colors) for eye comfort.
--   **Annotation**: Highlight important text with precision.
+## ⌨️ Keyboard Shortcuts
 
-## 🛠️ Built With
+| Action | Shortcut |
+| :--- | :--- |
+| **Open File** | `Ctrl + O` |
+| **Search** | `Ctrl + F` |
+| **Toggle Sidebar** | `Ctrl + B` |
+| **Undo / Redo** | `Ctrl + Z` / `Ctrl + Y` |
+| **Zoom In / Out** | `Ctrl + +` / `Ctrl + -` |
+| **Reset Zoom** | `Ctrl + 0` |
+| **Export Image** | `Ctrl + E` |
+| **Save Annotations** | `Ctrl + S` |
+| **Fullscreen** | `F11` |
+| **Tools** | `H` (Highlight), `R` (Rect), `C` (Circle), `L` (Line), `A` (Arrow), `T` (Text), `N` (Note), `Esc` (View) |
+| **Navigation** | Arrow Keys, PageUp/Down, Space, Home, End |
 
--   **Frontend**: HTML5, Vanilla JavaScript (No heavy frameworks), CSS3 Variables.
+## 🛠️ Technology Stack
+
+-   **Frontend**: HTML5, Vanilla JavaScript (Zero-framework for speed), CSS3 Variables.
 -   **Backend**: Rust (Tauri 2.0).
--   **Engine**: [MuPDF](https://mupdf.com/) (via `mupdf-rs`).
+-   **PDF Engine**: [MuPDF](https://mupdf.com/) (via `mupdf-rs`).
 
 ## 📦 Installation
 
@@ -49,29 +69,44 @@ Stop paying monthly subscriptions for bloatware. PDFbull is designed to be the o
 Grab the latest nightly build from the [Releases Page](https://github.com/SV-stark/PDFbull/releases/tag/nightly).
 
 ### Build from Source
-**Prerequisites**: Windows, Visual Studio C++ Build Tools, Rust, Node.js (v18+).
 
-```bash
-# Clone and Enter
-git clone https://github.com/SV-stark/PDFbull.git
-cd PDFbull
+**Prerequisites**:
+-   **Windows** (Required for current build config)
+-   **Visual Studio C++ Build Tools** (Required for compiling MuPDF)
+-   **Rust** (Latest Stable)
+-   **Node.js** (v18+)
 
-# Install Dependencies
-npm install
+1.  **Clone the repository**:
+    ```bash
+    git clone https://github.com/SV-stark/PDFbull.git
+    cd PDFbull
+    ```
 
-# Run (Development)
-npm run tauri dev
+2.  **Install Frontend Dependencies**:
+    ```bash
+    npm install
+    ```
 
-# Build (Release)
-npm run tauri build
-```
-The installer will be generated in `src-tauri/target/release/bundle/nsis/`.
+3.  **Run in Development Mode**:
+    ```bash
+    npm run tauri dev
+    ```
+
+4.  **Build Release**:
+    ```bash
+    npm run tauri build
+    ```
+    The installer will be in `src-tauri/target/release/bundle/nsis/`.
 
 ## 📄 License
 
-This project is licensed under the **GNU Affero General Public License v3.0 (AGPL-3.0)**.
+This project is licensed under the **GNU Affero General Public License v3.0 (AGPL-3.0)** - see the [LICENSE](LICENSE) file for details.
 
-*Note: This project statically links against the **MuPDF** library (Artifex Software, Inc). Distribution requires compliance with AGPL terms.*
+**Note**: This project statically links against the **MuPDF** library, which is a product of Artifex Software, Inc. and is licensed under the AGPL. If you widely distribute this application, you must comply with the AGPL terms (i.e., provide source code to users).
+
+## 🤝 Contributing
+
+Contributions are welcome! Please open an issue or submit a pull request.
 
 ---
 *Built with ❤️ by SV-Stark*
