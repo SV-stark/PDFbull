@@ -1,6 +1,7 @@
+use micropdf::ffi::document::Document;
 use micropdf::fitz::colorspace::Colorspace;
+use micropdf::fitz::error::Error;
 use micropdf::fitz::geometry::{Matrix, Rect};
-use micropdf::fitz::Document;
 use std::sync::Mutex;
 
 pub struct PdfWrapper(pub Document);
@@ -22,10 +23,14 @@ impl PdfState {
 
 #[tauri::command]
 pub fn open_document(state: tauri::State<PdfState>, path: String) -> Result<i32, String> {
-    let doc = Document::open(&path).map_err(|e| e.to_string())?;
-    let page_count = doc.page_count();
-    *state.doc.lock().unwrap() = Some(PdfWrapper(doc));
-    Ok(page_count as i32)
+    match Document::open(&path) {
+        Ok(doc) => {
+            let page_count = doc.page_count();
+            *state.doc.lock().unwrap() = Some(PdfWrapper(doc));
+            Ok(page_count as i32)
+        }
+        Err(e) => Err(e.to_string()),
+    }
 }
 
 #[tauri::command]
@@ -43,31 +48,29 @@ pub fn load_document_from_bytes(
     let mut file = std::fs::File::create(&temp_file).map_err(|e| e.to_string())?;
     file.write_all(&data).map_err(|e| e.to_string())?;
 
-    let doc = Document::open(temp_file.to_str().unwrap()).map_err(|e| e.to_string())?;
-    let _page_count = doc.page_count();
-
-    let doc_id = format!(
-        "doc_{}",
-        std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap()
-            .as_millis()
-    );
-
-    *state.doc.lock().unwrap() = Some(PdfWrapper(doc));
-
-    Ok(doc_id)
+    match Document::open(temp_file.to_str().unwrap()) {
+        Ok(doc) => {
+            let _page_count = doc.page_count();
+            let doc_id = format!(
+                "doc_{}",
+                std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .unwrap()
+                    .as_millis()
+            );
+            *state.doc.lock().unwrap() = Some(PdfWrapper(doc));
+            Ok(doc_id)
+        }
+        Err(e) => Err(e.to_string()),
+    }
 }
 
 #[tauri::command]
 pub fn get_page_count(state: tauri::State<PdfState>) -> Result<i32, String> {
     let guard = state.doc.lock().unwrap();
     if let Some(wrapper) = guard.as_ref() {
-        if wrapper.0.page_count() > 0 {
-            Ok(wrapper.0.page_count() as i32)
-        } else {
-            Ok(0)
-        }
+        let count = wrapper.0.page_count();
+        Ok(count as i32)
     } else {
         Err("No document open".to_string())
     }
@@ -78,8 +81,10 @@ pub fn get_page_text(state: tauri::State<PdfState>, page_num: i32) -> Result<Str
     let guard = state.doc.lock().unwrap();
     if let Some(wrapper) = guard.as_ref() {
         let doc = &wrapper.0;
-        let page = doc.load_page(page_num).map_err(|e| e.to_string())?;
-        let text = page.extract_text().map_err(|e| e.to_string())?;
+        let page = doc
+            .load_page(page_num as i32)
+            .map_err(|e: Error| e.to_string())?;
+        let text = page.extract_text().map_err(|e: Error| e.to_string())?;
         Ok(text)
     } else {
         Err("No document open".to_string())
@@ -95,8 +100,10 @@ pub fn search_text(
     let guard = state.doc.lock().unwrap();
     if let Some(wrapper) = guard.as_ref() {
         let doc = &wrapper.0;
-        let page = doc.load_page(page_num).map_err(|e| e.to_string())?;
-        let hits = page.search_text(&query).map_err(|e| e.to_string())?;
+        let page = doc
+            .load_page(page_num as i32)
+            .map_err(|e: Error| e.to_string())?;
+        let hits = page.search_text(&query).map_err(|e: Error| e.to_string())?;
 
         let rects = hits.iter().map(|r| (r.x0, r.y0, r.x1, r.y1)).collect();
         Ok(rects)
@@ -114,11 +121,13 @@ pub fn render_page(
     let mut guard = state.doc.lock().unwrap();
     if let Some(wrapper) = guard.as_mut() {
         let doc = &mut wrapper.0;
-        let page = doc.load_page(page_num).map_err(|e| e.to_string())?;
+        let page = doc
+            .load_page(page_num as i32)
+            .map_err(|e: Error| e.to_string())?;
 
         let matrix = Matrix::scale(scale, scale);
 
-        let pixmap = page.to_pixmap(&matrix).map_err(|e| e.to_string())?;
+        let pixmap = page.to_pixmap(&matrix).map_err(|e: Error| e.to_string())?;
 
         let samples = pixmap.samples();
         let width = pixmap.width() as u32;
