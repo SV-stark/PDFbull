@@ -1,9 +1,9 @@
 use micropdf::fitz::colorspace::Colorspace;
-use micropdf::fitz::geometry::Matrix;
-use micropdf::pdf::document::PdfDocument;
+use micropdf::fitz::geometry::{Matrix, Rect};
+use micropdf::fitz::Document;
 use std::sync::Mutex;
 
-pub struct PdfWrapper(pub PdfDocument);
+pub struct PdfWrapper(pub Document);
 
 unsafe impl Send for PdfWrapper {}
 unsafe impl Sync for PdfWrapper {}
@@ -22,11 +22,10 @@ impl PdfState {
 
 #[tauri::command]
 pub fn open_document(state: tauri::State<PdfState>, path: String) -> Result<i32, String> {
-    let doc = PdfDocument::open(&path).map_err(|e| e.to_string())?;
-    // page_count() returns usize, cast to i32
-    let page_count = doc.page_count().map_err(|e| e.to_string())? as i32;
+    let doc = Document::open(&path).map_err(|e| e.to_string())?;
+    let page_count = doc.page_count();
     *state.doc.lock().unwrap() = Some(PdfWrapper(doc));
-    Ok(page_count)
+    Ok(page_count as i32)
 }
 
 #[tauri::command]
@@ -44,8 +43,8 @@ pub fn load_document_from_bytes(
     let mut file = std::fs::File::create(&temp_file).map_err(|e| e.to_string())?;
     file.write_all(&data).map_err(|e| e.to_string())?;
 
-    let doc = PdfDocument::open(temp_file.to_str().unwrap()).map_err(|e| e.to_string())?;
-    let _page_count = doc.page_count().map_err(|e| e.to_string())?;
+    let doc = Document::open(temp_file.to_str().unwrap()).map_err(|e| e.to_string())?;
+    let _page_count = doc.page_count();
 
     let doc_id = format!(
         "doc_{}",
@@ -64,11 +63,11 @@ pub fn load_document_from_bytes(
 pub fn get_page_count(state: tauri::State<PdfState>) -> Result<i32, String> {
     let guard = state.doc.lock().unwrap();
     if let Some(wrapper) = guard.as_ref() {
-        wrapper
-            .0
-            .page_count()
-            .map(|c| c as i32)
-            .map_err(|e| e.to_string())
+        if wrapper.0.page_count() > 0 {
+            Ok(wrapper.0.page_count() as i32)
+        } else {
+            Ok(0)
+        }
     } else {
         Err("No document open".to_string())
     }
@@ -80,8 +79,8 @@ pub fn get_page_text(state: tauri::State<PdfState>, page_num: i32) -> Result<Str
     if let Some(wrapper) = guard.as_ref() {
         let doc = &wrapper.0;
         let page = doc.load_page(page_num).map_err(|e| e.to_string())?;
-        let text = page.to_text().map_err(|e| e.to_string())?;
-        Ok(text.as_text())
+        let text = page.extract_text().map_err(|e| e.to_string())?;
+        Ok(text)
     } else {
         Err("No document open".to_string())
     }
@@ -97,7 +96,7 @@ pub fn search_text(
     if let Some(wrapper) = guard.as_ref() {
         let doc = &wrapper.0;
         let page = doc.load_page(page_num).map_err(|e| e.to_string())?;
-        let hits = page.search(&query).map_err(|e| e.to_string())?;
+        let hits = page.search_text(&query).map_err(|e| e.to_string())?;
 
         let rects = hits.iter().map(|r| (r.x0, r.y0, r.x1, r.y1)).collect();
         Ok(rects)
@@ -119,9 +118,7 @@ pub fn render_page(
 
         let matrix = Matrix::scale(scale, scale);
 
-        let pixmap = page
-            .to_pixmap(&matrix, &Colorspace::device_rgb(), false)
-            .map_err(|e| e.to_string())?;
+        let pixmap = page.to_pixmap(&matrix).map_err(|e| e.to_string())?;
 
         let samples = pixmap.samples();
         let width = pixmap.width() as u32;

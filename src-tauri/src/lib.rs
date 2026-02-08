@@ -1,5 +1,6 @@
 mod annotations;
 mod compression;
+mod diag_v7;
 mod filters;
 mod forms;
 pub mod pdf_engine;

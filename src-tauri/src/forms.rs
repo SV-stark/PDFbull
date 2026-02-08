@@ -1,4 +1,5 @@
 use crate::pdf_engine::PdfState;
+use micropdf::fitz::Document;
 
 #[tauri::command]
 pub fn get_form_fields(

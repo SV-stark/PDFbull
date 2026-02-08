@@ -3,7 +3,7 @@ use base64::Engine as _;
 use image::DynamicImage;
 use micropdf::fitz::colorspace::Colorspace;
 use micropdf::fitz::geometry::Matrix;
-use micropdf::pdf::document::PdfDocument;
+use micropdf::fitz::Document;
 use std::io::Cursor;
 
 #[tauri::command]
@@ -40,9 +40,7 @@ pub fn auto_crop(state: tauri::State<PdfState>, page_num: i32) -> Result<(), Str
 
         // Render small version for edge detection to save speed
         let matrix = Matrix::scale(0.5, 0.5);
-        let _pixmap = page
-            .to_pixmap(&matrix, &Colorspace::device_gray(), false)
-            .map_err(|e| e.to_string())?;
+        let _pixmap = page.to_pixmap(&matrix).map_err(|e| e.to_string())?;
 
         // Placeholder for auto-crop implementation
         // Real implementation requires analysis of pixmap
