@@ -1,8 +1,6 @@
 use crate::pdf_engine::PdfState;
-use micropdf::enhanced::interactive::AnnotationType;
-use micropdf::ffi::document::Document;
-use micropdf::fitz::error::Error;
 use micropdf::fitz::geometry::Rect;
+use micropdf::pdf::annot::AnnotType;
 
 #[tauri::command]
 pub fn create_highlight(
@@ -13,16 +11,14 @@ pub fn create_highlight(
     let mut guard = state.doc.lock().unwrap();
     if let Some(wrapper) = guard.as_mut() {
         let doc = &mut wrapper.0;
-        let page = doc
-            .load_page(page_num as i32)
-            .map_err(|e: Error| e.to_string())?;
-
+        let page = doc.load_page(page_num as i32).map_err(|e| e.to_string())?;
         for (x0, y0, x1, y1) in rects {
             let rect = Rect::new(x0, y0, x1, y1);
             let mut annot = page
-                .create_annotation(AnnotationType::Highlight)
-                .map_err(|e: Error| e.to_string())?;
+                .create_annotation(AnnotType::Highlight)
+                .map_err(|e| e.to_string())?;
             annot.set_rect(rect);
+            annot.update().map_err(|e| e.to_string())?;
         }
 
         Ok(())

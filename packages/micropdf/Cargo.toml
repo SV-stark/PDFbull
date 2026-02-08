@@ -1,0 +1,235 @@
+[package]
+name = "micropdf"
+version = "0.9.0"
+edition = "2024"
+rust-version = "1.85"
+description = "A pure Rust PDF library - drop-in replacement for MuPDF with 100% API compatibility"
+license = "MIT OR Apache-2.0"
+authors = ["Lexmata <contact@lexmata.com>"]
+repository = "https://bitbucket.org/lexmata/micropdf"
+homepage = "https://bitbucket.org/lexmata/micropdf"
+documentation = "https://docs.rs/micropdf"
+readme = "README.md"
+keywords = ["pdf", "mupdf", "document", "parser", "rendering"]
+categories = ["parsing", "multimedia::images", "text-processing"]
+
+# Files to include in the crates.io package
+# (tests excluded to keep package size small - PDF fixtures are large)
+include = [
+    "src/**/*",
+    "benches/**/*",
+    "include/**/*",
+    "Cargo.toml",
+    "README.md",
+    "LICENSE-MIT",
+    "LICENSE-APACHE",
+    "CHANGELOG.md",
+    "build.rs",
+    "micropdf.pc.in",
+    "mupdf.pc.in",
+]
+
+# Badges for crates.io
+[badges]
+maintenance = { status = "actively-developed" }
+
+# Allow tarpaulin cfg for coverage instrumentation
+[lints.rust]
+unexpected_cfgs = { level = "warn", check-cfg = ["cfg(tarpaulin)"] }
+
+[lib]
+name = "micropdf"
+path = "src/lib.rs"
+crate-type = ["lib", "staticlib", "cdylib"]
+
+[dependencies]
+smallvec = "1.13"
+thiserror = "2"
+flate2 = "1"
+brotli = "7"
+aes = "0.8"
+cbc = "0.1"
+md-5 = "0.10"
+sha2 = { version = "0.10", features = ["oid"] }
+image = { version = "0.25", default-features = false, features = ["png", "jpeg"] }
+fontdb = "0.22"
+ttf-parser = "0.25"
+base64 = "0.22"
+weezl = "0.1"
+jpeg2k = { version = "0.8", optional = true }
+bytes = "1"
+byteorder = "1"
+memmap2 = "0.9"
+rayon = { version = "1.10", optional = true }
+tokio = { version = "1", features = ["fs", "io-util", "rt", "sync", "macros", "rt-multi-thread", "time"], optional = true }
+futures = { version = "0.3", optional = true }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+# Digital signature dependencies (optional)
+rsa = { version = "0.9", optional = true }
+ecdsa = { version = "0.16", optional = true, features = ["signing", "verifying"] }
+p256 = { version = "0.13", optional = true, features = ["ecdsa"] }
+p384 = { version = "0.13", optional = true, features = ["ecdsa"] }
+reqwest = { version = "0.12", optional = true, features = ["blocking"] }
+
+[features]
+default = []
+jpeg2000 = ["jpeg2k"]
+jbig2 = []
+parallel = ["rayon"]
+async = ["tokio", "futures"]
+signatures = ["rsa", "ecdsa", "p256", "p384"]  # Digital signature support
+tsa = ["signatures", "reqwest"]                 # Time-stamping authority support
+
+[dev-dependencies]
+tempfile = "3"
+criterion = { version = "0.5", features = ["html_reports"] }
+serial_test = "3"
+
+[[bench]]
+name = "geometry"
+harness = false
+
+[[bench]]
+name = "buffer"
+harness = false
+
+[[bench]]
+name = "pdf_objects"
+harness = false
+
+[[bench]]
+name = "colorspace"
+harness = false
+
+[[bench]]
+name = "filters"
+harness = false
+
+[[bench]]
+name = "pixmap"
+harness = false
+
+[[bench]]
+name = "stream"
+harness = false
+
+[[bench]]
+name = "path"
+harness = false
+
+[[bench]]
+name = "font"
+harness = false
+
+[[bench]]
+name = "image"
+harness = false
+
+[[bench]]
+name = "text"
+harness = false
+
+[[bench]]
+name = "device"
+harness = false
+
+[[bench]]
+name = "output"
+harness = false
+
+[[bench]]
+name = "archive"
+harness = false
+
+[[bench]]
+name = "pdf_realworld"
+harness = false
+
+[[bench]]
+name = "memory_allocation"
+harness = false
+
+# Debian package configuration (cargo-deb)
+[package.metadata.deb]
+maintainer = "Lexmata <contact@lexmata.com>"
+copyright = "2025, Lexmata LLC"
+license-file = ["LICENSE-MIT", "0"]
+extended-description = """MicroPDF is a native Rust PDF library inspired by MuPDF.
+It provides PDF parsing, rendering, and manipulation capabilities
+with a clean Rust API."""
+depends = "$auto"
+section = "libs"
+priority = "optional"
+assets = [
+    ["target/release/libmicropdf.so", "usr/lib/", "644"],
+    ["target/release/libmicropdf.a", "usr/lib/", "644"],
+    ["include/**/*", "usr/include/micropdf/", "644"],
+    ["micropdf.pc", "usr/lib/pkgconfig/", "644"],
+    ["mupdf.pc", "usr/lib/pkgconfig/", "644"],
+    ["README.md", "usr/share/doc/micropdf/README", "644"],
+    ["LICENSE-MIT", "usr/share/doc/micropdf/LICENSE-MIT", "644"],
+    ["LICENSE-APACHE", "usr/share/doc/micropdf/LICENSE-APACHE", "644"],
+]
+
+# RPM package configuration (cargo-generate-rpm)
+[package.metadata.generate-rpm]
+assets = [
+    { source = "target/release/libmicropdf.so", dest = "/usr/lib64/libmicropdf.so", mode = "755" },
+    { source = "target/release/libmicropdf.a", dest = "/usr/lib64/libmicropdf.a", mode = "644" },
+    { source = "include/micropdf.h", dest = "/usr/include/micropdf/micropdf.h", mode = "644" },
+    { source = "include/mupdf-ffi.h", dest = "/usr/include/micropdf/mupdf-ffi.h", mode = "644" },
+    { source = "micropdf.pc", dest = "/usr/lib64/pkgconfig/micropdf.pc", mode = "644" },
+    { source = "mupdf.pc", dest = "/usr/lib64/pkgconfig/mupdf.pc", mode = "644" },
+    { source = "README.md", dest = "/usr/share/doc/micropdf/README", mode = "644", doc = true },
+    { source = "LICENSE-MIT", dest = "/usr/share/doc/micropdf/LICENSE-MIT", mode = "644", doc = true },
+    { source = "LICENSE-APACHE", dest = "/usr/share/doc/micropdf/LICENSE-APACHE", mode = "644", doc = true },
+]
+
+[package.metadata.generate-rpm.requires]
+glibc = "*"
+
+# ============================================================================
+# Build Profiles
+# ============================================================================
+
+# Release profile with Link-Time Optimization (LTO)
+[profile.release]
+lto = "thin"              # thin-LTO: good balance of speed vs compile time
+codegen-units = 1         # single codegen unit for better optimization
+opt-level = 3             # maximum optimization
+strip = "symbols"         # strip debug symbols for smaller binary
+panic = "abort"           # abort on panic for smaller binary
+
+# Maximum optimization profile for benchmarks and production
+[profile.release-max]
+inherits = "release"
+lto = "fat"               # fat-LTO: maximum optimization, slower compile
+codegen-units = 1
+
+# Profile for Profile-Guided Optimization (PGO) - instrumentation phase
+[profile.release-pgo-generate]
+inherits = "release"
+lto = "thin"
+
+# Profile for PGO - use phase (after gathering profile data)
+[profile.release-pgo-use]
+inherits = "release"
+lto = "fat"
+codegen-units = 1
+
+# Development profile with some optimizations for faster testing
+[profile.dev]
+opt-level = 0
+debug = true
+
+# Test profile with optimizations for realistic benchmarks
+[profile.test]
+opt-level = 2
+
+# Bench profile inherits from release-max
+[profile.bench]
+inherits = "release"
+lto = "thin"
+debug = false

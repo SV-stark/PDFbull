@@ -1,0 +1,1 @@
+//! PDF colorspace module stub

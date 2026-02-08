@@ -1,17 +1,10 @@
 use crate::pdf_engine::PdfState;
-use base64::Engine as _;
 use image::DynamicImage;
-use micropdf::ffi::document::Document;
-use micropdf::fitz::colorspace::Colorspace;
-use micropdf::fitz::error::Error;
-use micropdf::fitz::geometry::Matrix;
 use std::io::Cursor;
 
 #[tauri::command]
 pub fn apply_filter(image_data: String, filter_type: String) -> Result<String, String> {
-    let bytes = base64::engine::general_purpose::STANDARD
-        .decode(image_data)
-        .map_err(|e| e.to_string())?;
+    let bytes = base64::decode(image_data).map_err(|e| e.to_string())?;
 
     let mut img = image::load_from_memory(&bytes).map_err(|e| e.to_string())?;
 
@@ -29,7 +22,7 @@ pub fn apply_filter(image_data: String, filter_type: String) -> Result<String, S
     img.write_to(&mut Cursor::new(&mut buf), image::ImageFormat::Png)
         .map_err(|e| e.to_string())?;
 
-    Ok(base64::engine::general_purpose::STANDARD.encode(buf))
+    Ok(base64::encode(buf))
 }
 
 #[tauri::command]
@@ -37,16 +30,10 @@ pub fn auto_crop(state: tauri::State<PdfState>, page_num: i32) -> Result<(), Str
     let mut guard = state.doc.lock().unwrap();
     if let Some(wrapper) = guard.as_mut() {
         let doc = &mut wrapper.0;
-        let page = doc
-            .load_page(page_num as i32)
-            .map_err(|e: Error| e.to_string())?;
+        let page = doc.load_page(page_num as i32).map_err(|e| e.to_string())?;
 
-        // Render small version for edge detection to save speed
-        let matrix = Matrix::scale(0.5, 0.5);
-        let _pixmap = page.to_pixmap(&matrix).map_err(|e: Error| e.to_string())?;
-
-        // Placeholder for auto-crop implementation
-        // Real implementation requires analysis of pixmap
+        let rect = page.bound();
+        println!("Auto-crop bounding box: {:?}", rect);
 
         Ok(())
     } else {

@@ -1,0 +1,10 @@
+# Clippy configuration for micropdf-rs
+
+# Allow raw pointer dereference in FFI functions
+# This is safe in our FFI layer because:
+# 1. All FFI functions are marked with #[unsafe(no_mangle)]
+# 2. All pointer dereferences are checked for null before use
+# 3. All pointer dereferences are wrapped in unsafe blocks
+# This is standard practice for C FFI bindings
+allow-mixed-uninlined-format-args = true
+

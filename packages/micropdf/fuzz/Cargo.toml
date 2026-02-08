@@ -1,0 +1,81 @@
+[package]
+name = "micropdf-fuzz"
+version = "0.0.0"
+publish = false
+edition = "2021"
+
+[package.metadata]
+cargo-fuzz = true
+
+[dependencies]
+libfuzzer-sys = "0.4"
+
+[dependencies.micropdf]
+path = ".."
+
+[[bin]]
+name = "fuzz_pdf_parse"
+path = "fuzz_targets/fuzz_pdf_parse.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "fuzz_buffer"
+path = "fuzz_targets/fuzz_buffer.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "fuzz_stream"
+path = "fuzz_targets/fuzz_stream.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "fuzz_pdf_objects"
+path = "fuzz_targets/fuzz_pdf_objects.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "fuzz_filters"
+path = "fuzz_targets/fuzz_filters.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "fuzz_xref"
+path = "fuzz_targets/fuzz_xref.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "fuzz_page_render"
+path = "fuzz_targets/fuzz_page_render.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "fuzz_annotations"
+path = "fuzz_targets/fuzz_annotations.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "fuzz_fonts"
+path = "fuzz_targets/fuzz_fonts.rs"
+test = false
+doc = false
+bench = false
+
+[profile.release]
+debug = true
+

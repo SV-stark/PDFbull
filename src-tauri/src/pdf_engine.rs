@@ -1,95 +1,48 @@
-use micropdf::ffi::document::Document;
+use micropdf::ffi::document::{Document, Page};
 use micropdf::fitz::colorspace::Colorspace;
-use micropdf::fitz::document::Document as DocumentTrait;
 use micropdf::fitz::error::Error;
-use micropdf::fitz::geometry::{Matrix, Rect};
-use std::sync::Mutex;
+use micropdf::fitz::geometry::Matrix;
+use std::fs;
+use std::sync::{Arc, Mutex};
+use tauri::State;
 
 pub struct PdfWrapper(pub Document);
 
-unsafe impl Send for PdfWrapper {}
-unsafe impl Sync for PdfWrapper {}
-
+#[derive(Default)]
 pub struct PdfState {
-    pub doc: Mutex<Option<PdfWrapper>>,
-}
-
-impl PdfState {
-    pub fn new() -> Self {
-        Self {
-            doc: Mutex::new(None),
-        }
-    }
+    pub doc: Arc<Mutex<Option<PdfWrapper>>>,
 }
 
 #[tauri::command]
-pub fn open_document(state: tauri::State<PdfState>, path: String) -> Result<i32, String> {
-    match Document::open(&path) {
-        Ok(doc) => {
-            let page_count = doc.count_pages();
-            *state.doc.lock().unwrap() = Some(PdfWrapper(doc));
-            Ok(page_count as i32)
-        }
-        Err(e) => Err(e.to_string()),
-    }
+pub async fn open_document(state: State<'_, PdfState>, path: String) -> Result<i32, String> {
+    let data = fs::read(&path).map_err(|e| e.to_string())?;
+    let doc = Document::open_memory(data).map_err(|e| e.to_string())?;
+    let page_count = doc.count_pages();
+    *state.doc.lock().unwrap() = Some(PdfWrapper(doc));
+    Ok(page_count)
+}
+
+pub fn load_document_from_bytes(data: Vec<u8>) -> Result<Document, String> {
+    Document::open_memory(data).map_err(|e| e.to_string())
 }
 
 #[tauri::command]
-pub fn load_document_from_bytes(
-    state: tauri::State<PdfState>,
-    file_name: String,
-    data: Vec<u8>,
-) -> Result<String, String> {
-    use std::env;
-    use std::io::Write;
-
-    let temp_dir = env::temp_dir();
-    let temp_file = temp_dir.join(&file_name);
-
-    let mut file = std::fs::File::create(&temp_file).map_err(|e| e.to_string())?;
-    file.write_all(&data).map_err(|e| e.to_string())?;
-
-    match Document::open(temp_file.to_str().unwrap()) {
-        Ok(doc) => {
-            let _page_count = doc.count_pages();
-            let doc_id = format!(
-                "doc_{}",
-                std::time::SystemTime::now()
-                    .duration_since(std::time::UNIX_EPOCH)
-                    .unwrap()
-                    .as_millis()
-            );
-            *state.doc.lock().unwrap() = Some(PdfWrapper(doc));
-            Ok(doc_id)
-        }
-        Err(e) => Err(e.to_string()),
-    }
-}
-
-#[tauri::command]
-pub fn get_page_count(state: tauri::State<PdfState>) -> Result<i32, String> {
-    let guard = state.doc.lock().unwrap();
-    if let Some(wrapper) = guard.as_ref() {
-        let count = wrapper.0.count_pages();
-        Ok(count as i32)
+pub async fn get_page_count(state: State<'_, PdfState>) -> Result<i32, String> {
+    let doc_lock = state.doc.lock().unwrap();
+    if let Some(wrapper) = doc_lock.as_ref() {
+        Ok(wrapper.0.count_pages())
     } else {
-        Err("No document open".to_string())
+        Err("No document opened".to_string())
     }
 }
 
 #[tauri::command]
-pub fn get_page_text(state: tauri::State<PdfState>, page_num: i32) -> Result<String, String> {
-    let guard = state.doc.lock().unwrap();
-    if let Some(wrapper) = guard.as_ref() {
-        let doc = &wrapper.0;
-        let page = doc
-            .load_page(page_num as i32)
-            .map_err(|e: Error| e.to_string())?;
-        let text = page.extract_text().map_err(|e: Error| e.to_string())?;
-        Ok(text)
-    } else {
-        Err("No document open".to_string())
-    }
+pub async fn extract_page_text(state: State<'_, PdfState>, page_num: i32) -> Result<String, String> {
+    let doc_lock = state.doc.lock().unwrap();
+    let wrapper = doc_lock.as_ref().ok_or("No document opened")?;
+    let page = wrapper.0.load_page(page_num).map_err(|e| e.to_string())?;
+
+    page.extract_text().map_err(|e| e.to_string())
 }
 
 #[tauri::command]

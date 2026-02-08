@@ -1,0 +1,431 @@
+%PDF-1.7
+%âãÏÓ
+
+1 0 obj
+<<
+  /Type /Catalog
+  /Pages 2 0 R
+  /Outlines 3 0 R
+  /Names 4 0 R
+  /Metadata 5 0 R
+  /AcroForm 6 0 R
+  /MarkInfo << /Marked true >>
+  /Lang (en-US)
+>>
+endobj
+
+2 0 obj
+<<
+  /Type /Pages
+  /Kids [7 0 R 8 0 R 9 0 R]
+  /Count 3
+>>
+endobj
+
+3 0 obj
+<<
+  /Type /Outlines
+  /First 10 0 R
+  /Last 11 0 R
+  /Count 2
+>>
+endobj
+
+4 0 obj
+<<
+  /Dests 12 0 R
+>>
+endobj
+
+5 0 obj
+<<
+  /Type /Metadata
+  /Subtype /XML
+  /Length 400
+>>
+stream
+<?xpacket begin="﻿" id="W5M0MpCehiHzreSzNTczkc9d"?>
+<x:xmpmeta xmlns:x="adobe:ns:meta/">
+  <rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#">
+    <rdf:Description xmlns:dc="http://purl.org/dc/elements/1.1/">
+      <dc:title>NanoPDF Comprehensive Test Document</dc:title>
+      <dc:creator>NanoPDF Test Suite</dc:creator>
+      <dc:description>Integration test PDF with multiple content types</dc:description>
+    </rdf:Description>
+  </rdf:RDF>
+</x:xmpmeta>
+<?xpacket end="w"?>
+endstream
+endobj
+
+6 0 obj
+<<
+  /Fields [13 0 R 14 0 R 15 0 R]
+  /DR << /Font << /Helv 16 0 R >> >>
+  /DA (/Helv 12 Tf 0 g)
+  /NeedAppearances true
+>>
+endobj
+
+7 0 obj
+<<
+  /Type /Page
+  /Parent 2 0 R
+  /MediaBox [0 0 612 792]
+  /CropBox [0 0 612 792]
+  /Resources <<
+    /Font <<
+      /F1 17 0 R
+      /F2 18 0 R
+    >>
+    /XObject <<
+      /Im1 19 0 R
+    >>
+    /ColorSpace <<
+      /CS1 [/ICCBased 20 0 R]
+    >>
+  >>
+  /Contents 21 0 R
+  /Annots [22 0 R 23 0 R 24 0 R]
+>>
+endobj
+
+8 0 obj
+<<
+  /Type /Page
+  /Parent 2 0 R
+  /MediaBox [0 0 612 792]
+  /Resources <<
+    /Font << /F1 17 0 R >>
+    /Pattern << /P1 25 0 R >>
+    /ExtGState << /GS1 26 0 R >>
+  >>
+  /Contents 27 0 R
+>>
+endobj
+
+9 0 obj
+<<
+  /Type /Page
+  /Parent 2 0 R
+  /MediaBox [0 0 612 792]
+  /Resources <<
+    /Font << /F1 17 0 R >>
+  >>
+  /Contents 28 0 R
+  /Annots [13 0 R 14 0 R 15 0 R]
+>>
+endobj
+
+10 0 obj
+<<
+  /Title (Chapter 1: Introduction)
+  /Parent 3 0 R
+  /Next 11 0 R
+  /Dest [7 0 R /XYZ 0 792 0]
+>>
+endobj
+
+11 0 obj
+<<
+  /Title (Chapter 2: Advanced Features)
+  /Parent 3 0 R
+  /Prev 10 0 R
+  /Dest [8 0 R /XYZ 0 792 0]
+>>
+endobj
+
+12 0 obj
+<<
+  /Names [(page1) [7 0 R /XYZ 0 792 0] (page2) [8 0 R /XYZ 0 792 0] (page3) [9 0 R /XYZ 0 792 0]]
+>>
+endobj
+
+13 0 obj
+<<
+  /Type /Annot
+  /Subtype /Widget
+  /FT /Tx
+  /T (name_field)
+  /V (John Doe)
+  /Rect [72 700 300 720]
+  /P 9 0 R
+  /F 4
+>>
+endobj
+
+14 0 obj
+<<
+  /Type /Annot
+  /Subtype /Widget
+  /FT /Btn
+  /T (checkbox_field)
+  /V /Yes
+  /Rect [72 660 92 680]
+  /P 9 0 R
+  /F 4
+  /Ff 0
+>>
+endobj
+
+15 0 obj
+<<
+  /Type /Annot
+  /Subtype /Widget
+  /FT /Ch
+  /T (dropdown_field)
+  /V (Option 2)
+  /Opt [(Option 1) (Option 2) (Option 3)]
+  /Rect [72 620 200 640]
+  /P 9 0 R
+  /F 4
+>>
+endobj
+
+16 0 obj
+<<
+  /Type /Font
+  /Subtype /Type1
+  /BaseFont /Helvetica
+>>
+endobj
+
+17 0 obj
+<<
+  /Type /Font
+  /Subtype /Type1
+  /BaseFont /Helvetica
+  /Encoding /WinAnsiEncoding
+>>
+endobj
+
+18 0 obj
+<<
+  /Type /Font
+  /Subtype /Type1
+  /BaseFont /Times-Roman
+  /Encoding /WinAnsiEncoding
+>>
+endobj
+
+19 0 obj
+<<
+  /Type /XObject
+  /Subtype /Image
+  /Width 8
+  /Height 8
+  /ColorSpace /DeviceRGB
+  /BitsPerComponent 8
+  /Filter /ASCIIHexDecode
+  /Length 384
+>>
+stream
+FF0000FF0000FF0000FF0000FFFFFFFFFFFFFFFFFFFFFFFF
+FF0000FF0000FF0000FF0000FFFFFFFFFFFFFFFFFFFFFFFF
+FF0000FF0000FF0000FF0000FFFFFFFFFFFFFFFFFFFFFFFF
+FF0000FF0000FF0000FF0000FFFFFFFFFFFFFFFFFFFFFFFF
+00FF0000FF0000FF0000FF000000FF0000FF0000FF0000FF00
+00FF0000FF0000FF0000FF000000FF0000FF0000FF0000FF00
+00FF0000FF0000FF0000FF000000FF0000FF0000FF0000FF00
+00FF0000FF0000FF0000FF000000FF0000FF0000FF0000FF00
+endstream
+endobj
+
+20 0 obj
+<<
+  /N 3
+  /Alternate /DeviceRGB
+  /Length 0
+>>
+stream
+endstream
+endobj
+
+21 0 obj
+<<
+  /Length 450
+>>
+stream
+BT
+/F1 24 Tf
+72 720 Td
+(NanoPDF Test Document - Page 1) Tj
+0 -30 Td
+/F1 12 Tf
+(This document tests various PDF features:) Tj
+0 -20 Td
+(- Multiple fonts) Tj
+0 -15 Td
+(- Images) Tj
+0 -15 Td
+(- Annotations) Tj
+0 -15 Td
+(- Bookmarks/Outlines) Tj
+0 -15 Td
+(- Named destinations) Tj
+0 -15 Td
+(- Metadata \(XMP\)) Tj
+0 -15 Td
+(- Form fields) Tj
+ET
+q
+100 0 0 100 72 400 cm
+/Im1 Do
+Q
+endstream
+endobj
+
+22 0 obj
+<<
+  /Type /Annot
+  /Subtype /Link
+  /Rect [72 200 200 220]
+  /Border [0 0 0]
+  /A <<
+    /Type /Action
+    /S /URI
+    /URI (https://github.com/lexmata/nanopdf)
+  >>
+>>
+endobj
+
+23 0 obj
+<<
+  /Type /Annot
+  /Subtype /Text
+  /Rect [400 600 420 620]
+  /Contents (This is a sticky note annotation)
+  /Open false
+  /Name /Comment
+  /C [1 1 0]
+>>
+endobj
+
+24 0 obj
+<<
+  /Type /Annot
+  /Subtype /Highlight
+  /Rect [72 680 300 695]
+  /QuadPoints [72 695 300 695 72 680 300 680]
+  /C [1 1 0]
+  /CA 0.5
+>>
+endobj
+
+25 0 obj
+<<
+  /Type /Pattern
+  /PatternType 1
+  /PaintType 1
+  /TilingType 1
+  /BBox [0 0 10 10]
+  /XStep 10
+  /YStep 10
+  /Resources << >>
+  /Matrix [1 0 0 1 0 0]
+  /Length 30
+>>
+stream
+0 0 5 5 re f
+5 5 5 5 re f
+endstream
+endobj
+
+26 0 obj
+<<
+  /Type /ExtGState
+  /CA 0.5
+  /ca 0.5
+  /BM /Normal
+>>
+endobj
+
+27 0 obj
+<<
+  /Length 380
+  /Filter /FlateDecode
+>>
+stream
+xÚ•ÑMoâ0à{~Å¹@HÂ²µ­Ùí'Q¨µ«kÜ80)$	i¤'M*ù÷;I £÷Ü¼3ãÉ$Ó'qÄ#Ý&c	*µL%h4Qù9Lf«Xú!ä¢£"ö5V£Y.¯ãÊ^HÊ8¼ö+S+zÍWé:©ÑëÙ|q_-ãõ´Y­æÙ&ÉS½Îú¢úå*î·ùÂe­®a'e8WT8äaþ´ú»t\Zv|	>õöìå§àP×àZM]À¼Ñi~.Â(=O¨ù)ÔÁ?Mè&CÞ¤!­¡mzö¢ö;ò¬;Ô¸B»Ãýnàëß8<
+endstream
+endobj
+
+28 0 obj
+<<
+  /Length 200
+>>
+stream
+BT
+/F1 24 Tf
+72 720 Td
+(Page 3: Form Fields) Tj
+0 -40 Td
+/F1 12 Tf
+(This page contains interactive form fields:) Tj
+0 -30 Td
+(Name: _______________) Tj
+0 -40 Td
+(Accept terms: [ ]) Tj
+0 -40 Td
+(Select option: [________]) Tj
+ET
+endstream
+endobj
+
+29 0 obj
+<<
+  /Title (NanoPDF Comprehensive Test Document)
+  /Author (NanoPDF Test Suite)
+  /Subject (Integration Testing)
+  /Keywords (pdf, test, nanopdf, integration)
+  /Creator (NanoPDF Test Generator)
+  /Producer (NanoPDF 0.1.0)
+  /CreationDate (D:20251203120000+00'00')
+  /ModDate (D:20251203120000+00'00')
+>>
+endobj
+
+xref
+0 30
+0000000000 65535 f
+0000000015 00000 n
+0000000219 00000 n
+0000000298 00000 n
+0000000395 00000 n
+0000000430 00000 n
+0000000906 00000 n
+0000001065 00000 n
+0000001408 00000 n
+0000001612 00000 n
+0000001802 00000 n
+0000001929 00000 n
+0000002059 00000 n
+0000002200 00000 n
+0000002362 00000 n
+0000002519 00000 n
+0000002703 00000 n
+0000002786 00000 n
+0000002894 00000 n
+0000003000 00000 n
+0000003468 00000 n
+0000003551 00000 n
+0000004056 00000 n
+0000004243 00000 n
+0000004403 00000 n
+0000004555 00000 n
+0000004804 00000 n
+0000004890 00000 n
+0000005350 00000 n
+0000005607 00000 n
+
+trailer
+<<
+  /Size 30
+  /Root 1 0 R
+  /Info 29 0 R
+  /ID [<4E616E6F504446546573744944> <4E616E6F504446546573744944>]
+>>
+startxref
+5924
+%%EOF
+

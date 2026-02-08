@@ -1,0 +1,13 @@
+prefix=@PREFIX@
+exec_prefix=${prefix}
+libdir=${exec_prefix}/lib
+includedir=${prefix}/include
+
+Name: mupdf
+Description: PDF, XPS, and E-book viewer (micropdf implementation)
+URL: https://github.com/yourusername/micropdf
+Version: @VERSION@
+Requires:
+Libs: -L${libdir} -lmicropdf
+Cflags: -I${includedir}/micropdf
+

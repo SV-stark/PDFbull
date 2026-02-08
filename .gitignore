@@ -24,3 +24,23 @@ dist-ssr
 micropdf_API_documentation.md
 src-tauri/src/check_output_v10.txt
 all_ffi_funcs.txt
+
+# Rust / Cargo
+**/target/
+**/Cargo.lock
+*.rs.bk
+.cargo/
+
+# Packages build artifacts
+packages/**/target/
+packages/**/*.rlib
+packages/**/*.rmeta
+packages/**/debug/
+packages/**/release/
+packages/**/.rustc_info.json
+packages/**/incremental/
+packages/**/.cargo-lock
+packages/**/build/
+packages/**/deps/
+packages/**/examples/
+packages/**/incremental/

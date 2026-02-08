@@ -2524,8 +2524,6 @@ dependencies = [
 [[package]]
 name = "micropdf"
 version = "0.9.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "874b4f02823fba5d165d05cdcd83c472b88cadc3265b8a930139e2c0f46d2b15"
 dependencies = [
  "aes",
  "base64 0.22.1",

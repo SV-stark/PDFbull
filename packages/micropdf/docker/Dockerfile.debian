@@ -1,0 +1,38 @@
+# Dockerfile for building NanoPDF as a Debian package (.deb)
+# Supports multi-architecture builds (amd64, arm64) via Docker Buildx
+FROM rust:1.87-bookworm AS builder
+
+# Install build dependencies and Python for header generation
+RUN apt-get update && apt-get install -y \
+    build-essential \
+    pkg-config \
+    libssl-dev \
+    dpkg-dev \
+    fakeroot \
+    python3 \
+    && rm -rf /var/lib/apt/lists/*
+
+# Install cargo-deb
+RUN cargo install cargo-deb
+
+WORKDIR /build
+COPY . .
+
+# Build the library (native build for container architecture)
+RUN cargo build --release
+
+# Generate pkg-config files from templates
+RUN VERSION=$(grep '^version' Cargo.toml | head -1 | sed 's/.*= *"\([^"]*\)".*/\1/') && \
+    sed -e "s|@PREFIX@|/usr|g" -e "s|@VERSION@|$VERSION|g" micropdf.pc.in > micropdf.pc && \
+    sed -e "s|@PREFIX@|/usr|g" -e "s|@VERSION@|$VERSION|g" mupdf.pc.in > mupdf.pc
+
+# Build the deb package
+RUN cargo deb --no-build
+
+# Final stage - minimal image with just the package
+FROM debian:bookworm-slim
+WORKDIR /output
+COPY --from=builder /build/target/debian/*.deb ./
+VOLUME /dist
+CMD cp /output/*.deb /dist/ && echo "Debian package built:" && ls -la /dist/*.deb
+
