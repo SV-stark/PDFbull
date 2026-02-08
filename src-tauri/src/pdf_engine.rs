@@ -1,5 +1,6 @@
 use micropdf::ffi::document::Document;
 use micropdf::fitz::colorspace::Colorspace;
+use micropdf::fitz::document::Document as DocumentTrait;
 use micropdf::fitz::error::Error;
 use micropdf::fitz::geometry::{Matrix, Rect};
 use std::sync::Mutex;
@@ -25,7 +26,7 @@ impl PdfState {
 pub fn open_document(state: tauri::State<PdfState>, path: String) -> Result<i32, String> {
     match Document::open(&path) {
         Ok(doc) => {
-            let page_count = doc.page_count();
+            let page_count = doc.count_pages();
             *state.doc.lock().unwrap() = Some(PdfWrapper(doc));
             Ok(page_count as i32)
         }
@@ -50,7 +51,7 @@ pub fn load_document_from_bytes(
 
     match Document::open(temp_file.to_str().unwrap()) {
         Ok(doc) => {
-            let _page_count = doc.page_count();
+            let _page_count = doc.count_pages();
             let doc_id = format!(
                 "doc_{}",
                 std::time::SystemTime::now()
@@ -69,7 +70,7 @@ pub fn load_document_from_bytes(
 pub fn get_page_count(state: tauri::State<PdfState>) -> Result<i32, String> {
     let guard = state.doc.lock().unwrap();
     if let Some(wrapper) = guard.as_ref() {
-        let count = wrapper.0.page_count();
+        let count = wrapper.0.count_pages();
         Ok(count as i32)
     } else {
         Err("No document open".to_string())

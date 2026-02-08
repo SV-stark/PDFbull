@@ -23,3 +23,4 @@ dist-ssr
 *.sw?
 micropdf_API_documentation.md
 src-tauri/src/check_output_v10.txt
+all_ffi_funcs.txt
