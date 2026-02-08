@@ -80,4 +80,4 @@ This project is licensed under the **GNU Affero General Public License v3.0 (AGP
 Contributions are welcome! Please open an issue or submit a pull request.
 
 ---
-*Built with ❤️ by [Your Name/Team]*
+*Built with ❤️ by SV-Stark*
