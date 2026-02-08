@@ -2,15 +2,28 @@ use mupdf::pdf::PdfDocument;
 use mupdf::{Colorspace, Matrix, Rect};
 use std::sync::Mutex;
 
+pub struct PdfWrapper(pub PdfDocument);
+
+unsafe impl Send for PdfWrapper {}
+unsafe impl Sync for PdfWrapper {}
+
 pub struct PdfState {
-    pub doc: Mutex<Option<PdfDocument>>,
+    pub doc: Mutex<Option<PdfWrapper>>,
+}
+
+impl PdfState {
+    pub fn new() -> Self {
+        Self {
+            doc: Mutex::new(None),
+        }
+    }
 }
 
 #[tauri::command]
 pub fn open_document(state: tauri::State<PdfState>, path: String) -> Result<i32, String> {
-    let doc = PdfDocument::open(&path).map_err(|e| e.to_string())?;
-    let page_count = doc.page_count().map_err(|e| e.to_string())?;
-    *state.doc.lock().unwrap() = Some(doc);
+    let doc = PdfDocument::open(&path).map_err(|e: mupdf::Error| e.to_string())?;
+    let page_count = doc.page_count().map_err(|e: mupdf::Error| e.to_string())?;
+    *state.doc.lock().unwrap() = Some(PdfWrapper(doc));
     Ok(page_count)
 }
 
@@ -30,8 +43,9 @@ pub fn load_document_from_bytes(
     let mut file = std::fs::File::create(&temp_file).map_err(|e| e.to_string())?;
     file.write_all(&data).map_err(|e| e.to_string())?;
 
-    let doc = PdfDocument::open(temp_file.to_str().unwrap()).map_err(|e| e.to_string())?;
-    let page_count = doc.page_count().map_err(|e| e.to_string())?;
+    let doc =
+        PdfDocument::open(temp_file.to_str().unwrap()).map_err(|e: mupdf::Error| e.to_string())?;
+    let page_count = doc.page_count().map_err(|e: mupdf::Error| e.to_string())?;
 
     let doc_id = format!(
         "doc_{}",
@@ -41,7 +55,7 @@ pub fn load_document_from_bytes(
             .as_millis()
     );
 
-    *state.doc.lock().unwrap() = Some(doc);
+    *state.doc.lock().unwrap() = Some(PdfWrapper(doc));
 
     Ok(doc_id)
 }
@@ -49,8 +63,11 @@ pub fn load_document_from_bytes(
 #[tauri::command]
 pub fn get_page_count(state: tauri::State<PdfState>) -> Result<i32, String> {
     let guard = state.doc.lock().unwrap();
-    if let Some(doc) = guard.as_ref() {
-        doc.page_count().map_err(|e| e.to_string())
+    if let Some(wrapper) = guard.as_ref() {
+        wrapper
+            .0
+            .page_count()
+            .map_err(|e: mupdf::Error| e.to_string())
     } else {
         Err("No document open".to_string())
     }
@@ -59,9 +76,12 @@ pub fn get_page_count(state: tauri::State<PdfState>) -> Result<i32, String> {
 #[tauri::command]
 pub fn get_page_text(state: tauri::State<PdfState>, page_num: i32) -> Result<String, String> {
     let guard = state.doc.lock().unwrap();
-    if let Some(doc) = guard.as_ref() {
-        let page = doc.load_page(page_num).map_err(|e| e.to_string())?;
-        let text = page.to_text().map_err(|e| e.to_string())?;
+    if let Some(wrapper) = guard.as_ref() {
+        let doc = &wrapper.0;
+        let page = doc
+            .load_page(page_num)
+            .map_err(|e: mupdf::Error| e.to_string())?;
+        let text = page.to_text().map_err(|e: mupdf::Error| e.to_string())?;
         Ok(text.as_text())
     } else {
         Err("No document open".to_string())
@@ -75,9 +95,14 @@ pub fn search_text(
     query: String,
 ) -> Result<Vec<(f32, f32, f32, f32)>, String> {
     let guard = state.doc.lock().unwrap();
-    if let Some(doc) = guard.as_ref() {
-        let page = doc.load_page(page_num).map_err(|e| e.to_string())?;
-        let hits = page.search(&query).map_err(|e| e.to_string())?;
+    if let Some(wrapper) = guard.as_ref() {
+        let doc = &wrapper.0;
+        let page = doc
+            .load_page(page_num)
+            .map_err(|e: mupdf::Error| e.to_string())?;
+        let hits = page
+            .search(&query)
+            .map_err(|e: mupdf::Error| e.to_string())?;
 
         let rects = hits.iter().map(|r| (r.x0, r.y0, r.x1, r.y1)).collect();
         Ok(rects)
@@ -93,14 +118,17 @@ pub fn render_page(
     scale: f32,
 ) -> Result<Vec<u8>, String> {
     let mut guard = state.doc.lock().unwrap();
-    if let Some(doc) = guard.as_mut() {
-        let page = doc.load_page(page_num).map_err(|e| e.to_string())?;
+    if let Some(wrapper) = guard.as_mut() {
+        let doc = &mut wrapper.0;
+        let page = doc
+            .load_page(page_num)
+            .map_err(|e: mupdf::Error| e.to_string())?;
 
         let matrix = Matrix::new_scale(scale, scale);
 
         let pixmap = page
             .to_pixmap(&matrix, &Colorspace::device_rgb(), false)
-            .map_err(|e| e.to_string())?;
+            .map_err(|e: mupdf::Error| e.to_string())?;
 
         let samples = pixmap.samples();
         let width = pixmap.width() as u32;
@@ -114,7 +142,7 @@ pub fn render_page(
 
         let mut buf = Vec::new();
         img.write_to(&mut Cursor::new(&mut buf), image::ImageFormat::Png)
-            .map_err(|e| e.to_string())?;
+            .map_err(|e: image::ImageError| e.to_string())?;
 
         Ok(buf)
     } else {
