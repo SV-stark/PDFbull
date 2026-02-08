@@ -1,8 +1,8 @@
-mod pdf_engine;
 mod annotations;
+mod compression;
 mod filters;
 mod forms;
-mod compression;
+pub mod pdf_engine;
 
 use pdf_engine::PdfState;
 
