@@ -393,8 +393,8 @@ impl Document {
         }
 
         // Parse the dictionary
-        let lexer = Lexer::new(&self.data[pos..]);
-        let (obj, _consumed) = self.parse_object_recursive(lexer, 0)?;
+        let mut lexer = Lexer::new(&self.data[pos..]);
+        let obj = self.parse_object_recursive(&mut lexer, 0)?;
 
         if let Object::Dict(dict) = obj {
             self.trailer = dict;
@@ -685,8 +685,8 @@ impl Document {
 
         // Parse the object at this offset
         let obj_data = &decoded[first + offset..first + end_offset];
-        let lexer = Lexer::new(obj_data);
-        let (obj, _) = self.parse_object_recursive(lexer, 0)?;
+        let mut lexer = Lexer::new(obj_data);
+        let obj = self.parse_object_recursive(&mut lexer, 0)?;
 
         Ok(obj)
     }
@@ -717,7 +717,9 @@ impl Document {
         }
 
         // Parse the object value
-        let (obj, consumed) = self.parse_object_recursive(lexer, 0)?;
+        let start_pos = lexer.pos;
+        let obj = self.parse_object_recursive(&mut lexer, 0)?;
+        let consumed = lexer.pos - start_pos;
 
         // Check for stream
         let mut stream_data = Vec::new();
@@ -837,14 +839,12 @@ impl Document {
     }
 
     /// Recursively parse a PDF object
-    fn parse_object_recursive(&self, mut lexer: Lexer, depth: usize) -> Result<(Object, usize)> {
+    fn parse_object_recursive<'a>(&'a self, lexer: &mut Lexer<'a>, depth: usize) -> Result<Object> {
         if depth > 100 {
             return Err(Error::Generic("Object nesting too deep".into()));
         }
 
         let mut buf = LexBuf::new();
-        let start_pos = lexer.pos;
-
         let token = lexer.lex(&mut buf)?;
 
         let obj = match token {
@@ -860,17 +860,16 @@ impl Document {
                 let mut arr = Array::new();
                 loop {
                     let mut inner_buf = LexBuf::new();
-                    let mut inner_lexer = lexer.clone();
-                    let inner_token = inner_lexer.lex(&mut inner_buf)?;
+                    let mut peek_lexer = lexer.clone();
+                    let inner_token = peek_lexer.lex(&mut inner_buf)?;
 
                     if inner_token == Token::CloseArray {
-                        lexer = inner_lexer;
+                        *lexer = peek_lexer;
                         break;
                     }
 
-                    let (element, consumed) = self.parse_object_recursive(lexer, depth + 1)?;
+                    let element = self.parse_object_recursive(lexer, depth + 1)?;
                     arr.push(element);
-                    lexer = Lexer::new(&self.data[lexer.pos + consumed..]);
                 }
                 Object::Array(arr)
             }
@@ -879,11 +878,11 @@ impl Document {
                 let mut dict = Dict::new();
                 loop {
                     let mut inner_buf = LexBuf::new();
-                    let mut inner_lexer = lexer.clone();
-                    let inner_token = inner_lexer.lex(&mut inner_buf)?;
+                    let mut peek_lexer = lexer.clone();
+                    let inner_token = peek_lexer.lex(&mut inner_buf)?;
 
                     if inner_token == Token::CloseDict {
-                        lexer = inner_lexer;
+                        *lexer = peek_lexer;
                         break;
                     }
 
@@ -891,11 +890,10 @@ impl Document {
                         return Err(Error::Generic("Dictionary key must be a name".into()));
                     }
                     let key = Name::new(inner_buf.as_str());
-                    lexer = inner_lexer;
+                    *lexer = peek_lexer; // Consume the key name
 
-                    let (value, consumed) = self.parse_object_recursive(lexer, depth + 1)?;
+                    let value = self.parse_object_recursive(lexer, depth + 1)?;
                     dict.insert(key, value);
-                    lexer = Lexer::new(&self.data[lexer.pos + consumed..]);
                 }
                 Object::Dict(dict)
             }
@@ -907,8 +905,7 @@ impl Document {
             _ => Object::Null,
         };
 
-        let consumed = lexer.pos - start_pos;
-        Ok((obj, consumed))
+        Ok(obj)
     }
 
     /// Find line end

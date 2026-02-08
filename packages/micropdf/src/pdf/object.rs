@@ -229,7 +229,7 @@ static COMMON_NAMES: LazyLock<Vec<(&'static str, Arc<str>)>> = LazyLock::new(|| 
     ]
 });
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PdfString(Vec<u8>);
 impl PdfString {
     pub fn new(data: Vec<u8>) -> Self {
@@ -257,7 +257,7 @@ impl ObjRef {
 pub type Dict = HashMap<Name, Object>;
 pub type Array = Vec<Object>;
 
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, PartialEq)]
 pub enum Object {
     #[default]
     Null,

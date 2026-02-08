@@ -107,6 +107,7 @@ impl Default for GraphicsState {
 }
 
 /// Resource dictionary manager
+#[derive(Clone)]
 pub struct Resources {
     /// Font dictionary: name -> Font
     fonts: HashMap<String, Arc<Font>>,
@@ -123,12 +124,14 @@ pub struct Resources {
 }
 
 /// XObject types
+#[derive(Clone)]
 pub enum XObject {
     Image(Image),
     Form(FormXObject),
 }
 
 /// Form XObject
+#[derive(Clone)]
 pub struct FormXObject {
     pub bbox: Rect,
     pub matrix: Matrix,
@@ -645,8 +648,9 @@ impl<'a, 'b> ContentInterpreter<'a, 'b> {
             "gs" => {
                 // Set graphics state from ExtGState
                 if let Some(Object::Name(name)) = operands.pop() {
-                    if let Some(gs_dict) = self.resources.get_ext_gstate(name.as_str()) {
-                        self.apply_ext_gstate(gs_dict)?;
+                    let gs_dict = self.resources.get_ext_gstate(name.as_str()).cloned();
+                    if let Some(gs_dict) = gs_dict {
+                        self.apply_ext_gstate(&gs_dict)?;
                     }
                 }
             }
@@ -853,8 +857,10 @@ impl<'a, 'b> ContentInterpreter<'a, 'b> {
             "Tf" => {
                 // Set font
                 if operands.len() >= 2 {
-                    if let Some(Object::Real(size)) | Some(Object::Int(size)) = operands.pop() {
-                        self.gs.font_size = size as f32;
+                    if let Some(obj) = operands.pop() {
+                        if let Some(size) = obj.as_real() {
+                            self.gs.font_size = size as f32;
+                        }
                     }
                     if let Some(Object::Name(name)) = operands.pop() {
                         if let Some(font) = self.resources.get_font(name.as_str()) {
@@ -901,9 +907,13 @@ impl<'a, 'b> ContentInterpreter<'a, 'b> {
                                             TextLanguage::Unset,
                                         );
                                     }
-                                    Object::Real(adj) | Object::Int(adj) => {
+                                    Object::Real(adj) => {
                                         // Apply adjustment (in thousandths of text unit)
-                                        let _adjustment = *adj as f32 * self.gs.font_size / 1000.0;
+                                        let _adjustment = adj as f32 * self.gs.font_size / 1000.0;
+                                    }
+                                    Object::Int(adj) => {
+                                        // Apply adjustment (in thousandths of text unit)
+                                        let _adjustment = adj as f32 * self.gs.font_size / 1000.0;
                                     }
                                     _ => {}
                                 }
@@ -917,11 +927,12 @@ impl<'a, 'b> ContentInterpreter<'a, 'b> {
             "Do" => {
                 // Draw XObject
                 if let Some(Object::Name(name)) = operands.pop() {
-                    if let Some(xobj) = self.resources.get_xobject(name.as_str()) {
+                    let xobj = self.resources.get_xobject(name.as_str()).cloned();
+                    if let Some(xobj) = xobj {
                         match xobj {
                             XObject::Image(image) => {
                                 self.device
-                                    .fill_image(image, &self.gs.ctm, self.gs.alpha_fill);
+                                    .fill_image(&image, &self.gs.ctm, self.gs.alpha_fill);
                             }
                             XObject::Form(form) => {
                                 // Save state

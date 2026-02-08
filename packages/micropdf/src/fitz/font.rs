@@ -762,26 +762,29 @@ use crate::fitz::path::{Path, PathElement};
 impl Font {
     /// Parse embedded font data and extract glyph information
     pub fn parse_font_data(&mut self) -> Result<()> {
-        if self.font_data.is_none() {
-            return Err(Error::Generic("No font data available".into()));
-        }
-
-        let data = self.font_data.as_ref().unwrap();
+        let data = match self.font_data.as_ref() {
+            Some(d) => d,
+            None => return Err(Error::Generic("No font data available".into())),
+        };
 
         // Detect font format from header
-        if data.starts_with(&[0x00, 0x01, 0x00, 0x00]) || data.starts_with(b"true") {
-            self.font_type = FontType::TrueType;
-            self.parse_truetype(data)?;
-        } else if data.starts_with(b"OTTO") {
-            self.font_type = FontType::OpenType;
-            self.parse_truetype(data)?; // CFF-based OpenType needs different parsing
-        } else if data.starts_with(b"\x01\x00") || data.starts_with(b"\x02\x02") {
-            // Type1 PFB or PFA
-            self.font_type = FontType::Type1;
-            // Type1 parsing would go here
-        } else if data.len() > 4 && data[0] == 0x80 {
-            // PFB format
-            self.font_type = FontType::Type1;
+        let (font_type, is_truetype) =
+            if data.starts_with(&[0x00, 0x01, 0x00, 0x00]) || data.starts_with(b"true") {
+                (FontType::TrueType, true)
+            } else if data.starts_with(b"OTTO") {
+                (FontType::OpenType, true)
+            } else if data.starts_with(b"\x01\x00") || data.starts_with(b"\x02\x02") {
+                (FontType::Type1, false)
+            } else if data.len() > 4 && data[0] == 0x80 {
+                (FontType::Type1, false)
+            } else {
+                (self.font_type, false)
+            };
+
+        self.font_type = font_type;
+        if is_truetype {
+            let data = self.font_data.as_ref().unwrap().clone();
+            self.parse_truetype(&data)?;
         }
 
         Ok(())
