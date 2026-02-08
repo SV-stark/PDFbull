@@ -6,6 +6,13 @@ pub struct Colorspace {
     n: u8,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ColorType {
+    Gray,
+    RGB,
+    CMYK,
+}
+
 impl Colorspace {
     pub fn device_gray() -> Self {
         Self {
@@ -30,6 +37,17 @@ impl Colorspace {
     }
     pub fn n(&self) -> u8 {
         self.n
+    }
+    pub fn color_type(&self) -> ColorType {
+        match self.name.as_str() {
+            "DeviceGray" => ColorType::Gray,
+            "DeviceRGB" => ColorType::RGB,
+            "DeviceCMYK" => ColorType::CMYK,
+            _ => ColorType::RGB, // Default fallback
+        }
+    }
+    pub fn has_alpha(&self) -> bool {
+        false // Default for now
     }
 }
 

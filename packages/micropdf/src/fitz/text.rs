@@ -138,6 +138,11 @@ impl TextSpan {
         }
     }
 
+    /// Get font size from TRM
+    pub fn size(&self) -> f32 {
+        self.trm.a.hypot(self.trm.b)
+    }
+
     /// Create with capacity
     pub fn with_capacity(font: Arc<Font>, trm: Matrix, capacity: usize) -> Self {
         Self {

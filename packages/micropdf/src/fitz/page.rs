@@ -1127,10 +1127,10 @@ impl<'a> Device for DrawDevice<'a> {
                         // Apply text transformation
                         // Scale by font size, position at item location
                         let scale_matrix = Matrix::new(
-                            span.size * item.advance,
+                            span.size() * item.advance,
                             0.0,
                             0.0,
-                            span.size,
+                            span.size(),
                             item.x,
                             item.y,
                         );
@@ -1155,7 +1155,7 @@ impl<'a> Device for DrawDevice<'a> {
                 // This provides basic visibility even without font parsing
                 if span.font.get_glyph_outline(item.gid as u16).is_err() {
                     let mut fallback_path = Path::new();
-                    let font_size = span.size;
+                    let font_size = span.size();
                     let char_width = font_size * 0.5; // Approximate width
 
                     let x = item.x;

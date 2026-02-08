@@ -3,6 +3,7 @@
 //! Supports RC4 and AES encryption algorithms with password authentication.
 
 use crate::fitz::error::{Error, Result};
+use crate::pdf::object::{Array, Dict, Name, Object, PdfString};
 use aes::cipher::{BlockDecryptMut, BlockEncryptMut, KeyIvInit};
 use md5::{Digest, Md5};
 
@@ -93,6 +94,72 @@ pub struct Crypt {
 }
 
 impl Crypt {
+    /// Create a new encryption context from dictionary
+    pub fn from_dict(dict: &Dict, document_id: Vec<u8>) -> Result<Self> {
+        let filter = dict
+            .get(&Name::new("Filter"))
+            .and_then(|o| o.as_name())
+            .ok_or(Error::Generic(
+                "Missing Filter in encryption dictionary".into(),
+            ))?;
+
+        if filter.as_str() != "Standard" {
+            return Err(Error::Generic(format!(
+                "Unsupported encryption filter: {}",
+                filter
+            )));
+        }
+
+        let v = dict
+            .get(&Name::new("V"))
+            .and_then(|o| o.as_int())
+            .unwrap_or(0) as i32;
+
+        let r = dict
+            .get(&Name::new("R"))
+            .and_then(|o| o.as_int())
+            .unwrap_or(0) as i32;
+
+        let p = dict
+            .get(&Name::new("P"))
+            .and_then(|o| o.as_int())
+            .ok_or(Error::Generic("Missing Permissions".into()))? as u32;
+
+        let length = dict
+            .get(&Name::new("Length"))
+            .and_then(|o| o.as_int())
+            .map(|l| l / 8) // Length is in bits
+            .unwrap_or(5); // Default 40 bits = 5 bytes
+
+        let algorithm = match v {
+            1 => EncryptionAlgorithm::Rc4_40,
+            2 => {
+                if length > 5 {
+                    EncryptionAlgorithm::Rc4_128
+                } else {
+                    EncryptionAlgorithm::Rc4_40
+                }
+            }
+            4 => EncryptionAlgorithm::Aes128,
+            5 => EncryptionAlgorithm::Aes256,
+            _ => EncryptionAlgorithm::Unknown,
+        };
+
+        // Placeholder passwords - in real app, these would come from user input/auth
+        let owner_password = vec![];
+        let user_password = vec![];
+
+        Self::new(
+            algorithm,
+            v,
+            r,
+            owner_password,
+            user_password,
+            p,
+            document_id,
+        )
+    }
+
     /// Create a new encryption context for decryption
     pub fn new(
         algorithm: EncryptionAlgorithm,
@@ -388,6 +455,40 @@ impl Crypt {
             _ => Err(Error::Generic(
                 "Unsupported encryption algorithm".to_string(),
             )),
+        }
+    }
+
+    /// Recursively decrypt an object
+    pub fn decrypt_object(&self, obj: &Object, num: i32, generation: i32) -> Result<Object> {
+        match obj {
+            Object::String(s) => {
+                let data = s.as_bytes();
+                let decrypted = self.decrypt_data(data, num, generation)?;
+                Ok(Object::String(PdfString::new(decrypted)))
+            }
+            Object::Stream { dict, data } => {
+                let decrypted = self.decrypt_data(data, num, generation)?;
+                // Theoretically should also decrypt dict values, but usually not needed for stream dicts
+                Ok(Object::Stream {
+                    dict: dict.clone(),
+                    data: decrypted,
+                })
+            }
+            Object::Array(arr) => {
+                let mut new_arr = Vec::new();
+                for item in arr {
+                    new_arr.push(self.decrypt_object(item, num, generation)?);
+                }
+                Ok(Object::Array(new_arr))
+            }
+            Object::Dict(d) => {
+                let mut new_dict = Dict::new();
+                for (k, v) in d {
+                    new_dict.insert(k.clone(), self.decrypt_object(v, num, generation)?);
+                }
+                Ok(Object::Dict(new_dict))
+            }
+            _ => Ok(obj.clone()),
         }
     }
 

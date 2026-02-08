@@ -708,6 +708,18 @@ impl crate::fitz::device::Device for TextDevice {
     }
 
     // Other Device methods can be no-ops for text extraction
+    // Other Device methods can be no-ops for text extraction
+    fn stroke_text(
+        &mut self,
+        _text: &Text,
+        _stroke: &StrokeState,
+        _ctm: &Matrix,
+        _colorspace: &Colorspace,
+        _color: &[f32],
+        _alpha: f32,
+    ) {
+    }
+
     fn fill_path(
         &mut self,
         _path: &Path,

@@ -115,9 +115,10 @@ impl Default for LexBuf {
 }
 
 /// PDF lexer for tokenizing PDF streams
+#[derive(Clone)]
 pub struct Lexer<'a> {
-    data: &'a [u8],
-    pos: usize,
+    pub data: &'a [u8],
+    pub pos: usize,
 }
 
 impl<'a> Lexer<'a> {

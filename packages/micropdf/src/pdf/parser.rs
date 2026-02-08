@@ -45,13 +45,13 @@ impl<'a> Parser<'a> {
             // Look ahead for generation number
             let saved_pos = self.lexer_pos();
             if let Ok(Token::Int) = self.peek_token() {
-                if let Ok(gen) = self.parse_int() {
+                if let Ok(generation) = self.parse_int() {
                     self.skip_whitespace_and_comments();
 
                     // Check for R keyword
                     if let Ok(Token::R) = self.peek_token() {
-                        self.consume_token()?; // consume R
-                        return Ok(Object::Ref(ObjRef::new(num as i32, gen as i32)));
+                        self.next_token()?; // consume R
+                        return Ok(Object::Ref(ObjRef::new(num as i32, generation as i32)));
                     }
                 }
             }
@@ -175,7 +175,7 @@ impl<'a> Parser<'a> {
     /// Parse an indirect object: num gen obj ... endobj
     pub fn parse_indirect_object(&mut self) -> Result<(i32, i32, Object)> {
         let obj_num = self.expect_int()?;
-        let gen_num = self.expect_int()?;
+        let generation = self.expect_int()?;
         self.expect_token(Token::Obj)?;
 
         let obj = self.parse_object()?;
@@ -190,13 +190,13 @@ impl<'a> Parser<'a> {
 
         self.expect_token(Token::EndObj)?;
 
-        Ok((obj_num as i32, gen_num as i32, obj))
+        Ok((obj_num as i32, generation as i32, obj))
     }
 
     /// Parse a stream object: num gen obj <<dict>> stream ... endstream endobj
     pub fn parse_stream_object(&mut self) -> Result<(i32, i32, Dict, Vec<u8>)> {
         let obj_num = self.expect_int()?;
-        let gen_num = self.expect_int()?;
+        let generation = self.expect_int()?;
         self.expect_token(Token::Obj)?;
 
         // Parse dictionary
@@ -226,7 +226,7 @@ impl<'a> Parser<'a> {
         self.expect_token(Token::EndStream)?;
         self.expect_token(Token::EndObj)?;
 
-        Ok((obj_num as i32, gen_num as i32, dict, stream_data))
+        Ok((obj_num as i32, generation as i32, dict, stream_data))
     }
 
     /// Parse XREF table

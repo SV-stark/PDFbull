@@ -1632,3 +1632,12 @@ mod tests {
         fz_drop_stext_page(ctx, page);
     }
 }
+/// Analyze text (high-level wrapper)
+#[unsafe(no_mangle)]
+pub extern "C" fn fz_analyze_text(ctx: Handle, page: Handle) -> i32 {
+    // This function typically runs analysis on the stext page to detect structure
+    // equivalent to fz_segment_stext_page + fz_table_hunt etc.
+    fz_segment_stext_page(ctx, page);
+    fz_table_hunt(ctx, page);
+    0
+}

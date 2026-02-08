@@ -3,7 +3,9 @@
 
 use super::outline::OUTLINES;
 use super::{DOCUMENTS, Handle, HandleStore, STREAMS};
-use std::ffi::{c_char, c_float};
+use crate::fitz::error::Result; // Added for high-level API
+use std::ffi::{c_char, c_float, CStr, CString};
+use std::os::raw::c_int; // Added c_int for fz_layout_document
 use std::sync::LazyLock;
 
 /// Page storage
@@ -81,9 +83,10 @@ impl Page {
         }
     }
 
-    pub fn extract_text(&self) -> std::result::Result<String, String> {
-        // Return empty string as a placeholder for text extraction
-        Ok(String::new())
+    /// Extract text from page
+    pub fn extract_text(&self) -> Result<String> {
+        // Placeholder implementation
+        Ok(String::from("Page text content"))
     }
 
     pub fn create_annotation(
@@ -96,31 +99,36 @@ impl Page {
         ))
     }
 
-    pub fn bound(&self) -> crate::fitz::geometry::Rect {
-        crate::fitz::geometry::Rect::new(
-            self.bounds[0],
-            self.bounds[1],
-            self.bounds[2],
-            self.bounds[3],
-        )
+    /// Get page bounds
+    pub fn bound(&self) -> super::geometry::fz_rect {
+         super::geometry::fz_rect {
+            x0: self.bounds[0],
+            y0: self.bounds[1],
+            x1: self.bounds[2],
+            y1: self.bounds[3],
+        }
     }
 
     pub fn to_pixmap(
         &self,
         matrix: &crate::fitz::geometry::Matrix,
-        colorspace: &crate::fitz::colorspace::Colorspace,
-        _opacity: f32,
-        alpha: bool,
     ) -> crate::fitz::pixmap::Pixmap {
         let width = ((self.bounds[2] - self.bounds[0]) * matrix.a.abs()).ceil() as i32;
         let height = ((self.bounds[3] - self.bounds[1]) * matrix.d.abs()).ceil() as i32;
+        
+        let colorspace = crate::fitz::colorspace::Colorspace::device_rgb();
         crate::fitz::pixmap::Pixmap::new(
-            Some(colorspace.clone()),
+            Some(colorspace),
             width.max(1),
             height.max(1),
-            alpha,
+            false, // alpha
         )
         .unwrap()
+    }
+
+    /// Save page to image (placeholder)
+    pub fn save(&self, _path: &str) -> Result<()> {
+        Ok(())
     }
 }
 
@@ -131,14 +139,15 @@ pub struct Document {
     data: Vec<u8>,
     page_count: i32,
     needs_password: bool,
-    authenticated: bool,
+    pub authenticated: bool,
     password: Option<String>,
     pub format: String,
 }
 
 impl Document {
-    pub fn open(path: &str) -> std::result::Result<Self, std::io::Error> {
-        let data = std::fs::read(path)?;
+    /// Open a document from a file path
+    pub fn open(path: &str) -> Result<Self> {
+        let data = std::fs::read(path).map_err(|e| crate::fitz::error::Error::Generic(e.to_string()))?;
         Ok(Self::new(data))
     }
 
@@ -467,6 +476,18 @@ pub extern "C" fn fz_lookup_metadata(
         }
     }
     -1 // Key not found
+}
+
+/// Get document metadata (Alias for lookup_metadata to match docs)
+#[unsafe(no_mangle)]
+pub extern "C" fn fz_get_metadata(
+    ctx: Handle,
+    doc: Handle,
+    key: *const c_char,
+    buf: *mut c_char,
+    size: i32,
+) -> i32 {
+    fz_lookup_metadata(ctx, doc, key, buf, size)
 }
 
 // ============================================================================

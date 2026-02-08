@@ -5,8 +5,8 @@
 
 use crate::fitz::error::{Error, Result};
 use crate::fitz::stream::Stream;
-use crate::pdf::crypt::CryptContext;
-use crate::pdf::filter::{decode_flate, decode_predictor};
+use crate::pdf::crypt::Crypt;
+use crate::pdf::filter::{decode_flate, FlateDecodeParams};
 use crate::pdf::lexer::{LexBuf, Lexer, Token};
 use crate::pdf::object::{Array, Dict, Name, ObjRef, Object, PdfString};
 use crate::pdf::xref::{XrefEntry, XrefEntryType, XrefSubsection, XrefTable};
@@ -27,7 +27,7 @@ pub struct Document {
     /// Info dictionary reference
     info: Option<ObjRef>,
     /// Encryption context (if encrypted)
-    crypt: Option<CryptContext>,
+    crypt: Option<Crypt>,
     /// Object cache for frequently accessed objects
     object_cache: HashMap<i32, Object>,
     /// Document version (e.g., "1.4")
@@ -45,8 +45,8 @@ impl Document {
 
     /// Open a PDF document from a stream
     pub fn from_stream(stream: &mut Stream) -> Result<Self> {
-        let mut data = Vec::new();
-        stream.read_to_end(&mut data)?;
+        let buffer = stream.read_all(0)?;
+        let data = buffer.as_slice().to_vec();
         Self::from_bytes(data)
     }
 
@@ -428,7 +428,20 @@ impl Document {
             let encrypt_obj = self.resolve_object_ref(*encrypt_ref)?;
 
             if let Object::Dict(encrypt_dict) = encrypt_obj {
-                self.crypt = Some(CryptContext::new(encrypt_dict)?);
+                // Get Document ID from trailer
+                let id_array = self
+                    .trailer
+                    .get(&Name::new("ID"))
+                    .and_then(|o| o.as_array())
+                    .ok_or(Error::Generic("Missing ID in trailer".into()))?;
+                let id_0 = id_array
+                    .get(0)
+                    .and_then(|o| o.as_string())
+                    .ok_or(Error::Generic("Invalid ID[0]".into()))?
+                    .as_bytes()
+                    .to_vec();
+
+                self.crypt = Some(Crypt::from_dict(&encrypt_dict, id_0)?);
             }
         }
 
@@ -486,7 +499,6 @@ impl Document {
 
         let pages_ref = catalog
             .get(&Name::new("Pages"))
-            .and_then(|o| o.as_ref())
             .ok_or_else(|| Error::Generic("Catalog missing Pages reference".into()))?;
 
         if let Object::Ref(pages_ref) = pages_ref {
@@ -507,7 +519,6 @@ impl Document {
 
         let pages_ref = catalog
             .get(&Name::new("Pages"))
-            .and_then(|o| o.as_ref())
             .ok_or_else(|| Error::Generic("Catalog missing Pages reference".into()))?;
 
         let pages_obj = if let Object::Ref(r) = pages_ref {
@@ -563,12 +574,12 @@ impl Document {
         let obj = match entry.entry_type {
             XrefEntryType::InUse => {
                 // Parse object at offset
-                let (num, gen, dict, data) = self.parse_object_at_offset(entry.offset)?;
+                let (num, generation, dict, data) = self.parse_object_at_offset(entry.offset)?;
 
-                if num != obj_ref.num || gen != obj_ref.generation {
+                if num != obj_ref.num || generation != obj_ref.generation {
                     return Err(Error::Generic(format!(
                         "Object mismatch: expected {} {}, found {} {}",
-                        obj_ref.num, obj_ref.generation, num, gen
+                        obj_ref.num, obj_ref.generation, num, generation
                     )));
                 }
 
@@ -785,21 +796,40 @@ impl Document {
         // For now, just handle FlateDecode
         if let Some(Object::Name(name)) = filter {
             if name.as_str() == "FlateDecode" {
-                result = decode_flate(data)?;
+                let mut params = None;
+                let mut flate_params;
 
-                // Handle predictor if present
                 if let Some(Object::Dict(parms)) = decode_parms {
-                    if let Some(Object::Int(predictor)) = parms.get(&Name::new("Predictor")) {
-                        if *predictor >= 10 {
-                            // PNG predictor
-                            let columns = parms
-                                .get(&Name::new("Columns"))
-                                .and_then(|o| o.as_int())
-                                .unwrap_or(1) as usize;
-                            result = decode_predictor(&result, *predictor as u8, columns)?;
-                        }
-                    }
+                    let predictor = parms
+                        .get(&Name::new("Predictor"))
+                        .and_then(|o| o.as_int())
+                        .unwrap_or(1) as i32;
+
+                    let columns = parms
+                        .get(&Name::new("Columns"))
+                        .and_then(|o| o.as_int())
+                        .unwrap_or(1) as i32;
+
+                    let colors = parms
+                        .get(&Name::new("Colors"))
+                        .and_then(|o| o.as_int())
+                        .unwrap_or(1) as i32;
+
+                    let bits_per_component = parms
+                        .get(&Name::new("BitsPerComponent"))
+                        .and_then(|o| o.as_int())
+                        .unwrap_or(8) as i32;
+
+                    flate_params = FlateDecodeParams {
+                        predictor,
+                        columns,
+                        colors,
+                        bits_per_component,
+                    };
+                    params = Some(&flate_params);
                 }
+
+                result = decode_flate(data, params)?;
             }
         }
 
@@ -829,9 +859,9 @@ impl Document {
                 // Parse array
                 let mut arr = Array::new();
                 loop {
-                    let inner_buf = LexBuf::new();
+                    let mut inner_buf = LexBuf::new();
                     let mut inner_lexer = lexer.clone();
-                    let inner_token = inner_lexer.lex(&inner_buf)?;
+                    let inner_token = inner_lexer.lex(&mut inner_buf)?;
 
                     if inner_token == Token::CloseArray {
                         lexer = inner_lexer;
@@ -848,9 +878,9 @@ impl Document {
                 // Parse dictionary
                 let mut dict = Dict::new();
                 loop {
-                    let inner_buf = LexBuf::new();
+                    let mut inner_buf = LexBuf::new();
                     let mut inner_lexer = lexer.clone();
-                    let inner_token = inner_lexer.lex(&inner_buf)?;
+                    let inner_token = inner_lexer.lex(&mut inner_buf)?;
 
                     if inner_token == Token::CloseDict {
                         lexer = inner_lexer;
