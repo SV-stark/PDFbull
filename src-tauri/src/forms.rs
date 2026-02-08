@@ -10,7 +10,7 @@ pub fn get_form_fields(
         let doc = &wrapper.0;
         let _page = doc
             .load_page(page_num)
-            .map_err(|e: mupdf::Error| e.to_string())?;
+            .map_err(|e: micropdf::Error| e.to_string())?;
 
         // Placeholder until mupdf-rs bindings verified
         Ok(vec![])
