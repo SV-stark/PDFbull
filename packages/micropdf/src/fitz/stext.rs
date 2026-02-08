@@ -10,8 +10,13 @@
 //! - Word boundaries
 //! - Bounding box tracking
 
+use crate::fitz::colorspace::Colorspace;
+use crate::fitz::error::Result;
 use crate::fitz::geometry::{Matrix, Point, Rect};
-use crate::fitz::text::{BidiDirection, TextItem, TextLanguage, TextSpan};
+use crate::fitz::image::Image;
+use crate::fitz::path::{Path, StrokeState};
+use crate::fitz::text::{BidiDirection, Text, TextItem, TextLanguage, TextSpan};
+use std::collections::HashMap;
 use std::fmt;
 
 /// Structured text page - top-level container
@@ -559,6 +564,32 @@ impl STextBuilder {
         }
     }
 
+    /// Add a single character directly (for text device integration)
+    pub fn add_char(&mut self, ch: STextChar, _ctm: Matrix, wmode: bool) {
+        let writing_mode = if wmode {
+            WritingMode::VerticalTtb
+        } else {
+            WritingMode::HorizontalLtr
+        };
+
+        // Check if we need a new line (vertical spacing)
+        if let Some(ref mut line) = self.current_line {
+            let baseline_diff = (ch.origin.y - line.baseline).abs();
+            if baseline_diff > ch.size * 0.5 {
+                // New line needed
+                self.finish_line();
+                self.start_line(writing_mode, ch.origin.y);
+            }
+        } else {
+            // Start first line
+            self.start_line(writing_mode, ch.origin.y);
+        }
+
+        if let Some(ref mut line) = self.current_line {
+            line.add_char(ch);
+        }
+    }
+
     /// Finish building and return the structured text page
     pub fn finish(mut self) -> STextPage {
         self.finish_line();
@@ -571,6 +602,305 @@ impl fmt::Display for STextPage {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "{}", self.get_text())
     }
+}
+
+// ============================================================================
+// Text Device Implementation
+// ============================================================================
+
+use crate::fitz::device::BlendMode;
+use crate::fitz::font::Font;
+use std::sync::Arc;
+
+/// Text extraction device - extracts text while rendering
+pub struct TextDevice {
+    /// Structured text builder
+    builder: STextBuilder,
+    /// Current text matrix
+    text_matrix: Matrix,
+    /// ToUnicode CMaps (font name -> CMap)
+    to_unicode_maps: HashMap<String, ToUnicodeCMap>,
+}
+
+impl TextDevice {
+    /// Create a new text device
+    pub fn new(media_box: Rect, options: STextOptions) -> Self {
+        Self {
+            builder: STextBuilder::new(media_box, options),
+            text_matrix: Matrix::IDENTITY,
+            to_unicode_maps: HashMap::new(),
+        }
+    }
+
+    /// Load ToUnicode CMap for a font
+    pub fn load_to_unicode(&mut self, font_name: &str, cmap_data: &[u8]) -> Result<()> {
+        let cmap = ToUnicodeCMap::parse(cmap_data)?;
+        self.to_unicode_maps.insert(font_name.to_string(), cmap);
+        Ok(())
+    }
+
+    /// Get the extracted text page
+    pub fn finish(self) -> STextPage {
+        self.builder.finish()
+    }
+
+    /// Convert a glyph ID to Unicode using ToUnicode CMap
+    fn glyph_to_unicode(&self, font_name: &str, gid: u16) -> Option<char> {
+        if let Some(cmap) = self.to_unicode_maps.get(font_name) {
+            cmap.lookup(gid)
+        } else {
+            None
+        }
+    }
+}
+
+impl crate::fitz::device::Device for TextDevice {
+    fn fill_text(
+        &mut self,
+        text: &Text,
+        ctm: &Matrix,
+        _colorspace: &Colorspace,
+        _color: &[f32],
+        _alpha: f32,
+    ) {
+        let combined_matrix = ctm.concat(&self.text_matrix);
+
+        for span in text.spans() {
+            let font_name = span.font.name().to_string();
+
+            for item in span.items() {
+                let ucs = if item.ucs >= 0 {
+                    item.ucs as u32
+                } else {
+                    self.glyph_to_unicode(&font_name, item.gid as u16)
+                        .map(|c| c as u32)
+                        .unwrap_or(item.gid as u32)
+                };
+
+                if let Some(ch) = char::from_u32(ucs) {
+                    let origin = Point::new(item.x, item.y);
+                    let font_size = (span.trm.a.abs() + span.trm.b.abs())
+                        .max(span.trm.c.abs() + span.trm.d.abs());
+                    let advance = item.advance;
+
+                    let quad = Quad::from_rect(&Rect::new(
+                        origin.x,
+                        origin.y - font_size * 0.2,
+                        origin.x + advance,
+                        origin.y + font_size * 0.8,
+                    ));
+
+                    let stext_char = STextChar::with_details(
+                        ch,
+                        quad,
+                        font_size,
+                        font_name.clone(),
+                        item.gid as u16,
+                        [0, 0, 0],
+                        origin,
+                    );
+
+                    self.builder
+                        .add_char(stext_char, combined_matrix, span.wmode);
+                }
+            }
+        }
+    }
+
+    // Other Device methods can be no-ops for text extraction
+    fn fill_path(
+        &mut self,
+        _path: &Path,
+        _even_odd: bool,
+        _ctm: &Matrix,
+        _colorspace: &Colorspace,
+        _color: &[f32],
+        _alpha: f32,
+    ) {
+    }
+    fn stroke_path(
+        &mut self,
+        _path: &Path,
+        _stroke: &StrokeState,
+        _ctm: &Matrix,
+        _colorspace: &Colorspace,
+        _color: &[f32],
+        _alpha: f32,
+    ) {
+    }
+    fn fill_image(&mut self, _image: &Image, _ctm: &Matrix, _alpha: f32) {}
+    fn fill_image_mask(
+        &mut self,
+        _image: &Image,
+        _ctm: &Matrix,
+        _colorspace: &Colorspace,
+        _color: &[f32],
+        _alpha: f32,
+    ) {
+    }
+    fn clip_path(&mut self, _path: &Path, _even_odd: bool, _ctm: &Matrix, _scissor: Rect) {}
+    fn clip_stroke_path(
+        &mut self,
+        _path: &Path,
+        _stroke: &StrokeState,
+        _ctm: &Matrix,
+        _scissor: Rect,
+    ) {
+    }
+    fn clip_text(&mut self, _text: &Text, _ctm: &Matrix, _scissor: Rect) {}
+    fn clip_stroke_text(
+        &mut self,
+        _text: &Text,
+        _stroke: &StrokeState,
+        _ctm: &Matrix,
+        _scissor: Rect,
+    ) {
+    }
+    fn ignore_text(&mut self, _text: &Text, _ctm: &Matrix) {}
+    fn clip_image_mask(&mut self, _image: &Image, _ctm: &Matrix, _scissor: Rect) {}
+    fn pop_clip(&mut self) {}
+    fn begin_mask(
+        &mut self,
+        _area: Rect,
+        _luminosity: bool,
+        _colorspace: &Colorspace,
+        _color: &[f32],
+    ) {
+    }
+    fn end_mask(&mut self) {}
+    fn begin_group(
+        &mut self,
+        _area: Rect,
+        _colorspace: Option<&Colorspace>,
+        _isolated: bool,
+        _knockout: bool,
+        _blendmode: BlendMode,
+        _alpha: f32,
+    ) {
+    }
+    fn end_group(&mut self) {}
+    fn begin_tile(
+        &mut self,
+        _area: Rect,
+        _view: Rect,
+        _xstep: f32,
+        _ystep: f32,
+        _ctm: &Matrix,
+    ) -> i32 {
+        0
+    }
+    fn end_tile(&mut self) {}
+}
+
+// ============================================================================
+// ToUnicode CMap Implementation
+// ============================================================================
+
+/// ToUnicode CMap - maps glyph IDs to Unicode codepoints
+pub struct ToUnicodeCMap {
+    /// CID mappings (CID -> Unicode)
+    cid_mappings: HashMap<u32, char>,
+    /// Range mappings (CID start, CID end) -> (Unicode start, Unicode end)
+    range_mappings: Vec<((u32, u32), (u32, u32))>,
+}
+
+impl ToUnicodeCMap {
+    /// Parse a ToUnicode CMap from bytes
+    pub fn parse(data: &[u8]) -> Result<Self> {
+        let content = String::from_utf8_lossy(data);
+        let mut cmap = Self {
+            cid_mappings: HashMap::new(),
+            range_mappings: Vec::new(),
+        };
+
+        // Parse CID character mappings
+        if let Some(start) = content.find("beginbfchar") {
+            if let Some(end) = content.find("endbfchar") {
+                let char_section = &content[start..end];
+                for line in char_section.lines() {
+                    let parts: Vec<&str> = line.split_whitespace().collect();
+                    if parts.len() >= 2 && !parts[0].starts_with("begin") {
+                        if let Some(cid) = parse_hex(parts[0]) {
+                            if let Some(unicode_hex) = parse_hex(parts[1]) {
+                                if let Some(ch) = char::from_u32(unicode_hex) {
+                                    cmap.cid_mappings.insert(cid, ch);
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        // Parse CID range mappings
+        if let Some(start) = content.find("beginbfrange") {
+            if let Some(end) = content.find("endbfrange") {
+                let range_section = &content[start..end];
+                for line in range_section.lines() {
+                    let parts: Vec<&str> = line.split_whitespace().collect();
+                    if parts.len() >= 3 && !parts[0].starts_with("begin") {
+                        if let (Some(cid_start), Some(cid_end)) =
+                            (parse_hex(parts[0]), parse_hex(parts[1]))
+                        {
+                            if let Some(unicode_start) = parse_hex(parts[2]) {
+                                cmap.range_mappings.push((
+                                    (cid_start, cid_end),
+                                    (unicode_start, unicode_start + (cid_end - cid_start)),
+                                ));
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        Ok(cmap)
+    }
+
+    /// Look up a glyph ID and return the corresponding Unicode character
+    pub fn lookup(&self, gid: u16) -> Option<char> {
+        let gid = gid as u32;
+
+        // Check single mappings first
+        if let Some(&ch) = self.cid_mappings.get(&gid) {
+            return Some(ch);
+        }
+
+        // Check range mappings
+        for ((cid_start, cid_end), (unicode_start, _unicode_end)) in &self.range_mappings {
+            if gid >= *cid_start && gid <= *cid_end {
+                let offset = gid - *cid_start;
+                return char::from_u32(unicode_start + offset);
+            }
+        }
+
+        None
+    }
+}
+
+/// Parse a hexadecimal string
+fn parse_hex(s: &str) -> Option<u32> {
+    let s = s.trim();
+    let s = s.trim_start_matches('<').trim_end_matches('>');
+    u32::from_str_radix(s, 16).ok()
+}
+
+/// Extract text from a PDF document page
+pub fn extract_text_from_page(
+    doc: &crate::pdf::document::Document,
+    page_num: i32,
+    options: STextOptions,
+) -> Result<String> {
+    let page = doc.get_page(page_num)?;
+    let media_box = page.media_box();
+
+    let mut text_device = TextDevice::new(media_box, options);
+
+    let mut interpreter = crate::fitz::page::ContentInterpreter::new(doc, &page, &mut text_device)?;
+    interpreter.run()?;
+
+    let stext_page = text_device.finish();
+    Ok(stext_page.get_text())
 }
 
 // ============================================================================
@@ -658,5 +988,53 @@ mod tests {
         assert_eq!(words.len(), 2);
         assert_eq!(words[0], "Hello");
         assert_eq!(words[1], "World");
+    }
+
+    #[test]
+    fn test_to_unicode_cmap_parse() {
+        let cmap_data = b"
+            /CIDInit /ProcSet findresource begin
+            12 dict begin
+            begincmap
+            /CIDSystemInfo << /Registry (Adobe) /Ordering (UCS) /Supplement 0 >> def
+            /CMapName /Adobe-Identity-UCS def
+            /CMapType 2 def
+            1 begincodespacerange
+            <00> <FF>
+            endcodespacerange
+            2 beginbfchar
+            <01> <0041>
+            <02> <0042>
+            endbfchar
+            1 beginbfrange
+            <03> <04> <0043>
+            endbfrange
+            endcmap
+            CMapName currentdict /CMap defineresource pop
+            end
+            end
+        ";
+
+        let cmap = ToUnicodeCMap::parse(cmap_data).unwrap();
+
+        assert_eq!(cmap.lookup(0x01), Some('A'));
+        assert_eq!(cmap.lookup(0x02), Some('B'));
+        assert_eq!(cmap.lookup(0x03), Some('C'));
+        assert_eq!(cmap.lookup(0x04), Some('D'));
+    }
+
+    #[test]
+    fn test_stext_builder_add_char() {
+        let media_box = Rect::new(0.0, 0.0, 612.0, 792.0);
+        let mut builder = STextBuilder::new(media_box, STextOptions::default());
+
+        let quad = Quad::from_rect(&Rect::new(10.0, 100.0, 20.0, 110.0));
+        let ch = STextChar::new('A', quad, 10.0, "Times".to_string());
+
+        builder.add_char(ch, Matrix::IDENTITY, false);
+
+        let page = builder.finish();
+        assert!(page.char_count() > 0);
+        assert!(page.get_text().contains('A'));
     }
 }
