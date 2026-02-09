@@ -57,6 +57,8 @@ impl OcrEngine {
             model_info.rec_model_path.to_str().unwrap(),
             model_info.keys_path.to_str().unwrap(),
         )
+            .classifier_model_path(model_info.cls_model_path.to_str().unwrap())
+            .with_document_image_orientation_classification()
             .build()
             .map_err(|e| format!("Failed to initialize OCR engine: {}", e))?;
 
