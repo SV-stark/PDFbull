@@ -5,7 +5,7 @@ mod forms;
 pub mod pdf_engine;
 
 use pdf_engine::PdfState;
-use std::fs;
+use tauri::Emitter;
 
 #[tauri::command]
 async fn save_file(path: String, data: Vec<u8>) -> Result<(), String> {
