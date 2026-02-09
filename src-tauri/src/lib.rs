@@ -8,8 +8,8 @@ use pdf_engine::PdfState;
 use std::fs;
 
 #[tauri::command]
-fn save_file(path: String, data: Vec<u8>) -> Result<(), String> {
-    fs::write(&path, data).map_err(|e| e.to_string())
+async fn save_file(path: String, data: Vec<u8>) -> Result<(), String> {
+    tokio::fs::write(&path, data).await.map_err(|e| e.to_string())
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -40,7 +40,9 @@ pub fn run() {
             // Forms
             forms::get_form_fields,
             // Compression
-            compression::compress_pdf
+            compression::compress_pdf,
+            // Scanner
+            pdf_engine::apply_scanner_filter
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

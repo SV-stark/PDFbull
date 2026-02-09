@@ -152,6 +152,33 @@
         </div>
       </div>
 
+      <!-- Actions -->
+      <div class="sidebar-section">
+        <div class="sidebar-header">Actions</div>
+        <div class="tools-container">
+          <button id="btn-scanner" class="tool-btn" tooltip="Scanner Mode">
+            <i class="ph ph-scan"></i>
+            <span>Scanner</span>
+          </button>
+          <button id="btn-crop" class="tool-btn" tooltip="Auto-crop whitespace">
+            <i class="ph ph-crop"></i>
+            <span>Auto Crop</span>
+          </button>
+          <button id="btn-forms" class="tool-btn" tooltip="Scan for form fields">
+            <i class="ph ph-textbox"></i>
+            <span>Scan Forms</span>
+          </button>
+          <button id="btn-compress" class="tool-btn" tooltip="Compress PDF file">
+            <i class="ph ph-file-zip"></i>
+            <span>Compress PDF</span>
+          </button>
+          <button id="btn-batch" class="tool-btn" tooltip="Batch processing">
+            <i class="ph ph-stack"></i>
+            <span>Batch Mode</span>
+          </button>
+        </div>
+      </div>
+
       <!-- Layers -->
       <div class="sidebar-section">
         <div class="sidebar-header">Layers</div>
@@ -178,29 +205,6 @@
           <button id="btn-filter-invert" class="tool-btn" data-filter="none" tooltip="Toggle color inversion">
             <i class="ph ph-swap"></i>
             <span>Invert</span>
-          </button>
-        </div>
-      </div>
-
-      <!-- Actions -->
-      <div class="sidebar-section">
-        <div class="sidebar-header">Actions</div>
-        <div class="tools-container">
-          <button id="btn-crop" class="tool-btn" tooltip="Auto-crop whitespace">
-            <i class="ph ph-crop"></i>
-            <span>Auto Crop</span>
-          </button>
-          <button id="btn-forms" class="tool-btn" tooltip="Scan for form fields">
-            <i class="ph ph-textbox"></i>
-            <span>Scan Forms</span>
-          </button>
-          <button id="btn-compress" class="tool-btn" tooltip="Compress PDF file">
-            <i class="ph ph-file-zip"></i>
-            <span>Compress PDF</span>
-          </button>
-          <button id="btn-batch" class="tool-btn" tooltip="Batch processing">
-            <i class="ph ph-stack"></i>
-            <span>Batch Mode</span>
           </button>
         </div>
       </div>
@@ -306,6 +310,61 @@
           <i class="ph ph-file-zip"></i>
           <span>Compress PDF</span>
         </button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Scanner Modal -->
+  <div id="scanner-modal" class="modal hidden">
+    <div class="modal-content scanner-content">
+      <div class="modal-header">
+        <h3>Scanner Mode</h3>
+        <button class="modal-close" id="btn-close-scanner">
+          <i class="ph ph-x"></i>
+        </button>
+      </div>
+      <div class="modal-body scanner-body">
+        <div class="scanner-preview-container">
+          <canvas id="scanner-preview-canvas"></canvas>
+        </div>
+        <div class="scanner-controls">
+          <div class="scanner-filters">
+            <button class="filter-btn active" data-filter="original" tooltip="Original">
+              <i class="ph ph-image"></i>
+              <span>Original</span>
+            </button>
+            <button class="filter-btn" data-filter="grayscale" tooltip="Grayscale">
+              <i class="ph ph-drop-half"></i>
+              <span>Grayscale</span>
+            </button>
+            <button class="filter-btn" data-filter="bw" tooltip="Black & White">
+              <i class="ph ph-circle-half"></i>
+              <span>B&W</span>
+            </button>
+            <button class="filter-btn" data-filter="lighten" tooltip="Lighten">
+              <i class="ph ph-sun-dim"></i>
+              <span>Lighten</span>
+            </button>
+            <button class="filter-btn" data-filter="eco" tooltip="Eco-friendly">
+              <i class="ph ph-leaf"></i>
+              <span>Eco</span>
+            </button>
+            <button class="filter-btn" data-filter="noshadow" tooltip="No Shadow">
+              <i class="ph ph-lamp"></i>
+              <span>No Shadow</span>
+            </button>
+          </div>
+          <div class="scanner-slider-container">
+            <label for="filter-intensity">Intensity</label>
+            <input type="range" id="filter-intensity" min="0" max="100" value="50">
+          </div>
+          <div class="scanner-actions">
+            <button id="btn-scanner-apply" class="primary-btn">
+              <i class="ph ph-check"></i>
+              <span>Save Filtered PDF</span>
+            </button>
+          </div>
+        </div>
       </div>
     </div>
   </div>

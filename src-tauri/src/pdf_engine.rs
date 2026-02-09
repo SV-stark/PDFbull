@@ -1,6 +1,9 @@
 use pdfium_render::prelude::*;
 use std::sync::{Arc, Mutex, OnceLock};
 use tauri::{Manager, State};
+use rayon::prelude::*;
+use image::GenericImageView;
+
 
 // Wrapper for Pdfium to make it Sync (it is Send but not Sync)
 struct PdfiumWrapper(pub Pdfium);
@@ -106,22 +109,27 @@ where
 #[tauri::command]
 pub async fn open_document(app: tauri::AppHandle, state: State<'_, PdfState>, path: String) -> Result<i32, String> {
     println!("[PDF Engine] Attempting to open document at: {}", path);
-    let pdfium = get_pdfium(&app)?;
+    // Clone state to move into blocking task
+    let state_clone = state.doc.clone();
     
-    // Performance: Use load_pdf_from_file for memory mapping
-    let doc = pdfium.load_pdf_from_file(&path, None)
-        .map_err(|e| {
-            let err = format!("Failed to open PDF: {}", e);
-            eprintln!("[PDF Engine] {}", err);
-            err
-        })?;
-    
-    let page_count = doc.pages().len();
-    println!("[PDF Engine] Document opened. Page count: {}", page_count);
-    
-    *state.doc.lock().map_err(|e| e.to_string())? = Some(PdfWrapper(doc));
-    
-    Ok(page_count as i32)
+    tokio::task::spawn_blocking(move || {
+        let pdfium = get_pdfium(&app)?;
+        
+        // Performance: Use load_pdf_from_file for memory mapping
+        let doc = pdfium.load_pdf_from_file(&path, None)
+            .map_err(|e| {
+                let err = format!("Failed to open PDF: {}", e);
+                eprintln!("[PDF Engine] {}", err);
+                err
+            })?;
+        
+        let page_count = doc.pages().len();
+        println!("[PDF Engine] Document opened. Page count: {}", page_count);
+        
+        *state_clone.lock().map_err(|e| e.to_string())? = Some(PdfWrapper(doc));
+        
+        Ok(page_count as i32)
+    }).await.map_err(|e| e.to_string())?
 }
 
 #[tauri::command]
@@ -181,32 +189,41 @@ pub fn search_text(
     })
 }
 
-#[derive(serde::Serialize)]
-pub struct RenderedPage {
-    pub width: i32,
-    pub height: i32,
-    pub data: Vec<u8>,
-}
-
 #[tauri::command]
-pub fn render_page(
-    state: tauri::State<PdfState>,
+pub async fn render_page(
+    state: tauri::State<'_, PdfState>,
     page_num: i32,
     scale: f32,
-) -> Result<RenderedPage, String> {
-    with_doc(&state, |doc| {
-        let page = doc.pages().get(page_num as u16).map_err(|e| e.to_string())?;
-        let width = (page.width().value * scale) as i32;
-        let height = (page.height().value * scale) as i32;
-        let bitmap = page.render(width, height, None).map_err(|e| e.to_string())?;
-        
-        // Return raw RGBA pixels
-        Ok(RenderedPage {
-            width,
-            height,
-            data: bitmap.as_raw_bytes().to_vec(),
-        })
-    })
+) -> Result<tauri::ipc::Response, String> {
+    let doc_clone = state.doc.clone();
+    tokio::task::spawn_blocking(move || {
+        let guard = doc_clone.lock().map_err(|e| e.to_string())?;
+        if let Some(wrapper) = guard.as_ref() {
+             let doc = &wrapper.0;
+             let page = doc.pages().get(page_num as u16).map_err(|e| e.to_string())?;
+             let width = (page.width().value * scale) as i32;
+             let height = (page.height().value * scale) as i32;
+             let bitmap = page.render(width, height, None).map_err(|e| e.to_string())?;
+             
+             let mut data = bitmap.as_raw_bytes().to_vec();
+
+             // Fix: PDFium returns BGRA, we want RGBA
+             // Swap Blue (0) and Red (2) channels
+             data.chunks_exact_mut(4).for_each(|chunk| chunk.swap(0, 2));
+             
+             // Zero-copy optimization: Return raw bytes with metadata header
+             // Layout: [width: 4 bytes][height: 4 bytes][pixels...]
+             // Using Big Endian for stability
+             let mut body = Vec::with_capacity(8 + data.len());
+             body.extend_from_slice(&width.to_be_bytes());
+             body.extend_from_slice(&height.to_be_bytes());
+             body.append(&mut data);
+
+             Ok(tauri::ipc::Response::new(body))
+        } else {
+             Err("No document open".to_string())
+        }
+    }).await.map_err(|e| e.to_string())?
 }
 
 #[tauri::command]
@@ -232,4 +249,155 @@ pub fn test_pdfium(app: tauri::AppHandle) -> Result<String, String> {
 #[tauri::command]
 pub fn ping() -> String {
     "pong".to_string()
+}
+
+fn apply_image_filter(dynamic_image: image::DynamicImage, filter_type: &str, intensity: f32) -> image::DynamicImage {
+    match filter_type {
+        "grayscale" => dynamic_image.grayscale(),
+        "bw" => {
+             let gray = dynamic_image.grayscale();
+             let threshold = (intensity * 255.0) as u8;
+             let (w, h) = gray.dimensions();
+             let luma = gray.into_luma8();
+             let mut raw = luma.into_raw();
+             
+             // Optimization: Iterate over raw bytes for auto-vectorization
+             raw.iter_mut().for_each(|freq| {
+                 *freq = if *freq > threshold { 255 } else { 0 };
+             });
+             
+             let luma = image::ImageBuffer::from_raw(w, h, raw).unwrap();
+             image::DynamicImage::ImageLuma8(luma)
+        },
+        "lighten" => {
+            let amount = (intensity * 100.0) as i32;
+            dynamic_image.brighten(amount)
+        },
+        "eco" => {
+            let gray = dynamic_image.grayscale();
+            let contrast = gray.adjust_contrast(50.0);
+            let bright = contrast.brighten(20);
+            let (w, h) = bright.dimensions();
+            let luma = bright.into_luma8();
+            let mut raw = luma.into_raw();
+
+            // Optimization: Iterate over raw bytes
+             raw.iter_mut().for_each(|p| {
+                 if *p > 200 { *p = 255; }
+             });
+             
+             let luma = image::ImageBuffer::from_raw(w, h, raw).unwrap();
+             image::DynamicImage::ImageLuma8(luma)
+        },
+        "noshadow" => {
+             let bright = dynamic_image.brighten(30);
+             bright.adjust_contrast(30.0)
+        },
+        _ => dynamic_image
+    }
+}
+
+#[tauri::command]
+pub async fn apply_scanner_filter(
+    app: tauri::AppHandle,
+    state: State<'_, PdfState>,
+    doc_path: String,
+    filter_type: String,
+    intensity: f32,
+) -> Result<(), String> {
+    println!("[PDF Engine] Applying filter: {}, intensity: {}", filter_type, intensity);
+    
+    let state_doc_clone = state.doc.clone();
+    let filter_type_clone = filter_type.clone();
+    let doc_path_clone = doc_path.clone();
+
+    tokio::task::spawn_blocking(move || {
+        // 1. Load original document
+        let pdfium = get_pdfium(&app)?;
+        let doc = pdfium.load_pdf_from_file(&doc_path_clone, None).map_err(|e| e.to_string())?;
+        
+        // 2. Create new document
+        let mut new_doc = pdfium.create_new_pdf().map_err(|e| e.to_string())?;
+        
+        let page_count = doc.pages().len();
+        let chunk_size = 4; // Process 4 pages at a time to balance memory and parallelism
+
+        for chunk_start in (0..page_count).step_by(chunk_size as usize) {
+            let end = std::cmp::min(chunk_start + chunk_size, page_count);
+            let mut raw_pages = Vec::new();
+
+            // A. Render Chunk (Sequential due to PDFium single-threadedness)
+            for i in chunk_start..end {
+                 let page = doc.pages().get(i).map_err(|e| e.to_string())?;
+                 
+                 // Render to high-res image (2.0 scale for quality)
+                 let scale = 2.0; 
+                 let width_px = (page.width().value * scale) as i32;
+                 let height_px = (page.height().value * scale) as i32;
+                 
+                 let bitmap = page.render(width_px, height_px, None).map_err(|e| e.to_string())?;
+                 
+                 raw_pages.push((
+                     page.width().value,
+                     page.height().value,
+                     width_px,
+                     height_px,
+                     bitmap.as_raw_bytes().to_vec()
+                 ));
+            }
+
+            // B. Process Chunk (Parallel using Rayon)
+            // This is the "Most Beneficial Usage": Parallelizing the heavy image processing
+            let processed_results: Vec<Result<_, String>> = raw_pages.into_par_iter()
+                .map(|(w_pt, h_pt, w_px, h_px, mut bytes)| {
+                    // Fix: Swap BGRA -> RGBA before processing
+                    bytes.chunks_exact_mut(4).for_each(|c| c.swap(0, 2));
+
+                    let img_buffer = image::ImageBuffer::<image::Rgba<u8>, _>::from_raw(w_px as u32, h_px as u32, bytes)
+                        .ok_or_else(|| "Failed to create image buffer".to_string())?;
+                    
+                    let dynamic_image = image::DynamicImage::ImageRgba8(img_buffer);
+                    let processed = apply_image_filter(dynamic_image, &filter_type_clone, intensity);
+                    
+                    Ok((w_pt, h_pt, processed))
+                })
+                .collect();
+
+            // C. Add to New Document (Sequential)
+            for result in processed_results {
+                 let (w_pt, h_pt, processed_img) = result?;
+                 
+                 let pdf_w = pdfium_render::prelude::PdfPoints::new(w_pt);
+                 let pdf_h = pdfium_render::prelude::PdfPoints::new(h_pt);
+                 
+                 let image_obj = PdfPageImageObject::new_with_width(&new_doc, &processed_img, pdf_w)
+                     .map_err(|e| format!("Failed to create image object: {}", e))?;
+                     
+                 let mut new_page = new_doc.pages_mut().create_page_at_end(pdfium_render::prelude::PdfPagePaperSize::Custom(pdf_w, pdf_h))
+                    .map_err(|e| e.to_string())?;
+                 
+                 new_page.objects_mut().add_image_object(image_obj).map_err(|e| e.to_string())?;
+            }
+        }
+        
+        // 3. Save to file
+        // 3.1 Close global state doc (if it matches doc_path)
+        {
+            let mut guard = state_doc_clone.lock().map_err(|e| e.to_string())?;
+            *guard = None; 
+        }
+        
+        // 3.2 Save to a temporary file first
+        let temp_path = format!("{}.tmp", doc_path_clone);
+        new_doc.save_to_file(&temp_path).map_err(|e| format!("Failed to save temp PDF: {}", e))?;
+        
+        // 3.3 Drop local doc handles to release file locks
+        drop(doc);
+        drop(new_doc);
+        
+        // 3.4 Move temp to target
+        std::fs::rename(&temp_path, &doc_path_clone).map_err(|e| format!("Failed to overwrite file: {}", e))?;
+        
+        Ok(())
+    }).await.map_err(|e| e.to_string())?
 }

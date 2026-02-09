@@ -44,3 +44,4 @@ packages/**/build/
 packages/**/deps/
 packages/**/examples/
 packages/**/incremental/
+agents.md

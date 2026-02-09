@@ -6,6 +6,8 @@ const { invoke } = window.__TAURI__.core;
 let currentPage = 0;
 let totalPages = 0;
 let currentZoom = 1.0;
+let renderScale = 1.0; // The scale at which pages are currently RENDERED (bitmap resolution)
+let zoomTimeout = null; // For debouncing high-res renders
 let currentDoc = null;
 let activeFilter = null;
 let pageCache = new Map();
@@ -731,9 +733,17 @@ let visiblePages = new Set();
 
 async function setupVirtualScroller() {
   const container = document.getElementById('pages-container');
-  container.innerHTML = '';
+  // Capture scroll ratio before changes
+  const viewer = document.getElementById('viewer-container');
+  const scrollRatio = viewer.scrollTop / viewer.scrollHeight;
+  const previousHeight = viewer.scrollHeight;
+
+  // Don't clear innerHTML if we already have pages
+  const existingPages = container.children.length > 0;
+
   visiblePages.clear();
-  pageCache.clear();
+  // We do NOT clear cache violently anymore, let the LRU handle it or clear if doc changed.
+  // pageCache.clear(); 
 
   // Fetch dimensions for all pages
   try {
@@ -743,33 +753,60 @@ async function setupVirtualScroller() {
     return;
   }
 
-  // Create placeholders
+  // Create or Update placeholders
   pageDimensions.forEach((dim, index) => {
     const [w, h] = dim;
+    let pageContainer = document.getElementById(`page-container-${index}`);
 
-    const pageContainer = document.createElement('div');
-    pageContainer.className = 'page-container';
-    pageContainer.id = `page-container-${index}`;
-    pageContainer.style.width = `${w * currentZoom}px`;
-    pageContainer.style.height = `${h * currentZoom}px`;
+    if (!pageContainer) {
+      pageContainer = document.createElement('div');
+      pageContainer.className = 'page-container';
+      pageContainer.id = `page-container-${index}`;
 
-    // Placeholder content
-    const placeholder = document.createElement('div');
-    placeholder.className = 'page-placeholder';
-    placeholder.textContent = `Page ${index + 1}`;
-    pageContainer.appendChild(placeholder);
+      // Placeholder content
+      const placeholder = document.createElement('div');
+      placeholder.className = 'page-placeholder';
+      placeholder.textContent = `Page ${index + 1}`;
+      pageContainer.appendChild(placeholder);
 
-    // Canvas (initially hidden or not created? Created but empty)
-    const pageCanvas = document.createElement('canvas');
-    pageCanvas.id = `page-canvas-${index}`;
-    pageCanvas.className = 'page-canvas';
-    pageCanvas.width = w * currentZoom;
-    pageCanvas.height = h * currentZoom;
-    pageCanvas.style.display = 'none'; // Hide until rendered
-    pageContainer.appendChild(pageCanvas);
+      // Canvas
+      const pageCanvas = document.createElement('canvas');
+      pageCanvas.id = `page-canvas-${index}`;
+      pageCanvas.className = 'page-canvas';
+      // Initial sizing
+      pageCanvas.width = w * currentZoom;
+      pageCanvas.height = h * currentZoom;
+      pageCanvas.style.display = 'none';
+      pageContainer.appendChild(pageCanvas);
+      container.appendChild(pageContainer);
+    }
 
-    container.appendChild(pageContainer);
+    const pageCanvas = document.getElementById(`page-canvas-${index}`);
+
+    // Use CSS variables for size
+    pageContainer.style.setProperty('--page-width', `${w}px`);
+    pageContainer.style.setProperty('--page-height', `${h}px`);
+
+    // Canvas resolution should match renderScale
+    // If renderScale != currentZoom, we just trust the CSS scaling until debounce finishes
+    if (pageCanvas && pageCanvas.width !== w * renderScale) {
+      pageCanvas.width = w * renderScale;
+      pageCanvas.height = h * renderScale;
+      // Hide until re-rendered to avoid stretching artifacts or blank canvas if cleared
+      pageCanvas.style.display = 'none';
+    }
   });
+
+  // Ensure global zoom factor matches currentZoom
+  document.getElementById('pages-container').style.setProperty('--zoom-factor', currentZoom);
+
+  // Restore scroll position immediately after layout update
+  if (existingPages && previousHeight > 0) {
+    // We need to wait for DOM update? synchronous updates should be fine for style.
+    // Recalculate new scroll height implicitly by setting scrollTop
+    // viewer.scrollHeight should be updated now that children sizes changed.
+    viewer.scrollTop = scrollRatio * viewer.scrollHeight;
+  }
 
   // Setup Observer
   if (pageObserver) pageObserver.disconnect();
@@ -852,7 +889,7 @@ async function renderPage(pageNum, saveHistory = false) {
   try {
     const { width, height, data } = await invoke('render_page', {
       pageNum: pageNum,
-      scale: currentZoom
+      scale: renderScale // Use renderScale, not currentZoom
     });
 
     // OPTIMIZATION: Abort if page is no longer visible (user scrolled past)
@@ -884,7 +921,7 @@ async function renderPage(pageNum, saveHistory = false) {
 
     setCachedPage(pageNum, {
       bitmap: imageBitmap,
-      zoom: currentZoom,
+      zoom: renderScale,
       width: width,
       height: height
     });
@@ -1449,21 +1486,84 @@ document.getElementById('btn-next').addEventListener('click', () => {
   }
 });
 document.getElementById('btn-zoom-in').addEventListener('click', () => {
-  currentZoom *= 1.25;
-  updateUI();
-  setupVirtualScroller();
+  updateZoom(currentZoom * 1.25);
 });
 document.getElementById('btn-zoom-out').addEventListener('click', () => {
-  currentZoom /= 1.25;
-  updateUI();
-  setupVirtualScroller();
+  updateZoom(currentZoom / 1.25);
 });
 document.getElementById('btn-reset-zoom').addEventListener('click', () => {
-  currentZoom = 1.0;
-  updateUI();
-  setupVirtualScroller();
+  updateZoom(1.0);
   showToast('Zoom reset to 100%');
 });
+
+// New Zoom Logic
+function updateZoom(newZoom, pivotX, pivotY) {
+  const oldZoom = currentZoom;
+  currentZoom = newZoom;
+
+  // 1. Update CSS Zoom immediately (Visual only)
+  document.getElementById('pages-container').style.setProperty('--zoom-factor', currentZoom);
+  updateUI();
+
+  // 2. Adjust Scroll Position (Zoom to cursor/center)
+  // If pivot is provided, keep it stable.
+  const viewer = viewerContainer;
+  const rect = viewer.getBoundingClientRect();
+
+  if (pivotX !== undefined && pivotY !== undefined) {
+    // Mouse coordinates relative to content
+    // But content is scrolled. 
+    // offsetX = (scrollLeft + pivotX)
+    // newScrollLeft = offsetX * (newZoom / oldZoom) - pivotX
+
+    const scrollLeft = viewer.scrollLeft;
+    const scrollTop = viewer.scrollTop;
+
+    const contentX = scrollLeft + pivotX;
+    const contentY = scrollTop + pivotY;
+
+    const newScrollLeft = contentX * (newZoom / oldZoom) - pivotX;
+    const newScrollTop = contentY * (newZoom / oldZoom) - pivotY;
+
+    viewer.scrollLeft = newScrollLeft;
+    viewer.scrollTop = newScrollTop;
+  } else {
+    // Center zoom (default for buttons)
+    const centerX = viewer.clientWidth / 2;
+    const centerY = viewer.clientHeight / 2;
+
+    const scrollLeft = viewer.scrollLeft;
+    const scrollTop = viewer.scrollTop;
+
+    const contentX = scrollLeft + centerX;
+    const contentY = scrollTop + centerY;
+
+    const newScrollLeft = contentX * (newZoom / oldZoom) - centerX;
+    const newScrollTop = contentY * (newZoom / oldZoom) - centerY;
+
+    viewer.scrollLeft = newScrollLeft;
+    viewer.scrollTop = newScrollTop;
+  }
+
+  // 3. Debounce High-Res Render
+  if (zoomTimeout) clearTimeout(zoomTimeout);
+  zoomTimeout = setTimeout(commitZoom, 300);
+}
+
+function commitZoom() {
+  renderScale = currentZoom; // Commit the zoom level
+  // Re-run setup to update placeholders and trigger renderPage with new scale
+  // We pass true to force re-render? No, setupVirtualScroller clears cache?
+  // We need to invalidate cache if scale changed.
+
+  // Note: optimization - only clear cache for visible pages or just rely on renderPage 
+  // to check cached.zoom vs renderScale.
+  // Our existing renderPage checks: if (cached && cached.zoom === currentZoom)
+  // We changed that line to match renderScale in snippet 4!
+  // So if renderScale changed, it will re-render. Perfect.
+
+  setupVirtualScroller();
+}
 document.getElementById('btn-sidebar-toggle').addEventListener('click', () => document.getElementById('sidebar').classList.toggle('collapsed'));
 document.getElementById('btn-fullscreen').addEventListener('click', toggleFullscreen);
 
@@ -1491,12 +1591,18 @@ document.getElementById('btn-fit-width').addEventListener('click', fitWidth);
 document.getElementById('btn-fit-page').addEventListener('click', fitPage);
 
 // Mouse wheel for zoom only (native scroll handles navigation)
+// Mouse wheel for zoom only (native scroll handles navigation)
 viewerContainer.addEventListener('wheel', (e) => {
   if (e.ctrlKey) {
     e.preventDefault();
     const zoomFactor = e.deltaY > 0 ? 0.9 : 1.1;
-    currentZoom *= zoomFactor;
-    setupVirtualScroller();
+
+    // Calculate pivot relative to viewer
+    const rect = viewerContainer.getBoundingClientRect();
+    const pivotX = e.clientX - rect.left;
+    const pivotY = e.clientY - rect.top;
+
+    updateZoom(currentZoom * zoomFactor, pivotX, pivotY);
   }
 }, { passive: false });
 
@@ -1804,3 +1910,171 @@ setInterval(() => {
     autoSaveAnnotations();
   }
 }, 30000); // Auto-save every 30 seconds
+
+// Scanner Mode Logic
+const scannerModal = document.getElementById('scanner-modal');
+const scannerPreviewCanvas = document.getElementById('scanner-preview-canvas');
+const filterIntensitySlider = document.getElementById('filter-intensity');
+let currentScannerFilter = 'original';
+let currentScannerIntensity = 50;
+let scannerOriginalBitmap = null;
+
+// Open Scanner Modal
+document.getElementById('btn-scanner').addEventListener('click', async () => {
+  if (!currentDoc) {
+    showToast('No document open', 'error');
+    return;
+  }
+
+  // Show modal
+  scannerModal.classList.remove('hidden');
+
+  // Render current page to preview canvas
+  await renderScannerPreview();
+});
+
+// Close Scanner Modal
+document.getElementById('btn-close-scanner').addEventListener('click', () => {
+  scannerModal.classList.add('hidden');
+});
+
+// Close on outside click
+scannerModal.addEventListener('click', (e) => {
+  if (e.target === scannerModal) {
+    scannerModal.classList.add('hidden');
+  }
+});
+
+// Filter Selection
+document.querySelectorAll('.filter-btn').forEach(btn => {
+  btn.addEventListener('click', () => {
+    // Update active state
+    document.querySelectorAll('.filter-btn').forEach(b => b.classList.remove('active'));
+    btn.classList.add('active');
+
+    // Update current filter
+    currentScannerFilter = btn.getAttribute('data-filter');
+
+    // Update slider visibility/value based on filter if needed
+    // For now, all filters use intensity
+
+    updateScannerPreviewStyle();
+  });
+});
+
+// Intensity Slider
+filterIntensitySlider.addEventListener('input', (e) => {
+  currentScannerIntensity = parseInt(e.target.value);
+  updateScannerPreviewStyle();
+});
+
+// Apply/Save Filter
+document.getElementById('btn-scanner-apply').addEventListener('click', async () => {
+  if (!currentDoc) return;
+
+  showLoading('Applying filter...');
+  try {
+    await invoke('apply_scanner_filter', {
+      docPath: currentDoc,
+      filterType: currentScannerFilter,
+      intensity: currentScannerIntensity / 100.0 // Normalize to 0.0 - 1.0
+    });
+
+    showToast('Filter applied successfully', 'success');
+    scannerModal.classList.add('hidden');
+
+    // Reload document to show changes
+    await openNewTab(currentDoc); // Refresh current tab effectively
+
+  } catch (e) {
+    console.error('Filter application failed:', e);
+    showToast('Failed to apply filter: ' + e, 'error');
+  } finally {
+    hideLoading();
+  }
+});
+
+async function renderScannerPreview() {
+  // We reuse logic from renderPage but specific for the preview canvas
+  // We want a high-res render for preview
+
+  // Get page dimensions
+  const [w, h] = pageDimensions[currentPage];
+
+  // Set canvas dimensions
+  scannerPreviewCanvas.width = 0; // Reset
+  scannerPreviewCanvas.height = 0;
+
+  // Calculate fit scale for modal
+  const container = document.querySelector('.scanner-preview-container');
+  const containerW = container.clientWidth - 40;
+  const containerH = container.clientHeight - 40;
+  const scaleX = containerW / w;
+  const scaleY = containerH / h;
+  const scale = Math.min(scaleX, scaleY, 1.5); // Cap at 1.5x
+
+  const renderW = Math.floor(w * scale);
+  const renderH = Math.floor(h * scale);
+
+  scannerPreviewCanvas.width = renderW;
+  scannerPreviewCanvas.height = renderH;
+
+  try {
+    const result = await invoke('render_page', {
+      pageNum: currentPage,
+      scale: scale
+    });
+
+    const imageData = new ImageData(
+      new Uint8ClampedArray(result.data),
+      result.width,
+      result.height
+    );
+
+    const ctx = scannerPreviewCanvas.getContext('2d');
+    createImageBitmap(imageData).then(bitmap => {
+      ctx.drawImage(bitmap, 0, 0);
+      scannerOriginalBitmap = bitmap; // Store for JS-based filters if needed
+      updateScannerPreviewStyle();
+    });
+
+  } catch (e) {
+    console.error('Preview render failed:', e);
+    showToast('Failed to load preview', 'error');
+  }
+}
+
+function updateScannerPreviewStyle() {
+  // Apply CSS filters for fast preview
+  const intensity = currentScannerIntensity;
+  let filterString = '';
+
+  switch (currentScannerFilter) {
+    case 'original':
+      filterString = 'none';
+      break;
+    case 'grayscale':
+      filterString = `grayscale(${intensity}%)`;
+      break;
+    case 'bw':
+      // High contrast + grayscale
+      filterString = `grayscale(100%) contrast(${100 + intensity}%)`;
+      break;
+    case 'lighten':
+      filterString = `brightness(${100 + intensity / 2}%)`;
+      break;
+    case 'eco':
+      // Eco mode: Invert + Grayscale (simulating simplified ink usage? or just dark mode?)
+      // User request usually implies "Eco-friendly" = "Save Ink".
+      // "Save Ink" usually means: Remove dark backgrounds, thin lines, grayscale.
+      // Let's go with: Grayscale + High Brightness + High Contrast to remove gray fills.
+      filterString = `grayscale(100%) contrast(150%) brightness(120%)`;
+      break;
+    case 'noshadow':
+      // Remove shadows usually means high brightness/contrast
+      filterString = `contrast(120%) brightness(${100 + intensity / 3}%)`;
+      break;
+  }
+
+  scannerPreviewCanvas.style.filter = filterString;
+}
