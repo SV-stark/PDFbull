@@ -4,6 +4,8 @@ pub mod pdf_embed;
 use serde::{Deserialize, Serialize};
 use std::sync::{Arc, Mutex};
 use std::sync::atomic::{AtomicBool, Ordering};
+use image::DynamicImage;
+use oar_ocr::{OcrEngine as OcrEngineInternal, OcrConfig};
 
 /// Text block with bounding box coordinates
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -25,27 +27,57 @@ pub struct PageTextBlocks {
 
 /// Global OCR engine state with lazy loading
 pub struct OcrEngine {
-    // TODO: Add actual paddle-ocr-rs engine instance
-    // For now, just track if models are loaded
-    models_loaded: Arc<Mutex<bool>>,
+    engine: Option<OcrEngineInternal>,
+    current_language: Option<String>,
     cancel_flag: Arc<AtomicBool>,
 }
 
 impl OcrEngine {
     pub fn new() -> Self {
         Self {
-            models_loaded: Arc::new(Mutex::new(false)),
+            engine: None,
+            current_language: None,
             cancel_flag: Arc::new(AtomicBool::new(false)),
         }
     }
 
+    /// Ensure models are loaded for the given language
+    fn ensure_loaded(&mut self, language: &str) -> Result<(), String> {
+        if self.engine.is_some() && self.current_language.as_deref() == Some(language) {
+            return Ok(());
+        }
+
+        let models = models::discover_models()?;
+        let model_info = models.iter()
+            .find(|m| m.code == language)
+            .ok_or_else(|| format!("Language model not found: {}", language))?;
+
+        // oar-ocr uses a builder-like config or simple constructor
+        let config = OcrConfig::new(
+            model_info.det_model_path.to_str().unwrap().to_string(),
+            model_info.rec_model_path.to_str().unwrap().to_string(),
+            model_info.keys_path.to_str().unwrap().to_string(),
+        );
+
+        let engine = OcrEngineInternal::new(config)
+            .map_err(|e| format!("Failed to initialize OCR engine: {}", e))?;
+
+        self.engine = Some(engine);
+        self.current_language = Some(language.to_string());
+        Ok(())
+    }
+
     /// Run OCR on multiple pages with progress reporting
     pub fn run_ocr(
-        &self,
+        &mut self,
         pages: Vec<Vec<u8>>,
         language: &str,
         window: tauri::Window,
     ) -> Result<Vec<PageTextBlocks>, String> {
+        // Ensure models are loaded
+        self.ensure_loaded(language)?;
+        let engine = self.engine.as_ref().unwrap();
+
         // Reset cancel flag
         self.cancel_flag.store(false, Ordering::SeqCst);
 
@@ -68,24 +100,45 @@ impl OcrEngine {
                 "percentage": percentage
             }));
 
-            // TODO: Actual OCR processing here
-            // For now, return dummy data
+            // Convert bytes to image
+            let img = image::load_from_memory(page_data)
+                .map_err(|e| format!("Failed to load image for page {}: {}", current, e))?;
+
+            // Run OCR
+            let ocr_result = engine.run(&img)
+                .map_err(|e| format!("OCR error on page {}: {}", current, e))?;
+
+            let mut blocks = Vec::new();
+            for region in ocr_result.text_regions {
+                if let Some(text) = region.text {
+                    // Extract bounding box from polygon
+                    let mut min_x = f32::MAX;
+                    let mut min_y = f32::MAX;
+                    let mut max_x = f32::MIN;
+                    let mut max_y = f32::MIN;
+
+                    for point in region.polygon {
+                        if (point.x as f32) < min_x { min_x = point.x as f32; }
+                        if (point.y as f32) < min_y { min_y = point.y as f32; }
+                        if (point.x as f32) > max_x { max_x = point.x as f32; }
+                        if (point.y as f32) > max_y { max_y = point.y as f32; }
+                    }
+
+                    blocks.push(TextBlock {
+                        text,
+                        x: min_x,
+                        y: min_y,
+                        width: max_x - min_x,
+                        height: max_y - min_y,
+                        confidence: region.confidence.unwrap_or(0.0),
+                    });
+                }
+            }
+
             results.push(PageTextBlocks {
                 page_number: current,
-                blocks: vec![
-                    TextBlock {
-                        text: format!("Sample text on page {}", current),
-                        x: 10.0,
-                        y: 10.0,
-                        width: 100.0,
-                        height: 20.0,
-                        confidence: 0.95,
-                    }
-                ],
+                blocks,
             });
-
-            // Simulate processing time
-            std::thread::sleep(std::time::Duration::from_millis(100));
         }
 
         Ok(results)
@@ -94,6 +147,12 @@ impl OcrEngine {
     /// Cancel ongoing OCR operation
     pub fn cancel(&self) {
         self.cancel_flag.store(true, Ordering::SeqCst);
+    }
+
+    /// Unload models to free memory
+    pub fn unload(&mut self) {
+        self.engine = None;
+        self.current_language = None;
     }
 }
 
