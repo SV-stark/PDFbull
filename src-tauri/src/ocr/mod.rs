@@ -4,7 +4,7 @@ pub mod pdf_embed;
 use serde::{Deserialize, Serialize};
 use std::sync::{Arc, Mutex};
 use std::sync::atomic::{AtomicBool, Ordering};
-use oar_ocr::prelude::*;
+// oar_ocr types are accessed via full paths
 use tauri::Emitter;
 
 /// Text block with bounding box coordinates
@@ -52,10 +52,11 @@ impl OcrEngine {
             .find(|m| m.code == language)
             .ok_or_else(|| format!("Language model not found: {}", language))?;
 
-        let engine = oar_ocr::oarocr::OAROCRBuilder::new()
-            .det_model_path(model_info.det_model_path.to_str().unwrap())
-            .rec_model_path(model_info.rec_model_path.to_str().unwrap())
-            .rec_keys_path(model_info.keys_path.to_str().unwrap())
+        let engine = oar_ocr::oarocr::OAROCRBuilder::new(
+            model_info.det_model_path.to_str().unwrap(),
+            model_info.rec_model_path.to_str().unwrap(),
+            model_info.keys_path.to_str().unwrap(),
+        )
             .build()
             .map_err(|e| format!("Failed to initialize OCR engine: {}", e))?;
 
@@ -102,7 +103,7 @@ impl OcrEngine {
                 .map_err(|e| format!("Failed to load image for page {}: {}", current, e))?;
 
             // Run OCR
-            let ocr_result = engine.run(&img)
+            let ocr_result = engine.predict(&[img.to_rgba8()])
                 .map_err(|e| format!("OCR error on page {}: {}", current, e))?;
 
             let mut blocks = Vec::new();
