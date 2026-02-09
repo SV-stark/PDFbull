@@ -124,5 +124,5 @@ npm run tauri build
 
 PDFbull is open-source software licensed under the **MIT License**. Contributions focusing on performance optimizations or cross-platform support are highly encouraged.
 
-*Built with <3 by [SV-Stark](https://github.com/SV-stark) with AI-driven process* 
-
+*Vibe-Coded with :heart: by [SV-Stark](https://github.com/SV-stark)* 
+*Tech-Checked with :brain: by [arun-mani-j](https://github.com/arun-mani-j)* 
