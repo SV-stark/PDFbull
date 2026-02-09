@@ -53,12 +53,10 @@ impl OcrEngine {
             .ok_or_else(|| format!("Language model not found: {}", language))?;
 
         let engine = oar_ocr::oarocr::OAROCRBuilder::new(
-            model_info.det_model_path.to_str().unwrap(),
-            model_info.rec_model_path.to_str().unwrap(),
-            model_info.keys_path.to_str().unwrap(),
+            model_info.det_model_path.to_string_lossy().to_string(),
+            model_info.rec_model_path.to_string_lossy().to_string(),
+            model_info.keys_path.to_string_lossy().to_string(),
         )
-            .classifier_model_path(model_info.cls_model_path.to_str().unwrap())
-            .with_document_image_orientation_classification()
             .build()
             .map_err(|e| format!("Failed to initialize OCR engine: {}", e))?;
 
@@ -112,29 +110,35 @@ impl OcrEngine {
             
             // engine.predict returns Vec<OAROCRResult>, one for each image
             if let Some(page_result) = ocr_results.first() {
-                for region in &page_result.text_regions {
-                    if let Some(text) = &region.content {
-                        // Extract bounding box from polygon
+                // User specified 'regions' field
+                for region in &page_result.regions {
+                    if let Some(text) = &region.text {
                         let mut min_x = f32::MAX;
                         let mut min_y = f32::MAX;
                         let mut max_x = f32::MIN;
                         let mut max_y = f32::MIN;
     
-                        for point in &region.polygon {
-                            if (point.x as f32) < min_x { min_x = point.x as f32; }
-                            if (point.y as f32) < min_y { min_y = point.y as f32; }
-                            if (point.x as f32) > max_x { max_x = point.x as f32; }
-                            if (point.y as f32) > max_y { max_y = point.y as f32; }
+                        // User specified 'bounding_box' is Option<Vec<Point>>
+                        if let Some(bbox) = &region.bounding_box {
+                            for point in bbox {
+                                if (point.x as f32) < min_x { min_x = point.x as f32; }
+                                if (point.y as f32) < min_y { min_y = point.y as f32; }
+                                if (point.x as f32) > max_x { max_x = point.x as f32; }
+                                if (point.y as f32) > max_y { max_y = point.y as f32; }
+                            }
                         }
-    
-                        blocks.push(TextBlock {
-                            text: text.clone(),
-                            x: min_x,
-                            y: min_y,
-                            width: max_x - min_x,
-                            height: max_y - min_y,
-                            confidence: region.confidence.unwrap_or(0.0),
-                        });
+
+                        // Avoid adding invalid boxes if bbox was missing or empty
+                        if min_x != f32::MAX {
+                            blocks.push(TextBlock {
+                                text: text.clone(),
+                                x: min_x,
+                                y: min_y,
+                                width: max_x - min_x,
+                                height: max_y - min_y,
+                                confidence: region.confidence.unwrap_or(0.0),
+                            });
+                        }
                     }
                 }
             }

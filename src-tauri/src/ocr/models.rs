@@ -9,7 +9,6 @@ pub struct LanguageInfo {
     pub det_model_path: PathBuf,
     pub rec_model_path: PathBuf,
     pub keys_path: PathBuf,
-    pub cls_model_path: PathBuf,
 }
 
 /// Discover available OCR language models
@@ -24,7 +23,6 @@ pub fn discover_models() -> Result<Vec<LanguageInfo>, String> {
         det_model_path: PathBuf::from("resources/ocr_models/en/det.onnx"),
         rec_model_path: PathBuf::from("resources/ocr_models/en/rec.onnx"),
         keys_path: PathBuf::from("resources/ocr_models/en/keys.txt"),
-        cls_model_path: PathBuf::from("resources/ocr_models/en/cls.onnx"),
     });
 
     // TODO: Scan user models directory {APP_DATA}/PDFbull/ocr_models/
