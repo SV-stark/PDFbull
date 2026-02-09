@@ -3,7 +3,7 @@
 
 <head>
   <meta charset="UTF-8" />
-  <link rel="stylesheet" href="styles.css" />
+  <link rel="stylesheet" href="styles/index.css" />
   <link rel="stylesheet" href="https://unpkg.com/@phosphor-icons/web@2.1.1/src/regular/style.css" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>PDFbull</title>
@@ -32,6 +32,16 @@
       <button id="btn-save" tooltip="Save (Ctrl+S)">
         <i class="ph ph-floppy-disk"></i>
         <span class="toolbar-label">Save</span>
+      </button>
+
+      <div class="toolbar-separator"></div>
+
+      <button id="btn-print" tooltip="Print (Ctrl+P)">
+        <i class="ph ph-printer"></i>
+      </button>
+
+      <button id="btn-bookmark" tooltip="Bookmark Page (Ctrl+D)">
+        <i class="ph ph-bookmark-simple"></i>
       </button>
 
       <div class="toolbar-separator"></div>
@@ -95,8 +105,12 @@
         <span class="toolbar-label">Export</span>
       </button>
 
-      <button id="btn-sidebar-toggle" tooltip="Toggle Sidebar (Ctrl+B)">
+      <button id="btn-sidebar-left-toggle" tooltip="Toggle Tools (Ctrl+B)">
         <i class="ph ph-sidebar"></i>
+      </button>
+
+      <button id="btn-sidebar-right-toggle" tooltip="Toggle Thumbnails (Ctrl+Shift+B)">
+        <i class="ph ph-sidebar" style="transform: scaleX(-1);"></i>
       </button>
 
       <button id="btn-fullscreen" tooltip="Fullscreen (F11)">
@@ -122,18 +136,8 @@
   <!-- Main Content -->
   <div class="main-container">
     <!-- Sidebar -->
-    <div class="sidebar" id="sidebar">
-      <!-- Thumbnails - Most Used, at Top -->
-      <div class="sidebar-section thumbnails-section">
-        <div class="sidebar-header">
-          <i class="ph ph-images"></i>
-          <span>Thumbnails</span>
-        </div>
-        <div class="thumbnail-list" id="thumbnail-list">
-          <!-- Thumbnails injected here -->
-        </div>
-      </div>
-
+    <!-- Left Sidebar: Tools, Layers, Actions -->
+    <div class="sidebar sidebar-left" id="sidebar-left">
       <!-- Drawing Tools -->
       <div class="sidebar-section tools-section">
         <div class="sidebar-header">
@@ -170,7 +174,7 @@
             <span>Sticky Note</span>
           </button>
         </div>
-        
+
         <!-- Color Picker - Contextual to Drawing Tools -->
         <div class="color-picker-row">
           <button class="color-btn active" data-color="#ffeb3b" style="background: #ffeb3b;"></button>
@@ -254,6 +258,20 @@
 
     </div>
 
+    <!-- Right Sidebar: Thumbnails -->
+    <div class="sidebar sidebar-right" id="sidebar-right">
+      <!-- Thumbnails - Most Used, at Top -->
+      <div class="sidebar-section thumbnails-section">
+        <div class="sidebar-header">
+          <i class="ph ph-images"></i>
+          <span>Thumbnails</span>
+        </div>
+        <div class="thumbnail-list" id="thumbnail-list">
+          <!-- Thumbnails injected here -->
+        </div>
+      </div>
+    </div>
+
     <!-- Floating Controls (moved outside viewer to stay fixed) -->
     <div class="overlay">
       <button id="btn-fit-width" class="tool-btn">
@@ -297,8 +315,17 @@
   <!-- Search Panel -->
   <div id="search-panel" class="search-panel hidden">
     <div class="search-header">
-      <input type="text" id="ipt-search" class="search-input" placeholder="Search in document...">
-      <button id="btn-search-exec">
+      <input type="text" id="ipt-search" class="search-input" placeholder="Search...">
+      <div class="search-nav">
+        <button id="btn-search-prev" tooltip="Previous Match">
+          <i class="ph ph-caret-up"></i>
+        </button>
+        <span id="search-counter" class="search-counter">0/0</span>
+        <button id="btn-search-next" tooltip="Next Match">
+          <i class="ph ph-caret-down"></i>
+        </button>
+      </div>
+      <button id="btn-search-exec" tooltip="Search">
         <i class="ph ph-magnifying-glass"></i>
       </button>
     </div>
@@ -621,6 +648,10 @@
           <i class="ph ph-file-zip"></i>
           <span>Compress PDF</span>
         </button>
+        <button class="export-option" id="btn-export-json">
+          <i class="ph ph-file-js"></i>
+          <span>Export Annotations (JSON)</span>
+        </button>
       </div>
     </div>
   </div>
@@ -675,6 +706,34 @@
               <span>Save Filtered PDF</span>
             </button>
           </div>
+        </div>
+      </div>
+    </div>
+  </div>
+  <!-- Keyboard Help Modal -->
+  <div id="keyboard-help-modal" class="modal hidden">
+    <div class="modal-content">
+      <div class="modal-header">
+        <h3>Keyboard Shortcuts</h3>
+        <button class="modal-close" id="btn-close-keyboard-help">
+          <i class="ph ph-x"></i>
+        </button>
+      </div>
+      <div class="modal-body">
+        <div class="shortcuts-list">
+          <div class="shortcut-item"><span>Open File</span><kbd>Ctrl+O</kbd></div>
+          <div class="shortcut-item"><span>Save</span><kbd>Ctrl+S</kbd></div>
+          <div class="shortcut-item"><span>Undo</span><kbd>Ctrl+Z</kbd></div>
+          <div class="shortcut-item"><span>Redo</span><kbd>Ctrl+Y</kbd></div>
+          <div class="shortcut-item"><span>Search</span><kbd>Ctrl+F</kbd></div>
+          <div class="shortcut-item"><span>Settings</span><kbd>Ctrl+,</kbd></div>
+          <div class="shortcut-item"><span>Zoom In</span><kbd>Ctrl++</kbd></div>
+          <div class="shortcut-item"><span>Zoom Out</span><kbd>Ctrl+-</kbd></div>
+          <div class="shortcut-item"><span>Toggle Sidebar</span><kbd>Ctrl+B</kbd></div>
+          <div class="shortcut-item"><span>Fullscreen</span><kbd>F11</kbd></div>
+          <div class="shortcut-item"><span>Bookmark</span><kbd>Ctrl+D</kbd></div>
+          <div class="shortcut-item"><span>Print</span><kbd>Ctrl+P</kbd></div>
+          <div class="shortcut-item"><span>Help</span><kbd>? / F1</kbd></div>
         </div>
       </div>
     </div>

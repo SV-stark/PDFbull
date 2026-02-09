@@ -23,46 +23,113 @@ export const search = {
 
         try {
             ui.showLoading('Searching...');
-            // Clear previous search results from this page
-            const pageAnns = state.annotations.get(state.currentPage) || [];
-            const filtered = pageAnns.filter(a => a.type !== 'search_highlight');
-            state.annotations.set(state.currentPage, filtered);
+            search.clearResults();
 
-            // Perform search
-            const results = await api.searchText(state.currentPage, query) // Need to ensure api.js has searchText
+            // Perform global search
+            const results = await api.searchDocument(query)
                 .catch(e => { throw e; });
+
+            state.searchResults = results;
+            state.currentSearchIndex = -1;
 
             ui.hideLoading();
 
-            ui.setStatusMessage(`Found ${results.length} matches`);
-            ui.showToast(`Found ${results.length} matches on this page`);
+            const counter = document.getElementById('search-counter');
+            if (counter) counter.textContent = `0/${results.length}`;
 
             if (results.length > 0) {
-                const [pageW, pageH] = state.pageDimensions[state.currentPage] || [0, 0];
+                // Determine matches per page for annotation adding
+                const matchesPerPage = new Map();
+                results.forEach(r => {
+                    if (!matchesPerPage.has(r.page)) matchesPerPage.set(r.page, []);
+                    matchesPerPage.get(r.page).push(r);
+                });
 
-                const newAnns = results.map(r => {
-                    const [x, y, w, h] = r;
-                    return {
+                // Add annotations to state
+                matchesPerPage.forEach((matches, pageNum) => {
+                    const pageAnns = state.annotations.get(pageNum) || [];
+                    const [pageW, pageH] = state.pageDimensions[pageNum] || [0, 0]; // Note: dimensions might be lazy loaded?
+                    // If dimensions are missing, we might have issues flipping Y. 
+                    // However, pageDimensions are usually populated on open or first render.
+                    // If not, we might need to fetch them.
+
+                    const newAnns = matches.map(r => ({
                         id: 'search-' + Math.random(),
                         type: 'search_highlight',
                         layer: 'default',
-                        x: x,
-                        y: pageH - y, // PDF coords usually put (0,0) at bottom-left.
-                        w: w,
-                        h: h,
-                        color: '#ff00ff'
-                    };
+                        x: r.x,
+                        y: pageH - r.y,
+                        w: r.w,
+                        h: r.h,
+                        color: 'rgba(255, 255, 0, 0.4)'
+                    }));
+
+                    state.annotations.set(pageNum, [...pageAnns, ...newAnns]);
+                    renderer.drawAnnotations(pageNum);
                 });
 
-                const currentAnns = state.annotations.get(state.currentPage) || [];
-                state.annotations.set(state.currentPage, [...currentAnns, ...newAnns]);
-                renderer.drawAnnotations(state.currentPage);
+                ui.showToast(`Found ${results.length} matches`);
+                search.nextResult(); // Jump to first result
+            } else {
+                ui.showToast('No matches found');
             }
 
         } catch (e) {
             console.error("Search failed:", e);
             ui.hideLoading();
-            ui.showToast('Search failed: ' + e, 'error');
+            ui.showToast('Search failed: ' + e.message, 'error');
         }
+    },
+
+    nextResult() {
+        if (state.searchResults.length === 0) return;
+        state.currentSearchIndex = (state.currentSearchIndex + 1) % state.searchResults.length;
+        search.jumptoResult(state.currentSearchIndex);
+    },
+
+    prevResult() {
+        if (state.searchResults.length === 0) return;
+        state.currentSearchIndex = (state.currentSearchIndex - 1 + state.searchResults.length) % state.searchResults.length;
+        search.jumptoResult(state.currentSearchIndex);
+    },
+
+    jumptoResult(index) {
+        if (index < 0 || index >= state.searchResults.length) return;
+        const result = state.searchResults[index];
+
+        // Update counter
+        const counter = document.getElementById('search-counter');
+        if (counter) counter.textContent = `${index + 1}/${state.searchResults.length}`;
+
+        // Jump to page
+        if (state.currentPage !== result.page) {
+            state.currentPage = result.page;
+            renderer.scrollToPage(result.page);
+        } else {
+            // If already on page, make sure we scroll to the specific element?
+            // Since we render whole page, scrollToPage is enough to show the page.
+            // Maybe advanced: scroll to specific Y?
+            const pageContainer = document.getElementById(`page-container-${result.page}`);
+            // Calculate Y offset %?
+            // For now, page functionality is good enough.
+        }
+
+        // Highlight current Result differently?
+        // We could update the specific annotation color.
+        // For efficiency, we might just blink it or rely on the user seeing it.
+        // Let's keep it simple for now.
+    },
+
+    clearResults() {
+        state.searchResults = [];
+        state.currentSearchIndex = -1;
+        // Remove search annotations
+        state.annotations.forEach((anns, page) => {
+            const filtered = anns.filter(a => a.type !== 'search_highlight');
+            state.annotations.set(page, filtered);
+            renderer.drawAnnotations(page); // Re-render to clear
+        });
+        const counter = document.getElementById('search-counter');
+        if (counter) counter.textContent = '0/0';
     }
 };

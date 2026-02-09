@@ -6,6 +6,27 @@ export const scanner = {
     currentFilter: 'original',
     currentIntensity: 50,
 
+    init() {
+        // Bind Filter Buttons
+        document.querySelectorAll('.filter-btn').forEach(btn => {
+            btn.addEventListener('click', () => {
+                document.querySelectorAll('.filter-btn').forEach(b => b.classList.remove('active'));
+                btn.classList.add('active');
+                scanner.currentFilter = btn.dataset.filter;
+                scanner.updateStyle();
+            });
+        });
+
+        // Bind Intensity Slider
+        const slider = document.getElementById('filter-intensity');
+        if (slider) {
+            slider.addEventListener('input', (e) => {
+                scanner.currentIntensity = parseInt(e.target.value);
+                scanner.updateStyle();
+            });
+        }
+    },
+
     async open() {
         if (!state.currentDoc) {
             ui.showToast('No document open', 'error');

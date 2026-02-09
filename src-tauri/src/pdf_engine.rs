@@ -161,17 +161,8 @@ pub fn search_text(
         let page = doc.pages().get(page_num as u16).map_err(|e| e.to_string())?;
         let text = page.text().map_err(|e| e.to_string())?;
         
-        // Search for all occurrences of the query
         let search = text.search(&query, &PdfSearchOptions::default()).map_err(|e| e.to_string())?;
         let mut results = Vec::new();
-        
-        // Fix: search returns a PdfPageTextSearch object which is not an iterator itself
-        // but has methods like .results() or checks.
-        // Or if it implements IntoIterator, we need to correct usage.
-        // Checking pdfium-render docs/examples, usually .iter() or similar is used.
-        // Assuming search.results() returns the iterator or vector.
-        // If not available, let's try assuming it behaves like an iterator
-        // Error was: `PdfPageTextSearch<'_>` is not an iterator
         
         for match_result in search.iter(PdfSearchDirection::SearchForward) {
              for segment in match_result.iter() {
@@ -187,6 +178,161 @@ pub fn search_text(
 
         Ok(results)
     })
+}
+
+#[derive(serde::Serialize)]
+pub struct SearchResult {
+    page: i32,
+    x: f32,
+    y: f32,
+    w: f32,
+    h: f32,
+}
+
+#[tauri::command]
+pub async fn search_document(
+    state: tauri::State<'_, PdfState>,
+    query: String
+) -> Result<Vec<SearchResult>, String> {
+    // Clone state to move into blocking task
+    let doc_clone = state.doc.clone();
+    
+    // Run search on blocking thread to not block async runtime
+    tokio::task::spawn_blocking(move || {
+        let guard = doc_clone.lock().map_err(|e| e.to_string())?;
+        if let Some(wrapper) = guard.as_ref() {
+             let doc = &wrapper.0;
+             let mut results = Vec::new();
+             
+             // Iterate all pages
+             for (i, page) in doc.pages().iter().enumerate() {
+                 // Text extraction is fast for one page
+                 if let Ok(text) = page.text() {
+                     if let Ok(search) = text.search(&query, &PdfSearchOptions::default()) {
+                         for match_result in search.iter(PdfSearchDirection::SearchForward) {
+                             for segment in match_result.iter() {
+                                 let rect = segment.bounds();
+                                 results.push(SearchResult {
+                                     page: i as i32,
+                                     x: rect.left().value,
+                                     y: rect.top().value,
+                                     w: rect.width().value,
+                                     h: rect.height().value,
+                                 });
+                             }
+                         }
+                     }
+                 }
+             }
+             Ok(results)
+        } else {
+             Err("No document open".to_string())
+        }
+    }).await.map_err(|e| e.to_string())?
+}
+
+/// Text rectangle for text layer rendering
+#[derive(serde::Serialize)]
+pub struct TextRect {
+    pub text: String,
+    pub x: f32,
+    pub y: f32,
+    pub w: f32,
+    pub h: f32,
+}
+
+/// Get text with coordinates for a single page (for text selection layer)
+#[tauri::command]
+pub async fn get_page_text_with_coords(
+    state: tauri::State<'_, PdfState>,
+    page_num: i32,
+) -> Result<Vec<TextRect>, String> {
+    let doc_clone = state.doc.clone();
+    
+    tokio::task::spawn_blocking(move || {
+        let guard = doc_clone.lock().map_err(|e| e.to_string())?;
+        if let Some(wrapper) = guard.as_ref() {
+            let doc = &wrapper.0;
+            let page = doc.pages().get(page_num as u16).map_err(|e| e.to_string())?;
+            let text_page = page.text().map_err(|e| e.to_string())?;
+            
+            let mut results = Vec::new();
+            
+            // Iterate through characters and group into words
+            let mut current_word = String::new();
+            let mut word_bounds: Option<(f32, f32, f32, f32)> = None; // (min_x, min_y, max_x, max_y)
+            
+            for char_result in text_page.chars().iter() {
+                let c = char_result.unicode_char();
+                let bounds = char_result.loose_bounds();
+                
+                let x = bounds.left().value;
+                let y = bounds.top().value;
+                let w = bounds.width().value;
+                let h = bounds.height().value;
+                
+                if c.is_whitespace() || c == '\n' || c == '\r' {
+                    // End current word
+                    if !current_word.is_empty() {
+                        if let Some((min_x, min_y, max_x, max_y)) = word_bounds {
+                            results.push(TextRect {
+                                text: current_word.clone(),
+                                x: min_x,
+                                y: min_y,
+                                w: max_x - min_x,
+                                h: max_y - min_y,
+                            });
+                        }
+                        current_word.clear();
+                        word_bounds = None;
+                    }
+                    
+                    // Add space as separate element if it's a regular space
+                    if c == ' ' {
+                        results.push(TextRect {
+                            text: " ".to_string(),
+                            x,
+                            y,
+                            w,
+                            h,
+                        });
+                    }
+                } else {
+                    // Add character to current word
+                    current_word.push(c);
+                    
+                    // Update word bounds
+                    if let Some((min_x, min_y, max_x, max_y)) = word_bounds {
+                        word_bounds = Some((
+                            min_x.min(x),
+                            min_y.min(y),
+                            max_x.max(x + w),
+                            max_y.max(y + h),
+                        ));
+                    } else {
+                        word_bounds = Some((x, y, x + w, y + h));
+                    }
+                }
+            }
+            
+            // Don't forget the last word
+            if !current_word.is_empty() {
+                if let Some((min_x, min_y, max_x, max_y)) = word_bounds {
+                    results.push(TextRect {
+                        text: current_word,
+                        x: min_x,
+                        y: min_y,
+                        w: max_x - min_x,
+                        h: max_y - min_y,
+                    });
+                }
+            }
+            
+            Ok(results)
+        } else {
+            Err("No document open".to_string())
+        }
+    }).await.map_err(|e| e.to_string())?
 }
 
 #[tauri::command]

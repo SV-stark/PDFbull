@@ -227,6 +227,15 @@ export const tools = {
         state.annotations = new Map(historyState.annotations);
         state.currentPage = historyState.currentPage;
         state.currentZoom = historyState.currentZoom;
+
+        // Re-render all visible pages to update annotations
+        if (state.visiblePages.size > 0) {
+            state.visiblePages.forEach(pageNum => {
+                renderer.drawAnnotations(pageNum);
+            });
+        }
+
+        // Ensure current page is rendered/updated
         renderer.renderPage(state.currentPage);
         ui.updateUndoRedoButtons();
     }

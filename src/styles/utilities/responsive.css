@@ -1,0 +1,41 @@
+/**
+ * ═══════════════════════════════════════════════════════════════════════════
+ * PDFbull - Responsive Breakpoints
+ * ═══════════════════════════════════════════════════════════════════════════
+ */
+
+/* Medium Screens (≤ 1200px) */
+@media (max-width: 1200px) {
+    .toolbar .toolbar-label {
+        display: none;
+    }
+}
+
+/* Tablets (≤ 1024px) */
+@media (max-width: 1024px) {
+    .sidebar {
+        width: 200px;
+    }
+
+    .toolbar {
+        padding: 0 8px;
+        gap: 6px;
+    }
+
+    .toolbar button span {
+        display: none;
+    }
+}
+
+/* Small Screens (≤ 900px) */
+@media (max-width: 900px) {
+    .toolbar-group:nth-child(3) {
+        display: none;
+    }
+
+    .search-panel {
+        right: 10px;
+        left: 10px;
+        width: auto;
+    }
+}

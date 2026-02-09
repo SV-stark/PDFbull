@@ -1,0 +1,317 @@
+/**
+ * ═══════════════════════════════════════════════════════════════════════════
+ * PDFbull - Modal Component
+ * ═══════════════════════════════════════════════════════════════════════════
+ */
+
+/* ─────────────────────────────────────
+   BASE MODAL
+   ───────────────────────────────────── */
+.modal {
+    position: fixed;
+    top: 0;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    background: rgba(0, 0, 0, 0.7);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    z-index: var(--z-modal);
+    backdrop-filter: blur(4px);
+}
+
+.modal.hidden {
+    display: none;
+}
+
+.modal-content {
+    background: var(--panel-bg);
+    border: 1px solid var(--glass-border);
+    border-radius: var(--radius-xl);
+    min-width: 320px;
+    max-width: 90vw;
+    box-shadow: 0 20px 60px rgba(0, 0, 0, 0.5);
+    animation: modal-in var(--transition-fast) ease-out;
+}
+
+.modal-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 16px 20px;
+    border-bottom: 1px solid var(--border-color);
+}
+
+.modal-header h3 {
+    font-size: var(--font-size-lg);
+    font-weight: 600;
+}
+
+.modal-close {
+    padding: 4px;
+    border-radius: var(--radius-md);
+}
+
+.modal-body {
+    padding: 16px 20px;
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+    overflow-y: auto;
+    max-height: 80vh;
+}
+
+/* ─────────────────────────────────────
+   EXPORT OPTIONS
+   ───────────────────────────────────── */
+.export-option {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    padding: 12px 16px;
+    background: var(--glass-bg);
+    border: 1px solid var(--glass-border);
+    border-radius: var(--radius-lg);
+    cursor: pointer;
+    transition: all var(--transition-fast);
+    text-align: left;
+}
+
+.export-option:hover {
+    background: rgba(255, 255, 255, 0.1);
+    border-color: var(--accent-color);
+}
+
+.export-option i {
+    font-size: 24px;
+    color: var(--accent-color);
+}
+
+/* ─────────────────────────────────────
+   SETTINGS MODAL
+   ───────────────────────────────────── */
+.settings-content {
+    width: 800px;
+    max-width: 95vw;
+    height: 600px;
+    max-height: 90vh;
+    display: flex;
+    flex-direction: column;
+}
+
+.settings-body {
+    flex: 1;
+    display: flex;
+    overflow: hidden;
+    padding: 0;
+}
+
+.settings-sidebar {
+    width: 180px;
+    background: var(--panel-bg);
+    border-right: 1px solid var(--border-color);
+    display: flex;
+    flex-direction: column;
+    padding: 16px 0;
+}
+
+.settings-tab {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    padding: 12px 20px;
+    background: transparent;
+    border: none;
+    color: var(--text-color);
+    font-size: var(--font-size-md);
+    text-align: left;
+    cursor: pointer;
+    transition: all var(--transition-fast);
+    border-left: 3px solid transparent;
+}
+
+.settings-tab:hover {
+    background: rgba(255, 255, 255, 0.05);
+}
+
+.settings-tab.active {
+    background: rgba(100, 108, 255, 0.1);
+    border-left-color: var(--accent-color);
+    color: var(--accent-color);
+}
+
+.settings-tab i {
+    font-size: 20px;
+}
+
+.settings-panels {
+    flex: 1;
+    overflow-y: auto;
+    padding: 24px;
+}
+
+.settings-panel {
+    display: none;
+}
+
+.settings-panel.active {
+    display: block;
+}
+
+.settings-panel h4 {
+    font-size: var(--font-size-xl);
+    margin-bottom: 20px;
+    padding-bottom: 12px;
+    border-bottom: 1px solid var(--border-color);
+}
+
+.setting-item {
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+    margin-bottom: 24px;
+}
+
+.setting-item>label {
+    font-size: var(--font-size-md);
+    font-weight: 500;
+    color: var(--text-color);
+}
+
+.setting-control {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+}
+
+.setting-control input[type="text"] {
+    flex: 1;
+    padding: 8px 12px;
+    background: var(--glass-bg);
+    border: 1px solid var(--glass-border);
+    border-radius: var(--radius-md);
+    color: var(--text-color);
+    font-size: var(--font-size-md);
+}
+
+.setting-control select {
+    padding: 8px 12px;
+    background: var(--glass-bg);
+    border: 1px solid var(--glass-border);
+    border-radius: var(--radius-md);
+    color: var(--text-color);
+    font-size: var(--font-size-md);
+    min-width: 150px;
+}
+
+.setting-value {
+    font-size: 13px;
+    color: var(--text-color);
+    opacity: 0.7;
+    min-width: 80px;
+}
+
+.theme-selector {
+    display: flex;
+    gap: 12px;
+}
+
+.shortcuts-list {
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+}
+
+.shortcut-item {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 10px 0;
+    border-bottom: 1px solid var(--border-color);
+}
+
+.shortcut-item:last-child {
+    border-bottom: none;
+}
+
+.shortcut-item span:first-child {
+    font-size: var(--font-size-md);
+    color: var(--text-color);
+}
+
+/* ─────────────────────────────────────
+   SCANNER MODAL
+   ───────────────────────────────────── */
+.scanner-content {
+    width: 900px;
+    max-width: 95vw;
+    height: 80vh;
+    display: flex;
+    flex-direction: column;
+}
+
+.scanner-body {
+    flex: 1;
+    display: flex;
+    gap: 20px;
+    overflow: hidden;
+    padding: 0;
+}
+
+.scanner-preview-container {
+    flex: 1;
+    background: var(--viewer-bg);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    overflow: hidden;
+    position: relative;
+    border-radius: var(--radius-lg);
+    padding: 20px;
+}
+
+#scanner-preview-canvas {
+    max-width: 100%;
+    max-height: 100%;
+    box-shadow: 0 4px 15px rgba(0, 0, 0, 0.3);
+    transition: all var(--transition-fast);
+}
+
+.scanner-controls {
+    width: 280px;
+    background: var(--panel-bg);
+    border-left: 1px solid var(--border-color);
+    display: flex;
+    flex-direction: column;
+    padding: 20px;
+    gap: 24px;
+}
+
+.scanner-filters {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 10px;
+}
+
+.scanner-slider-container {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+}
+
+.scanner-slider-container label {
+    font-size: var(--font-size-md);
+    font-weight: 500;
+    color: var(--text-color);
+}
+
+.scanner-actions {
+    margin-top: auto;
+}
+
+/* Batch Controls */
+.batch-controls {
+    background: rgba(100, 108, 255, 0.1);
+    border-bottom: 1px solid var(--accent-color);
+}

@@ -1,0 +1,279 @@
+/**
+ * ═══════════════════════════════════════════════════════════════════════════
+ * PDFbull - PDF Viewer Layout
+ * ═══════════════════════════════════════════════════════════════════════════
+ */
+
+/* ─────────────────────────────────────
+   MAIN CONTAINER
+   ───────────────────────────────────── */
+.main-container {
+    flex: 1;
+    display: flex;
+    overflow: hidden;
+    position: relative;
+}
+
+/* ─────────────────────────────────────
+   VIEWER CONTAINER
+   ───────────────────────────────────── */
+.viewer-container {
+    flex: 1;
+    background: var(--viewer-bg);
+    overflow: auto;
+    position: relative;
+    display: block;
+    text-align: center;
+    padding: 20px;
+    transition: all var(--transition-normal);
+    order: 2;
+    contain: layout;
+}
+
+.viewer-container.drag-over {
+    background: var(--accent-color);
+    background-image: repeating-linear-gradient(45deg,
+            transparent,
+            transparent 10px,
+            rgba(255, 255, 255, 0.1) 10px,
+            rgba(255, 255, 255, 0.1) 20px);
+    border: 3px dashed var(--accent-hover);
+    transform: scale(0.98);
+}
+
+.viewer-container.drag-over::before {
+    content: 'Drop PDF file here';
+    position: absolute;
+    top: 50%;
+    left: 50%;
+    transform: translate(-50%, -50%);
+    font-size: 24px;
+    font-weight: bold;
+    color: white;
+    text-shadow: 0 2px 4px rgba(0, 0, 0, 0.5);
+    pointer-events: none;
+    z-index: 1000;
+}
+
+/* ─────────────────────────────────────
+   PAGES CONTAINER
+   ───────────────────────────────────── */
+#pages-container {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 20px;
+    padding-bottom: 50px;
+    min-height: 100%;
+    width: 100%;
+    will-change: transform;
+    transform-origin: top left;
+}
+
+.page-container {
+    position: relative;
+    background: white;
+    box-shadow: 0 4px 15px rgba(0, 0, 0, 0.2);
+    width: calc(var(--page-width) * var(--zoom-factor));
+    height: calc(var(--page-height) * var(--zoom-factor));
+}
+
+/* ─────────────────────────────────────
+   PAGE CANVAS
+   ───────────────────────────────────── */
+.page-canvas {
+    display: block;
+    max-width: none;
+    width: 100%;
+    height: 100%;
+    transition: filter var(--transition-normal);
+    contain: layout paint style;
+    will-change: transform;
+}
+
+.page-canvas.pdf-layer {
+    position: absolute;
+    top: 0;
+    left: 0;
+    z-index: 1;
+}
+
+.page-canvas.annotation-layer {
+    position: absolute;
+    top: 0;
+    left: 0;
+    z-index: 2;
+    pointer-events: auto;
+}
+
+/* ─────────────────────────────────────
+   TEXT SELECTION LAYER
+   ───────────────────────────────────── */
+.text-layer {
+    position: absolute;
+    top: 0;
+    left: 0;
+    width: 100%;
+    height: 100%;
+    overflow: hidden;
+    z-index: 3;
+    pointer-events: auto;
+}
+
+.text-layer span {
+    position: absolute;
+    white-space: nowrap;
+    color: transparent;
+    user-select: text;
+    cursor: text;
+    line-height: 1;
+}
+
+.text-layer::selection,
+.text-layer span::selection {
+    background: rgba(0, 100, 255, 0.3);
+}
+
+#pdf-canvas {
+    contain: layout paint style;
+    will-change: transform;
+    animation: fadeIn var(--transition-fast) ease-out;
+}
+
+/* ─────────────────────────────────────
+   FILTERS
+   ───────────────────────────────────── */
+.viewer-container.grayscale .page-canvas {
+    filter: grayscale(100%);
+}
+
+.viewer-container.invert .page-canvas {
+    filter: invert(100%);
+}
+
+.filter-grayscale {
+    filter: grayscale(100%);
+}
+
+.filter-invert {
+    filter: invert(100%);
+}
+
+.filter-sepia {
+    filter: sepia(100%);
+}
+
+/* ─────────────────────────────────────
+   PLACEHOLDERS
+   ───────────────────────────────────── */
+.page-placeholder {
+    position: absolute;
+    top: 0;
+    left: 0;
+    width: 100%;
+    height: 100%;
+    background: white;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    color: #888;
+}
+
+/* ─────────────────────────────────────
+   FLOATING OVERLAY
+   ───────────────────────────────────── */
+.overlay {
+    position: absolute;
+    bottom: 20px;
+    left: 50%;
+    transform: translateX(-50%);
+    background: var(--glass-bg);
+    backdrop-filter: blur(10px);
+    padding: 8px 16px;
+    border-radius: 20px;
+    display: flex;
+    gap: 10px;
+    align-items: center;
+    border: 1px solid var(--glass-border);
+    opacity: 0;
+    transition: opacity var(--transition-normal);
+}
+
+.viewer-container:hover+.overlay,
+.overlay:hover {
+    opacity: 1;
+}
+
+/* ─────────────────────────────────────
+   LOADING OVERLAY
+   ───────────────────────────────────── */
+.loading-overlay {
+    position: absolute;
+    top: 0;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    background: rgba(0, 0, 0, 0.7);
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 16px;
+    z-index: 1000;
+    backdrop-filter: blur(4px);
+    transition: opacity var(--transition-normal);
+    animation: fadeIn var(--transition-fast) ease-out;
+}
+
+.loading-overlay.hidden {
+    display: none;
+    opacity: 0;
+    pointer-events: none;
+}
+
+.spinner {
+    width: 48px;
+    height: 48px;
+    border: 4px solid rgba(255, 255, 255, 0.1);
+    border-top-color: var(--accent-color);
+    border-radius: 50%;
+    animation: spin 0.8s linear infinite;
+}
+
+.loading-text {
+    color: var(--text-color);
+    font-size: var(--font-size-md);
+    font-weight: 500;
+}
+
+/* ─────────────────────────────────────
+   SKELETON LOADING
+   ───────────────────────────────────── */
+.skeleton-overlay {
+    position: absolute;
+    top: 0;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    background: var(--viewer-bg);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    z-index: 100;
+}
+
+.skeleton-overlay.hidden {
+    display: none;
+}
+
+.skeleton-page {
+    width: 80%;
+    height: 90%;
+    background: linear-gradient(90deg,
+            var(--glass-bg) 25%,
+            rgba(255, 255, 255, 0.1) 50%,
+            var(--glass-bg) 75%);
+    background-size: 200% 100%;
+    animation: skeleton-loading 1.5s infinite;
+    border-radius: var(--radius-lg);
+}

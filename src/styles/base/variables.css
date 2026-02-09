@@ -1,0 +1,106 @@
+/**
+ * ═══════════════════════════════════════════════════════════════════════════
+ * PDFbull Design System - CSS Variables & Design Tokens
+ * ═══════════════════════════════════════════════════════════════════════════
+ */
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   DEFAULT THEME (DARK)
+   ═══════════════════════════════════════════════════════════════════════════ */
+:root {
+    /* ─────────────────────────────────────
+     COLOR PALETTE
+     ───────────────────────────────────── */
+    --bg-color: #1a1a1a;
+    --panel-bg: rgba(30, 30, 30, 0.85);
+    --text-color: #e0e0e0;
+    --accent-color: #646cff;
+    --accent-hover: #747bff;
+    --border-color: #333;
+    --shadow: 0 4px 6px rgba(0, 0, 0, 0.3);
+    --glass-bg: rgba(40, 40, 40, 0.6);
+    --glass-border: rgba(255, 255, 255, 0.1);
+    --viewer-bg: #111;
+
+    /* ─────────────────────────────────────
+     SPACING SCALE
+     ───────────────────────────────────── */
+    --space-xs: 4px;
+    --space-sm: 8px;
+    --space-md: 16px;
+    --space-lg: 24px;
+    --space-xl: 32px;
+
+    /* ─────────────────────────────────────
+     TYPOGRAPHY
+     ───────────────────────────────────── */
+    --font-family: 'Inter', system-ui, sans-serif;
+    --font-size-xs: 10px;
+    --font-size-sm: 12px;
+    --font-size-md: 14px;
+    --font-size-lg: 16px;
+    --font-size-xl: 18px;
+
+    /* ─────────────────────────────────────
+     BORDER RADIUS
+     ───────────────────────────────────── */
+    --radius-sm: 4px;
+    --radius-md: 6px;
+    --radius-lg: 8px;
+    --radius-xl: 12px;
+    --radius-round: 50%;
+
+    /* ─────────────────────────────────────
+     TRANSITIONS
+     ───────────────────────────────────── */
+    --transition-fast: 0.2s cubic-bezier(0.4, 0, 0.2, 1);
+    --transition-normal: 0.3s ease;
+
+    /* ─────────────────────────────────────
+     Z-INDEX SCALE
+     ───────────────────────────────────── */
+    --z-dropdown: 1001;
+    --z-modal: 3000;
+    --z-toast: 2000;
+    --z-toolbar: 100;
+}
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   LIGHT THEME
+   ═══════════════════════════════════════════════════════════════════════════ */
+[data-theme="light"] {
+    --bg-color: #f5f5f5;
+    --panel-bg: rgba(255, 255, 255, 0.95);
+    --text-color: #1a1a1a;
+    --accent-color: #4f46e5;
+    --accent-hover: #4338ca;
+    --border-color: #e0e0e0;
+    --shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
+    --glass-bg: rgba(255, 255, 255, 0.8);
+    --glass-border: rgba(0, 0, 0, 0.1);
+    --viewer-bg: #e8e8e8;
+}
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   HIGH CONTRAST THEME
+   ═══════════════════════════════════════════════════════════════════════════ */
+[data-theme="high-contrast"] {
+    --bg-color: #000000;
+    --panel-bg: #000000;
+    --text-color: #ffffff;
+    --accent-color: #ffff00;
+    --accent-hover: #cccc00;
+    --border-color: #ffffff;
+    --shadow: 0 4px 6px rgba(255, 255, 255, 0.3);
+    --glass-bg: #000000;
+    --glass-border: #ffffff;
+    --viewer-bg: #000000;
+}
+
+[data-theme="high-contrast"] button {
+    border: 2px solid var(--border-color);
+}
+
+[data-theme="high-contrast"] .viewer-container {
+    border: 2px solid var(--border-color);
+}

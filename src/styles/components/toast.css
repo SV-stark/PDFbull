@@ -1,0 +1,46 @@
+/**
+ * ═══════════════════════════════════════════════════════════════════════════
+ * PDFbull - Toast Notifications
+ * ═══════════════════════════════════════════════════════════════════════════
+ */
+
+.toast-container {
+    position: fixed;
+    bottom: 40px;
+    right: 20px;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    z-index: var(--z-toast);
+    pointer-events: none;
+}
+
+.toast {
+    background: var(--panel-bg);
+    backdrop-filter: blur(20px);
+    border: 1px solid var(--glass-border);
+    border-radius: var(--radius-lg);
+    padding: 12px 16px;
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    box-shadow: 0 4px 16px rgba(0, 0, 0, 0.3);
+    animation: slideIn var(--transition-normal) ease-out;
+    pointer-events: auto;
+}
+
+.toast.success {
+    border-left: 3px solid #4ade80;
+}
+
+.toast.error {
+    border-left: 3px solid #f87171;
+}
+
+.toast.info {
+    border-left: 3px solid var(--accent-color);
+}
+
+.toast.hide {
+    animation: slideOut var(--transition-normal) ease-out forwards;
+}

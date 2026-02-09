@@ -1,6 +1,7 @@
 import { state } from './state.js';
 import { api } from './api.js';
 import { ui } from './ui.js';
+import { settings } from './settings.js';
 import { CONSTANTS } from './constants.js';
 
 export const renderer = {
@@ -59,7 +60,7 @@ export const renderer = {
 
         state.pageDimensions.forEach((dim, index) => {
             const [w, h] = dim;
-            let pageContainer = document.getElementById(`page-container-${index}`);
+            let pageContainer = /** @type {HTMLDivElement} */ (document.getElementById(`page-container-${index}`));
 
             if (!pageContainer) {
                 pageContainer = document.createElement('div');
@@ -89,11 +90,17 @@ export const renderer = {
                 annCanvas.height = h * state.currentZoom;
                 pageContainer.appendChild(annCanvas);
 
+                // Text Selection Layer (Topmost)
+                const textLayer = document.createElement('div');
+                textLayer.id = `text-layer-${index}`;
+                textLayer.className = 'text-layer';
+                pageContainer.appendChild(textLayer);
+
                 container.appendChild(pageContainer);
             }
 
-            const pdfCanvas = document.getElementById(`page-canvas-${index}`);
-            const annCanvas = document.getElementById(`ann-canvas-${index}`);
+            const pdfCanvas = /** @type {HTMLCanvasElement} */ (document.getElementById(`page-canvas-${index}`));
+            const annCanvas = /** @type {HTMLCanvasElement} */ (document.getElementById(`ann-canvas-${index}`));
 
             pageContainer.style.setProperty('--page-width', `${w}px`);
             pageContainer.style.setProperty('--page-height', `${h}px`);
@@ -147,6 +154,16 @@ export const renderer = {
         ui.updateStatusBar();
     },
 
+    scrollToPage(pageNum) {
+        const pageContainer = document.getElementById(`page-container-${pageNum}`);
+        if (pageContainer) {
+            pageContainer.scrollIntoView({ behavior: 'smooth', block: 'start' });
+            state.currentPage = pageNum;
+            ui.updateUI();
+            ui.updateStatusBar();
+        }
+    },
+
     updateCurrentPageFromScroll() {
         if (state.visiblePages.size > 0) {
             const sorted = Array.from(state.visiblePages).sort((a, b) => a - b);
@@ -179,9 +196,9 @@ export const renderer = {
     },
 
     unloadPage(pageNum) {
-        const pdfCanvas = document.getElementById(`page-canvas-${pageNum}`);
-        const annCanvas = document.getElementById(`ann-canvas-${pageNum}`);
-        const placeholder = document.querySelector(`#page-container-${pageNum} .page-placeholder`);
+        const pdfCanvas = /** @type {HTMLCanvasElement} */ (document.getElementById(`page-canvas-${pageNum}`));
+        const annCanvas = /** @type {HTMLCanvasElement} */ (document.getElementById(`ann-canvas-${pageNum}`));
+        const placeholder = /** @type {HTMLElement} */ (document.querySelector(`#page-container-${pageNum} .page-placeholder`));
 
         if (pdfCanvas && pdfCanvas.style.display !== 'none') {
             const ctx = pdfCanvas.getContext('2d');
@@ -199,15 +216,19 @@ export const renderer = {
         }
 
         if (placeholder) placeholder.style.display = 'flex';
+
+        // Clear text layer
+        const textLayer = document.getElementById(`text-layer-${pageNum}`);
+        if (textLayer) textLayer.innerHTML = '';
     },
 
     async renderPage(pageNum) {
         if (pageNum < 0 || pageNum >= state.totalPages) return;
 
-        const pdfCanvas = document.getElementById(`page-canvas-${pageNum}`);
-        const annCanvas = document.getElementById(`ann-canvas-${pageNum}`);
+        const pdfCanvas = /** @type {HTMLCanvasElement} */ (document.getElementById(`page-canvas-${pageNum}`));
+        const annCanvas = /** @type {HTMLCanvasElement} */ (document.getElementById(`ann-canvas-${pageNum}`));
         const pdfCtx = pdfCanvas.getContext('2d');
-        const placeholder = document.querySelector(`#page-container-${pageNum} .page-placeholder`);
+        const placeholder = /** @type {HTMLElement} */ (document.querySelector(`#page-container-${pageNum} .page-placeholder`));
 
         const cached = renderer.getCachedPage(pageNum);
 
@@ -258,16 +279,19 @@ export const renderer = {
 
             renderer.drawAnnotations(pageNum);
 
+            // Render text layer for selection (async, non-blocking)
+            renderer.renderTextLayer(pageNum, width, height);
+
         } catch (e) {
             console.error(`Failed to render page ${pageNum}:`, e);
         }
     },
 
     drawCachedPage(pageNum, cached) {
-        const pdfCanvas = document.getElementById(`page-canvas-${pageNum}`);
-        const annCanvas = document.getElementById(`ann-canvas-${pageNum}`);
+        const pdfCanvas = /** @type {HTMLCanvasElement} */ (document.getElementById(`page-canvas-${pageNum}`));
+        const annCanvas = /** @type {HTMLCanvasElement} */ (document.getElementById(`ann-canvas-${pageNum}`));
         const pdfCtx = pdfCanvas.getContext('2d');
-        const placeholder = document.querySelector(`#page-container-${pageNum} .page-placeholder`);
+        const placeholder = /** @type {HTMLElement} */ (document.querySelector(`#page-container-${pageNum} .page-placeholder`));
 
         pdfCanvas.width = cached.width;
         pdfCanvas.height = cached.height;
@@ -285,7 +309,7 @@ export const renderer = {
 
     drawAnnotations(pageNum) {
         const pageAnnotations = state.annotations.get(pageNum) || [];
-        const canvas = document.getElementById(`ann-canvas-${pageNum}`);
+        const canvas = /** @type {HTMLCanvasElement} */ (document.getElementById(`ann-canvas-${pageNum}`));
         if (!canvas) return;
         const ctx = canvas.getContext('2d');
 
@@ -355,6 +379,64 @@ export const renderer = {
         });
     },
 
+    /**
+     * Render transparent text layer for text selection
+     * @param {number} pageNum - Page number
+     * @param {number} canvasWidth - Rendered canvas width
+     * @param {number} canvasHeight - Rendered canvas height
+     */
+    async renderTextLayer(pageNum, canvasWidth, canvasHeight) {
+        const textLayer = /** @type {HTMLElement} */ (document.getElementById(`text-layer-${pageNum}`));
+        if (!textLayer) return;
+
+        // Check if already rendering or rendered for this zoom
+        if (textLayer.dataset.rendered === String(state.currentZoom)) return;
+
+        try {
+            const textRects = await api.getPageTextRects(pageNum);
+
+            // Verify page is still visible
+            if (!state.visiblePages.has(pageNum)) return;
+
+            // Get original page dimensions for coordinate conversion
+            const [origWidth, origHeight] = state.pageDimensions[pageNum] || [0, 0];
+            if (origWidth === 0) return;
+
+            // Scale factors
+            const scaleX = canvasWidth / origWidth;
+            const scaleY = canvasHeight / origHeight;
+
+            // Clear and populate
+            textLayer.innerHTML = '';
+
+            textRects.forEach(rect => {
+                if (!rect.text.trim() && rect.text !== ' ') return; // Skip empty
+
+                const span = document.createElement('span');
+                span.textContent = rect.text;
+
+                // Convert PDF coordinates (0,0 at bottom-left) to CSS (0,0 at top-left)
+                const cssX = rect.x * scaleX;
+                const cssY = (origHeight - rect.y) * scaleY; // Flip Y
+                const cssW = rect.w * scaleX;
+                const cssH = rect.h * scaleY;
+
+                span.style.left = `${cssX}px`;
+                span.style.top = `${cssY - cssH}px`; // Adjust for text baseline
+                span.style.width = `${cssW}px`;
+                span.style.height = `${cssH}px`;
+                span.style.fontSize = `${cssH * 0.9}px`; // Approximate font size
+
+                textLayer.appendChild(span);
+            });
+
+            textLayer.dataset.rendered = String(state.currentZoom);
+
+        } catch (e) {
+            console.error(`Failed to render text layer for page ${pageNum}:`, e);
+        }
+    },
+
     drawArrow(ctx, x1, y1, x2, y2, color) {
         const headlen = 15;
         const angle = Math.atan2(y2 - y1, x2 - x1);
@@ -376,8 +458,9 @@ export const renderer = {
     },
 
     drawStickyNote(ctx, x, y, text, color) {
-        const width = 150;
-        const height = 100;
+        const s = settings.load();
+        const width = s.stickyNoteWidth || 150;
+        const height = s.stickyNoteHeight || 100;
 
         ctx.fillStyle = color || '#ffeb3b';
         ctx.fillRect(x, y, width, height);
@@ -407,5 +490,89 @@ export const renderer = {
         });
 
         ctx.fillText(line, x + 5, lineY);
+    },
+
+    // Thumbnails
+    async renderThumbnails() {
+        const container = document.getElementById('thumbnail-list');
+        if (!container) return;
+        container.innerHTML = '';
+
+        for (let i = 0; i < state.totalPages; i++) {
+            const thumb = document.createElement('div');
+            thumb.className = 'thumbnail';
+            thumb.dataset.page = String(i);
+            thumb.innerHTML = `<span style="pointer-events:none;">${i + 1}</span>`;
+
+            // Highlight current page
+            if (i === state.currentPage) thumb.classList.add('active');
+
+            thumb.onclick = () => {
+                state.currentPage = i;
+                renderer.scrollToPage(i);
+                // updating UI active state logic can be here or in updateUI
+                document.querySelectorAll('.thumbnail').forEach(t => t.classList.remove('active'));
+                thumb.classList.add('active');
+            };
+            container.appendChild(thumb);
+        }
+
+        // Lazy-load visible thumbnails
+        const Observer = new IntersectionObserver((entries) => {
+            entries.forEach(async (entry) => {
+                const target = /** @type {HTMLElement} */ (entry.target);
+                if (entry.isIntersecting && !target.dataset.rendered) {
+                    const pageNum = parseInt(target.dataset.page);
+                    target.dataset.rendered = 'true';
+
+                    try {
+                        // Render at low scale (0.15)
+                        const responseBytes = await api.renderPage(pageNum, 0.15);
+                        const view = new DataView(responseBytes);
+
+                        // Parse header (same as renderPage)
+                        const width = view.getInt32(0, false);
+                        const height = view.getInt32(4, false);
+                        const pixels = new Uint8ClampedArray(responseBytes, 8);
+
+                        const imageData = new ImageData(pixels, width, height);
+                        const imageBitmap = await createImageBitmap(imageData);
+
+                        const canvas = document.createElement('canvas');
+                        canvas.width = width;
+                        canvas.height = height;
+                        canvas.style.width = '100%';
+                        canvas.style.height = 'auto';
+
+                        const ctx = canvas.getContext('2d');
+                        ctx.drawImage(imageBitmap, 0, 0);
+
+                        target.innerHTML = ''; // Clear number
+                        target.appendChild(canvas);
+
+                        // Add page number overlay back
+                        const num = document.createElement('div');
+                        num.textContent = String(pageNum + 1);
+                        num.className = 'thumb-num';
+                        num.style.position = 'absolute';
+                        num.style.bottom = '2px';
+                        num.style.right = '2px';
+                        num.style.background = 'rgba(0,0,0,0.5)';
+                        num.style.color = 'white';
+                        num.style.padding = '2px 4px';
+                        num.style.borderRadius = '4px';
+                        num.style.fontSize = '10px';
+                        target.appendChild(num);
+                        target.style.position = 'relative';
+
+                        imageBitmap.close();
+                    } catch (e) {
+                        console.error('Thumb render failed', e);
+                    }
+                }
+            });
+        }, { root: container, rootMargin: '100px' });
+
+        container.querySelectorAll('.thumbnail').forEach(el => Observer.observe(el));
     }
 };

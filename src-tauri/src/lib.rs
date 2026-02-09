@@ -58,7 +58,9 @@ pub fn run() {
             // Compression
             compression::compress_pdf,
             // Scanner
-            pdf_engine::apply_scanner_filter
+            pdf_engine::apply_scanner_filter,
+            pdf_engine::search_document,
+            pdf_engine::get_page_text_with_coords
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

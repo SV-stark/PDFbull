@@ -62,10 +62,13 @@ const app = {
     state.pageCache.clear(); // Or manage per tab? Original code cleared it.
     // loadAnnotations(); // Need to migrate loadAnnotations
     app.loadAnnotations();
+    app.loadBookmarks();
 
     // Update visual zoom state
     state.renderScale = state.currentZoom;
+    state.renderScale = state.currentZoom;
     renderer.setupVirtualScroller();
+    renderer.renderThumbnails();
   },
 
   closeTab(tabId) {
@@ -119,47 +122,6 @@ const app = {
     }
   },
 
-  saveWithAnnotations() {
-    // Logic moved from main.js, needs implementation or move to tools/renderer?
-    // It involves `api.saveFile` (via invoke save_annotations)
-    // Let's implement it here as it matches "Save" action
-    if (!state.currentDoc) return;
-
-    // Flatten annotations from map to array
-    let allAnnotations = [];
-    state.annotations.forEach((pageAnns, pageNum) => {
-      pageAnns.forEach(ann => {
-        if (ann.type === 'search_highlight') return;
-
-        allAnnotations.push({
-          page: parseInt(pageNum),
-          type: ann.type,
-          x: ann.x,
-          y: ann.y,
-          w: ann.w,
-          h: ann.h,
-          color: ann.color,
-          text: ann.text || null,
-          x1: ann.x1 || null,
-          y1: ann.y1 || null,
-          x2: ann.x2 || null,
-          y2: ann.y2 || null
-        });
-      });
-    });
-
-    if (allAnnotations.length === 0) {
-      ui.showToast('No annotations to save');
-      return;
-    }
-
-    // We need `save` dialog from Tauri.
-    // `api.js` only wraps invoke.
-    // We need `window.__TAURI__.dialog.save`
-    // Or move this logic to `events.js`?
-    // `events.js` dispatched `app:save`.
-  },
-
   async handleSave() {
     if (!state.currentDoc) return;
 
@@ -204,6 +166,39 @@ const app = {
       ui.hideLoading();
       ui.showToast('Save failed: ' + e, 'error');
     }
+  },
+
+  // Bookmarks
+  toggleBookmark(pageNum) {
+    if (state.bookmarks.has(pageNum)) {
+      state.bookmarks.delete(pageNum);
+      ui.showToast('Bookmark removed');
+    } else {
+      state.bookmarks.add(pageNum);
+      ui.showToast('Bookmark added');
+    }
+    app.saveBookmarks();
+    ui.updateBookmarkUI(pageNum);
+  },
+
+  saveBookmarks() {
+    if (!state.currentDoc) return;
+    const all = JSON.parse(localStorage.getItem('pdfBookmarks') || '{}');
+    all[state.currentDoc] = Array.from(state.bookmarks);
+    localStorage.setItem('pdfBookmarks', JSON.stringify(all));
+  },
+
+  loadBookmarks() {
+    if (!state.currentDoc) return;
+    const all = JSON.parse(localStorage.getItem('pdfBookmarks') || '{}');
+    const docBookmarks = all[state.currentDoc];
+    if (docBookmarks) {
+      state.bookmarks = new Set(docBookmarks);
+    } else {
+      state.bookmarks.clear();
+    }
+    // Update UI if current page is bookmarked
+    ui.updateBookmarkUI(state.currentPage);
   }
 };
 
@@ -219,11 +214,79 @@ document.addEventListener('app:save', () => {
   app.handleSave();
 });
 
+document.addEventListener('app:toggle-bookmark', () => {
+  if (state.currentDoc) app.toggleBookmark(state.currentPage);
+});
+
+document.addEventListener('app:export-json', () => {
+  if (!state.currentDoc) return;
+
+  const data = {
+    document: state.currentDoc,
+    exportedAt: new Date().toISOString(),
+    annotations: Array.from(state.annotations.entries()).map(([page, anns]) => ({
+      page,
+      items: anns.filter(a => a.type !== 'search_highlight')
+    }))
+  };
+
+  const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = `${state.currentDoc.split(/[/\\]/).pop()}_annotations.json`;
+  a.click();
+  URL.revokeObjectURL(url);
+  ui.showToast('Annotations exported as JSON');
+});
+
 // Init Events
 events.init();
 
 // Apply Settings
 applySettings();
+
+// Auto-Save Logic
+let autoSaveTimer = null;
+function startAutoSave() {
+  if (autoSaveTimer) clearInterval(autoSaveTimer);
+  const interval = settings.get('autoSaveInterval') * 1000;
+
+  if (interval > 0) {
+    autoSaveTimer = setInterval(() => {
+      if (state.currentDoc && state.annotations.size > 0) {
+        const saved = JSON.parse(localStorage.getItem('pdfAnnotations') || '{}');
+        // Only save if we have annotations for the current doc
+        const currentAnns = state.annotations;
+        // logic to convert map to array for storage
+        const annArray = [];
+        currentAnns.forEach((anns, page) => {
+          annArray.push({ page, annotations: anns });
+        });
+
+        // Actually we need to match the loadAnnotations format
+        // loadAnnotations does: state.annotations = new Map(docAnnotations.annotations);
+        // So docAnnotations.annotations should be an array of [key, value] pairs or compatible?
+        // Wait, JSON.stringify(map) returns {}, maps don't stringify well.
+        // We need to convert Map to Array of entries.
+
+        const serializableAnns = Array.from(state.annotations.entries());
+
+        saved[state.currentDoc] = { annotations: serializableAnns };
+        localStorage.setItem('pdfAnnotations', JSON.stringify(saved));
+
+        // Optional: toast only on first save or periodic? 
+        // Plan said toast "Auto-saved".
+        // Let's debounce the toast or it gets annoying.
+        // ui.showToast('Auto-saved', 'info', 1500);
+      }
+    }, interval);
+  }
+}
+
+// Restart auto-save when settings change (we can hook into settings save or just rely on reload)
+// For now, start it once.
+startAutoSave();
 
 // Load recents
 const recentFiles = JSON.parse(localStorage.getItem('recentFiles') || '[]');
@@ -232,10 +295,5 @@ ui.updateRecentFilesDropdown(recentFiles, app.openNewTab);
 ui.updateStatusBar();
 ui.updateUndoRedoButtons();
 ui.setStatusMessage('Ready - Drag and drop PDFs onto the window to open');
-
-// Backend Test
-api.openDocument('ping').then(() => { }).catch(() => { }); // Just generic invoke test if needed, or stick to dedicated ping
-// In api.js we didn't add ping.
-// window.__TAURI__.core.invoke('ping').then(...);
 
 console.log('PDFbull modules loaded.');

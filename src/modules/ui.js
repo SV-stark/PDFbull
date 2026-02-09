@@ -16,7 +16,9 @@ export const ui = {
         undoBtn: () => document.getElementById('btn-undo'),
         redoBtn: () => document.getElementById('btn-redo'),
         tabsContainer: () => document.getElementById('tabs-container'),
-        sidebar: () => document.getElementById('sidebar'),
+        sidebar: () => document.getElementById('sidebar-left'), // Default to left for backward compatibility
+        sidebarLeft: () => document.getElementById('sidebar-left'),
+        sidebarRight: () => document.getElementById('sidebar-right'),
         currentTool: () => document.getElementById('current-tool'),
         pagesContainer: () => document.getElementById('pages-container'),
     },
@@ -75,19 +77,30 @@ export const ui = {
 
         if (state.currentDoc) {
             const fileName = state.currentDoc.split(/[/\\]/).pop();
-            statusDoc().textContent = fileName;
-            statusPages().textContent = `${state.totalPages} pages`;
+            const elDoc = statusDoc();
+            if (elDoc) elDoc.textContent = fileName;
 
-            if (state.pageDimensions[state.currentPage]) {
-                const [w, h] = state.pageDimensions[state.currentPage];
-                statusDimensions().textContent = `${w}×${h}px`;
-            } else {
-                statusDimensions().textContent = '-';
+            const elPages = statusPages();
+            if (elPages) elPages.textContent = `${state.totalPages} pages`;
+
+            const elDim = statusDimensions();
+            if (elDim) {
+                if (state.pageDimensions[state.currentPage]) {
+                    const [w, h] = state.pageDimensions[state.currentPage];
+                    elDim.textContent = `${w}×${h}px`;
+                } else {
+                    elDim.textContent = '-';
+                }
             }
         } else {
-            statusDoc().textContent = 'No document open';
-            statusPages().textContent = '0 pages';
-            statusDimensions().textContent = '-';
+            const elDoc = statusDoc();
+            if (elDoc) elDoc.textContent = 'No document open';
+
+            const elPages = statusPages();
+            if (elPages) elPages.textContent = '0 pages';
+
+            const elDim = statusDimensions();
+            if (elDim) elDim.textContent = '-';
         }
     },
 
@@ -164,6 +177,24 @@ export const ui = {
 
         const pageInput = document.getElementById('page-input');
         if (pageInput) pageInput.value = state.currentPage + 1;
+
+        // Update Bookmark Icon
+        ui.updateBookmarkUI(state.currentPage);
+    },
+
+    updateBookmarkUI(pageNum) {
+        const btn = document.getElementById('btn-bookmark');
+        if (btn) {
+            const isBookmarked = state.bookmarks.has(pageNum);
+            const icon = btn.querySelector('i');
+            if (isBookmarked) {
+                icon.className = 'ph ph-bookmark-simple-fill';
+                icon.style.color = 'var(--accent-color)';
+            } else {
+                icon.className = 'ph ph-bookmark-simple';
+                icon.style.color = '';
+            }
+        }
     },
 
     createTabUI(tabId, docInfo, switchToTabCallback, closeTabCallback) {
@@ -201,7 +232,7 @@ export const ui = {
 
     // Batch
     renderBatchControls(size, events) {
-        const sidebar = ui.elements.sidebar();
+        const sidebar = ui.elements.sidebarLeft();
         const existing = document.getElementById('batch-controls');
         if (existing) existing.remove();
 
