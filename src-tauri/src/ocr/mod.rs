@@ -4,7 +4,7 @@ pub mod pdf_embed;
 use serde::{Deserialize, Serialize};
 use std::sync::{Arc, Mutex};
 use std::sync::atomic::{AtomicBool, Ordering};
-use oar_ocr::{OcrEngine as OcrEngineInternal, OcrConfig};
+use oar_ocr::prelude::*;
 use tauri::Emitter;
 
 /// Text block with bounding box coordinates
@@ -27,7 +27,7 @@ pub struct PageTextBlocks {
 
 /// Global OCR engine state with lazy loading
 pub struct OcrEngine {
-    engine: Option<OcrEngineInternal>,
+    engine: Option<Box<dyn oar_ocr::oarocr::OcrTrait>>,
     current_language: Option<String>,
     cancel_flag: Arc<AtomicBool>,
 }
@@ -52,17 +52,14 @@ impl OcrEngine {
             .find(|m| m.code == language)
             .ok_or_else(|| format!("Language model not found: {}", language))?;
 
-        // oar-ocr uses a builder-like config or simple constructor
-        let config = OcrConfig::new(
-            model_info.det_model_path.to_str().unwrap().to_string(),
-            model_info.rec_model_path.to_str().unwrap().to_string(),
-            model_info.keys_path.to_str().unwrap().to_string(),
-        );
-
-        let engine = OcrEngineInternal::new(config)
+        let engine = oar_ocr::oarocr::OAROCRBuilder::new()
+            .det_model_path(model_info.det_model_path.to_str().unwrap())
+            .rec_model_path(model_info.rec_model_path.to_str().unwrap())
+            .rec_keys_path(model_info.keys_path.to_str().unwrap())
+            .build()
             .map_err(|e| format!("Failed to initialize OCR engine: {}", e))?;
 
-        self.engine = Some(engine);
+        self.engine = Some(Box::new(engine));
         self.current_language = Some(language.to_string());
         Ok(())
     }
