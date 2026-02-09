@@ -12,7 +12,8 @@ let zoomTimeout = null; // For debouncing high-res renders
 let currentDoc = null;
 let activeFilter = null;
 let pageCache = new Map();
-const MAX_CACHE_SIZE = 15; // Reduced for larger memory footprint of ImageBitmaps
+let currentCacheBytes = 0;
+const MAX_CACHE_BYTES = 256 * 1024 * 1024; // 256 MB Limit
 
 function getCachedPage(pageNum) {
   if (pageCache.has(pageNum)) {
@@ -26,16 +27,26 @@ function getCachedPage(pageNum) {
 }
 
 function setCachedPage(pageNum, data) {
-  // If cache is full, remove oldest entry (first item)
-  if (pageCache.size >= MAX_CACHE_SIZE) {
+  // Calculate approximate size: width * height * 4 bytes (RGBA)
+  const pageSize = data.width * data.height * 4;
+
+  // Evict until we have space
+  while (currentCacheBytes + pageSize > MAX_CACHE_BYTES && pageCache.size > 0) {
     const firstKey = pageCache.keys().next().value;
     const oldData = pageCache.get(firstKey);
-    if (oldData && oldData.bitmap) {
-      oldData.bitmap.close();
+    if (oldData) {
+      if (oldData.bitmap) {
+        oldData.bitmap.close();
+      }
+      const oldSize = oldData.width * oldData.height * 4;
+      currentCacheBytes -= oldSize;
     }
     pageCache.delete(firstKey);
   }
+
   pageCache.set(pageNum, data);
+  currentCacheBytes += pageSize;
+  // console.log(`Cache: ${Math.round(currentCacheBytes / 1024 / 1024)}MB / ${Math.round(MAX_CACHE_BYTES / 1024 / 1024)}MB`);
 }
 
 // Multi-document support
@@ -443,9 +454,12 @@ function addAnnotation(type, data) {
 function drawAnnotations(pageNum) {
   const pageAnnotations = annotations.get(pageNum) || [];
 
-  const canvas = document.getElementById(`page-canvas-${pageNum}`);
+  const canvas = document.getElementById(`ann-canvas-${pageNum}`);
   if (!canvas) return;
   const ctx = canvas.getContext('2d');
+
+  // Clear previous annotations on this layer
+  ctx.clearRect(0, 0, canvas.width, canvas.height);
 
   pageAnnotations.forEach(ann => {
     if (!visibleLayers.has(ann.layer)) return;
@@ -770,19 +784,28 @@ async function setupVirtualScroller() {
       placeholder.textContent = `Page ${index + 1}`;
       pageContainer.appendChild(placeholder);
 
-      // Canvas
-      const pageCanvas = document.createElement('canvas');
-      pageCanvas.id = `page-canvas-${index}`;
-      pageCanvas.className = 'page-canvas';
-      // Initial sizing
-      pageCanvas.width = w * currentZoom;
-      pageCanvas.height = h * currentZoom;
-      pageCanvas.style.display = 'none';
-      pageContainer.appendChild(pageCanvas);
+      // Canvas Layering: PDF Layer (Bottom)
+      const pdfCanvas = document.createElement('canvas');
+      pdfCanvas.id = `page-canvas-${index}`;
+      pdfCanvas.className = 'page-canvas pdf-layer';
+      pdfCanvas.width = w * currentZoom;
+      pdfCanvas.height = h * currentZoom;
+      pdfCanvas.style.display = 'none'; // Hidden until rendered
+      pageContainer.appendChild(pdfCanvas);
+
+      // Canvas Layering: Annotation Layer (Top)
+      const annCanvas = document.createElement('canvas');
+      annCanvas.id = `ann-canvas-${index}`;
+      annCanvas.className = 'page-canvas annotation-layer';
+      annCanvas.width = w * currentZoom;
+      annCanvas.height = h * currentZoom;
+      pageContainer.appendChild(annCanvas);
+
       container.appendChild(pageContainer);
     }
 
-    const pageCanvas = document.getElementById(`page-canvas-${index}`);
+    const pdfCanvas = document.getElementById(`page-canvas-${index}`);
+    const annCanvas = document.getElementById(`ann-canvas-${index}`);
 
     // Use CSS variables for size
     pageContainer.style.setProperty('--page-width', `${w}px`);
@@ -790,11 +813,21 @@ async function setupVirtualScroller() {
 
     // Canvas resolution should match renderScale
     // If renderScale != currentZoom, we just trust the CSS scaling until debounce finishes
-    if (pageCanvas && pageCanvas.width !== w * renderScale) {
-      pageCanvas.width = w * renderScale;
-      pageCanvas.height = h * renderScale;
-      // Hide until re-rendered to avoid stretching artifacts or blank canvas if cleared
-      pageCanvas.style.display = 'none';
+    if (pdfCanvas && pdfCanvas.width !== w * renderScale) {
+      pdfCanvas.width = w * renderScale;
+      pdfCanvas.height = h * renderScale;
+      pdfCanvas.style.display = 'none';
+
+      // Sync annotation layer
+      if (annCanvas) {
+        annCanvas.width = w * renderScale;
+        annCanvas.height = h * renderScale;
+      }
+
+      // Redraw annotations on resize if needed, though they might be cleared.
+      // We will call drawAnnotations in renderPage anyway if it triggers.
+      // But if just resizing, we might want to redraw.
+      drawAnnotations(index);
     }
   });
 
@@ -854,29 +887,34 @@ function updateCurrentPageFromScroll() {
 }
 
 function unloadPage(pageNum) {
-  const canvas = document.getElementById(`page-canvas-${pageNum}`);
+  const pdfCanvas = document.getElementById(`page-canvas-${pageNum}`);
+  const annCanvas = document.getElementById(`ann-canvas-${pageNum}`);
   const placeholder = document.querySelector(`#page-container-${pageNum} .page-placeholder`);
 
-  if (canvas && canvas.style.display !== 'none') {
-    const ctx = canvas.getContext('2d');
-    // Clear canvas to free GPU memory
-    ctx.clearRect(0, 0, canvas.width, canvas.height);
-    // Reset size to 0 to be sure? No, keeping size avoids layout shift usually,
-    // but the container handles layout. The canvas is inside.
-    // Setting width/height to 0 frees more memory than clearRect.
-    canvas.width = 0;
-    canvas.height = 0;
-
-    canvas.style.display = 'none';
-    if (placeholder) placeholder.style.display = 'flex';
+  if (pdfCanvas && pdfCanvas.style.display !== 'none') {
+    const ctx = pdfCanvas.getContext('2d');
+    ctx.clearRect(0, 0, pdfCanvas.width, pdfCanvas.height);
+    pdfCanvas.width = 0;
+    pdfCanvas.height = 0;
+    pdfCanvas.style.display = 'none';
   }
+
+  if (annCanvas) {
+    const ctx = annCanvas.getContext('2d');
+    ctx.clearRect(0, 0, annCanvas.width, annCanvas.height);
+    annCanvas.width = 0;
+    annCanvas.height = 0;
+  }
+
+  if (placeholder) placeholder.style.display = 'flex';
 }
 
 async function renderPage(pageNum, saveHistory = false) {
   if (pageNum < 0 || pageNum >= totalPages) return;
 
-  const canvas = document.getElementById(`page-canvas-${pageNum}`);
-  const ctx = canvas.getContext('2d');
+  const pdfCanvas = document.getElementById(`page-canvas-${pageNum}`);
+  const annCanvas = document.getElementById(`ann-canvas-${pageNum}`);
+  const pdfCtx = pdfCanvas.getContext('2d');
   const placeholder = document.querySelector(`#page-container-${pageNum} .page-placeholder`);
 
   const cached = getCachedPage(pageNum);
@@ -915,11 +953,16 @@ async function renderPage(pageNum, saveHistory = false) {
       return;
     }
 
-    canvas.width = width;
-    canvas.height = height;
+    pdfCanvas.width = width;
+    pdfCanvas.height = height;
 
-    ctx.drawImage(imageBitmap, 0, 0);
-    canvas.style.display = 'block';
+    if (annCanvas) {
+      annCanvas.width = width;
+      annCanvas.height = height;
+    }
+
+    pdfCtx.drawImage(imageBitmap, 0, 0);
+    pdfCanvas.style.display = 'block';
     if (placeholder) placeholder.style.display = 'none';
 
     setCachedPage(pageNum, {
@@ -937,14 +980,21 @@ async function renderPage(pageNum, saveHistory = false) {
 }
 
 function drawCachedPage(pageNum, cached) {
-  const canvas = document.getElementById(`page-canvas-${pageNum}`);
-  const ctx = canvas.getContext('2d');
+  const pdfCanvas = document.getElementById(`page-canvas-${pageNum}`);
+  const annCanvas = document.getElementById(`ann-canvas-${pageNum}`);
+  const pdfCtx = pdfCanvas.getContext('2d');
   const placeholder = document.querySelector(`#page-container-${pageNum} .page-placeholder`);
 
-  canvas.width = cached.width;
-  canvas.height = cached.height;
-  ctx.drawImage(cached.bitmap, 0, 0);
-  canvas.style.display = 'block';
+  pdfCanvas.width = cached.width;
+  pdfCanvas.height = cached.height;
+
+  if (annCanvas) {
+    annCanvas.width = cached.width;
+    annCanvas.height = cached.height;
+  }
+
+  pdfCtx.drawImage(cached.bitmap, 0, 0);
+  pdfCanvas.style.display = 'block';
   if (placeholder) placeholder.style.display = 'none';
   drawAnnotations(pageNum);
 }
@@ -956,6 +1006,7 @@ function updateUI() {
     pageIndicator.textContent = `${currentPage + 1} / ${totalPages}`;
   }
   zoomIndicator.textContent = `${Math.round(currentZoom * 100)}%`;
+  updatePageInput();
 }
 
 function scrollToPage(pageNum) {
@@ -979,31 +1030,46 @@ let currentDrawingPage = -1;
 viewerContainer.addEventListener('mousedown', (e) => {
   if (currentTool === 'view') return;
 
-  const pageCanvas = e.target.closest('.page-canvas');
-  if (!pageCanvas) return;
+  // Click targets the top layer (annotation-layer)
+  const layer = e.target.closest('.annotation-layer');
+  if (!layer) return;
 
-  const pageId = pageCanvas.id.split('-')[2];
+  // Extract page ID from id="ann-canvas-X"
+  const pageId = layer.id.split('-')[2];
   currentDrawingPage = parseInt(pageId);
   currentPage = currentDrawingPage; // Update UI focus
   updateStatusBar();
 
   isDrawing = true;
-  const rect = pageCanvas.getBoundingClientRect();
+  const rect = layer.getBoundingClientRect();
   startX = e.clientX - rect.left;
   startY = e.clientY - rect.top;
 
   // Create temporary canvas for preview
   tempCanvas = document.createElement('canvas');
-  tempCanvas.width = pageCanvas.width;
-  tempCanvas.height = pageCanvas.height;
+  tempCanvas.width = layer.width;
+  tempCanvas.height = layer.height;
   tempCtx = tempCanvas.getContext('2d');
-  tempCtx.drawImage(pageCanvas, 0, 0);
+  // Copy existing annotations to temp canvas? 
+  // No, we draw ON TOP of them in temp canvas usually, or we just draw the new shape?
+  // Original code: tempCtx.drawImage(pageCanvas, 0, 0); 
+  // This copied the PDF content + annotations to temp canvas.
+  // Now we only have annotations on `layer`. 
+  // If we want to see the PDF while drawing, we rely on transparency of tempCanvas?
+  // The tempCanvas is NOT added to DOM, it's just a buffer.
+  // Wait, the `mousemove` clears `ctx` and draws `tempCanvas`. 
+  // If `tempCanvas` only has annotations, then PDF content disappears during draw!
+  // We need `tempCanvas` to be TRANSPARENT and only contain the "static" state of the layer?
+  // OR we just used tempCanvas to store the "check-pointed" state of the canvas before drawing started.
+  // Since `ann-canvas` is transparent, `drawImage(layer, 0, 0)` will copy existing annotations.
+  // PDF background is visible through it.
+  tempCtx.drawImage(layer, 0, 0);
 });
 
 viewerContainer.addEventListener('mousemove', (e) => {
   if (!isDrawing || !tempCtx || currentDrawingPage === -1) return;
 
-  const pageCanvas = document.getElementById(`page-canvas-${currentDrawingPage}`);
+  const pageCanvas = document.getElementById(`ann-canvas-${currentDrawingPage}`);
   if (!pageCanvas) return;
   const ctx = pageCanvas.getContext('2d');
 
@@ -1056,7 +1122,7 @@ viewerContainer.addEventListener('mousemove', (e) => {
 viewerContainer.addEventListener('mouseup', (e) => {
   if (!isDrawing || currentDrawingPage === -1) return;
 
-  const pageCanvas = document.getElementById(`page-canvas-${currentDrawingPage}`);
+  const pageCanvas = document.getElementById(`ann-canvas-${currentDrawingPage}`);
   if (!pageCanvas) {
     isDrawing = false;
     currentDrawingPage = -1;
@@ -1201,7 +1267,7 @@ document.addEventListener('keydown', (e) => {
         return;
       case 'f':
         e.preventDefault();
-        document.getElementById('ipt-search').focus();
+        toggleSearchPanel();
         return;
       case 'b':
         e.preventDefault();
@@ -1437,6 +1503,7 @@ async function openDocumentWithDialog() {
 
 // Event listeners for UI controls
 document.getElementById('btn-open').addEventListener('click', openDocumentWithDialog);
+document.getElementById('btn-save').addEventListener('click', saveWithAnnotations);
 document.getElementById('btn-prev').addEventListener('click', () => {
   if (currentPage > 0) {
     scrollToPage(currentPage - 1);
@@ -1568,9 +1635,30 @@ viewerContainer.addEventListener('wheel', (e) => {
   }
 }, { passive: false });
 
+// Search Panel Toggle
+const searchPanel = document.getElementById('search-panel');
+let isSearchOpen = false;
+
+function toggleSearchPanel() {
+  isSearchOpen = !isSearchOpen;
+  searchPanel.classList.toggle('hidden', !isSearchOpen);
+  if (isSearchOpen) {
+    setTimeout(() => document.getElementById('ipt-search').focus(), 100);
+  }
+}
+
+document.getElementById('btn-search-toggle').addEventListener('click', toggleSearchPanel);
+
+// Close search panel when clicking outside
+document.addEventListener('click', (e) => {
+  if (isSearchOpen && !e.target.closest('#search-panel') && !e.target.closest('#btn-search-toggle')) {
+    searchPanel.classList.add('hidden');
+    isSearchOpen = false;
+  }
+});
+
 // Search
-// Search
-document.getElementById('btn-search').addEventListener('click', async () => {
+document.getElementById('btn-search-exec').addEventListener('click', async () => {
   const query = document.getElementById('ipt-search').value;
   if (!query) return;
 
@@ -1809,33 +1897,8 @@ async function autoCrop() {
   }
 }
 
-// Theme dropdown toggle
-const themeDropdown = document.getElementById('theme-dropdown');
-document.getElementById('btn-theme').addEventListener('click', (e) => {
-  e.stopPropagation();
-  themeDropdown.classList.toggle('visible');
-});
-
-// Theme selection
-document.querySelectorAll('.theme-option').forEach(option => {
-  option.addEventListener('click', () => {
-    const theme = option.getAttribute('data-theme');
-    document.documentElement.setAttribute('data-theme', theme);
-    localStorage.setItem('theme', theme);
-    themeDropdown.classList.remove('visible');
-    showToast(`Theme changed to ${theme}`);
-  });
-});
-
-// Close theme dropdown when clicking outside
-document.addEventListener('click', (e) => {
-  if (!e.target.closest('#btn-theme') && !e.target.closest('#theme-dropdown')) {
-    themeDropdown.classList.remove('visible');
-  }
-});
-
-// Recent files toggle
-document.getElementById('btn-recent-toggle').addEventListener('click', (e) => {
+// Recent files dropdown toggle
+document.getElementById('btn-recent-toggle')?.addEventListener('click', (e) => {
   e.stopPropagation();
   recentFilesDropdown.classList.toggle('visible');
 });
@@ -1847,14 +1910,18 @@ document.addEventListener('click', (e) => {
   }
 });
 
-// Load saved theme
-const savedTheme = localStorage.getItem('theme') || 'dark';
-document.documentElement.setAttribute('data-theme', savedTheme);
+// Theme management moved to settings - migrate old theme setting
+const savedTheme = localStorage.getItem('theme');
+if (savedTheme && !localStorage.getItem('appSettings')) {
+  // Migrate old theme to new settings
+  settingsManager.set('theme', savedTheme);
+  localStorage.removeItem('theme');
+}
 
-// Color picker
-document.querySelectorAll('.color-btn').forEach(btn => {
+// Color picker - Sidebar only (scoped to tools-section)
+document.querySelectorAll('.tools-section .color-picker-row .color-btn').forEach(btn => {
   btn.addEventListener('click', () => {
-    document.querySelectorAll('.color-btn').forEach(b => b.classList.remove('active'));
+    document.querySelectorAll('.tools-section .color-picker-row .color-btn').forEach(b => b.classList.remove('active'));
     btn.classList.add('active');
     selectedColor = btn.getAttribute('data-color');
     document.getElementById('custom-color').value = selectedColor;
@@ -1863,15 +1930,27 @@ document.querySelectorAll('.color-btn').forEach(btn => {
 
 document.getElementById('custom-color').addEventListener('input', (e) => {
   selectedColor = e.target.value;
-  document.querySelectorAll('.color-btn').forEach(b => b.classList.remove('active'));
+  document.querySelectorAll('.tools-section .color-picker-row .color-btn').forEach(b => b.classList.remove('active'));
 });
 
-// Auto-save interval
-setInterval(() => {
-  if (currentDoc && annotations.size > 0) {
-    autoSaveAnnotations();
+// Auto-save interval - uses setting
+let autoSaveIntervalId = null;
+
+function setupAutoSave() {
+  if (autoSaveIntervalId) {
+    clearInterval(autoSaveIntervalId);
   }
-}, 30000); // Auto-save every 30 seconds
+  const interval = appSettings.autoSaveInterval * 1000;
+  if (interval > 0) {
+    autoSaveIntervalId = setInterval(() => {
+      if (currentDoc && annotations.size > 0) {
+        autoSaveAnnotations();
+      }
+    }, interval);
+  }
+}
+
+setupAutoSave();
 
 // Scanner Mode Logic
 const scannerModal = document.getElementById('scanner-modal');
@@ -2040,3 +2119,423 @@ function updateScannerPreviewStyle() {
 
   scannerPreviewCanvas.style.filter = filterString;
 }
+
+// Settings Management
+const settingsManager = {
+  defaults: {
+    theme: 'dark',
+    accentColor: '#646cff',
+    sidebarWidth: 250,
+    showToolbarLabels: true,
+    defaultZoom: '100',
+    autoSaveInterval: 30,
+    restoreSession: false,
+    smoothScroll: true,
+    doubleClickAction: 'nothing',
+    cacheSize: 15,
+    renderQuality: 'medium',
+    hardwareAccel: true,
+    recentFilesLimit: 10,
+    autoOpenLast: false,
+    defaultSavePath: '',
+    defaultAnnoColor: '#ffeb3b',
+    stickyNoteWidth: 150,
+    stickyNoteHeight: 100
+  },
+
+  load() {
+    const saved = JSON.parse(localStorage.getItem('appSettings') || '{}');
+    return { ...this.defaults, ...saved };
+  },
+
+  save(settings) {
+    localStorage.setItem('appSettings', JSON.stringify(settings));
+  },
+
+  get(key) {
+    const settings = this.load();
+    return settings[key];
+  },
+
+  set(key, value) {
+    const settings = this.load();
+    settings[key] = value;
+    this.save(settings);
+  }
+};
+
+// Initialize settings
+let appSettings = settingsManager.load();
+
+// Apply settings on load
+function applySettings() {
+  // Theme
+  document.documentElement.setAttribute('data-theme', appSettings.theme);
+  updateThemeUI();
+
+  // Accent color
+  document.documentElement.style.setProperty('--accent-color', appSettings.accentColor);
+  document.documentElement.style.setProperty('--accent-hover', adjustColor(appSettings.accentColor, -20));
+
+  // Sidebar width
+  document.getElementById('sidebar').style.width = appSettings.sidebarWidth + 'px';
+
+  // Toolbar labels
+  const toolbar = document.querySelector('.toolbar');
+  if (!appSettings.showToolbarLabels) {
+    toolbar.classList.add('hide-labels');
+  }
+
+  // Cache size
+  MAX_CACHE_SIZE = parseInt(appSettings.cacheSize);
+
+  // Update settings UI
+  updateSettingsUI();
+}
+
+// Helper to darken/lighten color
+function adjustColor(color, amount) {
+  const hex = color.replace('#', '');
+  const r = Math.max(0, Math.min(255, parseInt(hex.substr(0, 2), 16) + amount));
+  const g = Math.max(0, Math.min(255, parseInt(hex.substr(2, 2), 16) + amount));
+  const b = Math.max(0, Math.min(255, parseInt(hex.substr(4, 2), 16) + amount));
+  return `#${r.toString(16).padStart(2, '0')}${g.toString(16).padStart(2, '0')}${b.toString(16).padStart(2, '0')}`;
+}
+
+// Settings Modal
+const settingsModal = document.getElementById('settings-modal');
+const settingsTabs = document.querySelectorAll('.settings-tab');
+const settingsPanels = document.querySelectorAll('.settings-panel');
+
+// Open settings
+function openSettings() {
+  settingsModal.classList.remove('hidden');
+  updateSettingsUI();
+}
+
+// Close settings
+function closeSettings() {
+  settingsModal.classList.add('hidden');
+}
+
+// Update settings UI from current settings
+function updateSettingsUI() {
+  // Theme buttons
+  document.querySelectorAll('.theme-btn').forEach(btn => {
+    btn.classList.toggle('active', btn.dataset.theme === appSettings.theme);
+  });
+
+  // Accent color
+  document.querySelectorAll('[data-color]').forEach(btn => {
+    if (btn.dataset.color === appSettings.accentColor) {
+      btn.classList.add('active');
+    } else {
+      btn.classList.remove('active');
+    }
+  });
+  document.getElementById('accent-color-picker').value = appSettings.accentColor;
+
+  // Sidebar width
+  const sidebarWidthSlider = document.getElementById('setting-sidebar-width');
+  if (sidebarWidthSlider) {
+    sidebarWidthSlider.value = appSettings.sidebarWidth;
+    document.getElementById('sidebar-width-value').textContent = appSettings.sidebarWidth + 'px';
+  }
+
+  // Toolbar labels
+  const toolbarLabelsToggle = document.getElementById('setting-toolbar-labels');
+  if (toolbarLabelsToggle) toolbarLabelsToggle.checked = appSettings.showToolbarLabels;
+
+  // Default zoom
+  const defaultZoomSelect = document.getElementById('setting-default-zoom');
+  if (defaultZoomSelect) defaultZoomSelect.value = appSettings.defaultZoom;
+
+  // Auto-save
+  const autoSaveSlider = document.getElementById('setting-autosave');
+  if (autoSaveSlider) {
+    autoSaveSlider.value = appSettings.autoSaveInterval;
+    const value = appSettings.autoSaveInterval;
+    document.getElementById('autosave-value').textContent = value === 0 ? 'Off' : value + 's';
+  }
+
+  // Restore session
+  const restoreToggle = document.getElementById('setting-restore-session');
+  if (restoreToggle) restoreToggle.checked = appSettings.restoreSession;
+
+  // Smooth scroll
+  const smoothScrollToggle = document.getElementById('setting-smooth-scroll');
+  if (smoothScrollToggle) smoothScrollToggle.checked = appSettings.smoothScroll;
+
+  // Double click
+  const doubleClickSelect = document.getElementById('setting-double-click');
+  if (doubleClickSelect) doubleClickSelect.value = appSettings.doubleClickAction;
+
+  // Cache size
+  const cacheSizeSlider = document.getElementById('setting-cache-size');
+  if (cacheSizeSlider) {
+    cacheSizeSlider.value = appSettings.cacheSize;
+    document.getElementById('cache-size-value').textContent = appSettings.cacheSize + ' pages';
+  }
+
+  // Render quality
+  const renderQualitySelect = document.getElementById('setting-render-quality');
+  if (renderQualitySelect) renderQualitySelect.value = appSettings.renderQuality;
+
+  // Hardware accel
+  const hwAccelToggle = document.getElementById('setting-hardware-accel');
+  if (hwAccelToggle) hwAccelToggle.checked = appSettings.hardwareAccel;
+
+  // Recent files limit
+  const recentFilesSlider = document.getElementById('setting-recent-files');
+  if (recentFilesSlider) {
+    recentFilesSlider.value = appSettings.recentFilesLimit;
+    document.getElementById('recent-files-value').textContent = appSettings.recentFilesLimit + ' files';
+  }
+
+  // Auto open last
+  const autoOpenToggle = document.getElementById('setting-auto-open');
+  if (autoOpenToggle) autoOpenToggle.checked = appSettings.autoOpenLast;
+
+  // Default path
+  const defaultPath = document.getElementById('setting-default-path');
+  if (defaultPath) defaultPath.value = appSettings.defaultSavePath || '';
+
+  // Annotation color
+  document.querySelectorAll('[data-anno-color]').forEach(btn => {
+    btn.classList.toggle('active', btn.dataset.annoColor === appSettings.defaultAnnoColor);
+  });
+
+  // Sticky note dimensions
+  const stickyWidthSlider = document.getElementById('setting-sticky-width');
+  if (stickyWidthSlider) {
+    stickyWidthSlider.value = appSettings.stickyNoteWidth;
+    document.getElementById('sticky-width-value').textContent = appSettings.stickyNoteWidth + 'px';
+  }
+
+  const stickyHeightSlider = document.getElementById('setting-sticky-height');
+  if (stickyHeightSlider) {
+    stickyHeightSlider.value = appSettings.stickyNoteHeight;
+    document.getElementById('sticky-height-value').textContent = appSettings.stickyNoteHeight + 'px';
+  }
+}
+
+// Settings event listeners
+document.getElementById('btn-settings')?.addEventListener('click', openSettings);
+document.getElementById('btn-close-settings')?.addEventListener('click', closeSettings);
+
+// Close on backdrop click
+settingsModal?.addEventListener('click', (e) => {
+  if (e.target === settingsModal) closeSettings();
+});
+
+// Tab switching
+settingsTabs.forEach(tab => {
+  tab.addEventListener('click', () => {
+    settingsTabs.forEach(t => t.classList.remove('active'));
+    settingsPanels.forEach(p => p.classList.remove('active'));
+
+    tab.classList.add('active');
+    const panelId = 'panel-' + tab.dataset.tab;
+    document.getElementById(panelId)?.classList.add('active');
+  });
+});
+
+// Theme selection
+document.querySelectorAll('.theme-btn').forEach(btn => {
+  btn.addEventListener('click', () => {
+    const theme = btn.dataset.theme;
+    appSettings.theme = theme;
+    settingsManager.set('theme', theme);
+    applySettings();
+    showToast(`Theme changed to ${theme}`);
+  });
+});
+
+// Accent color selection
+document.querySelectorAll('#panel-appearance [data-color]').forEach(btn => {
+  btn.addEventListener('click', () => {
+    const color = btn.dataset.color;
+    appSettings.accentColor = color;
+    settingsManager.set('accentColor', color);
+    applySettings();
+  });
+});
+
+document.getElementById('accent-color-picker')?.addEventListener('change', (e) => {
+  appSettings.accentColor = e.target.value;
+  settingsManager.set('accentColor', e.target.value);
+  applySettings();
+});
+
+// Sidebar width
+document.getElementById('setting-sidebar-width')?.addEventListener('input', (e) => {
+  const width = parseInt(e.target.value);
+  document.getElementById('sidebar-width-value').textContent = width + 'px';
+  document.getElementById('sidebar').style.width = width + 'px';
+});
+
+document.getElementById('setting-sidebar-width')?.addEventListener('change', (e) => {
+  appSettings.sidebarWidth = parseInt(e.target.value);
+  settingsManager.set('sidebarWidth', appSettings.sidebarWidth);
+});
+
+// Toolbar labels
+document.getElementById('setting-toolbar-labels')?.addEventListener('change', (e) => {
+  appSettings.showToolbarLabels = e.target.checked;
+  settingsManager.set('showToolbarLabels', e.target.checked);
+  const toolbar = document.querySelector('.toolbar');
+  toolbar.classList.toggle('hide-labels', !e.target.checked);
+});
+
+// Default zoom
+document.getElementById('setting-default-zoom')?.addEventListener('change', (e) => {
+  appSettings.defaultZoom = e.target.value;
+  settingsManager.set('defaultZoom', e.target.value);
+});
+
+// Auto-save interval
+document.getElementById('setting-autosave')?.addEventListener('input', (e) => {
+  const value = parseInt(e.target.value);
+  document.getElementById('autosave-value').textContent = value === 0 ? 'Off' : value + 's';
+});
+
+document.getElementById('setting-autosave')?.addEventListener('change', (e) => {
+  appSettings.autoSaveInterval = parseInt(e.target.value);
+  settingsManager.set('autoSaveInterval', appSettings.autoSaveInterval);
+  setupAutoSave();
+  showToast('Auto-save settings updated');
+});
+
+// Restore session
+document.getElementById('setting-restore-session')?.addEventListener('change', (e) => {
+  appSettings.restoreSession = e.target.checked;
+  settingsManager.set('restoreSession', e.target.checked);
+});
+
+// Smooth scroll
+document.getElementById('setting-smooth-scroll')?.addEventListener('change', (e) => {
+  appSettings.smoothScroll = e.target.checked;
+  settingsManager.set('smoothScroll', e.target.checked);
+});
+
+// Double-click action
+document.getElementById('setting-double-click')?.addEventListener('change', (e) => {
+  appSettings.doubleClickAction = e.target.value;
+  settingsManager.set('doubleClickAction', e.target.value);
+});
+
+// Cache size
+document.getElementById('setting-cache-size')?.addEventListener('input', (e) => {
+  const value = parseInt(e.target.value);
+  document.getElementById('cache-size-value').textContent = value + ' pages';
+});
+
+document.getElementById('setting-cache-size')?.addEventListener('change', (e) => {
+  appSettings.cacheSize = parseInt(e.target.value);
+  settingsManager.set('cacheSize', appSettings.cacheSize);
+  MAX_CACHE_SIZE = appSettings.cacheSize;
+  showToast('Cache size updated');
+});
+
+// Render quality
+document.getElementById('setting-render-quality')?.addEventListener('change', (e) => {
+  appSettings.renderQuality = e.target.value;
+  settingsManager.set('renderQuality', e.target.value);
+});
+
+// Hardware acceleration
+document.getElementById('setting-hardware-accel')?.addEventListener('change', (e) => {
+  appSettings.hardwareAccel = e.target.checked;
+  settingsManager.set('hardwareAccel', e.target.checked);
+});
+
+// Recent files limit
+document.getElementById('setting-recent-files')?.addEventListener('input', (e) => {
+  const value = parseInt(e.target.value);
+  document.getElementById('recent-files-value').textContent = value + ' files';
+});
+
+document.getElementById('setting-recent-files')?.addEventListener('change', (e) => {
+  appSettings.recentFilesLimit = parseInt(e.target.value);
+  settingsManager.set('recentFilesLimit', appSettings.recentFilesLimit);
+  MAX_RECENT_FILES = appSettings.recentFilesLimit;
+});
+
+// Auto-open last file
+document.getElementById('setting-auto-open')?.addEventListener('change', (e) => {
+  appSettings.autoOpenLast = e.target.checked;
+  settingsManager.set('autoOpenLast', e.target.checked);
+});
+
+// Default annotation color
+document.querySelectorAll('[data-anno-color]').forEach(btn => {
+  btn.addEventListener('click', () => {
+    const color = btn.dataset.annoColor;
+    appSettings.defaultAnnoColor = color;
+    settingsManager.set('defaultAnnoColor', color);
+    selectedColor = color;
+    document.querySelectorAll('[data-anno-color]').forEach(b => b.classList.remove('active'));
+    btn.classList.add('active');
+  });
+});
+
+// Sticky note dimensions
+document.getElementById('setting-sticky-width')?.addEventListener('input', (e) => {
+  const value = parseInt(e.target.value);
+  document.getElementById('sticky-width-value').textContent = value + 'px';
+});
+
+document.getElementById('setting-sticky-width')?.addEventListener('change', (e) => {
+  appSettings.stickyNoteWidth = parseInt(e.target.value);
+  settingsManager.set('stickyNoteWidth', appSettings.stickyNoteWidth);
+});
+
+document.getElementById('setting-sticky-height')?.addEventListener('input', (e) => {
+  const value = parseInt(e.target.value);
+  document.getElementById('sticky-height-value').textContent = value + 'px';
+});
+
+document.getElementById('setting-sticky-height')?.addEventListener('change', (e) => {
+  appSettings.stickyNoteHeight = parseInt(e.target.value);
+  settingsManager.set('stickyNoteHeight', appSettings.stickyNoteHeight);
+});
+
+// Keyboard shortcut for settings
+document.addEventListener('keydown', (e) => {
+  if (e.ctrlKey && e.key === ',') {
+    e.preventDefault();
+    openSettings();
+  }
+});
+
+// Zoom select dropdown
+document.getElementById('zoom-select')?.addEventListener('change', (e) => {
+  const value = e.target.value;
+  if (value === 'fit-width') {
+    fitWidth();
+  } else if (value === 'fit-page') {
+    fitPage();
+  } else {
+    currentZoom = parseFloat(value);
+    renderPage(currentPage);
+  }
+});
+
+// Page input for direct navigation
+document.getElementById('page-input')?.addEventListener('change', (e) => {
+  const page = parseInt(e.target.value) - 1;
+  if (page >= 0 && page < totalPages) {
+    scrollToPage(page);
+  } else {
+    e.target.value = currentPage + 1;
+  }
+});
+
+// Update page input when page changes
+function updatePageInput() {
+  const pageInput = document.getElementById('page-input');
+  if (pageInput) pageInput.value = currentPage + 1;
+}
+
+// Apply settings on load
+applySettings();

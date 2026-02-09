@@ -13,80 +13,100 @@
 <body>
   <!-- Top Toolbar -->
   <div class="toolbar">
-    <div class="recent-files-container">
-      <button id="btn-open" class="primary" tooltip="Open PDF file (Ctrl+O)">
-        <i class="ph ph-file-pdf"></i>
-        <span>Open PDF</span>
-        <i class="ph ph-caret-down" style="margin-left: 4px; font-size: 12px;"></i>
-      </button>
-      <div id="recent-files-dropdown" class="recent-files-dropdown">
-        <div class="recent-file-empty">
-          <i class="ph ph-clock" style="font-size: 24px; margin-bottom: 8px;"></i>
-          <div>No recent files</div>
+    <!-- Left Group: File Operations -->
+    <div class="toolbar-group">
+      <div class="recent-files-container">
+        <button id="btn-open" class="primary" tooltip="Open PDF file (Ctrl+O)">
+          <i class="ph ph-file-pdf"></i>
+          <span class="toolbar-label">Open</span>
+          <i class="ph ph-caret-down" style="margin-left: 4px; font-size: 12px;"></i>
+        </button>
+        <div id="recent-files-dropdown" class="recent-files-dropdown">
+          <div class="recent-file-empty">
+            <i class="ph ph-clock" style="font-size: 24px; margin-bottom: 8px;"></i>
+            <div>No recent files</div>
+          </div>
         </div>
       </div>
+
+      <button id="btn-save" tooltip="Save (Ctrl+S)">
+        <i class="ph ph-floppy-disk"></i>
+        <span class="toolbar-label">Save</span>
+      </button>
+
+      <div class="toolbar-separator"></div>
+
+      <button id="btn-undo" tooltip="Undo (Ctrl+Z)">
+        <i class="ph ph-arrow-u-up-left"></i>
+      </button>
+      <button id="btn-redo" tooltip="Redo (Ctrl+Y)">
+        <i class="ph ph-arrow-u-up-right"></i>
+      </button>
     </div>
 
-    <button id="btn-recent-toggle" tooltip="Recent files">
-      <i class="ph ph-clock-counter-clockwise"></i>
-    </button>
+    <div class="spacer"></div>
 
-    <div class="toolbar-separator"></div>
-
-    <button id="btn-undo" tooltip="Undo (Ctrl+Z)">
-      <i class="ph ph-arrow-u-up-left"></i>
-    </button>
-    <button id="btn-redo" tooltip="Redo (Ctrl+Y)">
-      <i class="ph ph-arrow-u-up-right"></i>
-    </button>
+    <!-- Center Group: Navigation -->
+    <div class="toolbar-group">
+      <button id="btn-prev" tooltip="Previous Page (←)">
+        <i class="ph ph-caret-left"></i>
+      </button>
+      <div class="page-nav">
+        <input type="number" id="page-input" class="page-input" min="1" value="1" title="Jump to page">
+        <span id="page-indicator" tooltip="Current page">/ -</span>
+      </div>
+      <button id="btn-next" tooltip="Next Page (→)">
+        <i class="ph ph-caret-right"></i>
+      </button>
+    </div>
 
     <div class="spacer"></div>
 
-    <button id="btn-prev" tooltip="Previous Page (←)">
-      <i class="ph ph-caret-left"></i>
-    </button>
-    <span id="page-indicator" tooltip="Current page">- / -</span>
-    <button id="btn-next" tooltip="Next Page (→)">
-      <i class="ph ph-caret-right"></i>
-    </button>
+    <!-- Right Group: View Controls -->
+    <div class="toolbar-group">
+      <button id="btn-search-toggle" tooltip="Search (Ctrl+F)">
+        <i class="ph ph-magnifying-glass"></i>
+        <span class="toolbar-label">Search</span>
+      </button>
 
-    <div class="spacer"></div>
+      <div class="toolbar-separator"></div>
 
-    <input type="text" id="ipt-search" class="search-input" placeholder="Search...">
-    <button id="btn-search" tooltip="Search (Ctrl+F)">
-      <i class="ph ph-magnifying-glass"></i>
-    </button>
+      <button id="btn-zoom-out" tooltip="Zoom Out (Ctrl+-)">
+        <i class="ph ph-minus"></i>
+      </button>
+      <select id="zoom-select" class="zoom-select" title="Zoom level">
+        <option value="fit-width">Fit Width</option>
+        <option value="fit-page">Fit Page</option>
+        <option value="0.5">50%</option>
+        <option value="0.75">75%</option>
+        <option value="1" selected>100%</option>
+        <option value="1.25">125%</option>
+        <option value="1.5">150%</option>
+        <option value="2">200%</option>
+      </select>
+      <button id="btn-zoom-in" tooltip="Zoom In (Ctrl++)">
+        <i class="ph ph-plus"></i>
+      </button>
 
-    <div class="spacer"></div>
+      <div class="toolbar-separator"></div>
 
-    <button id="btn-zoom-out" tooltip="Zoom Out (Ctrl+-)">
-      <i class="ph ph-minus"></i>
-    </button>
-    <span id="zoom-level">100%</span>
-    <button id="btn-zoom-in" tooltip="Zoom In (Ctrl++)">
-      <i class="ph ph-plus"></i>
-    </button>
-    <button id="btn-reset-zoom" tooltip="Reset Zoom (Ctrl+0)">
-      <i class="ph ph-arrows-in"></i>
-    </button>
+      <button id="btn-export" tooltip="Export (Ctrl+E)">
+        <i class="ph ph-export"></i>
+        <span class="toolbar-label">Export</span>
+      </button>
 
-    <div class="spacer"></div>
+      <button id="btn-sidebar-toggle" tooltip="Toggle Sidebar (Ctrl+B)">
+        <i class="ph ph-sidebar"></i>
+      </button>
 
-    <button id="btn-export" tooltip="Export page (Ctrl+E)">
-      <i class="ph ph-export"></i>
-    </button>
+      <button id="btn-fullscreen" tooltip="Fullscreen (F11)">
+        <i class="ph ph-corners-out"></i>
+      </button>
 
-    <button id="btn-fullscreen" tooltip="Fullscreen (F11)">
-      <i class="ph ph-corners-out"></i>
-    </button>
-
-    <button id="btn-sidebar-toggle" tooltip="Toggle Sidebar (Ctrl+B)">
-      <i class="ph ph-sidebar"></i>
-    </button>
-
-    <button id="btn-theme" tooltip="Change theme">
-      <i class="ph ph-paint-brush"></i>
-    </button>
+      <button id="btn-settings" tooltip="Settings (Ctrl+,)">
+        <i class="ph ph-gear"></i>
+      </button>
+    </div>
   </div>
 
   <!-- Tab Bar -->
@@ -103,23 +123,23 @@
   <div class="main-container">
     <!-- Sidebar -->
     <div class="sidebar" id="sidebar">
-      <!-- Color Picker -->
-      <div class="sidebar-section">
-        <div class="sidebar-header">Color</div>
-        <div class="color-picker">
-          <button class="color-btn active" data-color="#ffeb3b" style="background: #ffeb3b;"></button>
-          <button class="color-btn" data-color="#ff5252" style="background: #ff5252;"></button>
-          <button class="color-btn" data-color="#448aff" style="background: #448aff;"></button>
-          <button class="color-btn" data-color="#69f0ae" style="background: #69f0ae;"></button>
-          <button class="color-btn" data-color="#e040fb" style="background: #e040fb;"></button>
-          <button class="color-btn" data-color="#ffffff" style="background: #ffffff;"></button>
-          <input type="color" id="custom-color" class="color-input" value="#ffeb3b">
+      <!-- Thumbnails - Most Used, at Top -->
+      <div class="sidebar-section thumbnails-section">
+        <div class="sidebar-header">
+          <i class="ph ph-images"></i>
+          <span>Thumbnails</span>
+        </div>
+        <div class="thumbnail-list" id="thumbnail-list">
+          <!-- Thumbnails injected here -->
         </div>
       </div>
 
       <!-- Drawing Tools -->
-      <div class="sidebar-section">
-        <div class="sidebar-header">Drawing Tools</div>
+      <div class="sidebar-section tools-section">
+        <div class="sidebar-header">
+          <i class="ph ph-pencil-simple"></i>
+          <span>Drawing Tools</span>
+        </div>
         <div class="tools-container">
           <button id="btn-highlight" class="tool-btn" data-tool="highlight" tooltip="Highlight (H)">
             <i class="ph ph-highlighter"></i>
@@ -150,11 +170,43 @@
             <span>Sticky Note</span>
           </button>
         </div>
+        
+        <!-- Color Picker - Contextual to Drawing Tools -->
+        <div class="color-picker-row">
+          <button class="color-btn active" data-color="#ffeb3b" style="background: #ffeb3b;"></button>
+          <button class="color-btn" data-color="#ff5252" style="background: #ff5252;"></button>
+          <button class="color-btn" data-color="#448aff" style="background: #448aff;"></button>
+          <button class="color-btn" data-color="#69f0ae" style="background: #69f0ae;"></button>
+          <button class="color-btn" data-color="#e040fb" style="background: #e040fb;"></button>
+          <button class="color-btn" data-color="#ffffff" style="background: #ffffff;"></button>
+          <input type="color" id="custom-color" class="color-input" value="#ffeb3b">
+        </div>
       </div>
 
-      <!-- Actions -->
-      <div class="sidebar-section">
-        <div class="sidebar-header">Actions</div>
+      <!-- Layers - Advanced Feature -->
+      <div class="sidebar-section layers-section">
+        <div class="sidebar-header">
+          <i class="ph ph-stack"></i>
+          <span>Layers</span>
+        </div>
+        <div class="layers-container" id="layers-container">
+          <label class="layer-item">
+            <input type="checkbox" checked data-layer="default">
+            <span>Default Layer</span>
+          </label>
+        </div>
+        <button id="btn-add-layer" class="tool-btn" style="margin-top: 8px;">
+          <i class="ph ph-plus-circle"></i>
+          <span>Add Layer</span>
+        </button>
+      </div>
+
+      <!-- Actions - Moved to Bottom -->
+      <div class="sidebar-section actions-section">
+        <div class="sidebar-header">
+          <i class="ph ph-lightning"></i>
+          <span>Actions</span>
+        </div>
         <div class="tools-container">
           <button id="btn-scanner" class="tool-btn" tooltip="Scanner Mode">
             <i class="ph ph-scan"></i>
@@ -176,42 +228,15 @@
             <i class="ph ph-stack"></i>
             <span>Batch Mode</span>
           </button>
-        </div>
-      </div>
-
-      <!-- Layers -->
-      <div class="sidebar-section">
-        <div class="sidebar-header">Layers</div>
-        <div class="layers-container" id="layers-container">
-          <label class="layer-item">
-            <input type="checkbox" checked data-layer="default">
-            <span>Default Layer</span>
-          </label>
-        </div>
-        <button id="btn-add-layer" class="tool-btn" style="margin-top: 8px;">
-          <i class="ph ph-plus-circle"></i>
-          <span>Add Layer</span>
-        </button>
-      </div>
-
-      <!-- Filters -->
-      <div class="sidebar-section">
-        <div class="sidebar-header">Filters</div>
-        <div class="tools-container">
-          <button id="btn-filter-gray" class="tool-btn" data-filter="none" tooltip="Toggle greyscale filter">
+          <button id="btn-filter-gray" class="tool-btn" tooltip="Toggle greyscale">
             <i class="ph ph-drop"></i>
             <span>Greyscale</span>
           </button>
-          <button id="btn-filter-invert" class="tool-btn" data-filter="none" tooltip="Toggle color inversion">
+          <button id="btn-filter-invert" class="tool-btn" tooltip="Toggle color inversion">
             <i class="ph ph-swap"></i>
             <span>Invert</span>
           </button>
         </div>
-      </div>
-
-      <div class="sidebar-header">Thumbnails</div>
-      <div class="thumbnail-list" id="thumbnail-list">
-        <!-- Thumbnails injected here -->
       </div>
     </div>
 
@@ -269,22 +294,308 @@
     </div>
   </div>
 
+  <!-- Search Panel -->
+  <div id="search-panel" class="search-panel hidden">
+    <div class="search-header">
+      <input type="text" id="ipt-search" class="search-input" placeholder="Search in document...">
+      <button id="btn-search-exec">
+        <i class="ph ph-magnifying-glass"></i>
+      </button>
+    </div>
+    <div class="search-options">
+      <label class="search-option">
+        <input type="checkbox" id="search-case-sensitive">
+        <span>Case sensitive</span>
+      </label>
+      <label class="search-option">
+        <input type="checkbox" id="search-whole-word">
+        <span>Whole word</span>
+      </label>
+    </div>
+    <div class="search-results" id="search-results">
+      <div class="search-placeholder">Enter search term</div>
+    </div>
+  </div>
+
   <!-- Toast Container -->
   <div id="toast-container" class="toast-container"></div>
 
-  <!-- Theme Selector Dropdown -->
-  <div id="theme-dropdown" class="theme-dropdown">
-    <div class="theme-option" data-theme="dark">
-      <i class="ph ph-moon"></i>
-      <span>Dark</span>
-    </div>
-    <div class="theme-option" data-theme="light">
-      <i class="ph ph-sun"></i>
-      <span>Light</span>
-    </div>
-    <div class="theme-option" data-theme="high-contrast">
-      <i class="ph ph-circle-half-tilt"></i>
-      <span>High Contrast</span>
+  <!-- Settings Modal -->
+  <div id="settings-modal" class="modal hidden">
+    <div class="modal-content settings-content">
+      <div class="modal-header">
+        <h3>Settings</h3>
+        <button class="modal-close" id="btn-close-settings">
+          <i class="ph ph-x"></i>
+        </button>
+      </div>
+      <div class="modal-body settings-body">
+        <div class="settings-sidebar">
+          <button class="settings-tab active" data-tab="appearance">
+            <i class="ph ph-paint-brush"></i>
+            <span>Appearance</span>
+          </button>
+          <button class="settings-tab" data-tab="behavior">
+            <i class="ph ph-sliders"></i>
+            <span>Behavior</span>
+          </button>
+          <button class="settings-tab" data-tab="performance">
+            <i class="ph ph-gauge"></i>
+            <span>Performance</span>
+          </button>
+          <button class="settings-tab" data-tab="files">
+            <i class="ph ph-folder"></i>
+            <span>Files</span>
+          </button>
+          <button class="settings-tab" data-tab="annotations">
+            <i class="ph ph-pencil"></i>
+            <span>Annotations</span>
+          </button>
+          <button class="settings-tab" data-tab="shortcuts">
+            <i class="ph ph-keyboard"></i>
+            <span>Shortcuts</span>
+          </button>
+        </div>
+        <div class="settings-panels">
+          <!-- Appearance Panel -->
+          <div class="settings-panel active" id="panel-appearance">
+            <h4>Appearance</h4>
+            <div class="setting-item">
+              <label>Theme</label>
+              <div class="theme-selector">
+                <button class="theme-btn active" data-theme="dark">
+                  <i class="ph ph-moon"></i>
+                  <span>Dark</span>
+                </button>
+                <button class="theme-btn" data-theme="light">
+                  <i class="ph ph-sun"></i>
+                  <span>Light</span>
+                </button>
+                <button class="theme-btn" data-theme="high-contrast">
+                  <i class="ph ph-circle-half-tilt"></i>
+                  <span>High Contrast</span>
+                </button>
+              </div>
+            </div>
+            <div class="setting-item">
+              <label>Accent Color</label>
+              <div class="color-picker">
+                <button class="color-btn" data-color="#646cff" style="background: #646cff;"></button>
+                <button class="color-btn" data-color="#4f46e5" style="background: #4f46e5;"></button>
+                <button class="color-btn" data-color="#ff5252" style="background: #ff5252;"></button>
+                <button class="color-btn" data-color="#448aff" style="background: #448aff;"></button>
+                <button class="color-btn" data-color="#69f0ae" style="background: #69f0ae;"></button>
+                <button class="color-btn" data-color="#e040fb" style="background: #e040fb;"></button>
+                <input type="color" id="accent-color-picker" class="color-input" value="#646cff">
+              </div>
+            </div>
+            <div class="setting-item">
+              <label for="setting-sidebar-width">Sidebar Width</label>
+              <div class="setting-control">
+                <input type="range" id="setting-sidebar-width" min="200" max="400" value="250">
+                <span class="setting-value" id="sidebar-width-value">250px</span>
+              </div>
+            </div>
+            <div class="setting-item">
+              <label for="setting-toolbar-labels">Show Toolbar Labels</label>
+              <div class="setting-control">
+                <label class="toggle-switch">
+                  <input type="checkbox" id="setting-toolbar-labels" checked>
+                  <span class="toggle-slider"></span>
+                </label>
+              </div>
+            </div>
+          </div>
+
+          <!-- Behavior Panel -->
+          <div class="settings-panel" id="panel-behavior">
+            <h4>Behavior</h4>
+            <div class="setting-item">
+              <label for="setting-default-zoom">Default Zoom Level</label>
+              <div class="setting-control">
+                <select id="setting-default-zoom">
+                  <option value="fit-width">Fit Width</option>
+                  <option value="fit-page">Fit Page</option>
+                  <option value="100" selected>100%</option>
+                  <option value="125">125%</option>
+                  <option value="150">150%</option>
+                </select>
+              </div>
+            </div>
+            <div class="setting-item">
+              <label for="setting-autosave">Auto-save Interval (seconds)</label>
+              <div class="setting-control">
+                <input type="range" id="setting-autosave" min="0" max="300" value="30" step="10">
+                <span class="setting-value" id="autosave-value">30s</span>
+              </div>
+            </div>
+            <div class="setting-item">
+              <label for="setting-restore-session">Restore Previous Session</label>
+              <div class="setting-control">
+                <label class="toggle-switch">
+                  <input type="checkbox" id="setting-restore-session">
+                  <span class="toggle-slider"></span>
+                </label>
+              </div>
+            </div>
+            <div class="setting-item">
+              <label for="setting-smooth-scroll">Smooth Scrolling</label>
+              <div class="setting-control">
+                <label class="toggle-switch">
+                  <input type="checkbox" id="setting-smooth-scroll" checked>
+                  <span class="toggle-slider"></span>
+                </label>
+              </div>
+            </div>
+            <div class="setting-item">
+              <label for="setting-double-click">Double-click Action</label>
+              <div class="setting-control">
+                <select id="setting-double-click">
+                  <option value="nothing">Nothing</option>
+                  <option value="zoom">Toggle Zoom</option>
+                  <option value="fit-width">Fit to Width</option>
+                </select>
+              </div>
+            </div>
+          </div>
+
+          <!-- Performance Panel -->
+          <div class="settings-panel" id="panel-performance">
+            <h4>Performance</h4>
+            <div class="setting-item">
+              <label for="setting-cache-size">Page Cache Size</label>
+              <div class="setting-control">
+                <input type="range" id="setting-cache-size" min="5" max="50" value="15">
+                <span class="setting-value" id="cache-size-value">15 pages</span>
+              </div>
+            </div>
+            <div class="setting-item">
+              <label for="setting-render-quality">Render Quality</label>
+              <div class="setting-control">
+                <select id="setting-render-quality">
+                  <option value="low">Low (Fast)</option>
+                  <option value="medium" selected>Medium</option>
+                  <option value="high">High (Slow)</option>
+                </select>
+              </div>
+            </div>
+            <div class="setting-item">
+              <label for="setting-hardware-accel">Hardware Acceleration</label>
+              <div class="setting-control">
+                <label class="toggle-switch">
+                  <input type="checkbox" id="setting-hardware-accel" checked>
+                  <span class="toggle-slider"></span>
+                </label>
+              </div>
+            </div>
+          </div>
+
+          <!-- Files Panel -->
+          <div class="settings-panel" id="panel-files">
+            <h4>Files</h4>
+            <div class="setting-item">
+              <label for="setting-recent-files">Recent Files Limit</label>
+              <div class="setting-control">
+                <input type="range" id="setting-recent-files" min="5" max="50" value="10">
+                <span class="setting-value" id="recent-files-value">10 files</span>
+              </div>
+            </div>
+            <div class="setting-item">
+              <label for="setting-auto-open">Auto-open Last File</label>
+              <div class="setting-control">
+                <label class="toggle-switch">
+                  <input type="checkbox" id="setting-auto-open">
+                  <span class="toggle-slider"></span>
+                </label>
+              </div>
+            </div>
+            <div class="setting-item">
+              <label for="setting-default-path">Default Save Location</label>
+              <div class="setting-control">
+                <input type="text" id="setting-default-path" placeholder="Same as source file" readonly>
+                <button id="btn-browse-path" class="secondary-btn">Browse</button>
+              </div>
+            </div>
+          </div>
+
+          <!-- Annotations Panel -->
+          <div class="settings-panel" id="panel-annotations">
+            <h4>Annotations</h4>
+            <div class="setting-item">
+              <label>Default Annotation Color</label>
+              <div class="color-picker">
+                <button class="color-btn active" data-anno-color="#ffeb3b" style="background: #ffeb3b;"></button>
+                <button class="color-btn" data-anno-color="#ff5252" style="background: #ff5252;"></button>
+                <button class="color-btn" data-anno-color="#448aff" style="background: #448aff;"></button>
+                <button class="color-btn" data-anno-color="#69f0ae" style="background: #69f0ae;"></button>
+                <button class="color-btn" data-anno-color="#e040fb" style="background: #e040fb;"></button>
+                <button class="color-btn" data-anno-color="#ffffff" style="background: #ffffff;"></button>
+              </div>
+            </div>
+            <div class="setting-item">
+              <label for="setting-sticky-width">Default Sticky Note Width</label>
+              <div class="setting-control">
+                <input type="range" id="setting-sticky-width" min="100" max="300" value="150">
+                <span class="setting-value" id="sticky-width-value">150px</span>
+              </div>
+            </div>
+            <div class="setting-item">
+              <label for="setting-sticky-height">Default Sticky Note Height</label>
+              <div class="setting-control">
+                <input type="range" id="setting-sticky-height" min="80" max="200" value="100">
+                <span class="setting-value" id="sticky-height-value">100px</span>
+              </div>
+            </div>
+          </div>
+
+          <!-- Shortcuts Panel -->
+          <div class="settings-panel" id="panel-shortcuts">
+            <h4>Keyboard Shortcuts</h4>
+            <div class="shortcuts-list">
+              <div class="shortcut-item">
+                <span>Open File</span>
+                <kbd>Ctrl+O</kbd>
+              </div>
+              <div class="shortcut-item">
+                <span>Save</span>
+                <kbd>Ctrl+S</kbd>
+              </div>
+              <div class="shortcut-item">
+                <span>Undo</span>
+                <kbd>Ctrl+Z</kbd>
+              </div>
+              <div class="shortcut-item">
+                <span>Redo</span>
+                <kbd>Ctrl+Y</kbd>
+              </div>
+              <div class="shortcut-item">
+                <span>Search</span>
+                <kbd>Ctrl+F</kbd>
+              </div>
+              <div class="shortcut-item">
+                <span>Settings</span>
+                <kbd>Ctrl+,</kbd>
+              </div>
+              <div class="shortcut-item">
+                <span>Zoom In</span>
+                <kbd>Ctrl++</kbd>
+              </div>
+              <div class="shortcut-item">
+                <span>Zoom Out</span>
+                <kbd>Ctrl+-</kbd>
+              </div>
+              <div class="shortcut-item">
+                <span>Toggle Sidebar</span>
+                <kbd>Ctrl+B</kbd>
+              </div>
+              <div class="shortcut-item">
+                <span>Fullscreen</span>
+                <kbd>F11</kbd>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
     </div>
   </div>
 

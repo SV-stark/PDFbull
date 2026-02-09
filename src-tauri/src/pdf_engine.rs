@@ -205,12 +205,12 @@ pub async fn render_page(
              let height = (page.height().value * scale) as i32;
              let bitmap = page.render(width, height, None).map_err(|e| e.to_string())?;
              
-             let mut data = bitmap.as_raw_bytes().to_vec();
+             let raw_bytes = bitmap.as_raw_bytes();
 
-             let mut body = Vec::with_capacity(8 + data.len());
+             let mut body = Vec::with_capacity(8 + raw_bytes.len());
              body.extend_from_slice(&width.to_be_bytes());
              body.extend_from_slice(&height.to_be_bytes());
-             body.append(&mut data);
+             body.extend_from_slice(raw_bytes);
 
              Ok(tauri::ipc::Response::new(body))
         } else {
@@ -317,7 +317,7 @@ pub async fn apply_scanner_filter(
 
         for chunk_start in (0..page_count).step_by(chunk_size as usize) {
             let end = std::cmp::min(chunk_start + chunk_size, page_count);
-            let mut raw_pages = Vec::new();
+            let mut raw_pages = Vec::with_capacity((end - chunk_start) as usize);
 
             // A. Render Chunk (Sequential due to PDFium single-threadedness)
             for i in chunk_start..end {
