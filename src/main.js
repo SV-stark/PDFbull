@@ -1,6 +1,7 @@
 // In a non-bundled setup, we use the global window.__TAURI__ object
 const { open, save } = window.__TAURI__.dialog;
 const { invoke } = window.__TAURI__.core;
+const { listen } = window.__TAURI__.event;
 
 // State Management
 let currentPage = 0;
@@ -1445,6 +1446,15 @@ setStatusMessage('Ready - Drag and drop PDFs or press Ctrl+O to open');
 // Backend ping test
 invoke('ping').then(res => console.log('Backend response:', res)).catch(err => console.error('Backend ping failed:', err));
 invoke('test_pdfium').then(res => console.log('PDFium check:', res)).catch(err => console.error('PDFium check failed:', err));
+
+// Support for opening files from OS (Context Menu / File Association)
+listen('open-file', async (event) => {
+  const path = event.payload;
+  console.log('Opening file from event:', path);
+  if (path && path.toLowerCase().endsWith('.pdf')) {
+    await openNewTab(path);
+  }
+});
 
 // Initialize first document if opened directly
 async function openDocumentWithDialog() {

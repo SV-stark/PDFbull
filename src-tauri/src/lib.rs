@@ -18,6 +18,22 @@ pub fn run() {
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_fs::init())
+        .plugin(tauri_plugin_single_instance::init(|app, args, _cwd| {
+            let _ = app.emit("open-file", args.get(1));
+        }))
+        .setup(|app| {
+            let args: Vec<String> = std::env::args().collect();
+            if args.len() > 1 {
+                let path = args[1].clone();
+                let app_handle = app.handle().clone();
+                tauri::async_runtime::spawn(async move {
+                    // Small delay to ensure frontend is ready to listen
+                    tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+                    let _ = app_handle.emit("open-file", path);
+                });
+            }
+            Ok(())
+        })
         .manage(PdfState::new())
         .invoke_handler(tauri::generate_handler![
             // File Operations
