@@ -36,6 +36,26 @@ jobs:
       - name: Install dependencies
         run: npm install
 
+      - name: Download ONNX Runtime and OCR Models
+        shell: pwsh
+        run: |
+          # Create resources directories
+          mkdir -p src-tauri/resources/ocr_models/en
+          
+          # Download ONNX Runtime (CPU)
+          $onnx_ver = "1.19.2"
+          $onnx_url = "https://github.com/microsoft/onnxruntime/releases/download/v$onnx_ver/onnxruntime-win-x64-$onnx_ver.zip"
+          Invoke-WebRequest -Uri $onnx_url -OutFile onnxruntime.zip
+          Expand-Archive -Path onnxruntime.zip -DestinationPath onnx_temp
+          Move-Item -Path "onn_temp/onnxruntime-win-x64-$onnx_ver/lib/onnxruntime.dll" -Destination "src-tauri/onnxruntime.dll"
+          Remove-Item -Recurse -Force onnxruntime.zip, onnx_temp
+
+          # Download PP-OCRv5 English Models from Hugging Face
+          $base_url = "https://huggingface.co/monkt/paddleocr-onnx/resolve/main"
+          Invoke-WebRequest -Uri "$base_url/detection/v5/det.onnx" -OutFile "src-tauri/resources/ocr_models/en/det.onnx"
+          Invoke-WebRequest -Uri "$base_url/languages/english/rec.onnx" -OutFile "src-tauri/resources/ocr_models/en/rec.onnx"
+          Invoke-WebRequest -Uri "$base_url/languages/english/dict.txt" -OutFile "src-tauri/resources/ocr_models/en/keys.txt"
+
       - name: Build and Release (Nightly)
         uses: tauri-apps/tauri-action@v0
         env:

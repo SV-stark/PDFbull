@@ -25,7 +25,9 @@
       "nsis"
     ],
     "resources": [
-      "pdfium.dll"
+      "pdfium.dll",
+      "onnxruntime.dll",
+      "resources/ocr_models/**/*"
     ],
     "icon": [
       "icons/32x32.png",

@@ -4,6 +4,7 @@ import { ui } from './modules/ui.js';
 import { renderer } from './modules/renderer.js';
 import { events } from './modules/events.js';
 import { settings, applySettings } from './modules/settings.js';
+import { ocr } from './modules/ocr.js';
 import { CONSTANTS } from './modules/constants.js';
 
 // Controller Logic
@@ -242,6 +243,9 @@ document.addEventListener('app:export-json', () => {
 
 // Init Events
 events.init();
+
+// Init OCR module
+ocr.init();
 
 // Apply Settings
 applySettings();

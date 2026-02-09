@@ -2,6 +2,7 @@ mod annotations;
 mod compression;
 mod filters;
 mod forms;
+mod ocr;
 pub mod pdf_engine;
 
 use pdf_engine::PdfState;
@@ -11,6 +12,49 @@ use tauri::Emitter;
 async fn save_file(path: String, data: Vec<u8>) -> Result<(), String> {
     tokio::fs::write(&path, data).await.map_err(|e| e.to_string())
 }
+
+// ==================== OCR Commands ====================
+
+#[tauri::command]
+async fn ocr_document(
+    pages: Vec<Vec<u8>>,
+    language: String,
+    window: tauri::Window,
+) -> Result<Vec<ocr::PageTextBlocks>, String> {
+    let engine = ocr::get_ocr_engine();
+    let engine_lock = engine.lock().map_err(|e| format!("Failed to lock OCR engine: {}", e))?;
+    engine_lock.run_ocr(pages, &language, window)
+}
+
+#[tauri::command]
+async fn cancel_ocr() -> Result<(), String> {
+    let engine = ocr::get_ocr_engine();
+    let engine_lock = engine.lock().map_err(|e| format!("Failed to lock OCR engine: {}", e))?;
+    engine_lock.cancel();
+    Ok(())
+}
+
+#[tauri::command]
+async fn list_ocr_languages() -> Result<Vec<ocr::models::LanguageInfo>, String> {
+    ocr::models::discover_models()
+}
+
+#[tauri::command]
+async fn unload_ocr_models() -> Result<(), String> {
+    // TODO: Implement model unloading
+    Ok(())
+}
+
+#[tauri::command]
+async fn save_ocr_to_pdf(
+    pdf_path: String,
+    ocr_data: Vec<ocr::PageTextBlocks>,
+    output_path: String,
+) -> Result<String, String> {
+    ocr::pdf_embed::embed_text_layer(&pdf_path, ocr_data, &output_path)
+}
+
+// ==================== App Setup ====================
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
@@ -60,7 +104,13 @@ pub fn run() {
             // Scanner
             pdf_engine::apply_scanner_filter,
             pdf_engine::search_document,
-            pdf_engine::get_page_text_with_coords
+            pdf_engine::get_page_text_with_coords,
+            // OCR
+            ocr_document,
+            cancel_ocr,
+            list_ocr_languages,
+            unload_ocr_models,
+            save_ocr_to_pdf
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

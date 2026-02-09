@@ -28,8 +28,11 @@ tauri-plugin-dialog = "2"
 tauri-plugin-fs = "2"
 tauri-plugin-single-instance = "2"
 serde = { version = "1", features = ["derive"] }
+serde_json = "1"
 pdfium-render = "0.8"
 image = "0.25"
 tokio = { version = "1", features = ["full"] }
 rayon = "1.10"
+paddle-ocr-rs = "0.6"
+lopdf = "0.32"
 

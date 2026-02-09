@@ -21,9 +21,7 @@ dist-ssr
 *.njsproj
 *.sln
 *.sw?
-micropdf_API_documentation.md
-src-tauri/src/check_output_v10.txt
-all_ffi_funcs.txt
+src-tauri/resources/
 
 # Rust / Cargo
 **/target/
