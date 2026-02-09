@@ -263,8 +263,17 @@ pub async fn get_page_text_with_coords(
             let mut word_bounds: Option<(f32, f32, f32, f32)> = None; // (min_x, min_y, max_x, max_y)
             
             for char_result in text_page.chars().iter() {
-                let c = char_result.unicode_char();
-                let bounds = char_result.loose_bounds();
+                // Unwrap unicode_char() which returns Option<char>
+                let c = match char_result.unicode_char() {
+                    Some(ch) => ch,
+                    None => continue, // Skip characters that can't be decoded
+                };
+                
+                // Unwrap loose_bounds() which returns Result<PdfRect, PdfiumError>
+                let bounds = match char_result.loose_bounds() {
+                    Ok(rect) => rect,
+                    Err(_) => continue, // Skip characters without valid bounds
+                };
                 
                 let x = bounds.left().value;
                 let y = bounds.top().value;
