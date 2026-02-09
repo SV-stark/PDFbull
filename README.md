@@ -1,121 +1,119 @@
-# PDFbull
+# 🐂 PDFbull
 
-![Nightly Release](https://github.com/SV-stark/PDFbull/actions/workflows/release.yml/badge.svg)
-![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)
-![Tauri](https://img.shields.io/badge/Built%20with-Tauri%202.0-orange)
+[![Nightly Release](https://github.com/SV-stark/PDFbull/actions/workflows/release.yml/badge.svg)](https://github.com/SV-stark/PDFbull/releases/tag/nightly)
+[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
+[![Built with Tauri 2.0](https://img.shields.io/badge/Built%20with-Tauri%202.0-orange)](https://tauri.app/)
+[![Rust](https://img.shields.io/badge/Backend-Rust-black?logo=rust)](https://www.rust-lang.org/)
 
-**PDFbull** is a high-performance, lightweight PDF reader and editor built for Windows. It leverages the raw speed of **PDFium** (Google Chrome's engine) combined with the safety of **Rust** and the flexibility of **Tauri**.
+**PDFbull** is a professional, high-performance PDF reader and editor engineered for efficiency. By combining the power of **Google's PDFium engine** with the safety of **Rust** and the lightweight architecture of **Tauri 2.0**, PDFbull delivers a desktop experience that is significantly faster and more resource-efficient than traditional Electron-based alternatives.
 
-Unlike other Electron-based readers that consume massive RAM, PDFbull is optimized for efficiency, using direct binary data transfer for rendering and native Rust bindings for heavy lifting.
+---
 
-## 🚀 Key Features
+## ⚡ Performance Engineering
 
-### ⚡ Performance & Core
--   **Instant Opening**: Open 100MB+ PDFs in <50ms using PDFium's memory-mapped file opening.
--   **Optimized Rendering**: Pages are rendered in native Rust memory and streamed to the UI as high-quality binary blobs for a smooth experience.
--   **Low Initial RAM**: Minimal memory footprint on startup, only mapping what's visible on screen.
+PDFbull is built from the ground up for speed:
+- **Instant Access**: Open 100MB+ documents in under 50ms using memory-mapped file I/O.
+- **Native Rendering**: Pages are processed in native Rust memory space and streamed as high-quality binary blobs, bypassing the overhead of traditional DOM-based PDF viewers.
+- **Efficient RAM Management**: Minimal startup footprint (~120MB), dynamically mapping only the data required for visible pages.
 
-### ✏️ Annotation Suite
--   **Comprehensive Tools**:
-    -   Highlight (Yellow, Green, Blue, Pink)
-    -   Shapes (Rectangle, Circle, Line, Arrow)
-    -   Text Box
-    -   Sticky Notes
--   **Layer Management**: Create multiple annotation layers and toggle their visibility independently.
--   **Undo/Redo**: Full history support for all annotation actions (`Ctrl+Z` / `Ctrl+Y`).
--   **Auto-Save**: Annotations are automatically saved to local storage every 30 seconds.
+## 🛠️ Feature Suite
 
-### 🛠️ Advanced Tools
--   **Search**: Fast text search using PDFium's structured text engine.
--   **Export Options**:
-    -   **Export Page as Image**: Save current view as high-quality PNG.
-    -   **Extract Text**: Save page text to `.txt` file.
--   **Form Scanning**: Automatically detect and identify form fields.
--   **Auto-Crop**: Remove whitespace margins automatically to focus on content.
--   **Compression**: Re-save PDFs with maximum compression to reduce file size.
+### ✏️ Advanced Annotations
+- **Professional Tools**: Highlighting, geometric shapes (Rectangles, Circles, Lines, Arrows), Text Boxes, and Sticky Notes.
+- **Layer Management**: Organize annotations across multiple layers with independent visibility toggles.
+- **Robust History**: Full Undo/Redo stack (`Ctrl+Z` / `Ctrl+Y`) for complex editing sessions.
+- **Persistence**: Hybrid saving strategy with local storage fallbacks and manual `Ctrl+S` export.
 
-### 🎨 Visual customization
--   **Themes**: Light, Dark, and High Contrast modes.
--   **Filters**:
-    -   **Greyscale**: For distraction-free reading.
-    -   **Invert Colors**: High contrast mode for night reading.
--   **Fullscreen Mode**: Immersive reading experience (`F11`).
+### 📐 Productivity Utilities
+- **Fast Search**: Leverages PDFium's structured text engine for instantaneous document-wide searching.
+- **Smart Formatting**: 
+    - **Auto-Crop**: Dynamically removes whitespace margins for optimized reading on smaller displays.
+    - **Batch Mode**: Infrastructure for processing multiple documents (experimental).
+- **Data Export**:
+    - **High-Fidelity Image Export**: Save any page as a crisp PNG.
+    - **Text Extraction**: One-click extraction of document text to `.txt` format.
+- **Document Optimization**: Built-in PDF compression and form field detection.
 
-## ⌨️ Keyboard Shortcuts
+### 🎨 Visual Experience
+- **Adaptive Themes**: Seamlessly switch between Light, Dark, and High-Contrast modes.
+- **Real-time Filters**: Apply Greyscale or Inverted filters directly to the rendering pipeline for enhanced night reading.
+- **Fullscreen Mode**: Toggle immersive reading with `F11`.
+
+---
+
+## ⌨️ Professional Shortcuts
 
 | Action | Shortcut |
 | :--- | :--- |
-| **Open File** | `Ctrl + O` |
-| **Search** | `Ctrl + F` |
-| **Toggle Sidebar** | `Ctrl + B` |
-| **Undo / Redo** | `Ctrl + Z` / `Ctrl + Y` |
-| **Zoom In / Out** | `Ctrl + +` / `Ctrl + -` |
-| **Reset Zoom** | `Ctrl + 0` |
-| **Export Image** | `Ctrl + E` |
-| **Save Annotations** | `Ctrl + S` |
-| **Fullscreen** | `F11` |
-| **Tools** | `H` (Highlight), `R` (Rect), `C` (Circle), `L` (Line), `A` (Arrow), `T` (Text), `N` (Note), `Esc` (View) |
-| **Navigation** | Arrow Keys, PageUp/Down, Space, Home, End |
+| **Document Management** | `Ctrl + O` (Open), `Ctrl + S` (Save), `Ctrl + E` (Export Image) |
+| **View Control** | `Ctrl + B` (Sidebar), `F11` (Fullscreen), `Ctrl + 0` (Reset Zoom) |
+| **Navigation** | `Arrow Keys`, `PgUp/PgDn`, `Home/End`, `Space` |
+| **Speed Dial (Tools)** | `H` (Highlight), `R` (Rectangle), `C` (Circle), `L` (Line), `A` (Arrow), `T` (Text), `N` (Note) |
+| **History** | `Ctrl + Z` (Undo), `Ctrl + Y` (Redo) |
 
-##  Comparison to Industry Standards
+---
+
+## 🛰️ Technology Stack
+
+- **Backend**: [Tauri 2.0](https://tauri.app/) with [Rust](https://www.rust-lang.org/)
+- **PDF Engine**: [PDFium](https://pdfium.googlesource.com/pdfium/) via [pdfium-render](https://crates.io/crates/pdfium-render)
+- **Frontend**: Vanilla JavaScript (Zero-framework for ultra-low latency) & CSS3
+- **Icons**: [Phosphor Icons](https://phosphoricons.com/)
+
+---
+
+## � Industry Standard Comparison
 
 | Feature | PDFbull 🐂 | Adobe Acrobat 🔴 | Chrome PDF 🔵 | Sumatra PDF 🟡 |
 | :--- | :--- | :--- | :--- | :--- |
 | **Engine** | PDFium (Rust) | Proprietary | PDFium | MuPDF (C++) |
-| **Startup Time** | **Instant** (<100ms) | Slow (~2s) | Fast (~200ms) | Instant (<50ms) |
-| **RAM Usage** | **Efficient** (~120MB) | Heavy (400MB+) | High (250MB+) | Ultra-Low (~40MB) |
-| **Rendering** | **Native Stream** | Standard | Standard | Standard |
-| **Privacy** | **100% Local** | Cloud-Connected | Google Tracking | 100% Local |
-| **Annotations** | **Rich** (Shapes, Layers) | Rich | Basic | Basic |
-| **Price** | **Free (Open Source)** | Subscription | Free | Free (Open Source) |
-
-## 🛠️ Technology Stack
-
--   **Frontend**: HTML5, Vanilla JavaScript (Zero-framework for speed), CSS3 Variables.
--   **Backend**: Rust (Tauri 2.0).
--   **PDF Engine**: [pdfium-render](https://crates.io/crates/pdfium-render).
-
-## 📦 Installation
-
-### Download
-Grab the latest nightly build from the [Releases Page](https://github.com/SV-stark/PDFbull/releases/tag/nightly).
-
-### Build from Source
-
-**Prerequisites**:
--   **Windows** (Required for current build config)
--   **Rust** (Latest Stable)
--   **Node.js** (v18+)
-
-1.  **Clone the repository**:
-    ```bash
-    git clone https://github.com/SV-stark/PDFbull.git
-    cd PDFbull
-    ```
-
-2.  **Install Frontend Dependencies**:
-    ```bash
-    npm install
-    ```
-
-3.  **Run in Development Mode**:
-    ```bash
-    npm run tauri dev
-    ```
-
-4.  **Build Release**:
-    ```bash
-    npm run tauri build
-    ```
-    The installer will be in `src-tauri/target/release/bundle/nsis/`.
-
-## 📄 License
-
-This project is licensed under the **MIT License** - see the [LICENSE](LICENSE) file for details.
-
-## 🤝 Contributing
-
-Contributions are welcome! Please open an issue or submit a pull request.
+| **Startup Time** | **<100ms** | ~2.0s | ~200ms | <50ms |
+| **RAM Usage** | **~120MB** | 400MB+ | 250MB+ | ~40MB |
+| **Experience** | **Native Stream** | Heavy Legacy | Browser Plugin | Standard Viewer |
+| **Annotations** | **Rich / Multi-Layer** | Enterprise | Basic | Basic |
+| **Privacy** | **100% Local** | Cloud-Connected | Google Telemetry | 100% Local |
 
 ---
-*Built with ❤️ by SV-Stark*
+
+## 🗺️ Roadmap
+
+- [ ] **AI Summarization**: Integration with local LLMs for instant document insight.
+- [ ] **Tabbed Interface 2.0**: Enhanced multi-document management with session recovery.
+- [ ] **Digital Signatures**: Professional cryptographic signing and verification.
+- [ ] **PDF Optimization**: Advanced structural compression and metadata sanitization.
+- [ ] **Mobile Layout**: Responsive UI for small-screen Windows tablets.
+
+---
+
+## �📦 Installation & Development
+
+### Nightly Builds
+Download the latest binaries from the [Releases Page](https://github.com/SV-stark/PDFbull/releases/tag/nightly).
+
+### Building from Source
+
+**Prerequisites**:
+- Windows (Current target platform)
+- Rust (Stable) & Node.js (v18+)
+
+```bash
+# 1. Clone & Enter
+git clone https://github.com/SV-stark/PDFbull.git && cd PDFbull
+
+# 2. Dependency Resolution
+npm install
+
+# 3. Development Server
+npm run tauri dev
+
+# 4. Production Build
+npm run tauri build
+```
+
+---
+
+## 📄 License & Contribution
+
+PDFbull is open-source software licensed under the **MIT License**. Contributions focusing on performance optimizations or cross-platform support are highly encouraged.
+
+*Built with precision by [SV-Stark](https://github.com/SV-stark)*
