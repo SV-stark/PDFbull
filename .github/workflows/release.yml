@@ -57,7 +57,7 @@ jobs:
           # monkt repo uses dict.txt for the english dictionary
           Invoke-WebRequest -Uri "$base_url/languages/english/dict.txt" -OutFile "src-tauri/resources/ocr_models/en/keys.txt"
           # Download classification model for orientation correction
-          Invoke-WebRequest -Uri "$base_url/preprocessing/doc-orientation/model.onnx" -OutFile "src-tauri/resources/ocr_models/en/cls.onnx"
+          Invoke-WebRequest -Uri "$base_url/preprocessing/doc-orientation/PP-LCNet_x1_0_doc_ori.onnx" -OutFile "src-tauri/resources/ocr_models/en/cls.onnx"
 
       - name: Build and Release (Nightly)
         uses: tauri-apps/tauri-action@v0
