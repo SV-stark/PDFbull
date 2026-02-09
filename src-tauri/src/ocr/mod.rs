@@ -102,34 +102,38 @@ impl OcrEngine {
             let img = image::load_from_memory(page_data)
                 .map_err(|e| format!("Failed to load image for page {}: {}", current, e))?;
 
-            // Run OCR
-            let ocr_result = engine.predict(&[img.to_rgba8()])
+            // Run OCR - Convert to RGB8 as required by oar-ocr
+            let ocr_results = engine.predict(vec![img.to_rgb8()])
                 .map_err(|e| format!("OCR error on page {}: {}", current, e))?;
 
             let mut blocks = Vec::new();
-            for region in ocr_result.text_regions {
-                if let Some(text) = region.text {
-                    // Extract bounding box from polygon
-                    let mut min_x = f32::MAX;
-                    let mut min_y = f32::MAX;
-                    let mut max_x = f32::MIN;
-                    let mut max_y = f32::MIN;
-
-                    for point in region.polygon {
-                        if (point.x as f32) < min_x { min_x = point.x as f32; }
-                        if (point.y as f32) < min_y { min_y = point.y as f32; }
-                        if (point.x as f32) > max_x { max_x = point.x as f32; }
-                        if (point.y as f32) > max_y { max_y = point.y as f32; }
+            
+            // engine.predict returns Vec<OAROCRResult>, one for each image
+            if let Some(page_result) = ocr_results.first() {
+                for region in &page_result.text_regions {
+                    if let Some(text) = &region.content {
+                        // Extract bounding box from polygon
+                        let mut min_x = f32::MAX;
+                        let mut min_y = f32::MAX;
+                        let mut max_x = f32::MIN;
+                        let mut max_y = f32::MIN;
+    
+                        for point in &region.polygon {
+                            if (point.x as f32) < min_x { min_x = point.x as f32; }
+                            if (point.y as f32) < min_y { min_y = point.y as f32; }
+                            if (point.x as f32) > max_x { max_x = point.x as f32; }
+                            if (point.y as f32) > max_y { max_y = point.y as f32; }
+                        }
+    
+                        blocks.push(TextBlock {
+                            text: text.clone(),
+                            x: min_x,
+                            y: min_y,
+                            width: max_x - min_x,
+                            height: max_y - min_y,
+                            confidence: region.confidence.unwrap_or(0.0),
+                        });
                     }
-
-                    blocks.push(TextBlock {
-                        text,
-                        x: min_x,
-                        y: min_y,
-                        width: max_x - min_x,
-                        height: max_y - min_y,
-                        confidence: region.confidence.unwrap_or(0.0),
-                    });
                 }
             }
 
