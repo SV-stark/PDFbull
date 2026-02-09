@@ -16,7 +16,7 @@ PDFbull is built from the ground up for speed, leveraging modern Rust ecosystem 
 - **Zero-Copy Rendering**: Pages are processed in native Rust memory space and streamed as high-quality binary blobs, bypassing the overhead of traditional DOM-based PDF viewers.
 - **Parallel Processing**: Powered by **Rayon**, heavy computational tasks like rendering and search are parallelized across all available CPU cores.
 - **Async I/O with Tokio**: ensuring the UI never freezes, even when loading 1GB+ documents.
-- **Efficient RAM Management**: Consistently outperforms industry standards, often beating **SumatraPDF** in RAM usage by **10-15%** in high-load scenarios.
+- **Efficient RAM Management**: Consistently outperforms industry standards.
 
 ## 🛠️ Feature Suite
 
@@ -76,7 +76,7 @@ PDFbull is built from the ground up for speed, leveraging modern Rust ecosystem 
 | **Annotations** | **Rich / Multi-Layer** | Enterprise | Basic | Basic |
 | **Privacy** | **100% Local** | Cloud-Connected | Google Telemetry | 100% Local |
 
-*\* Consistently beats SumatraPDF by 10-15% in RAM usage for complex documents/high zoom levels.*
+*\* Webview usage not factored in till now.*
 
 ---
 
@@ -124,4 +124,5 @@ npm run tauri build
 
 PDFbull is open-source software licensed under the **MIT License**. Contributions focusing on performance optimizations or cross-platform support are highly encouraged.
 
-*Built with precision by [SV-Stark](https://github.com/SV-stark)*
+*Built with <3 by [SV-Stark](https://github.com/SV-stark) with AI-driven process* 
+
