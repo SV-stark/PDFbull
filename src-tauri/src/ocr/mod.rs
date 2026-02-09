@@ -4,8 +4,7 @@ pub mod pdf_embed;
 use serde::{Deserialize, Serialize};
 use std::sync::{Arc, Mutex};
 use std::sync::atomic::{AtomicBool, Ordering};
-use image::DynamicImage;
-use oar_ocr::{Engine as OcrEngineInternal, Config as OcrConfig};
+use oar_ocr::{OcrEngine as OcrEngineInternal, OcrConfig};
 use tauri::Emitter;
 
 /// Text block with bounding box coordinates

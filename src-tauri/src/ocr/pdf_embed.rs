@@ -1,4 +1,4 @@
-use lopdf::{Document, Object, Dictionary};
+use lopdf::Document;
 use crate::ocr::PageTextBlocks;
 
 /// Embed OCR text layer into a PDF file

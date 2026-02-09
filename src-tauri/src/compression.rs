@@ -1,6 +1,4 @@
 use lopdf::{Document, Object};
-use std::fs::File;
-use std::io::Write;
 
 /// Compression level enum matching frontend values
 #[derive(Debug, Clone, Copy)]

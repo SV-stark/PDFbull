@@ -1,6 +1,5 @@
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
-use std::fs;
 
 /// Information about an available language model
 #[derive(Debug, Clone, Serialize, Deserialize)]
