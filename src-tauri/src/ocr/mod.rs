@@ -5,7 +5,8 @@ use serde::{Deserialize, Serialize};
 use std::sync::{Arc, Mutex};
 use std::sync::atomic::{AtomicBool, Ordering};
 use image::DynamicImage;
-use oar_ocr::{OcrEngine as OcrEngineInternal, OcrConfig};
+use oar_ocr::{Engine as OcrEngineInternal, Config as OcrConfig};
+use tauri::Emitter;
 
 /// Text block with bounding box coordinates
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -98,7 +99,7 @@ impl OcrEngine {
                 "current": current,
                 "total": total_pages,
                 "percentage": percentage
-            }));
+            })).map_err(|e| e.to_string())?;
 
             // Convert bytes to image
             let img = image::load_from_memory(page_data)

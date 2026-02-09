@@ -4,7 +4,7 @@ use crate::ocr::PageTextBlocks;
 /// Embed OCR text layer into a PDF file
 pub fn embed_text_layer(
     pdf_path: &str,
-    ocr_data: Vec<PageTextBlocks>,
+    _ocr_data: Vec<PageTextBlocks>,
     output_path: &str,
 ) -> Result<String, String> {
     // Load PDF document

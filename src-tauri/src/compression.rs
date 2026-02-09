@@ -1,6 +1,6 @@
 use lopdf::{Document, Object};
-use std::fs::{File, copy};
-use std::io::{Read, Write};
+use std::fs::File;
+use std::io::Write;
 
 /// Compression level enum matching frontend values
 #[derive(Debug, Clone, Copy)]
@@ -58,8 +58,7 @@ pub async fn compress_pdf(
         }
         CompressionLevel::High => {
             // Remove unused objects
-            doc.prune_objects()
-                .map_err(|e| format!("Failed to prune objects: {}", e))?;
+            let _ = doc.prune_objects();
             
             // Maximum compression
             doc.compress();

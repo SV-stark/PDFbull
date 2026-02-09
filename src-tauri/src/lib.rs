@@ -22,7 +22,7 @@ async fn ocr_document(
     window: tauri::Window,
 ) -> Result<Vec<ocr::PageTextBlocks>, String> {
     let engine = ocr::get_ocr_engine();
-    let engine_lock = engine.lock().map_err(|e| format!("Failed to lock OCR engine: {}", e))?;
+    let mut engine_lock = engine.lock().map_err(|e| format!("Failed to lock OCR engine: {}", e))?;
     engine_lock.run_ocr(pages, &language, window)
 }
 
