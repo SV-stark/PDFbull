@@ -194,9 +194,48 @@ button.primary:hover {
   z-index: 1000;
 }
 
-#pdf-canvas {
-  box-shadow: 0 0 20px rgba(0, 0, 0, 0.5);
+#pages-container {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 20px;
+  padding-bottom: 50px;
+  min-height: 100%;
+  width: 100%;
+}
+
+.page-container {
+  position: relative;
+  background: white;
+  box-shadow: 0 4px 15px rgba(0, 0, 0, 0.2);
+  transition: transform 0.2s;
+}
+
+.page-canvas {
+  display: block;
+  max-width: none;
   transition: filter 0.3s;
+}
+
+.viewer-container.grayscale .page-canvas {
+  filter: grayscale(100%);
+}
+
+.viewer-container.invert .page-canvas {
+  filter: invert(100%);
+}
+
+.page-placeholder {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
+  background: white;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: #888;
 }
 
 /* HUD / Overlays */

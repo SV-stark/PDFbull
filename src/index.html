@@ -26,7 +26,7 @@
         </div>
       </div>
     </div>
-    
+
     <button id="btn-recent-toggle" tooltip="Recent files">
       <i class="ph ph-clock-counter-clockwise"></i>
     </button>
@@ -39,13 +39,13 @@
     <button id="btn-redo" tooltip="Redo (Ctrl+Y)">
       <i class="ph ph-arrow-u-up-right"></i>
     </button>
-    
+
     <div class="spacer"></div>
 
     <button id="btn-prev" tooltip="Previous Page (←)">
       <i class="ph ph-caret-left"></i>
     </button>
-    <span id="page-indicator" tooltip="Current page">0 / 0</span>
+    <span id="page-indicator" tooltip="Current page">- / -</span>
     <button id="btn-next" tooltip="Next Page (→)">
       <i class="ph ph-caret-right"></i>
     </button>
@@ -79,11 +79,11 @@
     <button id="btn-fullscreen" tooltip="Fullscreen (F11)">
       <i class="ph ph-corners-out"></i>
     </button>
-    
+
     <button id="btn-sidebar-toggle" tooltip="Toggle Sidebar (Ctrl+B)">
       <i class="ph ph-sidebar"></i>
     </button>
-    
+
     <button id="btn-theme" tooltip="Change theme">
       <i class="ph ph-paint-brush"></i>
     </button>
@@ -213,12 +213,9 @@
 
     <!-- PDF Canvas -->
     <div class="viewer-container" id="viewer-container">
-      <canvas id="pdf-canvas"></canvas>
+      <div id="pages-container" class="pages-container"></div>
 
       <!-- Skeleton Loading -->
-      <div id="skeleton-loader" class="skeleton-overlay hidden">
-        <div class="skeleton-page"></div>
-      </div>
 
       <!-- Loading Spinner -->
       <div id="loading-spinner" class="loading-overlay hidden">
@@ -227,17 +224,17 @@
       </div>
 
     </div>
-    
+
     <!-- Floating Controls (moved outside viewer to stay fixed) -->
     <div class="overlay">
-        <button id="btn-fit-width" class="tool-btn">
-          <i class="ph ph-arrows-out-horizontal"></i>
-          <span>Fit Width</span>
-        </button>
-        <button id="btn-fit-page" class="tool-btn">
-          <i class="ph ph-arrows-out"></i>
-          <span>Fit Page</span>
-        </button>
+      <button id="btn-fit-width" class="tool-btn">
+        <i class="ph ph-arrows-out-horizontal"></i>
+        <span>Fit Width</span>
+      </button>
+      <button id="btn-fit-page" class="tool-btn">
+        <i class="ph ph-arrows-out"></i>
+        <span>Fit Page</span>
+      </button>
     </div>
   </div>
 
@@ -270,7 +267,7 @@
 
   <!-- Toast Container -->
   <div id="toast-container" class="toast-container"></div>
-  
+
   <!-- Theme Selector Dropdown -->
   <div id="theme-dropdown" class="theme-dropdown">
     <div class="theme-option" data-theme="dark">
@@ -304,6 +301,10 @@
         <button class="export-option" id="btn-export-text">
           <i class="ph ph-text-t"></i>
           <span>Extract Text</span>
+        </button>
+        <button class="export-option" id="btn-export-compress">
+          <i class="ph ph-file-zip"></i>
+          <span>Compress PDF</span>
         </button>
       </div>
     </div>

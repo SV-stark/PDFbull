@@ -33,7 +33,7 @@ pub fn run() {
             pdf_engine::test_pdfium,
             pdf_engine::ping,
             // Annotations
-            annotations::create_highlight,
+            annotations::save_annotations,
             // Filters
             filters::apply_filter,
             filters::auto_crop,
