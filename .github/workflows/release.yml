@@ -47,7 +47,7 @@ jobs:
           $onnx_url = "https://github.com/microsoft/onnxruntime/releases/download/v$onnx_ver/onnxruntime-win-x64-$onnx_ver.zip"
           Invoke-WebRequest -Uri $onnx_url -OutFile onnxruntime.zip
           Expand-Archive -Path onnxruntime.zip -DestinationPath onnx_temp
-          Move-Item -Path "onnx_temp/onnxruntime-win-x64-$onnx_ver/lib/onnxruntime.dll" -Destination "src-tauri/onnxruntime.dll"
+          Move-Item -Path "onnx_temp/onnxruntime-win-x64-$onnx_ver/lib/onnxruntime.dll" -Destination "src-tauri/onnxruntime.dll" -Force
           Remove-Item -Recurse -Force onnxruntime.zip, onnx_temp
 
           # Download PP-OCRv5 English Models from Hugging Face
