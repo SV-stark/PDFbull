@@ -143,6 +143,19 @@ pub fn render_page(
 }
 
 #[tauri::command]
+pub fn get_page_dimensions(state: tauri::State<PdfState>) -> Result<Vec<(i32, i32)>, String> {
+    with_doc(&state, |doc| {
+        let mut dimensions = Vec::new();
+        for page in doc.pages().iter() {
+            let width = page.width().value as i32;
+            let height = page.height().value as i32;
+            dimensions.push((width, height));
+        }
+        Ok(dimensions)
+    })
+}
+
+#[tauri::command]
 pub fn test_pdfium() -> Result<String, String> {
     println!("[PDF Engine] Diagnostic test_pdfium triggered.");
     get_pdfium()?;
