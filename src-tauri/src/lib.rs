@@ -29,6 +29,8 @@ pub fn run() {
             pdf_engine::render_page,
             pdf_engine::get_page_text,
             pdf_engine::search_text,
+            pdf_engine::test_pdfium,
+            pdf_engine::ping,
             // Annotations
             annotations::create_highlight,
             // Filters

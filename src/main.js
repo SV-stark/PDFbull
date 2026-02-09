@@ -1,5 +1,5 @@
-import { open, save } from '@tauri-apps/plugin-dialog';
-
+// In a non-bundled setup, we use the global window.__TAURI__ object
+const { open, save } = window.__TAURI__.dialog;
 const { invoke } = window.__TAURI__.core;
 
 // State Management
@@ -15,6 +15,7 @@ const MAX_CACHE_SIZE = 10;
 let openDocuments = new Map();
 let activeTabId = null;
 let tabCounter = 0;
+let currentRenderRequest = 0; // For handling race conditions
 
 // Annotation system
 let annotations = new Map();
@@ -66,7 +67,7 @@ function updateRecentFilesDropdown() {
     `;
     return;
   }
-  
+
   recentFilesDropdown.innerHTML = recentFiles.map(file => `
     <div class="recent-file-item" data-path="${file.path}">
       <i class="ph ph-file-pdf recent-file-icon"></i>
@@ -76,7 +77,7 @@ function updateRecentFilesDropdown() {
       </div>
     </div>
   `).join('');
-  
+
   recentFilesDropdown.querySelectorAll('.recent-file-item').forEach(item => {
     item.addEventListener('click', async () => {
       const path = item.getAttribute('data-path');
@@ -91,17 +92,17 @@ function showToast(message, type = 'info', duration = 3000) {
   const container = document.getElementById('toast-container');
   const toast = document.createElement('div');
   toast.className = `toast ${type}`;
-  
-  const icon = type === 'success' ? 'ph-check-circle' : 
-               type === 'error' ? 'ph-x-circle' : 'ph-info';
-  
+
+  const icon = type === 'success' ? 'ph-check-circle' :
+    type === 'error' ? 'ph-x-circle' : 'ph-info';
+
   toast.innerHTML = `
     <i class="ph ${icon}"></i>
     <span>${message}</span>
   `;
-  
+
   container.appendChild(toast);
-  
+
   setTimeout(() => {
     toast.classList.add('hide');
     setTimeout(() => toast.remove(), 300);
@@ -113,7 +114,7 @@ function updateStatusBar() {
   const statusDoc = document.querySelector('#status-doc span');
   const statusPages = document.getElementById('status-pages');
   const statusDimensions = document.getElementById('status-dimensions');
-  
+
   if (currentDoc) {
     const fileName = currentDoc.split(/[/\\]/).pop();
     statusDoc.textContent = fileName;
@@ -172,20 +173,20 @@ function saveState() {
     currentZoom,
     timestamp: Date.now()
   };
-  
+
   // Remove any states after current index
   history = history.slice(0, historyIndex + 1);
-  
+
   // Add new state
   history.push(state);
-  
+
   // Limit history size
   if (history.length > MAX_HISTORY_SIZE) {
     history.shift();
   } else {
     historyIndex++;
   }
-  
+
   updateUndoRedoButtons();
   autoSaveAnnotations();
 }
@@ -217,7 +218,7 @@ function restoreState(state) {
 function updateUndoRedoButtons() {
   const undoBtn = document.getElementById('btn-undo');
   const redoBtn = document.getElementById('btn-redo');
-  
+
   if (undoBtn) {
     undoBtn.disabled = historyIndex <= 0;
     undoBtn.style.opacity = historyIndex <= 0 ? '0.5' : '1';
@@ -231,13 +232,13 @@ function updateUndoRedoButtons() {
 // Auto-save annotations
 function autoSaveAnnotations() {
   if (!currentDoc) return;
-  
+
   const saveData = {
     document: currentDoc,
     annotations: Array.from(annotations.entries()),
     timestamp: Date.now()
   };
-  
+
   const savedAnnotations = JSON.parse(localStorage.getItem('pdfAnnotations') || '{}');
   savedAnnotations[currentDoc] = saveData;
   localStorage.setItem('pdfAnnotations', JSON.stringify(savedAnnotations));
@@ -245,10 +246,10 @@ function autoSaveAnnotations() {
 
 function loadAnnotations() {
   if (!currentDoc) return;
-  
+
   const savedAnnotations = JSON.parse(localStorage.getItem('pdfAnnotations') || '{}');
   const docAnnotations = savedAnnotations[currentDoc];
-  
+
   if (docAnnotations) {
     annotations = new Map(docAnnotations.annotations);
     showToast('Annotations loaded');
@@ -258,11 +259,11 @@ function loadAnnotations() {
 // Tab management
 async function openNewTab(path) {
   const tabId = `tab-${++tabCounter}`;
-  
+
   try {
     showLoading('Opening PDF...');
     const pages = await invoke('open_document', { path });
-    
+
     openDocuments.set(tabId, {
       id: tabId,
       path: path,
@@ -271,7 +272,7 @@ async function openNewTab(path) {
       currentPage: 0,
       zoom: 1.0
     });
-    
+
     addToRecentFiles(path);
     createTabUI(tabId, openDocuments.get(tabId));
     switchToTab(tabId);
@@ -295,23 +296,23 @@ function createTabUI(tabId, docInfo) {
       <i class="ph ph-x"></i>
     </button>
   `;
-  
+
   tab.addEventListener('click', (e) => {
     if (!e.target.closest('.tab-close')) {
       switchToTab(tabId);
     }
   });
-  
+
   tab.querySelector('.tab-close').addEventListener('click', () => {
     closeTab(tabId);
   });
-  
+
   tabsContainer.appendChild(tab);
 }
 
 function switchToTab(tabId) {
   if (!openDocuments.has(tabId)) return;
-  
+
   // Save current state
   if (activeTabId) {
     const currentDoc = openDocuments.get(activeTabId);
@@ -320,20 +321,20 @@ function switchToTab(tabId) {
       currentDoc.zoom = currentZoom;
     }
   }
-  
+
   // Switch to new tab
   activeTabId = tabId;
   const doc = openDocuments.get(tabId);
-  
+
   currentDoc = doc.path;
   totalPages = doc.totalPages;
   currentPage = doc.currentPage;
   currentZoom = doc.zoom;
-  
+
   // Update UI
   document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
   document.getElementById(tabId).classList.add('active');
-  
+
   pageCache.clear();
   loadAnnotations();
   renderPage(currentPage);
@@ -342,9 +343,9 @@ function switchToTab(tabId) {
 function closeTab(tabId) {
   const tab = document.getElementById(tabId);
   if (tab) tab.remove();
-  
+
   openDocuments.delete(tabId);
-  
+
   if (activeTabId === tabId) {
     const remainingTabs = Array.from(openDocuments.keys());
     if (remainingTabs.length > 0) {
@@ -367,15 +368,15 @@ function closeTab(tabId) {
 // Annotation tools
 function setTool(tool) {
   currentTool = tool;
-  
+
   // Update UI
   document.querySelectorAll('.tool-btn[data-tool]').forEach(btn => {
     btn.classList.remove('active');
   });
-  
+
   const activeBtn = document.querySelector(`[data-tool="${tool}"]`);
   if (activeBtn) activeBtn.classList.add('active');
-  
+
   // Set cursor
   const cursors = {
     'view': 'default',
@@ -387,9 +388,9 @@ function setTool(tool) {
     'text': 'text',
     'sticky': 'pointer'
   };
-  
+
   canvas.style.cursor = cursors[tool] || 'default';
-  
+
   if (tool !== 'view') {
     showToast(`${tool.charAt(0).toUpperCase() + tool.slice(1)} tool selected`);
   }
@@ -403,48 +404,48 @@ function addAnnotation(type, data) {
     layer: currentLayer,
     ...data
   };
-  
+
   pageAnnotations.push(annotation);
   annotations.set(currentPage, pageAnnotations);
-  
+
   saveState();
   drawAnnotations();
 }
 
 function drawAnnotations() {
   const pageAnnotations = annotations.get(currentPage) || [];
-  
+
   pageAnnotations.forEach(ann => {
     if (!visibleLayers.has(ann.layer)) return;
-    
+
     ctx.save();
-    
-    switch(ann.type) {
+
+    switch (ann.type) {
       case 'highlight':
         ctx.fillStyle = ann.color + '4D'; // 30% opacity
         ctx.fillRect(ann.x, ann.y, ann.w, ann.h);
         break;
-        
+
       case 'rectangle':
         ctx.strokeStyle = ann.color;
         ctx.lineWidth = 2;
         ctx.strokeRect(ann.x, ann.y, ann.w, ann.h);
         break;
-        
+
       case 'circle':
         ctx.strokeStyle = ann.color;
         ctx.lineWidth = 2;
         ctx.beginPath();
         ctx.ellipse(
-          ann.x + ann.w/2, 
-          ann.y + ann.h/2, 
-          ann.w/2, 
-          ann.h/2, 
+          ann.x + ann.w / 2,
+          ann.y + ann.h / 2,
+          ann.w / 2,
+          ann.h / 2,
           0, 0, 2 * Math.PI
         );
         ctx.stroke();
         break;
-        
+
       case 'line':
         ctx.strokeStyle = ann.color;
         ctx.lineWidth = 2;
@@ -453,22 +454,22 @@ function drawAnnotations() {
         ctx.lineTo(ann.x2, ann.y2);
         ctx.stroke();
         break;
-        
+
       case 'arrow':
         drawArrow(ann.x1, ann.y1, ann.x2, ann.y2, ann.color);
         break;
-        
+
       case 'text':
         ctx.fillStyle = ann.color;
         ctx.font = '16px Inter, sans-serif';
         ctx.fillText(ann.text, ann.x, ann.y);
         break;
-        
+
       case 'sticky':
         drawStickyNote(ann.x, ann.y, ann.text, ann.color);
         break;
     }
-    
+
     ctx.restore();
   });
 }
@@ -476,14 +477,14 @@ function drawAnnotations() {
 function drawArrow(x1, y1, x2, y2, color) {
   const headlen = 15;
   const angle = Math.atan2(y2 - y1, x2 - x1);
-  
+
   ctx.strokeStyle = color;
   ctx.lineWidth = 2;
   ctx.beginPath();
   ctx.moveTo(x1, y1);
   ctx.lineTo(x2, y2);
   ctx.stroke();
-  
+
   ctx.beginPath();
   ctx.moveTo(x2, y2);
   ctx.lineTo(x2 - headlen * Math.cos(angle - Math.PI / 6), y2 - headlen * Math.sin(angle - Math.PI / 6));
@@ -496,25 +497,25 @@ function drawArrow(x1, y1, x2, y2, color) {
 function drawStickyNote(x, y, text, color) {
   const width = 150;
   const height = 100;
-  
+
   ctx.fillStyle = color || '#ffeb3b';
   ctx.fillRect(x, y, width, height);
-  
+
   ctx.strokeStyle = '#000';
   ctx.lineWidth = 1;
   ctx.strokeRect(x, y, width, height);
-  
+
   ctx.fillStyle = '#000';
   ctx.font = '12px Inter, sans-serif';
-  
+
   const words = text.split(' ');
   let line = '';
   let lineY = y + 20;
-  
+
   words.forEach(word => {
     const testLine = line + word + ' ';
     const metrics = ctx.measureText(testLine);
-    
+
     if (metrics.width > width - 10 && line !== '') {
       ctx.fillText(line, x + 5, lineY);
       line = word + ' ';
@@ -523,7 +524,7 @@ function drawStickyNote(x, y, text, color) {
       line = testLine;
     }
   });
-  
+
   ctx.fillText(line, x + 5, lineY);
 }
 
@@ -533,7 +534,7 @@ async function exportPageAsImage() {
     showToast('No document open', 'error');
     return;
   }
-  
+
   try {
     const savePath = await save({
       filters: [{
@@ -542,25 +543,25 @@ async function exportPageAsImage() {
       }],
       defaultPath: `page_${currentPage + 1}.png`
     });
-    
+
     if (savePath) {
       showLoading('Exporting...');
-      
+
       // Create temporary canvas with annotations
       const exportCanvas = document.createElement('canvas');
       exportCanvas.width = canvas.width;
       exportCanvas.height = canvas.height;
       const exportCtx = exportCanvas.getContext('2d');
-      
+
       // Copy base image
       exportCtx.drawImage(canvas, 0, 0);
-      
+
       // Add annotations
       const pageAnnotations = annotations.get(currentPage) || [];
       pageAnnotations.forEach(ann => {
         // Redraw annotations on export canvas
       });
-      
+
       // Convert to blob and save
       exportCanvas.toBlob(async (blob) => {
         const reader = new FileReader();
@@ -585,11 +586,11 @@ async function exportText() {
     showToast('No document open', 'error');
     return;
   }
-  
+
   try {
     showLoading('Extracting text...');
     const text = await invoke('get_page_text', { pageNum: currentPage });
-    
+
     const savePath = await save({
       filters: [{
         name: 'Text File',
@@ -597,7 +598,7 @@ async function exportText() {
       }],
       defaultPath: `page_${currentPage + 1}.txt`
     });
-    
+
     if (savePath) {
       await invoke('save_file', { path: savePath, data: Array.from(new TextEncoder().encode(text)) });
       showToast('Text exported successfully', 'success');
@@ -617,7 +618,7 @@ let batchMode = false;
 function toggleBatchMode() {
   batchMode = !batchMode;
   const btn = document.getElementById('btn-batch');
-  
+
   if (batchMode) {
     btn.classList.add('active');
     showToast('Batch mode enabled. Select pages from sidebar.');
@@ -634,7 +635,7 @@ function renderBatchControls() {
   const sidebar = document.getElementById('sidebar');
   const existing = document.getElementById('batch-controls');
   if (existing) existing.remove();
-  
+
   const controls = document.createElement('div');
   controls.id = 'batch-controls';
   controls.className = 'batch-controls';
@@ -655,7 +656,7 @@ function renderBatchControls() {
       </button>
     </div>
   `;
-  
+
   sidebar.insertBefore(controls, sidebar.firstChild);
 }
 
@@ -667,68 +668,108 @@ function hideBatchControls() {
 // Rendering
 async function renderPage(pageNum, saveHistory = false) {
   if (pageNum < 0 || pageNum >= totalPages) return;
-  
-  showSkeleton();
-  
+
+  // Update UI immediately for responsiveness
+  document.getElementById('page-indicator').textContent = `${pageNum + 1} / ${totalPages}`;
+
   const cached = getCachedPage(pageNum);
   if (cached && currentZoom === cached.zoom) {
     displayCachedPage(cached, pageNum);
+    prefetchPages(pageNum);
     return;
   }
 
   try {
-    showLoading('Rendering page...');
     setStatusMessage('Rendering...');
-    
+    // Do NOT show blocking loader/skeleton to prevent flicker
+
+    const requestId = Date.now();
+    currentRenderRequest = requestId;
+
     const imageBytes = await invoke('render_page', {
       pageNum: pageNum,
       scale: currentZoom
     });
+
+    // Ignore if a newer render request started
+    if (currentRenderRequest !== requestId) return;
 
     const blob = new Blob([new Uint8Array(imageBytes)], { type: 'image/png' });
     const url = URL.createObjectURL(blob);
 
     const img = new Image();
     img.onload = () => {
+      // Check again before drawing
+      if (currentRenderRequest !== requestId) return;
+
       canvas.width = img.width;
       canvas.height = img.height;
       ctx.drawImage(img, 0, 0);
-      
+
       setCachedPage(pageNum, {
         imageData: url,
         zoom: currentZoom,
         width: img.width,
         height: img.height
       });
-      
+
       drawAnnotations();
-      
-      hideLoading();
-      hideSkeleton();
+
       updateUI();
       updateStatusBar();
       setStatusMessage('Ready');
-      
+
       if (saveHistory) {
         saveState();
       }
+
+      currentPage = pageNum;
+      prefetchPages(pageNum);
     };
     img.onerror = () => {
       URL.revokeObjectURL(url);
-      hideLoading();
-      hideSkeleton();
       setStatusMessage('Error');
       showToast('Failed to render page', 'error');
     };
     img.src = url;
 
+    // Optimistic update of current page variable
     currentPage = pageNum;
   } catch (e) {
     console.error('Failed to render page:', e);
-    hideLoading();
-    hideSkeleton();
     setStatusMessage('Error');
-    showToast('Failed to render page', 'error');
+  }
+}
+
+async function prefetchPages(centerPage) {
+  const pagesToPrefetch = [centerPage + 1, centerPage - 1];
+
+  for (const pageNum of pagesToPrefetch) {
+    if (pageNum >= 0 && pageNum < totalPages) {
+      if (!getCachedPage(pageNum)) {
+        try {
+          // Prefetch silently
+          const imageBytes = await invoke('render_page', {
+            pageNum: pageNum,
+            scale: currentZoom
+          });
+          const blob = new Blob([new Uint8Array(imageBytes)], { type: 'image/png' });
+          const url = URL.createObjectURL(blob);
+          const img = new Image();
+          img.onload = () => {
+            setCachedPage(pageNum, {
+              imageData: url,
+              zoom: currentZoom,
+              width: img.width,
+              height: img.height
+            });
+          };
+          img.src = url;
+        } catch (e) {
+          // Silent fail for prefetch
+        }
+      }
+    }
   }
 }
 
@@ -758,12 +799,12 @@ let tempCtx = null;
 
 canvas.addEventListener('mousedown', (e) => {
   if (currentTool === 'view') return;
-  
+
   isDrawing = true;
   const rect = canvas.getBoundingClientRect();
   startX = e.clientX - rect.left;
   startY = e.clientY - rect.top;
-  
+
   // Create temporary canvas for preview
   tempCanvas = document.createElement('canvas');
   tempCanvas.width = canvas.width;
@@ -774,24 +815,24 @@ canvas.addEventListener('mousedown', (e) => {
 
 canvas.addEventListener('mousemove', (e) => {
   if (!isDrawing || !tempCtx) return;
-  
+
   const rect = canvas.getBoundingClientRect();
   const currentX = e.clientX - rect.left;
   const currentY = e.clientY - rect.top;
-  
+
   // Restore from temp canvas
   ctx.clearRect(0, 0, canvas.width, canvas.height);
   ctx.drawImage(tempCanvas, 0, 0);
-  
+
   // Draw preview based on tool
   ctx.strokeStyle = selectedColor;
   ctx.fillStyle = selectedColor + '4D';
   ctx.lineWidth = 2;
-  
+
   const width = currentX - startX;
   const height = currentY - startY;
-  
-  switch(currentTool) {
+
+  switch (currentTool) {
     case 'highlight':
       ctx.fillRect(startX, startY, width, height);
       break;
@@ -800,7 +841,7 @@ canvas.addEventListener('mousemove', (e) => {
       break;
     case 'circle':
       ctx.beginPath();
-      ctx.ellipse(startX + width/2, startY + height/2, Math.abs(width/2), Math.abs(height/2), 0, 0, 2 * Math.PI);
+      ctx.ellipse(startX + width / 2, startY + height / 2, Math.abs(width / 2), Math.abs(height / 2), 0, 0, 2 * Math.PI);
       ctx.stroke();
       break;
     case 'line':
@@ -817,12 +858,12 @@ canvas.addEventListener('mousemove', (e) => {
 
 canvas.addEventListener('mouseup', (e) => {
   if (!isDrawing) return;
-  
+
   isDrawing = false;
   const rect = canvas.getBoundingClientRect();
   const endX = e.clientX - rect.left;
   const endY = e.clientY - rect.top;
-  
+
   const data = {
     color: selectedColor,
     x: Math.min(startX, endX),
@@ -830,8 +871,8 @@ canvas.addEventListener('mouseup', (e) => {
     w: Math.abs(endX - startX),
     h: Math.abs(endY - startY)
   };
-  
-  switch(currentTool) {
+
+  switch (currentTool) {
     case 'highlight':
       addAnnotation('highlight', data);
       break;
@@ -860,7 +901,7 @@ canvas.addEventListener('mouseup', (e) => {
       }
       break;
   }
-  
+
   tempCanvas = null;
   tempCtx = null;
 });
@@ -871,9 +912,9 @@ document.addEventListener('keydown', (e) => {
     if (e.key === 'Escape') e.target.blur();
     return;
   }
-  
+
   if (e.ctrlKey) {
-    switch(e.key) {
+    switch (e.key) {
       case 'z':
         e.preventDefault();
         undo();
@@ -921,8 +962,8 @@ document.addEventListener('keydown', (e) => {
         return;
     }
   }
-  
-  switch(e.key) {
+
+  switch (e.key) {
     case 'ArrowLeft':
     case 'PageUp':
       e.preventDefault();
@@ -998,7 +1039,7 @@ function toggleFullscreen() {
 function setFilter(filterName) {
   const grayBtn = document.getElementById('btn-filter-gray');
   const invertBtn = document.getElementById('btn-filter-invert');
-  
+
   if (activeFilter === filterName) {
     activeFilter = null;
     canvas.style.filter = 'none';
@@ -1008,7 +1049,7 @@ function setFilter(filterName) {
   } else {
     activeFilter = filterName;
     canvas.style.filter = filterName === 'grayscale' ? 'grayscale(100%)' : 'invert(100%)';
-    
+
     if (filterName === 'grayscale') {
       grayBtn.setAttribute('data-filter', 'grayscale');
       invertBtn.setAttribute('data-filter', 'none');
@@ -1054,24 +1095,24 @@ document.addEventListener('dragleave', (e) => {
 document.addEventListener('drop', async (e) => {
   e.preventDefault();
   viewerContainer.classList.remove('drag-over');
-  
+
   const files = e.dataTransfer.files;
   if (files.length === 0) return;
-  
+
   const file = files[0];
-  
+
   if (file.name.toLowerCase().endsWith('.pdf')) {
     try {
       const arrayBuffer = await file.arrayBuffer();
       const uint8Array = new Uint8Array(arrayBuffer);
-      
+
       showToast(`Loading ${file.name}...`);
-      
+
       const docId = await invoke('load_document_from_bytes', {
         fileName: file.name,
         data: Array.from(uint8Array)
       });
-      
+
       await openNewTabFromDrop(docId, file.name);
       showToast(`Loaded ${file.name}`, 'success');
     } catch (err) {
@@ -1086,7 +1127,7 @@ document.addEventListener('drop', async (e) => {
 async function openNewTabFromDrop(docId, fileName) {
   tabCounter++;
   const tabId = `tab-${tabCounter}`;
-  
+
   openDocuments.set(tabId, {
     id: docId,
     path: fileName,
@@ -1096,13 +1137,13 @@ async function openNewTabFromDrop(docId, fileName) {
     zoom: 1.0,
     cache: new Map()
   });
-  
+
   try {
     showLoading();
     const pageCount = await invoke('get_page_count', { docId });
     openDocuments.get(tabId).totalPages = pageCount;
     hideLoading();
-    
+
     switchToTab(tabId);
     updateTabBar();
     addToRecentFiles(fileName);
@@ -1114,13 +1155,19 @@ async function openNewTabFromDrop(docId, fileName) {
 }
 
 // Initialize
+console.log('PDFbull initializing...');
 updateRecentFilesDropdown();
 updateStatusBar();
 updateUndoRedoButtons();
 setStatusMessage('Ready - Drag and drop PDFs or press Ctrl+O to open');
 
+// Backend ping test
+invoke('ping').then(res => console.log('Backend response:', res)).catch(err => console.error('Backend ping failed:', err));
+invoke('test_pdfium').then(res => console.log('PDFium check:', res)).catch(err => console.error('PDFium check failed:', err));
+
 // Initialize first document if opened directly
 async function openDocumentWithDialog() {
+  console.log('Open document dialog triggered');
   try {
     const selected = await open({
       multiple: false,
@@ -1133,13 +1180,15 @@ async function openDocumentWithDialog() {
         extensions: ['*']
       }]
     });
-
+    console.log('Dialog selection:', selected);
     if (selected) {
       await openNewTab(selected);
+    } else {
+      console.log('Dialog cancelled');
     }
   } catch (e) {
     console.error('Failed to open dialog:', e);
-    showToast('Error opening file dialog', 'error');
+    showToast('Error opening file dialog: ' + e, 'error');
   }
 }
 
@@ -1152,6 +1201,47 @@ document.getElementById('btn-zoom-out').addEventListener('click', () => { curren
 document.getElementById('btn-reset-zoom').addEventListener('click', () => { currentZoom = 1.0; renderPage(currentPage); showToast('Zoom reset to 100%'); });
 document.getElementById('btn-sidebar-toggle').addEventListener('click', () => document.getElementById('sidebar').classList.toggle('collapsed'));
 document.getElementById('btn-fullscreen').addEventListener('click', toggleFullscreen);
+
+// Zoom and Navigation
+function fitWidth() {
+  if (!currentDoc) return;
+  const containerWidth = viewerContainer.clientWidth - 40; // Subtract padding
+  const canvasWidth = canvas.width / currentZoom;
+  currentZoom = containerWidth / canvasWidth;
+  renderPage(currentPage);
+  showToast(`Fit to width: ${Math.round(currentZoom * 100)}%`);
+}
+
+function fitPage() {
+  if (!currentDoc) return;
+  const containerHeight = viewerContainer.clientHeight - 40;
+  const canvasHeight = canvas.height / currentZoom;
+  currentZoom = containerHeight / canvasHeight;
+  renderPage(currentPage);
+  showToast(`Fit to page: ${Math.round(currentZoom * 100)}%`);
+}
+
+document.getElementById('btn-fit-width').addEventListener('click', fitWidth);
+document.getElementById('btn-fit-page').addEventListener('click', fitPage);
+
+// Mouse wheel for zoom and navigation
+viewerContainer.addEventListener('wheel', (e) => {
+  if (e.ctrlKey) {
+    e.preventDefault();
+    const zoomFactor = e.deltaY > 0 ? 0.9 : 1.1;
+    currentZoom *= zoomFactor;
+    renderPage(currentPage);
+  } else {
+    // Only change page if scrolling fast or at bounds
+    if (Math.abs(e.deltaY) > 50) {
+      const direction = e.deltaY > 0 ? 1 : -1;
+      const next = currentPage + direction;
+      if (next >= 0 && next < totalPages && next !== currentPage) {
+        renderPage(next);
+      }
+    }
+  }
+}, { passive: false });
 
 // Search
 document.getElementById('btn-search').addEventListener('click', async () => {

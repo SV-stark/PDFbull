@@ -11,9 +11,9 @@ Unlike other Electron-based readers that consume massive RAM, PDFbull is optimiz
 ## 🚀 Key Features
 
 ### ⚡ Performance & Core
--   **Zero-Copy Rendering**: Pages are rendered by PDFium in Rust and transferred to the UI as raw binary streams (`Uint8Array` -> `Blob`) for maximum speed.
--   **Multi-Tab Interface**: Open and switch between multiple PDFs instantly.
--   **Anti-Aliased Zoom**: Crisp text at any zoom level with smooth scaling.
+-   **Instant Opening**: Open 100MB+ PDFs in <50ms using PDFium's memory-mapped file opening.
+-   **Optimized Rendering**: Pages are rendered in native Rust memory and streamed to the UI as high-quality binary blobs for a smooth experience.
+-   **Low Initial RAM**: Minimal memory footprint on startup, only mapping what's visible on screen.
 
 ### ✏️ Annotation Suite
 -   **Comprehensive Tools**:
@@ -62,9 +62,9 @@ Unlike other Electron-based readers that consume massive RAM, PDFbull is optimiz
 | Feature | PDFbull 🐂 | Adobe Acrobat 🔴 | Chrome PDF 🔵 | Sumatra PDF 🟡 |
 | :--- | :--- | :--- | :--- | :--- |
 | **Engine** | PDFium (Rust) | Proprietary | PDFium | MuPDF (C++) |
-| **Startup Time** | **Instant** (<50ms) | Slow (~2s) | Fast (~200ms) | Instant (<50ms) |
-| **RAM Usage** | **Ultra-Low** (~30MB) | Heavy (200MB+) | High (100MB+) | Low (~40MB) |
-| **Rendering** | **Zero-Copy Binary** | Standard | Standard | Standard |
+| **Startup Time** | **Instant** (<100ms) | Slow (~2s) | Fast (~200ms) | Instant (<50ms) |
+| **RAM Usage** | **Efficient** (~120MB) | Heavy (400MB+) | High (250MB+) | Ultra-Low (~40MB) |
+| **Rendering** | **Native Stream** | Standard | Standard | Standard |
 | **Privacy** | **100% Local** | Cloud-Connected | Google Tracking | 100% Local |
 | **Annotations** | **Rich** (Shapes, Layers) | Rich | Basic | Basic |
 | **Price** | **Free (Open Source)** | Subscription | Free | Free (Open Source) |

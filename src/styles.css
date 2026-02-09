@@ -77,7 +77,9 @@ body {
   z-index: 100;
 }
 
-.spacer { flex: 1; }
+.spacer {
+  flex: 1;
+}
 
 button {
   background: transparent;
@@ -108,6 +110,8 @@ button.primary:hover {
   flex: 1;
   display: flex;
   overflow: hidden;
+  position: relative;
+  /* Anchor for absolute positioned overlay */
 }
 
 /* Sidebar */
@@ -118,6 +122,7 @@ button.primary:hover {
   display: flex;
   flex-direction: column;
   transition: width 0.3s ease;
+  overflow-y: auto;
 }
 
 .sidebar.collapsed {
@@ -145,7 +150,8 @@ button.primary:hover {
   transition: border-color 0.2s;
 }
 
-.thumbnail:hover, .thumbnail.active {
+.thumbnail:hover,
+.thumbnail.active {
   border-color: var(--accent-color);
 }
 
@@ -155,21 +161,21 @@ button.primary:hover {
   background: var(--viewer-bg);
   overflow: auto;
   position: relative;
-  display: flex;
-  justify-content: center;
+  display: block;
+  /* changed from flex to allow native scroll */
+  text-align: center;
+  /* centers the canvas */
   padding: 20px;
   transition: all 0.3s ease;
 }
 
 .viewer-container.drag-over {
   background: var(--accent-color);
-  background-image: repeating-linear-gradient(
-    45deg,
-    transparent,
-    transparent 10px,
-    rgba(255, 255, 255, 0.1) 10px,
-    rgba(255, 255, 255, 0.1) 20px
-  );
+  background-image: repeating-linear-gradient(45deg,
+      transparent,
+      transparent 10px,
+      rgba(255, 255, 255, 0.1) 10px,
+      rgba(255, 255, 255, 0.1) 20px);
   border: 3px dashed var(--accent-hover);
   transform: scale(0.98);
 }
@@ -189,7 +195,7 @@ button.primary:hover {
 }
 
 #pdf-canvas {
-  box-shadow: 0 0 20px rgba(0,0,0,0.5);
+  box-shadow: 0 0 20px rgba(0, 0, 0, 0.5);
   transition: filter 0.3s;
 }
 
@@ -207,18 +213,27 @@ button.primary:hover {
   gap: 10px;
   align-items: center;
   border: 1px solid var(--glass-border);
-  opacity: 0; 
+  opacity: 0;
   transition: opacity 0.3s;
 }
 
-.viewer-container:hover .overlay {
+.viewer-container:hover+.overlay,
+.overlay:hover {
   opacity: 1;
 }
 
 /* Filters */
-.filter-grayscale { filter: grayscale(100%); }
-.filter-invert { filter: invert(100%); }
-.filter-sepia { filter: sepia(100%); }
+.filter-grayscale {
+  filter: grayscale(100%);
+}
+
+.filter-invert {
+  filter: invert(100%);
+}
+
+.filter-sepia {
+  filter: sepia(100%);
+}
 
 /* Active Filter States */
 .tool-btn[data-filter="grayscale"] {
@@ -258,7 +273,7 @@ button.primary:hover {
 
 /* Search Input */
 .search-input {
-  background: rgba(255,255,255,0.1);
+  background: rgba(255, 255, 255, 0.1);
   border: 1px solid var(--border-color);
   color: var(--text-color);
   padding: 6px 12px;
@@ -487,6 +502,7 @@ button::after {
     opacity: 0;
     transform: scale(0.98);
   }
+
   to {
     opacity: 1;
     transform: scale(1);
@@ -662,6 +678,7 @@ input:focus-visible {
     opacity: 0;
     transform: translateX(100%);
   }
+
   to {
     opacity: 1;
     transform: translateX(0);
@@ -735,13 +752,16 @@ input:focus-visible {
   width: 8px;
   height: 8px;
 }
+
 ::-webkit-scrollbar-track {
   background: transparent;
 }
+
 ::-webkit-scrollbar-thumb {
   background: #444;
   border-radius: 4px;
 }
+
 ::-webkit-scrollbar-thumb:hover {
   background: #555;
 }
@@ -918,12 +938,10 @@ input:focus-visible {
 .skeleton-page {
   width: 80%;
   height: 90%;
-  background: linear-gradient(
-    90deg,
-    var(--glass-bg) 25%,
-    rgba(255, 255, 255, 0.1) 50%,
-    var(--glass-bg) 75%
-  );
+  background: linear-gradient(90deg,
+      var(--glass-bg) 25%,
+      rgba(255, 255, 255, 0.1) 50%,
+      var(--glass-bg) 75%);
   background-size: 200% 100%;
   animation: skeleton-loading 1.5s infinite;
   border-radius: 8px;
@@ -933,6 +951,7 @@ input:focus-visible {
   0% {
     background-position: 200% 0;
   }
+
   100% {
     background-position: -200% 0;
   }
@@ -972,6 +991,7 @@ input:focus-visible {
     opacity: 0;
     transform: scale(0.9) translateY(-20px);
   }
+
   to {
     opacity: 1;
     transform: scale(1) translateY(0);
@@ -1048,12 +1068,12 @@ input:focus-visible {
   .sidebar {
     width: 200px;
   }
-  
+
   .toolbar {
     padding: 0 8px;
     gap: 6px;
   }
-  
+
   .toolbar button span {
     display: none;
   }

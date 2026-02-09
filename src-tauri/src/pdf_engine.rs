@@ -8,17 +8,37 @@ unsafe impl Sync for PdfiumWrapper {}
 unsafe impl Send for PdfiumWrapper {}
 
 // Global singleton for the PDFium library interface
-static PDFIUM: OnceLock<PdfiumWrapper> = OnceLock::new();
+// We store the Result inside the OnceLock to avoid panicking during initialization.
+static PDFIUM: OnceLock<Result<PdfiumWrapper, String>> = OnceLock::new();
 
-fn get_pdfium() -> &'static Pdfium {
-    &PDFIUM.get_or_init(|| {
-        let pdfium = Pdfium::new(
-            Pdfium::bind_to_library(Pdfium::pdfium_platform_library_name_at_path("./"))
-                .or_else(|_| Pdfium::bind_to_library(Pdfium::pdfium_platform_library_name()))
-                .expect("CRITICAL: Failed to load PDFium library. Ensure pdfium.dll/libpdfium.so is present.")
-        );
-        PdfiumWrapper(pdfium)
-    }).0
+fn get_pdfium() -> Result<&'static Pdfium, String> {
+    let result = PDFIUM.get_or_init(|| {
+        println!("[PDF Engine] Initializing PDFium...");
+        // Log current directory to help user verify DLL placement
+        if let Ok(cwd) = std::env::current_dir() {
+            println!("[PDF Engine] Current working directory: {:?}", cwd);
+        }
+        
+        let path_result = Pdfium::bind_to_library(Pdfium::pdfium_platform_library_name_at_path("./"))
+            .or_else(|_| Pdfium::bind_to_library(Pdfium::pdfium_platform_library_name()));
+            
+        match path_result {
+            Ok(bindings) => {
+                println!("[PDF Engine] PDFium library successfully bound.");
+                Ok(PdfiumWrapper(Pdfium::new(bindings)))
+            }
+            Err(e) => {
+                let err_msg = format!("PDFium library load failed: {}. Ensure pdfium.dll/libpdfium.so is in the correct directory.", e);
+                eprintln!("[PDF Engine] {}", err_msg);
+                Err(err_msg)
+            }
+        }
+    });
+
+    match result {
+        Ok(wrapper) => Ok(&wrapper.0),
+        Err(e) => Err(e.clone()),
+    }
 }
 
 // Wrapper to make PdfDocument Send + Sync relies on Mutex for safety
@@ -55,13 +75,19 @@ where
 
 #[tauri::command]
 pub async fn open_document(state: State<'_, PdfState>, path: String) -> Result<i32, String> {
-    let pdfium = get_pdfium();
+    println!("[PDF Engine] Attempting to open document at: {}", path);
+    let pdfium = get_pdfium()?;
     
     // Performance: Use load_pdf_from_file for memory mapping
     let doc = pdfium.load_pdf_from_file(&path, None)
-        .map_err(|e| format!("Failed to open PDF: {}", e))?;
+        .map_err(|e| {
+            let err = format!("Failed to open PDF: {}", e);
+            eprintln!("[PDF Engine] {}", err);
+            err
+        })?;
     
     let page_count = doc.pages().len();
+    println!("[PDF Engine] Document opened. Page count: {}", page_count);
     
     *state.doc.lock().map_err(|e| e.to_string())? = Some(PdfWrapper(doc));
     
@@ -93,7 +119,6 @@ pub fn search_text(
     _page_num: i32,
     _query: String,
 ) -> Result<Vec<(f32, f32, f32, f32)>, String> {
-    // Stubbed
     Ok(vec![])
 }
 
@@ -105,21 +130,26 @@ pub fn render_page(
 ) -> Result<Vec<u8>, String> {
     with_doc(&state, |doc| {
         let page = doc.pages().get(page_num as u16).map_err(|e| e.to_string())?;
-        
         let width = (page.width().value * scale) as i32;
         let height = (page.height().value * scale) as i32;
-        
-        // Render to bitmap
-        // We pass None for config to use defaults (scale to fit)
         let bitmap = page.render(width, height, None).map_err(|e| e.to_string())?;
-
-        // Convert to PNG
         let mut buf = Vec::new();
         let img = bitmap.as_image(); 
         use std::io::Cursor;
         img.write_to(&mut Cursor::new(&mut buf), image::ImageFormat::Png)
             .map_err(|e| e.to_string())?;
-
         Ok(buf)
     })
+}
+
+#[tauri::command]
+pub fn test_pdfium() -> Result<String, String> {
+    println!("[PDF Engine] Diagnostic test_pdfium triggered.");
+    get_pdfium()?;
+    Ok("PDFium library loaded successfully!".to_string())
+}
+
+#[tauri::command]
+pub fn ping() -> String {
+    "pong".to_string()
 }
