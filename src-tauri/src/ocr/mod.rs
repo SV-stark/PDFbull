@@ -27,7 +27,7 @@ pub struct PageTextBlocks {
 
 /// Global OCR engine state with lazy loading
 pub struct OcrEngine {
-    engine: Option<Box<dyn oar_ocr::oarocr::OcrTrait>>,
+    engine: Option<oar_ocr::oarocr::OAROCR>,
     current_language: Option<String>,
     cancel_flag: Arc<AtomicBool>,
 }
@@ -59,7 +59,7 @@ impl OcrEngine {
             .build()
             .map_err(|e| format!("Failed to initialize OCR engine: {}", e))?;
 
-        self.engine = Some(Box::new(engine));
+        self.engine = Some(engine);
         self.current_language = Some(language.to_string());
         Ok(())
     }
