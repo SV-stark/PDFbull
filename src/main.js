@@ -888,10 +888,17 @@ async function renderPage(pageNum, saveHistory = false) {
   }
 
   try {
-    const { width, height, data } = await invoke('render_page', {
+    const responseBytes = await invoke('render_page', {
       pageNum: pageNum,
       scale: renderScale // Use renderScale, not currentZoom
     });
+
+    const view = new DataView(responseBytes);
+    const width = view.getInt32(0, false); // Big Endian
+    const height = view.getInt32(4, false); // Big Endian
+
+    // Pixels start at offset 8
+    const pixels = new Uint8ClampedArray(responseBytes, 8);
 
     // OPTIMIZATION: Abort if page is no longer visible (user scrolled past)
     if (!visiblePages.has(pageNum)) {
@@ -899,7 +906,7 @@ async function renderPage(pageNum, saveHistory = false) {
     }
 
     // Use ImageData and createImageBitmap for performance
-    const imageData = new ImageData(new Uint8ClampedArray(data), width, height);
+    const imageData = new ImageData(pixels, width, height);
     const imageBitmap = await createImageBitmap(imageData);
 
     // Double check visibility before expensive draw
@@ -910,11 +917,6 @@ async function renderPage(pageNum, saveHistory = false) {
 
     canvas.width = width;
     canvas.height = height;
-
-    // Update container size to match exact render
-    const container = document.getElementById(`page-container-${pageNum}`);
-    container.style.width = `${width}px`;
-    container.style.height = `${height}px`;
 
     ctx.drawImage(imageBitmap, 0, 0);
     canvas.style.display = 'block';
@@ -1361,87 +1363,37 @@ function createLayer(layerName) {
   showToast(`Layer "${layerName}" created`);
 }
 
-// Drag and Drop support
-
-document.addEventListener('dragover', (e) => {
-  e.preventDefault();
+// Drag and Drop support (Tauri Native)
+listen('tauri://drag-enter', () => {
   viewerContainer.classList.add('drag-over');
 });
 
-document.addEventListener('dragleave', (e) => {
-  if (e.target === document.body || e.target === viewerContainer) {
-    viewerContainer.classList.remove('drag-over');
-  }
+listen('tauri://drag-leave', () => {
+  viewerContainer.classList.remove('drag-over');
 });
 
-document.addEventListener('drop', async (e) => {
-  e.preventDefault();
+listen('tauri://drag-drop', async (event) => {
   viewerContainer.classList.remove('drag-over');
 
-  const files = e.dataTransfer.files;
-  if (files.length === 0) return;
+  // event.payload contains the drop details (paths, position) in Tauri 2.0
+  const paths = event.payload.paths;
+  if (!paths || paths.length === 0) return;
 
-  const file = files[0];
-
-  if (file.name.toLowerCase().endsWith('.pdf')) {
-    try {
-      const arrayBuffer = await file.arrayBuffer();
-      const uint8Array = new Uint8Array(arrayBuffer);
-
-      showToast(`Loading ${file.name}...`);
-
-      const docId = await invoke('load_document_from_bytes', {
-        fileName: file.name,
-        data: Array.from(uint8Array)
-      });
-
-      await openNewTabFromDrop(docId, file.name);
-      showToast(`Loaded ${file.name}`, 'success');
-    } catch (err) {
-      console.error('Failed to load dropped file:', err);
-      showToast('Failed to load PDF file', 'error');
+  for (const path of paths) {
+    if (path.toLowerCase().endsWith('.pdf')) {
+      await openNewTab(path);
+    } else {
+      showToast('Only PDF files are supported', 'error');
     }
-  } else {
-    showToast('Only PDF files are supported', 'error');
   }
 });
-
-async function openNewTabFromDrop(docId, fileName) {
-  tabCounter++;
-  const tabId = `tab-${tabCounter}`;
-
-  openDocuments.set(tabId, {
-    id: docId,
-    path: fileName,
-    name: fileName,
-    page: 0,
-    totalPages: 0,
-    zoom: 1.0,
-    cache: new Map()
-  });
-
-  try {
-    showLoading();
-    const pageCount = await invoke('get_page_count', { docId });
-    openDocuments.get(tabId).totalPages = pageCount;
-    hideLoading();
-
-    switchToTab(tabId);
-    updateTabBar();
-    addToRecentFiles(fileName);
-  } catch (e) {
-    console.error('Failed to get page count:', e);
-    hideLoading();
-    showToast('Error loading PDF', 'error');
-  }
-}
 
 // Initialize
 console.log('PDFbull initializing...');
 updateRecentFilesDropdown();
 updateStatusBar();
 updateUndoRedoButtons();
-setStatusMessage('Ready - Drag and drop PDFs or press Ctrl+O to open');
+setStatusMessage('Ready - Drag and drop PDFs onto the window to open');
 
 // Backend ping test
 invoke('ping').then(res => console.log('Backend response:', res)).catch(err => console.error('Backend ping failed:', err));
