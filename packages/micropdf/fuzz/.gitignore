@@ -1,7 +1,0 @@
-target/
-corpus/
-artifacts/
-coverage/
-*.profraw
-*.profdata
-

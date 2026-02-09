@@ -4,14 +4,14 @@
 ![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)
 ![Tauri](https://img.shields.io/badge/Built%20with-Tauri%202.0-orange)
 
-**PDFbull** is a high-performance, lightweight PDF reader and editor built for Windows. It leverages the raw speed of **MicroPDF** combined with the safety of **Rust** and the flexibility of **Tauri**.
+**PDFbull** is a high-performance, lightweight PDF reader and editor built for Windows. It leverages the raw speed of **PDFium** (Google Chrome's engine) combined with the safety of **Rust** and the flexibility of **Tauri**.
 
 Unlike other Electron-based readers that consume massive RAM, PDFbull is optimized for efficiency, using direct binary data transfer for rendering and native Rust bindings for heavy lifting.
 
 ## 🚀 Key Features
 
 ### ⚡ Performance & Core
--   **Zero-Copy Rendering**: Pages are rendered by MicroPDF in Rust and transferred to the UI as raw binary streams (`Uint8Array` -> `Blob`) for maximum speed.
+-   **Zero-Copy Rendering**: Pages are rendered by PDFium in Rust and transferred to the UI as raw binary streams (`Uint8Array` -> `Blob`) for maximum speed.
 -   **Multi-Tab Interface**: Open and switch between multiple PDFs instantly.
 -   **Anti-Aliased Zoom**: Crisp text at any zoom level with smooth scaling.
 
@@ -26,7 +26,7 @@ Unlike other Electron-based readers that consume massive RAM, PDFbull is optimiz
 -   **Auto-Save**: Annotations are automatically saved to local storage every 30 seconds.
 
 ### 🛠️ Advanced Tools
--   **Search**: Fast text search using MicroPDF's structured text engine.
+-   **Search**: Fast text search using PDFium's structured text engine.
 -   **Export Options**:
     -   **Export Page as Image**: Save current view as high-quality PNG.
     -   **Extract Text**: Save page text to `.txt` file.
@@ -61,7 +61,7 @@ Unlike other Electron-based readers that consume massive RAM, PDFbull is optimiz
 
 | Feature | PDFbull 🐂 | Adobe Acrobat 🔴 | Chrome PDF 🔵 | Sumatra PDF 🟡 |
 | :--- | :--- | :--- | :--- | :--- |
-| **Engine** | MicroPDF (Rust) | Proprietary | PDFium | MuPDF (C++) |
+| **Engine** | PDFium (Rust) | Proprietary | PDFium | MuPDF (C++) |
 | **Startup Time** | **Instant** (<50ms) | Slow (~2s) | Fast (~200ms) | Instant (<50ms) |
 | **RAM Usage** | **Ultra-Low** (~30MB) | Heavy (200MB+) | High (100MB+) | Low (~40MB) |
 | **Rendering** | **Zero-Copy Binary** | Standard | Standard | Standard |
@@ -73,7 +73,7 @@ Unlike other Electron-based readers that consume massive RAM, PDFbull is optimiz
 
 -   **Frontend**: HTML5, Vanilla JavaScript (Zero-framework for speed), CSS3 Variables.
 -   **Backend**: Rust (Tauri 2.0).
--   **PDF Engine**: [MicroPDF](https://crates.io/crates/micropdf).
+-   **PDF Engine**: [pdfium-render](https://crates.io/crates/pdfium-render).
 
 ## 📦 Installation
 

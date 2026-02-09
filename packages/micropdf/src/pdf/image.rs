@@ -1,1 +1,0 @@
-//! PDF image module stub
