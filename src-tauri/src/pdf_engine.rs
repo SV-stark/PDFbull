@@ -210,7 +210,7 @@ pub async fn render_page(
              let mut body = Vec::with_capacity(8 + raw_bytes.len());
              body.extend_from_slice(&width.to_be_bytes());
              body.extend_from_slice(&height.to_be_bytes());
-             body.extend_from_slice(raw_bytes);
+             body.extend_from_slice(&raw_bytes);
 
              Ok(tauri::ipc::Response::new(body))
         } else {
@@ -342,7 +342,7 @@ pub async fn apply_scanner_filter(
             // B. Process Chunk (Parallel using Rayon)
             // This is the "Most Beneficial Usage": Parallelizing the heavy image processing
             let processed_results: Vec<Result<_, String>> = raw_pages.into_par_iter()
-                .map(|(w_pt, h_pt, w_px, h_px, mut bytes)| {
+                .map(|(w_pt, h_pt, w_px, h_px, bytes)| {
                     let img_buffer = image::ImageBuffer::<image::Rgba<u8>, _>::from_raw(w_px as u32, h_px as u32, bytes)
                         .ok_or_else(|| "Failed to create image buffer".to_string())?;
                     
