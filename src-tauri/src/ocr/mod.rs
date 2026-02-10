@@ -2,8 +2,8 @@ pub mod models;
 pub mod pdf_embed;
 
 use serde::{Deserialize, Serialize};
-use std::sync::{Arc, Mutex};
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Mutex};
 // oar_ocr types are accessed via full paths
 use tauri::Emitter;
 
@@ -48,7 +48,8 @@ impl OcrEngine {
         }
 
         let models = models::discover_models()?;
-        let model_info = models.iter()
+        let model_info = models
+            .iter()
             .find(|m| m.code == language)
             .ok_or_else(|| format!("Language model not found: {}", language))?;
 
@@ -57,8 +58,8 @@ impl OcrEngine {
             model_info.rec_model_path.to_string_lossy().to_string(),
             model_info.keys_path.to_string_lossy().to_string(),
         )
-            .build()
-            .map_err(|e| format!("Failed to initialize OCR engine: {}", e))?;
+        .build()
+        .map_err(|e| format!("Failed to initialize OCR engine: {}", e))?;
 
         self.engine = Some(engine);
         self.current_language = Some(language.to_string());
@@ -92,46 +93,57 @@ impl OcrEngine {
             let percentage = ((current as f32 / total_pages as f32) * 100.0) as u32;
 
             // Emit progress event
-            let _ = window.emit("ocr-progress", serde_json::json!({
-                "current": current,
-                "total": total_pages,
-                "percentage": percentage
-            })).map_err(|e| e.to_string())?;
+            let _ = window
+                .emit(
+                    "ocr-progress",
+                    serde_json::json!({
+                        "current": current,
+                        "total": total_pages,
+                        "percentage": percentage
+                    }),
+                )
+                .map_err(|e| e.to_string())?;
 
             // Convert bytes to image
             let img = image::load_from_memory(page_data)
                 .map_err(|e| format!("Failed to load image for page {}: {}", current, e))?;
 
             // Run OCR - Convert to RGB8 as required by oar-ocr
-            let ocr_results = engine.predict(vec![img.to_rgb8()])
+            let ocr_results = engine
+                .predict(vec![img.to_rgb8()])
                 .map_err(|e| format!("OCR error on page {}: {}", current, e))?;
 
             let mut blocks = Vec::new();
-            
+
             // engine.predict returns Vec<OAROCRResult>, one for each image
             if let Some(page_result) = ocr_results.first() {
                 // User specified 'regions' field
-                for region in &page_result.regions {
+                for region in &page_result.text_regions {
                     if let Some(text) = &region.text {
                         let mut min_x = f32::MAX;
                         let mut min_y = f32::MAX;
                         let mut max_x = f32::MIN;
                         let mut max_y = f32::MIN;
-    
-                        // User specified 'bounding_box' is Option<Vec<Point>>
-                        if let Some(bbox) = &region.bounding_box {
-                            for point in bbox {
-                                if (point.x as f32) < min_x { min_x = point.x as f32; }
-                                if (point.y as f32) < min_y { min_y = point.y as f32; }
-                                if (point.x as f32) > max_x { max_x = point.x as f32; }
-                                if (point.y as f32) > max_y { max_y = point.y as f32; }
+
+                        for point in &region.bounding_box.points {
+                            let (px, py) = (point.x as f32, point.y as f32);
+                            if px < min_x {
+                                min_x = px;
+                            }
+                            if py < min_y {
+                                min_y = py;
+                            }
+                            if px > max_x {
+                                max_x = px;
+                            }
+                            if py > max_y {
+                                max_y = py;
                             }
                         }
 
-                        // Avoid adding invalid boxes if bbox was missing or empty
                         if min_x != f32::MAX {
                             blocks.push(TextBlock {
-                                text: text.clone(),
+                                text: text.to_string(),
                                 x: min_x,
                                 y: min_y,
                                 width: max_x - min_x,
@@ -170,8 +182,8 @@ static mut OCR_ENGINE: Option<Arc<Mutex<OcrEngine>>> = None;
 /// Get or initialize the global OCR engine
 pub fn get_ocr_engine() -> Arc<Mutex<OcrEngine>> {
     unsafe {
-        OCR_ENGINE.get_or_insert_with(|| {
-            Arc::new(Mutex::new(OcrEngine::new()))
-        }).clone()
+        OCR_ENGINE
+            .get_or_insert_with(|| Arc::new(Mutex::new(OcrEngine::new())))
+            .clone()
     }
 }
