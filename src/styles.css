@@ -1853,3 +1853,100 @@ kbd {
   z-index: 2;
   pointer-events: auto;
 }
+
+/* Empty State / Welcome Screen */
+.empty-state {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  display: none;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  color: var(--text-color);
+  opacity: 0.6;
+  z-index: 5;
+  pointer-events: none;
+}
+
+.empty-state h2 {
+  font-size: 20px;
+  font-weight: 600;
+}
+
+.empty-state p {
+  font-size: 14px;
+  opacity: 0.7;
+}
+
+.empty-state kbd {
+  background: var(--glass-bg);
+  border: 1px solid var(--glass-border);
+  padding: 2px 6px;
+  border-radius: 4px;
+  font-family: monospace;
+  font-size: 12px;
+}
+
+/* Zoom Level Display */
+.zoom-level {
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+  opacity: 0.7;
+  min-width: 40px;
+  text-align: center;
+}
+
+/* Modal Footer */
+.modal-footer {
+  padding: 12px 20px;
+  border-top: 1px solid var(--border-color);
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+/* Search Close Button Override */
+#btn-search-close {
+  background: transparent;
+  color: var(--text-color);
+  opacity: 0.7;
+  padding: 8px;
+}
+
+#btn-search-close:hover {
+  opacity: 1;
+  background: rgba(255, 255, 255, 0.1);
+}
+
+/* Active Search Result */
+.search-result-item.active {
+  border-color: var(--accent-color);
+  background: rgba(100, 108, 255, 0.15);
+  box-shadow: 0 0 0 1px var(--accent-color);
+}
+
+/* Search No Results */
+.search-no-results {
+  text-align: center;
+  padding: 20px 0;
+  opacity: 0.5;
+  font-size: 14px;
+}
+
+/* Layer Item */
+.layer-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 4px;
+  font-size: 13px;
+  cursor: pointer;
+}
+
+.layer-item input[type="checkbox"] {
+  cursor: pointer;
+}

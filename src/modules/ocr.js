@@ -68,7 +68,7 @@ export const ocr = {
      * Start OCR process on current document
      */
     async startOcr() {
-        if (!state.filePath) {
+        if (!state.currentDoc) {
             ui.showToast('Please open a PDF document first', 'error');
             return;
         }
@@ -218,7 +218,7 @@ export const ocr = {
      * Save OCR results to PDF
      */
     async saveOcrToPdf() {
-        if (!ocrResults || !state.filePath) {
+        if (!ocrResults || !state.currentDoc) {
             ui.showToast('No OCR results to save', 'error');
             return;
         }
@@ -226,9 +226,9 @@ export const ocr = {
         try {
             ui.showLoading('Embedding OCR text layer...');
 
-            const outputPath = state.filePath.replace('.pdf', '_ocr.pdf');
+            const outputPath = state.currentDoc.replace('.pdf', '_ocr.pdf');
             await window.__TAURI__.core.invoke('save_ocr_to_pdf', {
-                pdfPath: state.filePath,
+                pdfPath: state.currentDoc,
                 ocrData: ocrResults,
                 outputPath
             });

@@ -19,27 +19,21 @@ export const events = {
         this.bindTauriEvents();
         this.bindKeyboardEvents();
         this.bindCanvasEvents();
+        this.bindColorPickerEvents();
+        this.bindPageInputEvents();
 
-        // New Bindings
+        // Bookmark button
         document.getElementById('btn-bookmark')?.addEventListener('click', () => {
-            // Assume app is global or dispatched
-            // Main.js is not exported as 'app'. It is 'app' inside main.js.
-            // We need to dispatch a custom event or attach 'app' to window.
-            // Given main.js structure: `const app = { ... };` and not attached to window.
-            // But main.js does: `document.addEventListener('app:open-file', ...)`
-            // So we should dispatch events.
-
-            // Wait, `app` in main.js is local. 
-            // We need to add event listeners in main.js or export app?
-            // main.js is a module, not exported.
-            // I should add a custom event for bookmarking.
             document.dispatchEvent(new CustomEvent('app:toggle-bookmark'));
         });
 
+        // Export JSON in export modal
         document.getElementById('btn-export-json')?.addEventListener('click', () => {
             document.dispatchEvent(new CustomEvent('app:export-json'));
+            document.getElementById('export-modal')?.classList.add('hidden');
         });
 
+        // Keyboard help close
         document.getElementById('btn-close-keyboard-help')?.addEventListener('click', () => {
             document.getElementById('keyboard-help-modal').classList.add('hidden');
         });
@@ -50,8 +44,7 @@ export const events = {
 
     bindGlobalEvents() {
         window.addEventListener('resize', () => {
-            // Optional: Re-calculate zoom if fitting?
-            // renderer.setupVirtualScroller();
+            // Optional: Re-calculate zoom if fitting
         });
 
         // Ctrl + Wheel Zoom
@@ -63,7 +56,6 @@ export const events = {
                     ? state.currentZoom * zoomFactor
                     : state.currentZoom / zoomFactor;
 
-                // Clamp zoom
                 const clampedZoom = Math.min(Math.max(0.1, newZoom), 5.0);
                 events.updateZoom(clampedZoom);
             }
@@ -81,19 +73,6 @@ export const events = {
                     filters: [{ name: 'PDF Files', extensions: ['pdf'] }, { name: 'All Files', extensions: ['*'] }]
                 });
                 if (selected) {
-                    // Call main app logic to open tab
-                    // We need a circular dependency fix or pass app controller?
-                    // Ideally events dispatches a custom event or calls a "controller" module.
-                    // For now, let's assume `window.PDFApp.openNewTab(selected)` is available or we import `app`.
-                    // Circular dependency: main imports events. events imports main? No.
-                    // events.js should take callbacks or we should have a `controller.js`.
-                    // Or we attach `openNewTab` to `api` or `state`? No.
-                    // Let's rely on a global or exported function passed on init, OR
-                    // Move `openNewTab` to `renderer.js` or `state.js` (logic) + `ui.js` (dom)?
-                    // `openNewTab` logic is: call API open_document, update state, create UI.
-                    // This fits in a "controller" or "app" logic.
-                    // Let's assume we can trigger a CustomEvent 'request-open-tab'.
-
                     const event = new CustomEvent('app:open-file', { detail: selected });
                     document.dispatchEvent(event);
                 }
@@ -103,20 +82,18 @@ export const events = {
         });
 
         document.getElementById('btn-new-tab')?.addEventListener('click', () => {
-            // Re-use open logic
             document.getElementById('btn-open').click();
         });
 
         document.getElementById('btn-save')?.addEventListener('click', () => {
-            const event = new CustomEvent('app:save');
-            document.dispatchEvent(event);
+            document.dispatchEvent(new CustomEvent('app:save'));
         });
 
         // Navigation
         document.getElementById('btn-prev')?.addEventListener('click', () => {
             if (state.currentPage > 0) {
                 state.currentPage--;
-                renderer.scrollToPage(state.currentPage); // We need scrollToPage in renderer
+                renderer.scrollToPage(state.currentPage);
             }
         });
         document.getElementById('btn-next')?.addEventListener('click', () => {
@@ -129,15 +106,10 @@ export const events = {
         // Zoom
         document.getElementById('btn-zoom-in')?.addEventListener('click', () => events.updateZoom(state.currentZoom * 1.25));
         document.getElementById('btn-zoom-out')?.addEventListener('click', () => events.updateZoom(state.currentZoom / 1.25));
-        document.getElementById('btn-reset-zoom')?.addEventListener('click', () => {
-            events.updateZoom(1.0);
-            ui.showToast('Zoom reset to 100%');
-        });
 
         document.getElementById('zoom-select')?.addEventListener('change', (e) => {
             const val = e.target.value;
             if (val === 'fit-width') {
-                // Calculate fit width zoom
                 const container = document.getElementById('viewer-container');
                 const page = state.pageDimensions[state.currentPage] || [600, 800];
                 if (container) {
@@ -147,7 +119,6 @@ export const events = {
                 const container = document.getElementById('viewer-container');
                 const page = state.pageDimensions[state.currentPage] || [600, 800];
                 if (container) {
-                    // rough fit
                     const scale = Math.min((container.clientWidth - 40) / page[0], (container.clientHeight - 40) / page[1]);
                     events.updateZoom(scale);
                 }
@@ -178,12 +149,9 @@ export const events = {
 
         // Rotation
         document.getElementById('btn-rotate')?.addEventListener('click', () => {
-            // For now, consistent visual rotation via CSS
-            // Ideally this should trigger a re-render with rotation if backend supported it.
             state.rotation = (state.rotation || 0) + 90;
             if (state.rotation >= 360) state.rotation = 0;
 
-            // Apply to all pages for consistency
             document.querySelectorAll('.page-canvas').forEach(canvas => {
                 canvas.style.transform = `rotate(${state.rotation}deg)`;
             });
@@ -195,11 +163,11 @@ export const events = {
             window.print();
         });
 
-        // Edit
+        // Undo/Redo
         document.getElementById('btn-undo')?.addEventListener('click', tools.undo);
         document.getElementById('btn-redo')?.addEventListener('click', tools.redo);
 
-        // Tools
+        // Drawing Tools
         ['highlight', 'rectangle', 'circle', 'line', 'arrow', 'text', 'sticky'].forEach(tool => {
             document.getElementById(`btn-${tool}`)?.addEventListener('click', () => tools.setTool(tool));
         });
@@ -212,18 +180,118 @@ export const events = {
         });
         document.getElementById('btn-search-next')?.addEventListener('click', search.nextResult);
         document.getElementById('btn-search-prev')?.addEventListener('click', search.prevResult);
+        document.getElementById('btn-search-close')?.addEventListener('click', () => {
+            search.isSearchOpen = false;
+            document.getElementById('search-panel')?.classList.add('hidden');
+        });
 
         // Forms
         document.getElementById('btn-forms')?.addEventListener('click', () => {
-            // trigger form scan
-            const event = new CustomEvent('app:scan-forms');
-            document.dispatchEvent(event);
+            document.dispatchEvent(new CustomEvent('app:scan-forms'));
         });
 
         // Scanner
         document.getElementById('btn-scanner')?.addEventListener('click', scanner.open);
         document.getElementById('btn-close-scanner')?.addEventListener('click', scanner.close);
         document.getElementById('btn-scanner-apply')?.addEventListener('click', scanner.apply);
+
+        // Export Modal
+        document.getElementById('btn-export')?.addEventListener('click', () => {
+            if (!state.currentDoc) {
+                ui.showToast('No document open', 'error');
+                return;
+            }
+            document.getElementById('export-modal')?.classList.remove('hidden');
+        });
+        document.getElementById('btn-close-export')?.addEventListener('click', () => {
+            document.getElementById('export-modal')?.classList.add('hidden');
+        });
+
+        // Export Image (PNG)
+        document.getElementById('btn-export-image')?.addEventListener('click', async () => {
+            if (!state.currentDoc) return;
+            try {
+                ui.showLoading('Exporting page as image...');
+                const responseBytes = await api.renderPage(state.currentPage, 2.0); // High quality
+                const view = new DataView(responseBytes);
+                const width = view.getInt32(0, false);
+                const height = view.getInt32(4, false);
+                const pixels = new Uint8ClampedArray(responseBytes, 8);
+
+                const imageData = new ImageData(pixels, width, height);
+                const canvas = document.createElement('canvas');
+                canvas.width = width;
+                canvas.height = height;
+                const ctx = canvas.getContext('2d');
+                const bitmap = await createImageBitmap(imageData);
+                ctx.drawImage(bitmap, 0, 0);
+                bitmap.close();
+
+                canvas.toBlob(async (blob) => {
+                    const { save } = window.__TAURI__.dialog;
+                    const savePath = await save({
+                        filters: [{ name: 'PNG Image', extensions: ['png'] }],
+                        defaultPath: `page_${state.currentPage + 1}.png`
+                    });
+                    if (savePath) {
+                        const arrayBuffer = await blob.arrayBuffer();
+                        await api.saveFile(savePath, Array.from(new Uint8Array(arrayBuffer)));
+                        ui.showToast('Page exported as PNG', 'success');
+                    }
+                    ui.hideLoading();
+                }, 'image/png');
+            } catch (e) {
+                console.error('Image export failed:', e);
+                ui.hideLoading();
+                ui.showToast('Export failed: ' + e, 'error');
+            }
+            document.getElementById('export-modal')?.classList.add('hidden');
+        });
+
+        // Export Text
+        document.getElementById('btn-export-text')?.addEventListener('click', async () => {
+            if (!state.currentDoc) return;
+            try {
+                ui.showLoading('Extracting text...');
+                let allText = '';
+                for (let i = 0; i < state.totalPages; i++) {
+                    const pageText = await api.getPageText(i);
+                    allText += `--- Page ${i + 1} ---\n${pageText}\n\n`;
+                }
+                ui.hideLoading();
+
+                const { save } = window.__TAURI__.dialog;
+                const savePath = await save({
+                    filters: [{ name: 'Text File', extensions: ['txt'] }],
+                    defaultPath: `${state.currentDoc.split(/[/\\]/).pop().replace('.pdf', '.txt')}`
+                });
+                if (savePath) {
+                    const encoder = new TextEncoder();
+                    await api.saveFile(savePath, Array.from(encoder.encode(allText)));
+                    ui.showToast('Text extracted and saved', 'success');
+                }
+            } catch (e) {
+                console.error('Text export failed:', e);
+                ui.hideLoading();
+                ui.showToast('Text export failed: ' + e, 'error');
+            }
+            document.getElementById('export-modal')?.classList.add('hidden');
+        });
+
+        // Export Compress
+        document.getElementById('btn-export-compress')?.addEventListener('click', async () => {
+            if (!state.currentDoc) return;
+            ui.showLoading('Compressing PDF...');
+            try {
+                await api.compressPdf(50); // Medium quality integer
+                ui.showToast('Compression complete', 'success');
+            } catch (e) {
+                ui.showToast('Compression failed: ' + e, 'error');
+            } finally {
+                ui.hideLoading();
+            }
+            document.getElementById('export-modal')?.classList.add('hidden');
+        });
     },
 
     bindSettingsEvents() {
@@ -234,7 +302,6 @@ export const events = {
 
         if (btnOpen) {
             btnOpen.addEventListener('click', () => {
-                // Load current settings into inputs
                 const s = settings.load();
 
                 // Appearance
@@ -298,27 +365,29 @@ export const events = {
                     autoOpenLast: document.getElementById('setting-auto-open').checked,
                     stickyNoteWidth: parseInt(document.getElementById('setting-sticky-width').value),
                     stickyNoteHeight: parseInt(document.getElementById('setting-sticky-height').value),
-                    // Accent color is handled via separate listener or we should grab it here
                     accentColor: getComputedStyle(document.documentElement).getPropertyValue('--accent-color').trim()
                 };
 
                 settings.save(newSettings);
 
-                // Re-apply settings
-                // We need to import applySettings or call logic
-                // For now, let's assume global or re-import? 
-                // events.js imports settings object, not applySettings function.
-                // We should expose applySettings in settings.js and import it.
-                // Or just reload page? No.
-                // Let's rely on styles updates.
-
-                // Theme
+                // Apply theme
                 document.documentElement.setAttribute('data-theme', newSettings.theme);
 
-                // Colors
-                // ...
+                // Apply accent color
+                document.documentElement.style.setProperty('--accent-color', newSettings.accentColor);
+                document.documentElement.style.setProperty('--accent-hover', settings.adjustColor(newSettings.accentColor, -20));
 
-                ui.showToast('Settings saved');
+                // Apply sidebar width
+                const sidebarRight = document.getElementById('sidebar-right');
+                if (sidebarRight) sidebarRight.style.width = newSettings.sidebarWidth + 'px';
+
+                // Apply toolbar labels
+                const toolbar = document.querySelector('.toolbar');
+                if (toolbar) {
+                    toolbar.classList.toggle('hide-labels', !newSettings.showToolbarLabels);
+                }
+
+                ui.showToast('Settings saved', 'success');
                 modal.classList.add('hidden');
             });
         }
@@ -334,11 +403,25 @@ export const events = {
             });
         });
 
-        // Live Inputs (Visual Feedback)
+        // Live Input Feedback
         document.getElementById('setting-sidebar-width')?.addEventListener('input', (e) => {
             document.getElementById('sidebar-width-value').textContent = e.target.value + 'px';
         });
-        // ... (add other live updates as needed)
+        document.getElementById('setting-autosave')?.addEventListener('input', (e) => {
+            document.getElementById('autosave-value').textContent = e.target.value + 's';
+        });
+        document.getElementById('setting-cache-size')?.addEventListener('input', (e) => {
+            document.getElementById('cache-size-value').textContent = e.target.value + ' pages';
+        });
+        document.getElementById('setting-recent-files')?.addEventListener('input', (e) => {
+            document.getElementById('recent-files-value').textContent = e.target.value + ' files';
+        });
+        document.getElementById('setting-sticky-width')?.addEventListener('input', (e) => {
+            document.getElementById('sticky-width-value').textContent = e.target.value + 'px';
+        });
+        document.getElementById('setting-sticky-height')?.addEventListener('input', (e) => {
+            document.getElementById('sticky-height-value').textContent = e.target.value + 'px';
+        });
 
         // Theme Buttons
         document.querySelectorAll('.theme-btn').forEach(btn => {
@@ -346,6 +429,37 @@ export const events = {
                 document.querySelectorAll('.theme-btn').forEach(b => b.classList.remove('active'));
                 btn.classList.add('active');
             });
+        });
+
+        // Accent Color Picker
+        document.getElementById('accent-color-picker')?.addEventListener('input', (e) => {
+            const color = e.target.value;
+            document.documentElement.style.setProperty('--accent-color', color);
+            document.documentElement.style.setProperty('--accent-hover', settings.adjustColor(color, -20));
+        });
+
+        // Accent color preset buttons in settings
+        document.querySelectorAll('#panel-appearance .color-btn[data-color]').forEach(btn => {
+            btn.addEventListener('click', () => {
+                const color = btn.dataset.color;
+                document.documentElement.style.setProperty('--accent-color', color);
+                document.documentElement.style.setProperty('--accent-hover', settings.adjustColor(color, -20));
+                const picker = document.getElementById('accent-color-picker');
+                if (picker) picker.value = color;
+            });
+        });
+
+        // Browse Path button
+        document.getElementById('btn-browse-path')?.addEventListener('click', async () => {
+            try {
+                const { open } = window.__TAURI__.dialog;
+                const selected = await open({ directory: true, multiple: false });
+                if (selected) {
+                    document.getElementById('setting-default-path').value = selected;
+                }
+            } catch (e) {
+                console.error('Browse failed:', e);
+            }
         });
     },
 
@@ -360,40 +474,20 @@ export const events = {
             if (sidebar) sidebar.classList.toggle('collapsed');
         });
 
-        // Actions
-        // Filters
-        document.getElementById('btn-filter-gray')?.addEventListener('click', async () => {
-            ui.showLoading('Applying Grayscale...');
-            try {
-                // Using scanner filter for now as it's implemented
-                // or api.applyFilter if backend supports it.
-                // Re-using applyScannerFilter for single page? No, it takes docPath.
-                // Let's use api.applyFilter if available, else warn.
-                // Actually filter logic was in pdf_engine.rs as apply_scanner_filter which processes WHOLE doc.
-                // If we want single page view filter, we need CSS or canvas filter.
-                // For "Action" sidebar, it implies modifying the PDF.
-                // Let's assume we want to modify the document.
-                if (!state.currentDoc) return;
-                await api.applyScannerFilter(state.currentDoc, 'grayscale', 1.0);
-                // Reload
-                const event = new CustomEvent('app:open-file', { detail: state.currentDoc });
-                document.dispatchEvent(event);
-                ui.showToast('Grayscale applied');
-            } catch (e) {
-                console.error(e);
-                ui.showToast('Filter failed: ' + e, 'error');
-            } finally {
-                ui.hideLoading();
-            }
+        // Greyscale filter (CSS-based since backend is a stub)
+        document.getElementById('btn-filter-gray')?.addEventListener('click', () => {
+            document.getElementById('pages-container').classList.toggle('filter-grayscale');
+            const active = document.getElementById('pages-container').classList.contains('filter-grayscale');
+            document.getElementById('btn-filter-gray')?.classList.toggle('active', active);
+            ui.showToast(active ? 'Greyscale filter applied' : 'Greyscale filter removed');
         });
 
-        document.getElementById('btn-filter-invert')?.addEventListener('click', async () => {
-            // Basic CSS inversion for view-only?
-            // The button is in "Actions", likely meant for PDF modification.
-            // But invert usually is a view preference.
-            // Let's make it a view toggle for now (CSS).
+        // Invert filter (CSS-based)
+        document.getElementById('btn-filter-invert')?.addEventListener('click', () => {
             document.getElementById('pages-container').classList.toggle('filter-invert');
-            ui.showToast('Invert Colors Toggled');
+            const active = document.getElementById('pages-container').classList.contains('filter-invert');
+            document.getElementById('btn-filter-invert')?.classList.toggle('active', active);
+            ui.showToast(active ? 'Invert filter applied' : 'Invert filter removed');
         });
 
         // Crop
@@ -402,7 +496,7 @@ export const events = {
             ui.showLoading('Auto-cropping...');
             try {
                 await api.autoCrop(state.currentPage);
-                renderer.renderPage(state.currentPage); // Re-render
+                renderer.renderPage(state.currentPage);
                 ui.showToast('Page cropped');
             } catch (e) {
                 ui.showToast('Crop failed: ' + e, 'error');
@@ -416,8 +510,8 @@ export const events = {
             if (!state.currentDoc) return;
             ui.showLoading('Compressing PDF...');
             try {
-                await api.compressPdf('medium');
-                ui.showToast('Compression complete');
+                await api.compressPdf(50); // Fixed: pass integer quality
+                ui.showToast('Compression complete', 'success');
             } catch (e) {
                 ui.showToast('Compression failed: ' + e, 'error');
             } finally {
@@ -431,20 +525,54 @@ export const events = {
             document.getElementById('btn-batch').classList.toggle('active', state.batchMode);
             document.body.classList.toggle('batch-mode', state.batchMode);
             ui.showToast(state.batchMode ? 'Batch Mode Enabled' : 'Batch Mode Disabled');
-            // Logic to show checkboxes on thumbnails would go here or in ui.js
         });
 
-        // Note: Forms button is handled in bindToolbarEvents to avoid duplicate handlers
+        // Add Layer
+        document.getElementById('btn-add-layer')?.addEventListener('click', () => {
+            const name = `Layer ${state.visibleLayers.size + 1}`;
+            state.visibleLayers.add(name);
+
+            const container = document.getElementById('layers-container');
+            if (container) {
+                const label = document.createElement('label');
+                label.className = 'layer-item';
+                label.innerHTML = `<input type="checkbox" checked data-layer="${name}"><span>${name}</span>`;
+                label.querySelector('input').addEventListener('change', (e) => {
+                    if (e.target.checked) {
+                        state.visibleLayers.add(name);
+                    } else {
+                        state.visibleLayers.delete(name);
+                    }
+                    // Re-render visible pages to update annotation visibility
+                    state.visiblePages.forEach(pageNum => renderer.drawAnnotations(pageNum));
+                });
+                container.appendChild(label);
+            }
+            ui.showToast(`Layer "${name}" added`);
+        });
+
+        // Layer checkbox changes on existing default layer
+        document.querySelectorAll('#layers-container input[data-layer]').forEach(checkbox => {
+            checkbox.addEventListener('change', (e) => {
+                const layerName = e.target.dataset.layer;
+                if (e.target.checked) {
+                    state.visibleLayers.add(layerName);
+                } else {
+                    state.visibleLayers.delete(layerName);
+                }
+                state.visiblePages.forEach(pageNum => renderer.drawAnnotations(pageNum));
+            });
+        });
     },
 
     bindTauriEvents() {
         // Drag and Drop
-        listen('tauri://drag-enter', () => ui.elements.viewerContainer().classList.add('drag-over'));
-        listen('tauri://drag-leave', () => ui.elements.viewerContainer().classList.remove('drag-over'));
+        listen('tauri://drag-enter', () => ui.elements.viewerContainer()?.classList.add('drag-over'));
+        listen('tauri://drag-leave', () => ui.elements.viewerContainer()?.classList.remove('drag-over'));
         listen('tauri://drag-drop', (event) => {
-            ui.elements.viewerContainer().classList.remove('drag-over');
+            ui.elements.viewerContainer()?.classList.remove('drag-over');
             if (event.payload.paths && event.payload.paths.length > 0) {
-                const path = event.payload.paths[0]; // Just open first for now
+                const path = event.payload.paths[0];
                 if (path.toLowerCase().endsWith('.pdf')) {
                     const e = new CustomEvent('app:open-file', { detail: path });
                     document.dispatchEvent(e);
@@ -463,8 +591,12 @@ export const events = {
 
     updateZoom(newZoom) {
         state.currentZoom = newZoom;
-        // Visual update
         document.getElementById('pages-container').style.setProperty('--zoom-factor', state.currentZoom);
+
+        // Update zoom level display
+        const zoomLevel = document.getElementById('zoom-level');
+        if (zoomLevel) zoomLevel.textContent = `${Math.round(state.currentZoom * 100)}%`;
+
         ui.updateUI();
 
         // Debounce commit
@@ -477,23 +609,128 @@ export const events = {
 
     bindKeyboardEvents() {
         document.addEventListener('keydown', (e) => {
-            // Shortcuts (Ctrl+Z, etc) -> call tools.undo(), tools.redo()
-            if (e.ctrlKey && e.key === 'z') { e.preventDefault(); tools.undo(); }
-            if (e.ctrlKey && e.key === 'y') { e.preventDefault(); tools.redo(); }
-
-            if (e.key === '?' || e.key === 'F1') {
-                e.preventDefault();
-                document.getElementById('keyboard-help-modal').classList.toggle('hidden');
+            // Don't capture shortcuts when typing in inputs
+            const tag = e.target.tagName;
+            if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT') {
+                // Allow Escape in inputs
+                if (e.key === 'Escape') {
+                    e.target.blur();
+                }
+                return;
             }
 
-            if (e.ctrlKey && e.key === 'd') {
-                e.preventDefault();
-                document.dispatchEvent(new CustomEvent('app:toggle-bookmark'));
+            // Ctrl shortcuts
+            if (e.ctrlKey && !e.shiftKey) {
+                switch (e.key.toLowerCase()) {
+                    case 'o':
+                        e.preventDefault();
+                        document.getElementById('btn-open')?.click();
+                        break;
+                    case 's':
+                        e.preventDefault();
+                        document.dispatchEvent(new CustomEvent('app:save'));
+                        break;
+                    case 'f':
+                        e.preventDefault();
+                        search.togglePanel();
+                        break;
+                    case 'e':
+                        e.preventDefault();
+                        document.getElementById('btn-export')?.click();
+                        break;
+                    case 'z':
+                        e.preventDefault();
+                        tools.undo();
+                        break;
+                    case 'y':
+                        e.preventDefault();
+                        tools.redo();
+                        break;
+                    case 'd':
+                        e.preventDefault();
+                        document.dispatchEvent(new CustomEvent('app:toggle-bookmark'));
+                        break;
+                    case 'p':
+                        e.preventDefault();
+                        window.print();
+                        break;
+                    case 'b':
+                        e.preventDefault();
+                        document.getElementById('btn-sidebar-left-toggle')?.click();
+                        break;
+                    case ',':
+                        e.preventDefault();
+                        document.getElementById('btn-settings')?.click();
+                        break;
+                    case '=':
+                    case '+':
+                        e.preventDefault();
+                        events.updateZoom(state.currentZoom * 1.25);
+                        break;
+                    case '-':
+                        e.preventDefault();
+                        events.updateZoom(state.currentZoom / 1.25);
+                        break;
+                }
             }
 
-            if (e.ctrlKey && e.key === 'p') {
-                e.preventDefault();
-                window.print();
+            // Ctrl+Shift shortcuts
+            if (e.ctrlKey && e.shiftKey) {
+                switch (e.key.toLowerCase()) {
+                    case 'b':
+                        e.preventDefault();
+                        document.getElementById('btn-sidebar-right-toggle')?.click();
+                        break;
+                }
+            }
+
+            // Single key shortcuts (no modifiers)
+            if (!e.ctrlKey && !e.altKey && !e.metaKey) {
+                switch (e.key) {
+                    case 'ArrowLeft':
+                        if (state.currentPage > 0) {
+                            state.currentPage--;
+                            renderer.scrollToPage(state.currentPage);
+                        }
+                        break;
+                    case 'ArrowRight':
+                        if (state.currentPage < state.totalPages - 1) {
+                            state.currentPage++;
+                            renderer.scrollToPage(state.currentPage);
+                        }
+                        break;
+                    case '?':
+                    case 'F1':
+                        e.preventDefault();
+                        document.getElementById('keyboard-help-modal').classList.toggle('hidden');
+                        break;
+                    case 'F11':
+                        e.preventDefault();
+                        document.getElementById('btn-fullscreen')?.click();
+                        break;
+                    case 'Escape':
+                        // Close any open modal
+                        document.querySelectorAll('.modal:not(.hidden)').forEach(m => m.classList.add('hidden'));
+                        // Close search panel
+                        if (search.isSearchOpen) {
+                            search.isSearchOpen = false;
+                            document.getElementById('search-panel')?.classList.add('hidden');
+                        }
+                        // Reset tool to view
+                        if (state.currentTool !== 'view') {
+                            tools.setTool('view');
+                        }
+                        break;
+                    // Tool hotkeys
+                    case 'h': tools.setTool('highlight'); break;
+                    case 'r': tools.setTool('rectangle'); break;
+                    case 'c': tools.setTool('circle'); break;
+                    case 'l': tools.setTool('line'); break;
+                    case 'a': tools.setTool('arrow'); break;
+                    case 't': tools.setTool('text'); break;
+                    case 'n': tools.setTool('sticky'); break;
+                    case 'v': tools.setTool('view'); break;
+                }
             }
         });
     },
@@ -504,11 +741,6 @@ export const events = {
 
         viewer.addEventListener('mousedown', (e) => {
             if (state.currentTool === 'view') return;
-            // Delegate to tools module which should handle drawing logic
-            // For now, let's assume tools has handleMouseDown(e)
-            // or we implement the logic here? 
-            // Implementation in main.js was inline.
-            // Let's create `tools.handleMouseDown(e)`
             tools.handleMouseDown && tools.handleMouseDown(e);
         });
 
@@ -518,6 +750,71 @@ export const events = {
 
         viewer.addEventListener('mouseup', (e) => {
             tools.handleMouseUp && tools.handleMouseUp(e);
+        });
+
+        // Double-click action
+        viewer.addEventListener('dblclick', () => {
+            const action = settings.get('doubleClickAction') || 'nothing';
+            switch (action) {
+                case 'zoom':
+                    if (Math.abs(state.currentZoom - 1.0) < 0.1) {
+                        events.updateZoom(2.0);
+                    } else {
+                        events.updateZoom(1.0);
+                    }
+                    break;
+                case 'fit-width':
+                    document.getElementById('zoom-select').value = 'fit-width';
+                    document.getElementById('zoom-select').dispatchEvent(new Event('change'));
+                    break;
+                case 'nothing':
+                default:
+                    break;
+            }
+        });
+    },
+
+    bindColorPickerEvents() {
+        // Sidebar color picker buttons
+        document.querySelectorAll('.color-picker-row .color-btn[data-color]').forEach(btn => {
+            btn.addEventListener('click', () => {
+                document.querySelectorAll('.color-picker-row .color-btn').forEach(b => b.classList.remove('active'));
+                btn.classList.add('active');
+                state.selectedColor = btn.dataset.color;
+            });
+        });
+
+        // Custom color input
+        document.getElementById('custom-color')?.addEventListener('input', (e) => {
+            state.selectedColor = e.target.value;
+            // Remove active from preset buttons
+            document.querySelectorAll('.color-picker-row .color-btn').forEach(b => b.classList.remove('active'));
+        });
+    },
+
+    bindPageInputEvents() {
+        const pageInput = document.getElementById('page-input');
+        if (!pageInput) return;
+
+        const navigateToPage = () => {
+            let page = parseInt(pageInput.value) - 1; // Convert to 0-indexed
+            if (isNaN(page)) return;
+            page = Math.max(0, Math.min(page, state.totalPages - 1));
+            state.currentPage = page;
+            renderer.scrollToPage(page);
+            ui.updateUI();
+        };
+
+        pageInput.addEventListener('keypress', (e) => {
+            if (e.key === 'Enter') {
+                e.preventDefault();
+                navigateToPage();
+                pageInput.blur();
+            }
+        });
+
+        pageInput.addEventListener('change', () => {
+            navigateToPage();
         });
     }
 };

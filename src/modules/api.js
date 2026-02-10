@@ -99,10 +99,11 @@ export const api = {
     applyScannerFilter: (docPath, filterType, intensity) => invoke('apply_scanner_filter', { docPath, filterType, intensity }),
 
     /**
-     * Get form fields from the document
+     * Get form fields from a specific page
+     * @param {number} pageNum - Page number (0-indexed)
      * @returns {Promise<Array<Object>>} Array of form field objects
      */
-    getFormFields: () => invoke('get_form_fields'),
+    getFormFields: (pageNum) => invoke('get_form_fields', { pageNum }),
 
     /**
      * Compress the PDF file

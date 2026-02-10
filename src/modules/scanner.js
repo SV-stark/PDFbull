@@ -104,7 +104,7 @@ export const scanner = {
 
         ui.showLoading('Applying filter...');
         try {
-            await api.applyFilter(state.currentDoc, scanner.currentFilter, scanner.currentIntensity / 100.0);
+            await api.applyScannerFilter(state.currentDoc, scanner.currentFilter, scanner.currentIntensity / 100.0);
             ui.showToast('Filter applied successfully', 'success');
             scanner.close();
             // Trigger reload?

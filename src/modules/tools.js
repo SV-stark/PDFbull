@@ -208,12 +208,10 @@ export const tools = {
             case 'line': tools.addAnnotation('line', { ...data, x1: startX, y1: startY, x2: endX, y2: endY }); break;
             case 'arrow': tools.addAnnotation('arrow', { ...data, x1: startX, y1: startY, x2: endX, y2: endY }); break;
             case 'text':
-                const text = prompt('Enter text:');
-                if (text) tools.addAnnotation('text', { ...data, text, x: startX, y: startY + 16 });
+                tools._showInlineInput(startX, startY, data, 'text');
                 break;
             case 'sticky':
-                const note = prompt('Enter note:');
-                if (note) tools.addAnnotation('sticky', { ...data, text: note, x: startX, y: startY });
+                tools._showInlineInput(startX, startY, data, 'sticky');
                 break;
         }
 
@@ -238,5 +236,68 @@ export const tools = {
         // Ensure current page is rendered/updated
         renderer.renderPage(state.currentPage);
         ui.updateUndoRedoButtons();
+    },
+
+    /**
+     * Show an inline text input at the given position instead of prompt()
+     */
+    _showInlineInput(x, y, data, type) {
+        // Remove any existing inline inputs
+        document.querySelectorAll('.inline-anno-input').forEach(el => el.remove());
+
+        const viewer = document.getElementById('viewer-container');
+        if (!viewer) return;
+
+        const input = document.createElement('textarea');
+        input.className = 'inline-anno-input';
+        input.placeholder = type === 'sticky' ? 'Enter note...' : 'Enter text...';
+        input.style.cssText = `
+            position: absolute;
+            left: ${x}px;
+            top: ${y}px;
+            min-width: 150px;
+            min-height: ${type === 'sticky' ? '80px' : '32px'};
+            z-index: 9999;
+            background: var(--surface, #2a2a2a);
+            color: var(--text-primary, #fff);
+            border: 2px solid var(--accent-color, #646cff);
+            border-radius: 6px;
+            padding: 6px 8px;
+            font-size: 13px;
+            font-family: inherit;
+            resize: both;
+            outline: none;
+            box-shadow: 0 4px 16px rgba(0,0,0,0.3);
+        `;
+
+        const submit = () => {
+            const value = input.value.trim();
+            input.remove();
+            if (value) {
+                if (type === 'text') {
+                    tools.addAnnotation('text', { ...data, text: value, x: x, y: y + 16 });
+                } else {
+                    tools.addAnnotation('sticky', { ...data, text: value, x: x, y: y });
+                }
+            }
+        };
+
+        input.addEventListener('keydown', (e) => {
+            if (e.key === 'Enter' && !e.shiftKey) {
+                e.preventDefault();
+                submit();
+            }
+            if (e.key === 'Escape') {
+                input.remove();
+            }
+        });
+
+        input.addEventListener('blur', () => {
+            setTimeout(submit, 100);
+        });
+
+        viewer.style.position = 'relative';
+        viewer.appendChild(input);
+        input.focus();
     }
 };

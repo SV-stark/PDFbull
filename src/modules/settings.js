@@ -67,9 +67,9 @@ export function applySettings() {
     document.documentElement.style.setProperty('--accent-color', s.accentColor);
     document.documentElement.style.setProperty('--accent-hover', settings.adjustColor(s.accentColor, -20));
 
-    // Sidebar width
-    const sidebar = document.getElementById('sidebar-left');
-    if (sidebar) sidebar.style.width = s.sidebarWidth + 'px';
+    // Sidebar width (applies to right sidebar where tools are)
+    const sidebarRight = document.getElementById('sidebar-right');
+    if (sidebarRight) sidebarRight.style.width = s.sidebarWidth + 'px';
 
     // Toolbar labels
     const toolbar = document.querySelector('.toolbar');

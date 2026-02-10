@@ -29,6 +29,10 @@ const app = {
       ui.createTabUI(tabId, state.openDocuments.get(tabId), app.switchToTab, app.closeTab);
       app.switchToTab(tabId);
       ui.hideLoading();
+
+      // Hide welcome screen
+      const emptyState = document.getElementById('empty-state');
+      if (emptyState) emptyState.style.display = 'none';
     } catch (e) {
       console.error('Failed to open document:', e);
       ui.showToast('Error opening PDF: ' + e, 'error');
@@ -66,7 +70,6 @@ const app = {
     app.loadBookmarks();
 
     // Update visual zoom state
-    state.renderScale = state.currentZoom;
     state.renderScale = state.currentZoom;
     renderer.setupVirtualScroller();
     renderer.renderThumbnails();
@@ -241,6 +244,42 @@ document.addEventListener('app:export-json', () => {
   ui.showToast('Annotations exported as JSON');
 });
 
+document.addEventListener('app:scan-forms', async () => {
+  if (!state.currentDoc) {
+    ui.showToast('No document open', 'error');
+    return;
+  }
+  try {
+    ui.showLoading('Scanning for form fields...');
+    const fields = await api.getFormFields(state.currentPage);
+    ui.hideLoading();
+    if (fields.length === 0) {
+      ui.showToast('No form fields found on this page');
+    } else {
+      // Add form field annotations
+      const pageAnns = state.annotations.get(state.currentPage) || [];
+      const newAnns = fields.map(f => ({
+        id: 'form-' + Math.random(),
+        type: 'form_field',
+        layer: 'default',
+        x: f.x,
+        y: f.y,
+        w: f.w,
+        h: f.h,
+        color: 'rgba(0, 150, 255, 0.3)',
+        text: f.name,
+        fieldType: f.field_type
+      }));
+      state.annotations.set(state.currentPage, [...pageAnns, ...newAnns]);
+      renderer.drawAnnotations(state.currentPage);
+      ui.showToast(`Found ${fields.length} form fields`);
+    }
+  } catch (e) {
+    ui.hideLoading();
+    ui.showToast('Form scan failed: ' + e, 'error');
+  }
+});
+
 // Init Events
 events.init();
 
@@ -299,5 +338,11 @@ ui.updateRecentFilesDropdown(recentFiles, app.openNewTab);
 ui.updateStatusBar();
 ui.updateUndoRedoButtons();
 ui.setStatusMessage('Ready - Drag and drop PDFs onto the window to open');
+
+// Show empty state initially
+const emptyState = document.getElementById('empty-state');
+if (emptyState && state.openDocuments.size === 0) {
+  emptyState.style.display = 'flex';
+}
 
 console.log('PDFbull modules loaded.');

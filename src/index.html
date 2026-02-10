@@ -94,22 +94,27 @@
         <option value="1.5">150%</option>
         <option value="2">200%</option>
       </select>
+      <span id="zoom-level" class="zoom-level">100%</span>
       <button id="btn-zoom-in" tooltip="Zoom In (Ctrl++)">
         <i class="ph ph-plus"></i>
       </button>
 
       <div class="toolbar-separator"></div>
 
+      <button id="btn-rotate" tooltip="Rotate Page">
+        <i class="ph ph-arrow-clockwise"></i>
+      </button>
+
       <button id="btn-export" tooltip="Export (Ctrl+E)">
         <i class="ph ph-export"></i>
         <span class="toolbar-label">Export</span>
       </button>
 
-      <button id="btn-sidebar-left-toggle" tooltip="Toggle Tools (Ctrl+B)">
+      <button id="btn-sidebar-left-toggle" tooltip="Toggle Thumbnails (Ctrl+B)">
         <i class="ph ph-sidebar"></i>
       </button>
 
-      <button id="btn-sidebar-right-toggle" tooltip="Toggle Thumbnails (Ctrl+Shift+B)">
+      <button id="btn-sidebar-right-toggle" tooltip="Toggle Tools (Ctrl+Shift+B)">
         <i class="ph ph-sidebar" style="transform: scaleX(-1);"></i>
       </button>
 
@@ -136,8 +141,41 @@
   <!-- Main Content -->
   <div class="main-container">
     <!-- Sidebar -->
-    <!-- Left Sidebar: Tools, Layers, Actions -->
+    <!-- Left Sidebar: Thumbnails (Navigation) -->
     <div class="sidebar sidebar-left" id="sidebar-left">
+      <!-- Thumbnails - Navigation Panel -->
+      <div class="sidebar-section thumbnails-section">
+        <div class="sidebar-header">
+          <i class="ph ph-images"></i>
+          <span>Thumbnails</span>
+        </div>
+        <div class="thumbnail-list" id="thumbnail-list">
+          <!-- Thumbnails injected here -->
+        </div>
+      </div>
+    </div>
+
+    <!-- PDF Canvas -->
+    <div class="viewer-container" id="viewer-container">
+      <div id="pages-container" class="pages-container"></div>
+
+      <!-- Welcome / Empty State -->
+      <div id="empty-state" class="empty-state">
+        <i class="ph ph-file-pdf" style="font-size: 64px; opacity: 0.3;"></i>
+        <h2>No document open</h2>
+        <p>Drag and drop a PDF here, or press <kbd>Ctrl+O</kbd> to open</p>
+      </div>
+
+      <!-- Loading Spinner -->
+      <div id="loading-spinner" class="loading-overlay hidden">
+        <div class="spinner"></div>
+        <span class="loading-text">Loading...</span>
+      </div>
+
+    </div>
+
+    <!-- Right Sidebar: Tools, Layers, Actions -->
+    <div class="sidebar sidebar-right" id="sidebar-right">
       <!-- Drawing Tools -->
       <div class="sidebar-section tools-section">
         <div class="sidebar-header">
@@ -205,7 +243,7 @@
         </button>
       </div>
 
-      <!-- Actions - Moved to Bottom -->
+      <!-- Actions -->
       <div class="sidebar-section actions-section">
         <div class="sidebar-header">
           <i class="ph ph-lightning"></i>
@@ -249,34 +287,6 @@
             <i class="ph ph-swap"></i>
             <span>Invert</span>
           </button>
-        </div>
-      </div>
-    </div>
-
-    <!-- PDF Canvas -->
-    <div class="viewer-container" id="viewer-container">
-      <div id="pages-container" class="pages-container"></div>
-
-      <!-- Skeleton Loading -->
-
-      <!-- Loading Spinner -->
-      <div id="loading-spinner" class="loading-overlay hidden">
-        <div class="spinner"></div>
-        <span class="loading-text">Loading...</span>
-      </div>
-
-    </div>
-
-    <!-- Right Sidebar: Thumbnails -->
-    <div class="sidebar sidebar-right" id="sidebar-right">
-      <!-- Thumbnails - Most Used, at Top -->
-      <div class="sidebar-section thumbnails-section">
-        <div class="sidebar-header">
-          <i class="ph ph-images"></i>
-          <span>Thumbnails</span>
-        </div>
-        <div class="thumbnail-list" id="thumbnail-list">
-          <!-- Thumbnails injected here -->
         </div>
       </div>
     </div>
@@ -336,6 +346,9 @@
       </div>
       <button id="btn-search-exec" tooltip="Search">
         <i class="ph ph-magnifying-glass"></i>
+      </button>
+      <button id="btn-search-close" tooltip="Close" class="modal-close">
+        <i class="ph ph-x"></i>
       </button>
     </div>
     <div class="search-options">
@@ -631,6 +644,12 @@
             </div>
           </div>
         </div>
+      </div>
+      <div class="modal-footer">
+        <button id="btn-save-settings" class="primary-btn">
+          <i class="ph ph-floppy-disk"></i>
+          <span>Save Settings</span>
+        </button>
       </div>
     </div>
   </div>
