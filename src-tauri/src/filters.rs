@@ -1,6 +1,6 @@
 use crate::pdf_engine::{with_mut_doc, PdfState};
 use base64::{engine::general_purpose, Engine as _};
-use image::{DynamicImage, ImageOutputFormat};
+use image::{DynamicImage, ImageFormat};
 use pdfium_render::prelude::*;
 use std::io::Cursor;
 
@@ -47,7 +47,7 @@ pub fn apply_filter(image_data: String, filter_type: String) -> Result<String, S
 
     // 4. Encode back to Base64 (PNG for quality)
     let mut buf = Vec::new();
-    img.write_to(&mut Cursor::new(&mut buf), ImageOutputFormat::Png)
+    img.write_to(&mut Cursor::new(&mut buf), ImageFormat::Png)
         .map_err(|e| format!("Failed to encode image: {}", e))?;
 
     let encoded_string = general_purpose::STANDARD.encode(&buf);

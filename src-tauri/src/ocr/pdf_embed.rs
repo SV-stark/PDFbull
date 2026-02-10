@@ -14,8 +14,8 @@ pub fn embed_text_layer(
         let page_number = page_data.page_number as u32;
 
         // Get page object ID
-        let page_id = match doc.page_object_id(page_number) {
-            Some(id) => id,
+        let page_id = match doc.get_pages().get(&page_number) {
+            Some(id) => *id,
             None => continue,
         };
 
