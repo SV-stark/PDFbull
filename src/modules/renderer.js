@@ -39,6 +39,21 @@ export const renderer = {
         state.currentCacheBytes += pageSize;
     },
 
+    bindScrollEvents() {
+        const viewer = document.getElementById('viewer-container');
+        const progressBar = document.getElementById('reading-progress-bar');
+        if (!viewer || !progressBar) return;
+
+        viewer.addEventListener('scroll', () => {
+            const scrollTop = viewer.scrollTop;
+            const scrollHeight = viewer.scrollHeight - viewer.clientHeight;
+            if (scrollHeight > 0) {
+                const progress = (scrollTop / scrollHeight) * 100;
+                progressBar.style.width = `${progress}%`;
+            }
+        });
+    },
+
     // Setup Virtual Scroller
     async setupVirtualScroller() {
         const container = ui.elements.pagesContainer();
@@ -500,7 +515,7 @@ export const renderer = {
 
         for (let i = 0; i < state.totalPages; i++) {
             const thumb = document.createElement('div');
-            thumb.className = 'thumbnail';
+            thumb.className = 'thumbnail skeleton';
             thumb.dataset.page = String(i);
             thumb.innerHTML = `<span style="pointer-events:none;">${i + 1}</span>`;
 
@@ -548,6 +563,8 @@ export const renderer = {
                         ctx.drawImage(imageBitmap, 0, 0);
 
                         target.innerHTML = ''; // Clear number
+                        target.classList.remove('skeleton');
+                        target.style.background = 'transparent';
                         target.appendChild(canvas);
 
                         // Add page number overlay back

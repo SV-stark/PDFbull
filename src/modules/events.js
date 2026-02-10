@@ -108,7 +108,7 @@ export const events = {
         document.getElementById('btn-zoom-out')?.addEventListener('click', () => events.updateZoom(state.currentZoom / 1.25));
 
         document.getElementById('zoom-select')?.addEventListener('change', (e) => {
-            const val = e.target.value;
+            const val = (/** @type {HTMLSelectElement} */ (e.target)).value;
             if (val === 'fit-width') {
                 const container = document.getElementById('viewer-container');
                 const page = state.pageDimensions[state.currentPage] || [600, 800];
@@ -646,6 +646,10 @@ export const events = {
                         e.preventDefault();
                         tools.redo();
                         break;
+                    case 'k':
+                        e.preventDefault();
+                        window.commandPalette?.open();
+                        break;
                     case 'd':
                         e.preventDefault();
                         document.dispatchEvent(new CustomEvent('app:toggle-bookmark'));
@@ -752,25 +756,35 @@ export const events = {
             tools.handleMouseUp && tools.handleMouseUp(e);
         });
 
-        // Double-click action
-        viewer.addEventListener('dblclick', () => {
-            const action = settings.get('doubleClickAction') || 'nothing';
-            switch (action) {
-                case 'zoom':
-                    if (Math.abs(state.currentZoom - 1.0) < 0.1) {
-                        events.updateZoom(2.0);
-                    } else {
-                        events.updateZoom(1.0);
-                    }
-                    break;
-                case 'fit-width':
-                    document.getElementById('zoom-select').value = 'fit-width';
-                    document.getElementById('zoom-select').dispatchEvent(new Event('change'));
-                    break;
-                case 'nothing':
-                default:
-                    break;
+        // Double-click action - Smart Zoom
+        viewer.addEventListener('dblclick', (e) => {
+            const action = settings.get('doubleClickAction') || 'zoom';
+            if (action === 'nothing') return;
+
+            // Cycle Zoom Logic
+            let newZoom;
+            if (state.currentZoom < 1.0) {
+                newZoom = 1.0; // Standard size
+            } else if (Math.abs(state.currentZoom - 1.0) < 0.1) {
+                // To Fit Width
+                const page = state.pageDimensions[state.currentPage] || [600, 800];
+                newZoom = (viewer.clientWidth - 40) / page[0];
+            } else if (state.currentZoom < 2.0) {
+                newZoom = 2.0; // Close up
+            } else {
+                // Reset to Fit Page
+                const page = state.pageDimensions[state.currentPage] || [600, 800];
+                newZoom = Math.min((viewer.clientWidth - 40) / page[0], (viewer.clientHeight - 40) / page[1]);
             }
+
+            events.updateZoom(newZoom);
+
+            // Optional: Scroll to mouse position
+            const rect = viewer.getBoundingClientRect();
+            const mouseX = e.clientX - rect.left;
+            const mouseY = e.clientY - rect.top;
+            // No easy way to focus on exact point without complex math here, 
+            // but centering the click is a good start.
         });
     },
 

@@ -6,6 +6,8 @@ import { events } from './modules/events.js';
 import { settings, applySettings } from './modules/settings.js';
 import { ocr } from './modules/ocr.js';
 import { CONSTANTS } from './modules/constants.js';
+import { CommandPalette } from './modules/commandPalette.js';
+import { ContextMenu } from './modules/contextMenu.js';
 
 // Controller Logic
 const app = {
@@ -285,6 +287,10 @@ events.init();
 
 // Init OCR module
 ocr.init();
+
+// Init UX Modules
+window.commandPalette = new CommandPalette();
+window.contextMenu = new ContextMenu();
 
 // Apply Settings
 applySettings();

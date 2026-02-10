@@ -11,6 +11,9 @@
 </head>
 
 <body>
+  <!-- Reading Progress Bar -->
+  <div id="reading-progress-bar" class="reading-progress-bar"></div>
+
   <!-- Top Toolbar -->
   <div class="toolbar">
     <!-- Left Group: File Operations -->
@@ -790,6 +793,24 @@
       </div>
     </div>
   </div>
+  <!-- Command Palette -->
+  <div id="command-palette-overlay" class="command-palette-overlay hidden">
+    <div class="command-palette-modal">
+      <div class="command-palette-header">
+        <i class="ph ph-terminal-window"></i>
+        <input type="text" id="command-palette-input" placeholder="Type a command..." autocomplete="off">
+      </div>
+      <div id="command-palette-list" class="command-palette-list"></div>
+      <div class="command-palette-footer">
+        <span><kbd>↑↓</kbd> to navigate</span>
+        <span><kbd>↵</kbd> to select</span>
+        <span><kbd>esc</kbd> to close</span>
+      </div>
+    </div>
+  </div>
+
+  <!-- Custom Context Menu -->
+  <div id="custom-context-menu" class="custom-context-menu hidden"></div>
 </body>
 
 </html>
