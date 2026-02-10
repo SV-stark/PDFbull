@@ -33,8 +33,8 @@ pdfium-render = "0.8"
 image = "0.25"
 tokio = { version = "1", features = ["full"] }
 rayon = "1.10"
-paddle-ocr-rs = { version = "0.6", optional = true }
 oar-ocr = "0.6"
 ort = { version = "2.0.0-rc.10", features = ["load-dynamic"] }
 lopdf = "0.32"
+base64 = "0.22"
 
