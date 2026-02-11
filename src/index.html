@@ -381,75 +381,96 @@
           <i class="ph ph-x"></i>
         </button>
       </div>
-      <div class="modal-body settings-body">
-        <div class="settings-sidebar">
-          <button class="settings-tab active" data-tab="appearance">
-            <i class="ph ph-paint-brush"></i>
-            <span>Appearance</span>
-          </button>
-          <button class="settings-tab" data-tab="behavior">
-            <i class="ph ph-sliders"></i>
-            <span>Behavior</span>
-          </button>
-          <button class="settings-tab" data-tab="performance">
-            <i class="ph ph-gauge"></i>
-            <span>Performance</span>
-          </button>
-          <button class="settings-tab" data-tab="files">
-            <i class="ph ph-folder"></i>
-            <span>Files</span>
-          </button>
-          <button class="settings-tab" data-tab="annotations">
-            <i class="ph ph-pencil"></i>
-            <span>Annotations</span>
-          </button>
-          <button class="settings-tab" data-tab="shortcuts">
-            <i class="ph ph-keyboard"></i>
-            <span>Shortcuts</span>
-          </button>
-        </div>
-        <div class="settings-panels">
-          <!-- Appearance Panel -->
-          <div class="settings-panel active" id="panel-appearance">
-            <h4>Appearance</h4>
+      
+      <div class="settings-sidebar">
+        <button class="settings-tab active" data-tab="appearance">
+          <i class="ph ph-paint-brush"></i>
+          <span>Appearance</span>
+        </button>
+        <button class="settings-tab" data-tab="behavior">
+          <i class="ph ph-sliders"></i>
+          <span>Behavior</span>
+        </button>
+        <button class="settings-tab" data-tab="performance">
+          <i class="ph ph-gauge"></i>
+          <span>Performance</span>
+        </button>
+        <button class="settings-tab" data-tab="files">
+          <i class="ph ph-folder"></i>
+          <span>Files</span>
+        </button>
+        <button class="settings-tab" data-tab="annotations">
+          <i class="ph ph-pencil"></i>
+          <span>Annotations</span>
+        </button>
+        <button class="settings-tab" data-tab="shortcuts">
+          <i class="ph ph-keyboard"></i>
+          <span>Shortcuts</span>
+        </button>
+      </div>
+
+      <div class="settings-panels">
+        <!-- Appearance Panel -->
+        <div class="settings-panel active" id="panel-appearance">
+          <h4>Appearance</h4>
+          <div class="setting-section">
             <div class="setting-item">
-              <label>Theme</label>
-              <div class="theme-selector">
-                <button class="theme-btn active" data-theme="dark">
-                  <i class="ph ph-moon"></i>
-                  <span>Dark</span>
-                </button>
-                <button class="theme-btn" data-theme="light">
-                  <i class="ph ph-sun"></i>
-                  <span>Light</span>
-                </button>
-                <button class="theme-btn" data-theme="high-contrast">
-                  <i class="ph ph-circle-half-tilt"></i>
-                  <span>High Contrast</span>
-                </button>
+              <div class="setting-info">
+                <span class="setting-label">Theme</span>
+                <span class="setting-desc">Choose your preferred visual theme</span>
               </div>
             </div>
-            <div class="setting-item">
-              <label>Accent Color</label>
-              <div class="color-picker">
-                <button class="color-btn" data-color="#646cff" style="background: #646cff;"></button>
-                <button class="color-btn" data-color="#4f46e5" style="background: #4f46e5;"></button>
-                <button class="color-btn" data-color="#ff5252" style="background: #ff5252;"></button>
-                <button class="color-btn" data-color="#448aff" style="background: #448aff;"></button>
-                <button class="color-btn" data-color="#69f0ae" style="background: #69f0ae;"></button>
-                <button class="color-btn" data-color="#e040fb" style="background: #e040fb;"></button>
-                <input type="color" id="accent-color-picker" class="color-input" value="#646cff">
+            <div class="theme-selector-grid">
+              <div class="theme-card active" data-theme="dark">
+                <div class="theme-preview"></div>
+                <span>Dark</span>
+              </div>
+              <div class="theme-card" data-theme="light">
+                <div class="theme-preview"></div>
+                <span>Light</span>
+              </div>
+              <div class="theme-card" data-theme="high-contrast">
+                <div class="theme-preview"></div>
+                <span>High Contrast</span>
               </div>
             </div>
+          </div>
+
+          <div class="setting-section">
             <div class="setting-item">
-              <label for="setting-sidebar-width">Sidebar Width</label>
+              <div class="setting-info">
+                <span class="setting-label">Accent Color</span>
+                <span class="setting-desc">Primary color for buttons and highlights</span>
+              </div>
               <div class="setting-control">
-                <input type="range" id="setting-sidebar-width" min="200" max="400" value="250">
-                <span class="setting-value" id="sidebar-width-value">250px</span>
+                <div class="color-grid">
+                    <div class="color-option" data-color="#646cff" style="background: #646cff;"></div>
+                    <div class="color-option" data-color="#4f46e5" style="background: #4f46e5;"></div>
+                    <div class="color-option" data-color="#ff5252" style="background: #ff5252;"></div>
+                    <div class="color-option" data-color="#448aff" style="background: #448aff;"></div>
+                    <div class="color-option" data-color="#69f0ae" style="background: #69f0ae;"></div>
+                    <div class="color-option" data-color="#e040fb" style="background: #e040fb;"></div>
+                    <input type="color" id="accent-color-picker" class="color-input" value="#646cff" style="width: 32px; height: 32px; padding: 0; border: none; overflow: hidden; border-radius: 50%;">
+                </div>
               </div>
             </div>
+
             <div class="setting-item">
-              <label for="setting-toolbar-labels">Show Toolbar Labels</label>
+              <div class="setting-info">
+                <label for="setting-sidebar-width" class="setting-label">Sidebar Width</label>
+                <span class="setting-desc">Adjust the width of the tool sidebar</span>
+              </div>
+              <div class="setting-control" style="width: 200px; flex-direction: column; align-items: flex-end; gap: 4px;">
+                <span class="setting-value" id="sidebar-width-value">250px</span>
+                <input type="range" id="setting-sidebar-width" min="200" max="400" value="250">
+              </div>
+            </div>
+
+            <div class="setting-item">
+              <div class="setting-info">
+                <label for="setting-toolbar-labels" class="setting-label">Show Toolbar Labels</label>
+                <span class="setting-desc">Show text labels alongside icons in the toolbar</span>
+              </div>
               <div class="setting-control">
                 <label class="toggle-switch">
                   <input type="checkbox" id="setting-toolbar-labels" checked>
@@ -458,200 +479,217 @@
               </div>
             </div>
           </div>
+        </div>
 
-          <!-- Behavior Panel -->
-          <div class="settings-panel" id="panel-behavior">
-            <h4>Behavior</h4>
-            <div class="setting-item">
-              <label for="setting-default-zoom">Default Zoom Level</label>
-              <div class="setting-control">
-                <select id="setting-default-zoom">
-                  <option value="fit-width">Fit Width</option>
-                  <option value="fit-page">Fit Page</option>
-                  <option value="100" selected>100%</option>
-                  <option value="125">125%</option>
-                  <option value="150">150%</option>
-                </select>
-              </div>
+        <!-- Behavior Panel -->
+        <div class="settings-panel" id="panel-behavior">
+          <h4>Behavior</h4>
+          <div class="setting-item">
+            <div class="setting-info">
+              <label for="setting-default-zoom" class="setting-label">Default Zoom Level</label>
+              <span class="setting-desc">Initial zoom level when opening a document</span>
             </div>
-            <div class="setting-item">
-              <label for="setting-autosave">Auto-save Interval (seconds)</label>
-              <div class="setting-control">
-                <input type="range" id="setting-autosave" min="0" max="300" value="30" step="10">
-                <span class="setting-value" id="autosave-value">30s</span>
-              </div>
-            </div>
-            <div class="setting-item">
-              <label for="setting-restore-session">Restore Previous Session</label>
-              <div class="setting-control">
-                <label class="toggle-switch">
-                  <input type="checkbox" id="setting-restore-session">
-                  <span class="toggle-slider"></span>
-                </label>
-              </div>
-            </div>
-            <div class="setting-item">
-              <label for="setting-smooth-scroll">Smooth Scrolling</label>
-              <div class="setting-control">
-                <label class="toggle-switch">
-                  <input type="checkbox" id="setting-smooth-scroll" checked>
-                  <span class="toggle-slider"></span>
-                </label>
-              </div>
-            </div>
-            <div class="setting-item">
-              <label for="setting-double-click">Double-click Action</label>
-              <div class="setting-control">
-                <select id="setting-double-click">
-                  <option value="nothing">Nothing</option>
-                  <option value="zoom">Toggle Zoom</option>
-                  <option value="fit-width">Fit to Width</option>
-                </select>
-              </div>
+            <div class="setting-control">
+              <select id="setting-default-zoom">
+                <option value="fit-width">Fit Width</option>
+                <option value="fit-page">Fit Page</option>
+                <option value="100" selected>100%</option>
+                <option value="125">125%</option>
+                <option value="150">150%</option>
+              </select>
             </div>
           </div>
-
-          <!-- Performance Panel -->
-          <div class="settings-panel" id="panel-performance">
-            <h4>Performance</h4>
-            <div class="setting-item">
-              <label for="setting-cache-size">Page Cache Size</label>
-              <div class="setting-control">
-                <input type="range" id="setting-cache-size" min="5" max="50" value="15">
-                <span class="setting-value" id="cache-size-value">15 pages</span>
-              </div>
+          <div class="setting-item">
+             <div class="setting-info">
+              <label for="setting-autosave" class="setting-label">Auto-save Interval</label>
+              <span class="setting-desc">How often to save changes automatically</span>
             </div>
-            <div class="setting-item">
-              <label for="setting-render-quality">Render Quality</label>
-              <div class="setting-control">
-                <select id="setting-render-quality">
-                  <option value="low">Low (Fast)</option>
-                  <option value="medium" selected>Medium</option>
-                  <option value="high">High (Slow)</option>
-                </select>
-              </div>
-            </div>
-            <div class="setting-item">
-              <label for="setting-hardware-accel">Hardware Acceleration</label>
-              <div class="setting-control">
-                <label class="toggle-switch">
-                  <input type="checkbox" id="setting-hardware-accel" checked>
-                  <span class="toggle-slider"></span>
-                </label>
-              </div>
+            <div class="setting-control" style="width: 200px; flex-direction: column; align-items: flex-end; gap: 4px;">
+               <span class="setting-value" id="autosave-value">30s</span>
+              <input type="range" id="setting-autosave" min="0" max="300" value="30" step="10">
             </div>
           </div>
-
-          <!-- Files Panel -->
-          <div class="settings-panel" id="panel-files">
-            <h4>Files</h4>
-            <div class="setting-item">
-              <label for="setting-recent-files">Recent Files Limit</label>
-              <div class="setting-control">
-                <input type="range" id="setting-recent-files" min="5" max="50" value="10">
-                <span class="setting-value" id="recent-files-value">10 files</span>
-              </div>
+          <div class="setting-item">
+            <div class="setting-info">
+                <label for="setting-restore-session" class="setting-label">Restore Previous Session</label>
+                <span class="setting-desc">Reopen files that were open when you last closed the app</span>
             </div>
-            <div class="setting-item">
-              <label for="setting-auto-open">Auto-open Last File</label>
-              <div class="setting-control">
-                <label class="toggle-switch">
-                  <input type="checkbox" id="setting-auto-open">
-                  <span class="toggle-slider"></span>
-                </label>
-              </div>
-            </div>
-            <div class="setting-item">
-              <label for="setting-default-path">Default Save Location</label>
-              <div class="setting-control">
-                <input type="text" id="setting-default-path" placeholder="Same as source file" readonly>
-                <button id="btn-browse-path" class="secondary-btn">Browse</button>
-              </div>
+            <div class="setting-control">
+              <label class="toggle-switch">
+                <input type="checkbox" id="setting-restore-session">
+                <span class="toggle-slider"></span>
+              </label>
             </div>
           </div>
-
-          <!-- Annotations Panel -->
-          <div class="settings-panel" id="panel-annotations">
-            <h4>Annotations</h4>
-            <div class="setting-item">
-              <label>Default Annotation Color</label>
-              <div class="color-picker">
-                <button class="color-btn active" data-anno-color="#ffeb3b" style="background: #ffeb3b;"></button>
-                <button class="color-btn" data-anno-color="#ff5252" style="background: #ff5252;"></button>
-                <button class="color-btn" data-anno-color="#448aff" style="background: #448aff;"></button>
-                <button class="color-btn" data-anno-color="#69f0ae" style="background: #69f0ae;"></button>
-                <button class="color-btn" data-anno-color="#e040fb" style="background: #e040fb;"></button>
-                <button class="color-btn" data-anno-color="#ffffff" style="background: #ffffff;"></button>
-              </div>
+          <div class="setting-item">
+            <div class="setting-info">
+                <label for="setting-smooth-scroll" class="setting-label">Smooth Scrolling</label>
+                <span class="setting-desc">Enable smooth scrolling animation</span>
             </div>
-            <div class="setting-item">
-              <label for="setting-sticky-width">Default Sticky Note Width</label>
-              <div class="setting-control">
-                <input type="range" id="setting-sticky-width" min="100" max="300" value="150">
-                <span class="setting-value" id="sticky-width-value">150px</span>
-              </div>
-            </div>
-            <div class="setting-item">
-              <label for="setting-sticky-height">Default Sticky Note Height</label>
-              <div class="setting-control">
-                <input type="range" id="setting-sticky-height" min="80" max="200" value="100">
-                <span class="setting-value" id="sticky-height-value">100px</span>
-              </div>
+            <div class="setting-control">
+              <label class="toggle-switch">
+                <input type="checkbox" id="setting-smooth-scroll" checked>
+                <span class="toggle-slider"></span>
+              </label>
             </div>
           </div>
+          <div class="setting-item">
+            <div class="setting-info">
+                <label for="setting-double-click" class="setting-label">Double-click Action</label>
+                <span class="setting-desc">What happens when you double-click the page</span>
+            </div>
+            <div class="setting-control">
+              <select id="setting-double-click">
+                <option value="nothing">Nothing</option>
+                <option value="zoom">Toggle Zoom</option>
+                <option value="fit-width">Fit to Width</option>
+              </select>
+            </div>
+          </div>
+        </div>
 
-          <!-- Shortcuts Panel -->
-          <div class="settings-panel" id="panel-shortcuts">
-            <h4>Keyboard Shortcuts</h4>
-            <div class="shortcuts-list">
-              <div class="shortcut-item">
-                <span>Open File</span>
-                <kbd>Ctrl+O</kbd>
-              </div>
-              <div class="shortcut-item">
-                <span>Save</span>
-                <kbd>Ctrl+S</kbd>
-              </div>
-              <div class="shortcut-item">
-                <span>Undo</span>
-                <kbd>Ctrl+Z</kbd>
-              </div>
-              <div class="shortcut-item">
-                <span>Redo</span>
-                <kbd>Ctrl+Y</kbd>
-              </div>
-              <div class="shortcut-item">
-                <span>Search</span>
-                <kbd>Ctrl+F</kbd>
-              </div>
-              <div class="shortcut-item">
-                <span>Settings</span>
-                <kbd>Ctrl+,</kbd>
-              </div>
-              <div class="shortcut-item">
-                <span>Zoom In</span>
-                <kbd>Ctrl++</kbd>
-              </div>
-              <div class="shortcut-item">
-                <span>Zoom Out</span>
-                <kbd>Ctrl+-</kbd>
-              </div>
-              <div class="shortcut-item">
-                <span>Toggle Sidebar</span>
-                <kbd>Ctrl+B</kbd>
-              </div>
-              <div class="shortcut-item">
-                <span>Fullscreen</span>
-                <kbd>F11</kbd>
+        <!-- Performance Panel -->
+        <div class="settings-panel" id="panel-performance">
+          <h4>Performance</h4>
+          <div class="setting-item">
+             <div class="setting-info">
+                <label for="setting-cache-size" class="setting-label">Page Cache Size</label>
+                <span class="setting-desc">Number of pages to keep in memory (higher uses more RAM)</span>
+            </div>
+            <div class="setting-control" style="width: 200px; flex-direction: column; align-items: flex-end; gap: 4px;">
+               <span class="setting-value" id="cache-size-value">15 pages</span>
+              <input type="range" id="setting-cache-size" min="5" max="50" value="15">
+            </div>
+          </div>
+          <div class="setting-item">
+             <div class="setting-info">
+                <label for="setting-render-quality" class="setting-label">Render Quality</label>
+                <span class="setting-desc">Trade-off between visual quality and performance</span>
+            </div>
+            <div class="setting-control">
+              <select id="setting-render-quality">
+                <option value="low">Low (Fast)</option>
+                <option value="medium" selected>Medium</option>
+                <option value="high">High (Slow)</option>
+              </select>
+            </div>
+          </div>
+          <div class="setting-item">
+             <div class="setting-info">
+                <label for="setting-hardware-accel" class="setting-label">Hardware Acceleration</label>
+                <span class="setting-desc">Use GPU for rendering (recommended)</span>
+            </div>
+            <div class="setting-control">
+              <label class="toggle-switch">
+                <input type="checkbox" id="setting-hardware-accel" checked>
+                <span class="toggle-slider"></span>
+              </label>
+            </div>
+          </div>
+        </div>
+
+        <!-- Files Panel -->
+        <div class="settings-panel" id="panel-files">
+          <h4>Files</h4>
+          <div class="setting-item">
+             <div class="setting-info">
+                <label for="setting-recent-files" class="setting-label">Recent Files Limit</label>
+                <span class="setting-desc">Number of recent files to remember</span>
+            </div>
+            <div class="setting-control" style="width: 200px; flex-direction: column; align-items: flex-end; gap: 4px;">
+               <span class="setting-value" id="recent-files-value">10 files</span>
+               <input type="range" id="setting-recent-files" min="5" max="50" value="10">
+            </div>
+          </div>
+          <div class="setting-item">
+             <div class="setting-info">
+                <label for="setting-auto-open" class="setting-label">Auto-open Last File</label>
+                <span class="setting-desc">Automatically open the last viewed file on startup</span>
+            </div>
+            <div class="setting-control">
+              <label class="toggle-switch">
+                <input type="checkbox" id="setting-auto-open">
+                <span class="toggle-slider"></span>
+              </label>
+            </div>
+          </div>
+          <div class="setting-item">
+             <div class="setting-info">
+                <label for="setting-default-path" class="setting-label">Default Save Location</label>
+                <span class="setting-desc">Directory where files are saved by default</span>
+            </div>
+            <div class="setting-control">
+              <div style="display: flex; gap: 8px;">
+                  <input type="text" id="setting-default-path" placeholder="Same as source file" readonly>
+                  <button id="btn-browse-path" class="secondary-btn">Browse</button>
               </div>
             </div>
           </div>
         </div>
+
+        <!-- Annotations Panel -->
+        <div class="settings-panel" id="panel-annotations">
+          <h4>Annotations</h4>
+          <div class="setting-item">
+             <div class="setting-info">
+                <span class="setting-label">Default Annotation Color</span>
+                <span class="setting-desc">Default color for new annotations</span>
+            </div>
+            <div class="setting-control">
+               <div class="color-grid">
+                    <div class="color-option active" data-anno-color="#ffeb3b" style="background: #ffeb3b;"></div>
+                    <div class="color-option" data-anno-color="#ff5252" style="background: #ff5252;"></div>
+                    <div class="color-option" data-anno-color="#448aff" style="background: #448aff;"></div>
+                    <div class="color-option" data-anno-color="#69f0ae" style="background: #69f0ae;"></div>
+                    <div class="color-option" data-anno-color="#e040fb" style="background: #e040fb;"></div>
+                    <div class="color-option" data-anno-color="#ffffff" style="background: #ffffff;"></div>
+                </div>
+            </div>
+          </div>
+          <div class="setting-item">
+             <div class="setting-info">
+                <label for="setting-sticky-width" class="setting-label">Sticky Note Width</label>
+                <span class="setting-desc">Default width for sticky notes</span>
+            </div>
+            <div class="setting-control" style="width: 200px; flex-direction: column; align-items: flex-end; gap: 4px;">
+               <span class="setting-value" id="sticky-width-value">150px</span>
+               <input type="range" id="setting-sticky-width" min="100" max="300" value="150">
+            </div>
+          </div>
+          <div class="setting-item">
+             <div class="setting-info">
+                <label for="setting-sticky-height" class="setting-label">Sticky Note Height</label>
+                <span class="setting-desc">Default height for sticky notes</span>
+            </div>
+            <div class="setting-control" style="width: 200px; flex-direction: column; align-items: flex-end; gap: 4px;">
+               <span class="setting-value" id="sticky-height-value">100px</span>
+               <input type="range" id="setting-sticky-height" min="80" max="200" value="100">
+            </div>
+          </div>
+        </div>
+
+        <!-- Shortcuts Panel -->
+        <div class="settings-panel" id="panel-shortcuts">
+          <h4>Keyboard Shortcuts</h4>
+          <div class="shortcuts-list">
+            <div class="shortcut-item"><span>Open File</span><kbd>Ctrl+O</kbd></div>
+            <div class="shortcut-item"><span>Save</span><kbd>Ctrl+S</kbd></div>
+            <div class="shortcut-item"><span>Undo</span><kbd>Ctrl+Z</kbd></div>
+            <div class="shortcut-item"><span>Redo</span><kbd>Ctrl+Y</kbd></div>
+            <div class="shortcut-item"><span>Search</span><kbd>Ctrl+F</kbd></div>
+            <div class="shortcut-item"><span>Settings</span><kbd>Ctrl+,</kbd></div>
+            <div class="shortcut-item"><span>Zoom In</span><kbd>Ctrl++</kbd></div>
+            <div class="shortcut-item"><span>Zoom Out</span><kbd>Ctrl+-</kbd></div>
+            <div class="shortcut-item"><span>Toggle Sidebar</span><kbd>Ctrl+B</kbd></div>
+            <div class="shortcut-item"><span>Fullscreen</span><kbd>F11</kbd></div>
+          </div>
+        </div>
       </div>
+      
       <div class="modal-footer">
         <button id="btn-save-settings" class="primary-btn">
           <i class="ph ph-floppy-disk"></i>
-          <span>Save Settings</span>
+          <span>Save Changes</span>
         </button>
       </div>
     </div>
@@ -696,45 +734,66 @@
           <i class="ph ph-x"></i>
         </button>
       </div>
-      <div class="modal-body scanner-body">
-        <div class="scanner-preview-container">
-          <canvas id="scanner-preview-canvas"></canvas>
+      
+      <div class="scanner-body">
+        <div class="scanner-preview-area">
+          <div class="scanner-preview-wrapper" id="scanner-preview-wrapper">
+             <canvas id="scanner-preview-canvas"></canvas>
+             <div class="compare-hint">
+                <i class="ph ph-eye"></i> Hold to compare
+             </div>
+          </div>
         </div>
-        <div class="scanner-controls">
-          <div class="scanner-filters">
-            <button class="filter-btn active" data-filter="original" tooltip="Original">
-              <i class="ph ph-image"></i>
-              <span>Original</span>
-            </button>
-            <button class="filter-btn" data-filter="grayscale" tooltip="Grayscale">
-              <i class="ph ph-drop-half"></i>
-              <span>Grayscale</span>
-            </button>
-            <button class="filter-btn" data-filter="bw" tooltip="Black & White">
-              <i class="ph ph-circle-half"></i>
-              <span>B&W</span>
-            </button>
-            <button class="filter-btn" data-filter="lighten" tooltip="Lighten">
-              <i class="ph ph-sun-dim"></i>
-              <span>Lighten</span>
-            </button>
-            <button class="filter-btn" data-filter="eco" tooltip="Eco-friendly">
-              <i class="ph ph-leaf"></i>
-              <span>Eco</span>
-            </button>
-            <button class="filter-btn" data-filter="noshadow" tooltip="No Shadow">
-              <i class="ph ph-lamp"></i>
-              <span>No Shadow</span>
-            </button>
+        
+        <div class="scanner-controls-sidebar">
+          <div class="scanner-section">
+             <label class="setting-label">Filter</label>
+             <div class="filter-grid">
+               <button class="filter-card active" data-filter="original" tooltip="No Filter">
+                 <i class="ph ph-image"></i>
+                 <span>Original</span>
+               </button>
+               <button class="filter-card" data-filter="grayscale" tooltip="Grayscale">
+                 <i class="ph ph-drop-half"></i>
+                 <span>Grayscale</span>
+               </button>
+               <button class="filter-card" data-filter="bw" tooltip="High Contrast B&W">
+                 <i class="ph ph-circle-half"></i>
+                 <span>B&W</span>
+               </button>
+               <button class="filter-card" data-filter="lighten" tooltip="Remove shadows/Lighten">
+                 <i class="ph ph-sun-dim"></i>
+                 <span>Lighten</span>
+               </button>
+               <button class="filter-card" data-filter="eco" tooltip="Save ink (Eco Mode)">
+                 <i class="ph ph-leaf"></i>
+                 <span>Eco</span>
+               </button>
+               <button class="filter-card" data-filter="noshadow" tooltip="Aggressive shadow removal">
+                 <i class="ph ph-lamp"></i>
+                 <span>No Shadow</span>
+               </button>
+             </div>
           </div>
-          <div class="scanner-slider-container">
-            <label for="filter-intensity">Intensity</label>
-            <input type="range" id="filter-intensity" min="0" max="100" value="50">
+
+          <div class="scanner-section">
+             <label for="filter-intensity" class="setting-label">Intensity</label>
+             <div class="intensity-control">
+                <div class="intensity-header">
+                   <span>Strength</span>
+                   <span id="intensity-value">50%</span>
+                </div>
+                <input type="range" id="filter-intensity" min="0" max="100" value="50">
+             </div>
           </div>
+
           <div class="scanner-actions">
-            <button id="btn-scanner-apply" class="primary-btn">
+            <button id="btn-scanner-apply" class="primary-btn btn-large">
               <i class="ph ph-check"></i>
               <span>Save Filtered PDF</span>
+            </button>
+            <button id="btn-scanner-cancel" class="secondary-btn btn-large" onclick="document.getElementById('scanner-modal').classList.add('hidden')">
+              <span>Cancel</span>
             </button>
           </div>
         </div>

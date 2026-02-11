@@ -33,6 +33,7 @@ export const settings = {
 
     save(newSettings) {
         localStorage.setItem('appSettings', JSON.stringify(newSettings));
+        applySettings(); // Apply immediately on save
     },
 
     get(key) {
@@ -63,13 +64,35 @@ export function applySettings() {
     // Theme
     document.documentElement.setAttribute('data-theme', s.theme);
 
+    // Update Theme Cards UI if visible
+    document.querySelectorAll('.theme-card').forEach(card => {
+        if (card.dataset.theme === s.theme) {
+            card.classList.add('active');
+        } else {
+            card.classList.remove('active');
+        }
+    });
+
     // Accent color
     document.documentElement.style.setProperty('--accent-color', s.accentColor);
     document.documentElement.style.setProperty('--accent-hover', settings.adjustColor(s.accentColor, -20));
 
+    // Update Color Picker UI if visible
+    document.querySelectorAll('.color-option').forEach(opt => {
+        if (opt.dataset.color === s.accentColor) {
+            opt.classList.add('active');
+        } else {
+            opt.classList.remove('active');
+        }
+    });
+
     // Sidebar width (applies to right sidebar where tools are)
     const sidebarRight = document.getElementById('sidebar-right');
     if (sidebarRight) sidebarRight.style.width = s.sidebarWidth + 'px';
+
+    // Update sidebar width value display
+    const sidebarWidthValue = document.getElementById('sidebar-width-value');
+    if (sidebarWidthValue) sidebarWidthValue.textContent = s.sidebarWidth + 'px';
 
     // Toolbar labels
     const toolbar = document.querySelector('.toolbar');

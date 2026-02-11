@@ -5,25 +5,60 @@ import { ui } from './ui.js';
 export const scanner = {
     currentFilter: 'original',
     currentIntensity: 50,
+    previewState: 'filtered', // 'filtered' or 'original'
 
     init() {
-        // Bind Filter Buttons
-        document.querySelectorAll('.filter-btn').forEach(btn => {
-            btn.addEventListener('click', () => {
-                document.querySelectorAll('.filter-btn').forEach(b => b.classList.remove('active'));
-                btn.classList.add('active');
-                scanner.currentFilter = btn.dataset.filter;
+        // Bind Filter Cards
+        document.querySelectorAll('.filter-card').forEach(card => {
+            card.addEventListener('click', () => {
+                document.querySelectorAll('.filter-card').forEach(c => c.classList.remove('active'));
+                card.classList.add('active');
+                scanner.currentFilter = card.dataset.filter;
                 scanner.updateStyle();
             });
         });
 
         // Bind Intensity Slider
         const slider = document.getElementById('filter-intensity');
+        const valueDisplay = document.getElementById('intensity-value');
         if (slider) {
             slider.addEventListener('input', (e) => {
                 scanner.currentIntensity = parseInt(e.target.value);
+                if (valueDisplay) valueDisplay.textContent = scanner.currentIntensity + '%';
                 scanner.updateStyle();
             });
+        }
+
+        // Comparison Feature
+        const previewWrapper = document.getElementById('scanner-preview-wrapper');
+        const hint = document.querySelector('.compare-hint');
+
+        if (previewWrapper) {
+            const showOriginal = () => {
+                scanner.previewState = 'original';
+                scanner.updateStyle();
+                if (hint) hint.innerHTML = '<i class="ph ph-eye-slash"></i> Release to filter';
+            };
+
+            const showFiltered = () => {
+                scanner.previewState = 'filtered';
+                scanner.updateStyle();
+                if (hint) hint.innerHTML = '<i class="ph ph-eye"></i> Hold to compare';
+            };
+
+            previewWrapper.addEventListener('mousedown', showOriginal);
+            previewWrapper.addEventListener('mouseup', showFiltered);
+            previewWrapper.addEventListener('mouseleave', showFiltered);
+
+            // Touch support
+            previewWrapper.addEventListener('touchstart', (e) => { e.preventDefault(); showOriginal(); });
+            previewWrapper.addEventListener('touchend', (e) => { e.preventDefault(); showFiltered(); });
+        }
+
+        // Bind Actions
+        const applyBtn = document.getElementById('btn-scanner-apply');
+        if (applyBtn) {
+            applyBtn.addEventListener('click', scanner.apply);
         }
     },
 
@@ -56,9 +91,9 @@ export const scanner = {
         const scaleY = containerH / h;
         const scale = Math.min(scaleX, scaleY, 1.5);
 
+        ui.showLoading('Generating preview...');
         try {
             const result = await api.renderPage(state.currentPage, scale); // Returns bytes
-            // api.renderPage returns ArrayBuffer
 
             const view = new DataView(result);
             const width = view.getInt32(0, false);
@@ -77,12 +112,20 @@ export const scanner = {
             scanner.updateStyle();
         } catch (e) {
             console.error("Scanner preview failed", e);
+            ui.showToast('Preview generation failed', 'error');
+        } finally {
+            ui.hideLoading();
         }
     },
 
     updateStyle() {
         const canvas = document.getElementById('scanner-preview-canvas');
         if (!canvas) return;
+
+        if (scanner.previewState === 'original') {
+            canvas.style.filter = 'none';
+            return;
+        }
 
         const intensity = scanner.currentIntensity;
         let filterString = '';
