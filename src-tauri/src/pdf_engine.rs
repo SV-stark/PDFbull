@@ -202,28 +202,36 @@ pub async fn search_document(
         let guard = doc_clone.lock().map_err(|e| e.to_string())?;
         if let Some(wrapper) = guard.as_ref() {
              let doc = &wrapper.0;
-             let mut results = Vec::new();
-             
-             // Iterate all pages
-             for (i, page) in doc.pages().iter().enumerate() {
-                 // Text extraction is fast for one page
-                 if let Ok(text) = page.text() {
-                     if let Ok(search) = text.search(&query, &PdfSearchOptions::default()) {
-                         for match_result in search.iter(PdfSearchDirection::SearchForward) {
-                             for segment in match_result.iter() {
-                                 let rect = segment.bounds();
-                                 results.push(SearchResult {
-                                     page: i as i32,
-                                     x: rect.left().value,
-                                     y: rect.top().value,
-                                     w: rect.width().value,
-                                     h: rect.height().value,
-                                 });
+             let page_count = doc.pages().len();
+
+             // Parallelize search across all pages using Rayon
+             let results: Vec<SearchResult> = (0..page_count).into_par_iter()
+                 .map(|i| {
+                     let mut page_results = Vec::new();
+                     // Access page by index - Pdfium pages are thread-safe for read operations if the doc is valid
+                     if let Ok(page) = doc.pages().get(i) {
+                         if let Ok(text) = page.text() {
+                             if let Ok(search) = text.search(&query, &PdfSearchOptions::default()) {
+                                 for match_result in search.iter(PdfSearchDirection::SearchForward) {
+                                     for segment in match_result.iter() {
+                                         let rect = segment.bounds();
+                                         page_results.push(SearchResult {
+                                             page: i as i32,
+                                             x: rect.left().value,
+                                             y: rect.top().value,
+                                             w: rect.width().value,
+                                             h: rect.height().value,
+                                         });
+                                     }
+                                 }
                              }
                          }
                      }
-                 }
-             }
+                     page_results
+                 })
+                 .flatten()
+                 .collect();
+
              Ok(results)
         } else {
              Err("No document open".to_string())

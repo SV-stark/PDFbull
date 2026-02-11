@@ -37,10 +37,25 @@ export const search = {
             let filteredResults = results;
 
             if (caseSensitive || wholeWord) {
-                // We need to verify matches against actual page text
+                // Collect unique pages that need text fetching
+                const uniquePages = [...new Set(results.map(r => r.page))];
+                const pageTextMap = new Map();
+
+                // Fetch page text in parallel
+                await Promise.all(uniquePages.map(async (page) => {
+                    try {
+                        const text = await api.getPageText(page);
+                        pageTextMap.set(page, text || '');
+                    } catch (e) {
+                        console.warn(`Failed to fetch text for page ${page}`, e);
+                        pageTextMap.set(page, '');
+                    }
+                }));
+
+                // Verify matches against fetched text
                 const verifiedResults = [];
                 for (const r of results) {
-                    const pageText = await api.getPageText(r.page).catch(() => '');
+                    const pageText = pageTextMap.get(r.page);
                     if (pageText) {
                         let found = false;
                         if (wholeWord && caseSensitive) {
