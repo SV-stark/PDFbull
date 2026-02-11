@@ -107,10 +107,12 @@ export const api = {
 
     /**
      * Compress the PDF file
-     * @param {number} quality - Compression quality (0-100)
-     * @returns {Promise<void>}
+     * @param {string} inputPath - Input PDF path
+     * @param {string} outputPath - Output PDF path
+     * @param {string} level - Compression level ('low', 'standard', 'high')
+     * @returns {Promise<Object>} Compression result
      */
-    compressPdf: (quality) => invoke('compress_pdf', { quality }),
+    compressPdf: (inputPath, outputPath, level) => invoke('compress_pdf', { inputPath, outputPath, level }),
 
     /**
      * Auto-crop whitespace from a page

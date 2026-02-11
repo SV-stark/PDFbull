@@ -381,7 +381,7 @@
           <i class="ph ph-x"></i>
         </button>
       </div>
-      
+
       <div class="settings-sidebar">
         <button class="settings-tab active" data-tab="appearance">
           <i class="ph ph-paint-brush"></i>
@@ -444,13 +444,14 @@
               </div>
               <div class="setting-control">
                 <div class="color-grid">
-                    <div class="color-option" data-color="#646cff" style="background: #646cff;"></div>
-                    <div class="color-option" data-color="#4f46e5" style="background: #4f46e5;"></div>
-                    <div class="color-option" data-color="#ff5252" style="background: #ff5252;"></div>
-                    <div class="color-option" data-color="#448aff" style="background: #448aff;"></div>
-                    <div class="color-option" data-color="#69f0ae" style="background: #69f0ae;"></div>
-                    <div class="color-option" data-color="#e040fb" style="background: #e040fb;"></div>
-                    <input type="color" id="accent-color-picker" class="color-input" value="#646cff" style="width: 32px; height: 32px; padding: 0; border: none; overflow: hidden; border-radius: 50%;">
+                  <div class="color-option" data-color="#646cff" style="background: #646cff;"></div>
+                  <div class="color-option" data-color="#4f46e5" style="background: #4f46e5;"></div>
+                  <div class="color-option" data-color="#ff5252" style="background: #ff5252;"></div>
+                  <div class="color-option" data-color="#448aff" style="background: #448aff;"></div>
+                  <div class="color-option" data-color="#69f0ae" style="background: #69f0ae;"></div>
+                  <div class="color-option" data-color="#e040fb" style="background: #e040fb;"></div>
+                  <input type="color" id="accent-color-picker" class="color-input" value="#646cff"
+                    style="width: 32px; height: 32px; padding: 0; border: none; overflow: hidden; border-radius: 50%;">
                 </div>
               </div>
             </div>
@@ -460,7 +461,8 @@
                 <label for="setting-sidebar-width" class="setting-label">Sidebar Width</label>
                 <span class="setting-desc">Adjust the width of the tool sidebar</span>
               </div>
-              <div class="setting-control" style="width: 200px; flex-direction: column; align-items: flex-end; gap: 4px;">
+              <div class="setting-control"
+                style="width: 200px; flex-direction: column; align-items: flex-end; gap: 4px;">
                 <span class="setting-value" id="sidebar-width-value">250px</span>
                 <input type="range" id="setting-sidebar-width" min="200" max="400" value="250">
               </div>
@@ -500,19 +502,19 @@
             </div>
           </div>
           <div class="setting-item">
-             <div class="setting-info">
+            <div class="setting-info">
               <label for="setting-autosave" class="setting-label">Auto-save Interval</label>
               <span class="setting-desc">How often to save changes automatically</span>
             </div>
             <div class="setting-control" style="width: 200px; flex-direction: column; align-items: flex-end; gap: 4px;">
-               <span class="setting-value" id="autosave-value">30s</span>
+              <span class="setting-value" id="autosave-value">30s</span>
               <input type="range" id="setting-autosave" min="0" max="300" value="30" step="10">
             </div>
           </div>
           <div class="setting-item">
             <div class="setting-info">
-                <label for="setting-restore-session" class="setting-label">Restore Previous Session</label>
-                <span class="setting-desc">Reopen files that were open when you last closed the app</span>
+              <label for="setting-restore-session" class="setting-label">Restore Previous Session</label>
+              <span class="setting-desc">Reopen files that were open when you last closed the app</span>
             </div>
             <div class="setting-control">
               <label class="toggle-switch">
@@ -523,8 +525,8 @@
           </div>
           <div class="setting-item">
             <div class="setting-info">
-                <label for="setting-smooth-scroll" class="setting-label">Smooth Scrolling</label>
-                <span class="setting-desc">Enable smooth scrolling animation</span>
+              <label for="setting-smooth-scroll" class="setting-label">Smooth Scrolling</label>
+              <span class="setting-desc">Enable smooth scrolling animation</span>
             </div>
             <div class="setting-control">
               <label class="toggle-switch">
@@ -535,8 +537,8 @@
           </div>
           <div class="setting-item">
             <div class="setting-info">
-                <label for="setting-double-click" class="setting-label">Double-click Action</label>
-                <span class="setting-desc">What happens when you double-click the page</span>
+              <label for="setting-double-click" class="setting-label">Double-click Action</label>
+              <span class="setting-desc">What happens when you double-click the page</span>
             </div>
             <div class="setting-control">
               <select id="setting-double-click">
@@ -552,19 +554,19 @@
         <div class="settings-panel" id="panel-performance">
           <h4>Performance</h4>
           <div class="setting-item">
-             <div class="setting-info">
-                <label for="setting-cache-size" class="setting-label">Page Cache Size</label>
-                <span class="setting-desc">Number of pages to keep in memory (higher uses more RAM)</span>
+            <div class="setting-info">
+              <label for="setting-cache-size" class="setting-label">Page Cache Size</label>
+              <span class="setting-desc">Number of pages to keep in memory (higher uses more RAM)</span>
             </div>
             <div class="setting-control" style="width: 200px; flex-direction: column; align-items: flex-end; gap: 4px;">
-               <span class="setting-value" id="cache-size-value">15 pages</span>
+              <span class="setting-value" id="cache-size-value">15 pages</span>
               <input type="range" id="setting-cache-size" min="5" max="50" value="15">
             </div>
           </div>
           <div class="setting-item">
-             <div class="setting-info">
-                <label for="setting-render-quality" class="setting-label">Render Quality</label>
-                <span class="setting-desc">Trade-off between visual quality and performance</span>
+            <div class="setting-info">
+              <label for="setting-render-quality" class="setting-label">Render Quality</label>
+              <span class="setting-desc">Trade-off between visual quality and performance</span>
             </div>
             <div class="setting-control">
               <select id="setting-render-quality">
@@ -575,9 +577,9 @@
             </div>
           </div>
           <div class="setting-item">
-             <div class="setting-info">
-                <label for="setting-hardware-accel" class="setting-label">Hardware Acceleration</label>
-                <span class="setting-desc">Use GPU for rendering (recommended)</span>
+            <div class="setting-info">
+              <label for="setting-hardware-accel" class="setting-label">Hardware Acceleration</label>
+              <span class="setting-desc">Use GPU for rendering (recommended)</span>
             </div>
             <div class="setting-control">
               <label class="toggle-switch">
@@ -592,19 +594,19 @@
         <div class="settings-panel" id="panel-files">
           <h4>Files</h4>
           <div class="setting-item">
-             <div class="setting-info">
-                <label for="setting-recent-files" class="setting-label">Recent Files Limit</label>
-                <span class="setting-desc">Number of recent files to remember</span>
+            <div class="setting-info">
+              <label for="setting-recent-files" class="setting-label">Recent Files Limit</label>
+              <span class="setting-desc">Number of recent files to remember</span>
             </div>
             <div class="setting-control" style="width: 200px; flex-direction: column; align-items: flex-end; gap: 4px;">
-               <span class="setting-value" id="recent-files-value">10 files</span>
-               <input type="range" id="setting-recent-files" min="5" max="50" value="10">
+              <span class="setting-value" id="recent-files-value">10 files</span>
+              <input type="range" id="setting-recent-files" min="5" max="50" value="10">
             </div>
           </div>
           <div class="setting-item">
-             <div class="setting-info">
-                <label for="setting-auto-open" class="setting-label">Auto-open Last File</label>
-                <span class="setting-desc">Automatically open the last viewed file on startup</span>
+            <div class="setting-info">
+              <label for="setting-auto-open" class="setting-label">Auto-open Last File</label>
+              <span class="setting-desc">Automatically open the last viewed file on startup</span>
             </div>
             <div class="setting-control">
               <label class="toggle-switch">
@@ -614,14 +616,14 @@
             </div>
           </div>
           <div class="setting-item">
-             <div class="setting-info">
-                <label for="setting-default-path" class="setting-label">Default Save Location</label>
-                <span class="setting-desc">Directory where files are saved by default</span>
+            <div class="setting-info">
+              <label for="setting-default-path" class="setting-label">Default Save Location</label>
+              <span class="setting-desc">Directory where files are saved by default</span>
             </div>
             <div class="setting-control">
               <div style="display: flex; gap: 8px;">
-                  <input type="text" id="setting-default-path" placeholder="Same as source file" readonly>
-                  <button id="btn-browse-path" class="secondary-btn">Browse</button>
+                <input type="text" id="setting-default-path" placeholder="Same as source file" readonly>
+                <button id="btn-browse-path" class="secondary-btn">Browse</button>
               </div>
             </div>
           </div>
@@ -631,39 +633,39 @@
         <div class="settings-panel" id="panel-annotations">
           <h4>Annotations</h4>
           <div class="setting-item">
-             <div class="setting-info">
-                <span class="setting-label">Default Annotation Color</span>
-                <span class="setting-desc">Default color for new annotations</span>
+            <div class="setting-info">
+              <span class="setting-label">Default Annotation Color</span>
+              <span class="setting-desc">Default color for new annotations</span>
             </div>
             <div class="setting-control">
-               <div class="color-grid">
-                    <div class="color-option active" data-anno-color="#ffeb3b" style="background: #ffeb3b;"></div>
-                    <div class="color-option" data-anno-color="#ff5252" style="background: #ff5252;"></div>
-                    <div class="color-option" data-anno-color="#448aff" style="background: #448aff;"></div>
-                    <div class="color-option" data-anno-color="#69f0ae" style="background: #69f0ae;"></div>
-                    <div class="color-option" data-anno-color="#e040fb" style="background: #e040fb;"></div>
-                    <div class="color-option" data-anno-color="#ffffff" style="background: #ffffff;"></div>
-                </div>
+              <div class="color-grid">
+                <div class="color-option active" data-anno-color="#ffeb3b" style="background: #ffeb3b;"></div>
+                <div class="color-option" data-anno-color="#ff5252" style="background: #ff5252;"></div>
+                <div class="color-option" data-anno-color="#448aff" style="background: #448aff;"></div>
+                <div class="color-option" data-anno-color="#69f0ae" style="background: #69f0ae;"></div>
+                <div class="color-option" data-anno-color="#e040fb" style="background: #e040fb;"></div>
+                <div class="color-option" data-anno-color="#ffffff" style="background: #ffffff;"></div>
+              </div>
             </div>
           </div>
           <div class="setting-item">
-             <div class="setting-info">
-                <label for="setting-sticky-width" class="setting-label">Sticky Note Width</label>
-                <span class="setting-desc">Default width for sticky notes</span>
+            <div class="setting-info">
+              <label for="setting-sticky-width" class="setting-label">Sticky Note Width</label>
+              <span class="setting-desc">Default width for sticky notes</span>
             </div>
             <div class="setting-control" style="width: 200px; flex-direction: column; align-items: flex-end; gap: 4px;">
-               <span class="setting-value" id="sticky-width-value">150px</span>
-               <input type="range" id="setting-sticky-width" min="100" max="300" value="150">
+              <span class="setting-value" id="sticky-width-value">150px</span>
+              <input type="range" id="setting-sticky-width" min="100" max="300" value="150">
             </div>
           </div>
           <div class="setting-item">
-             <div class="setting-info">
-                <label for="setting-sticky-height" class="setting-label">Sticky Note Height</label>
-                <span class="setting-desc">Default height for sticky notes</span>
+            <div class="setting-info">
+              <label for="setting-sticky-height" class="setting-label">Sticky Note Height</label>
+              <span class="setting-desc">Default height for sticky notes</span>
             </div>
             <div class="setting-control" style="width: 200px; flex-direction: column; align-items: flex-end; gap: 4px;">
-               <span class="setting-value" id="sticky-height-value">100px</span>
-               <input type="range" id="setting-sticky-height" min="80" max="200" value="100">
+              <span class="setting-value" id="sticky-height-value">100px</span>
+              <input type="range" id="setting-sticky-height" min="80" max="200" value="100">
             </div>
           </div>
         </div>
@@ -685,7 +687,7 @@
           </div>
         </div>
       </div>
-      
+
       <div class="modal-footer">
         <button id="btn-save-settings" class="primary-btn">
           <i class="ph ph-floppy-disk"></i>
@@ -697,30 +699,41 @@
 
   <!-- Export Options Modal -->
   <div id="export-modal" class="modal hidden">
-    <div class="modal-content">
+    <div class="modal-content export-content">
       <div class="modal-header">
         <h3>Export Options</h3>
         <button class="modal-close" id="btn-close-export">
           <i class="ph ph-x"></i>
         </button>
       </div>
-      <div class="modal-body">
-        <button class="export-option" id="btn-export-image">
-          <i class="ph ph-image"></i>
-          <span>Export as Image (PNG)</span>
-        </button>
-        <button class="export-option" id="btn-export-text">
-          <i class="ph ph-text-t"></i>
-          <span>Extract Text</span>
-        </button>
-        <button class="export-option" id="btn-export-compress">
-          <i class="ph ph-file-zip"></i>
-          <span>Compress PDF</span>
-        </button>
-        <button class="export-option" id="btn-export-json">
-          <i class="ph ph-file-js"></i>
-          <span>Export Annotations (JSON)</span>
-        </button>
+      <div class="modal-body export-body">
+        <div class="export-options-grid">
+          <button class="export-card" id="btn-export-image">
+            <i class="ph ph-image"></i>
+            <div class="export-info">
+              <span class="export-title">Export as Image</span>
+              <span class="export-desc">Save current page as a high-quality PNG image</span>
+            </div>
+          </button>
+
+          <button class="export-card" id="btn-export-text">
+            <i class="ph ph-text-aa"></i>
+            <div class="export-info">
+              <span class="export-title">Extract Text</span>
+              <span class="export-desc">Extract all text from the document to a .txt file</span>
+            </div>
+          </button>
+
+
+
+          <button class="export-card" id="btn-export-json">
+            <i class="ph ph-code"></i>
+            <div class="export-info">
+              <span class="export-title">Export Annotations</span>
+              <span class="export-desc">Save all highlights and notes as a JSON file</span>
+            </div>
+          </button>
+        </div>
       </div>
     </div>
   </div>
@@ -734,57 +747,57 @@
           <i class="ph ph-x"></i>
         </button>
       </div>
-      
+
       <div class="scanner-body">
         <div class="scanner-preview-area">
           <div class="scanner-preview-wrapper" id="scanner-preview-wrapper">
-             <canvas id="scanner-preview-canvas"></canvas>
-             <div class="compare-hint">
-                <i class="ph ph-eye"></i> Hold to compare
-             </div>
+            <canvas id="scanner-preview-canvas"></canvas>
+            <div class="compare-hint">
+              <i class="ph ph-eye"></i> Hold to compare
+            </div>
           </div>
         </div>
-        
+
         <div class="scanner-controls-sidebar">
           <div class="scanner-section">
-             <label class="setting-label">Filter</label>
-             <div class="filter-grid">
-               <button class="filter-card active" data-filter="original" tooltip="No Filter">
-                 <i class="ph ph-image"></i>
-                 <span>Original</span>
-               </button>
-               <button class="filter-card" data-filter="grayscale" tooltip="Grayscale">
-                 <i class="ph ph-drop-half"></i>
-                 <span>Grayscale</span>
-               </button>
-               <button class="filter-card" data-filter="bw" tooltip="High Contrast B&W">
-                 <i class="ph ph-circle-half"></i>
-                 <span>B&W</span>
-               </button>
-               <button class="filter-card" data-filter="lighten" tooltip="Remove shadows/Lighten">
-                 <i class="ph ph-sun-dim"></i>
-                 <span>Lighten</span>
-               </button>
-               <button class="filter-card" data-filter="eco" tooltip="Save ink (Eco Mode)">
-                 <i class="ph ph-leaf"></i>
-                 <span>Eco</span>
-               </button>
-               <button class="filter-card" data-filter="noshadow" tooltip="Aggressive shadow removal">
-                 <i class="ph ph-lamp"></i>
-                 <span>No Shadow</span>
-               </button>
-             </div>
+            <label class="setting-label">Filter</label>
+            <div class="filter-grid">
+              <button class="filter-card active" data-filter="original" tooltip="No Filter">
+                <i class="ph ph-image"></i>
+                <span>Original</span>
+              </button>
+              <button class="filter-card" data-filter="grayscale" tooltip="Grayscale">
+                <i class="ph ph-drop-half"></i>
+                <span>Grayscale</span>
+              </button>
+              <button class="filter-card" data-filter="bw" tooltip="High Contrast B&W">
+                <i class="ph ph-circle-half"></i>
+                <span>B&W</span>
+              </button>
+              <button class="filter-card" data-filter="lighten" tooltip="Remove shadows/Lighten">
+                <i class="ph ph-sun-dim"></i>
+                <span>Lighten</span>
+              </button>
+              <button class="filter-card" data-filter="eco" tooltip="Save ink (Eco Mode)">
+                <i class="ph ph-leaf"></i>
+                <span>Eco</span>
+              </button>
+              <button class="filter-card" data-filter="noshadow" tooltip="Aggressive shadow removal">
+                <i class="ph ph-lamp"></i>
+                <span>No Shadow</span>
+              </button>
+            </div>
           </div>
 
           <div class="scanner-section">
-             <label for="filter-intensity" class="setting-label">Intensity</label>
-             <div class="intensity-control">
-                <div class="intensity-header">
-                   <span>Strength</span>
-                   <span id="intensity-value">50%</span>
-                </div>
-                <input type="range" id="filter-intensity" min="0" max="100" value="50">
-             </div>
+            <label for="filter-intensity" class="setting-label">Intensity</label>
+            <div class="intensity-control">
+              <div class="intensity-header">
+                <span>Strength</span>
+                <span id="intensity-value">50%</span>
+              </div>
+              <input type="range" id="filter-intensity" min="0" max="100" value="50">
+            </div>
           </div>
 
           <div class="scanner-actions">
@@ -792,7 +805,8 @@
               <i class="ph ph-check"></i>
               <span>Save Filtered PDF</span>
             </button>
-            <button id="btn-scanner-cancel" class="secondary-btn btn-large" onclick="document.getElementById('scanner-modal').classList.add('hidden')">
+            <button id="btn-scanner-cancel" class="secondary-btn btn-large"
+              onclick="document.getElementById('scanner-modal').classList.add('hidden')">
               <span>Cancel</span>
             </button>
           </div>

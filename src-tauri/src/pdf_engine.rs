@@ -204,11 +204,10 @@ pub async fn search_document(
              let doc = &wrapper.0;
              let page_count = doc.pages().len();
 
-             // Parallelize search across all pages using Rayon
-             let results: Vec<SearchResult> = (0..page_count).into_par_iter()
+             // Sequential search across all pages (PdfDocument is not Sync)
+             let results: Vec<SearchResult> = (0..page_count).into_iter()
                  .map(|i| {
                      let mut page_results = Vec::new();
-                     // Access page by index - Pdfium pages are thread-safe for read operations if the doc is valid
                      if let Ok(page) = doc.pages().get(i) {
                          if let Ok(text) = page.text() {
                              if let Ok(search) = text.search(&query, &PdfSearchOptions::default()) {

@@ -3,12 +3,14 @@ import { api } from './api.js';
 import { ui } from './ui.js';
 import { renderer } from './renderer.js';
 import { tools } from './tools.js';
+// import { startAutoSave } from './autosave.js'; // Removed as file does not exist
 import { search } from './search.js';
 import { scanner } from './scanner.js';
 import { settings } from './settings.js';
+import { exportManager } from './export.js';
 import { CONSTANTS } from './constants.js';
 
-const { listen } = window.__TAURI__.event;
+const { listen } = window.__TAURI__?.event || { listen: () => () => { } };
 
 export const events = {
     init() {
@@ -27,11 +29,13 @@ export const events = {
             document.dispatchEvent(new CustomEvent('app:toggle-bookmark'));
         });
 
-        // Export JSON in export modal
+        // Export JSON in export modal - Handled in bindToolbarEvents now
+        /*
         document.getElementById('btn-export-json')?.addEventListener('click', () => {
             document.dispatchEvent(new CustomEvent('app:export-json'));
             document.getElementById('export-modal')?.classList.add('hidden');
         });
+        */
 
         // Keyboard help close
         document.getElementById('btn-close-keyboard-help')?.addEventListener('click', () => {
@@ -207,91 +211,23 @@ export const events = {
             document.getElementById('export-modal')?.classList.add('hidden');
         });
 
-        // Export Image (PNG)
+        // Export Actions
         document.getElementById('btn-export-image')?.addEventListener('click', async () => {
-            if (!state.currentDoc) return;
-            try {
-                ui.showLoading('Exporting page as image...');
-                const responseBytes = await api.renderPage(state.currentPage, 2.0); // High quality
-                const view = new DataView(responseBytes);
-                const width = view.getInt32(0, false);
-                const height = view.getInt32(4, false);
-                const pixels = new Uint8ClampedArray(responseBytes, 8);
-
-                const imageData = new ImageData(pixels, width, height);
-                const canvas = document.createElement('canvas');
-                canvas.width = width;
-                canvas.height = height;
-                const ctx = canvas.getContext('2d');
-                const bitmap = await createImageBitmap(imageData);
-                ctx.drawImage(bitmap, 0, 0);
-                bitmap.close();
-
-                canvas.toBlob(async (blob) => {
-                    const { save } = window.__TAURI__.dialog;
-                    const savePath = await save({
-                        filters: [{ name: 'PNG Image', extensions: ['png'] }],
-                        defaultPath: `page_${state.currentPage + 1}.png`
-                    });
-                    if (savePath) {
-                        const arrayBuffer = await blob.arrayBuffer();
-                        await api.saveFile(savePath, Array.from(new Uint8Array(arrayBuffer)));
-                        ui.showToast('Page exported as PNG', 'success');
-                    }
-                    ui.hideLoading();
-                }, 'image/png');
-            } catch (e) {
-                console.error('Image export failed:', e);
-                ui.hideLoading();
-                ui.showToast('Export failed: ' + e, 'error');
-            }
+            await exportManager.exportToImage();
             document.getElementById('export-modal')?.classList.add('hidden');
         });
 
-        // Export Text
         document.getElementById('btn-export-text')?.addEventListener('click', async () => {
-            if (!state.currentDoc) return;
-            try {
-                ui.showLoading('Extracting text...');
-                let allText = '';
-                for (let i = 0; i < state.totalPages; i++) {
-                    const pageText = await api.getPageText(i);
-                    allText += `--- Page ${i + 1} ---\n${pageText}\n\n`;
-                }
-                ui.hideLoading();
-
-                const { save } = window.__TAURI__.dialog;
-                const savePath = await save({
-                    filters: [{ name: 'Text File', extensions: ['txt'] }],
-                    defaultPath: `${state.currentDoc.split(/[/\\]/).pop().replace('.pdf', '.txt')}`
-                });
-                if (savePath) {
-                    const encoder = new TextEncoder();
-                    await api.saveFile(savePath, Array.from(encoder.encode(allText)));
-                    ui.showToast('Text extracted and saved', 'success');
-                }
-            } catch (e) {
-                console.error('Text export failed:', e);
-                ui.hideLoading();
-                ui.showToast('Text export failed: ' + e, 'error');
-            }
+            await exportManager.exportToText();
             document.getElementById('export-modal')?.classList.add('hidden');
         });
 
-        // Export Compress
-        document.getElementById('btn-export-compress')?.addEventListener('click', async () => {
-            if (!state.currentDoc) return;
-            ui.showLoading('Compressing PDF...');
-            try {
-                await api.compressPdf(50); // Medium quality integer
-                ui.showToast('Compression complete', 'success');
-            } catch (e) {
-                ui.showToast('Compression failed: ' + e, 'error');
-            } finally {
-                ui.hideLoading();
-            }
+        document.getElementById('btn-export-json')?.addEventListener('click', () => {
+            exportManager.exportToJSON();
             document.getElementById('export-modal')?.classList.add('hidden');
         });
+
+
     },
 
     bindSettingsEvents() {
@@ -506,18 +442,59 @@ export const events = {
         });
 
         // Compress
-        document.getElementById('btn-compress')?.addEventListener('click', async () => {
-            if (!state.currentDoc) return;
-            ui.showLoading('Compressing PDF...');
-            try {
-                await api.compressPdf(50); // Fixed: pass integer quality
-                ui.showToast('Compression complete', 'success');
-            } catch (e) {
-                ui.showToast('Compression failed: ' + e, 'error');
-            } finally {
-                ui.hideLoading();
-            }
+        document.getElementById('btn-compress')?.addEventListener('click', () => {
+            // Open Compress Modal
+            document.getElementById('compress-modal')?.classList.remove('hidden');
         });
+
+        // Close Compress Modal
+        document.getElementById('btn-close-compress')?.addEventListener('click', () => {
+            document.getElementById('compress-modal')?.classList.add('hidden');
+        });
+
+        // Compress Level Selection & Execution
+        document.querySelectorAll('#compress-modal .export-card').forEach(card => {
+            card.addEventListener('click', async () => {
+                const level = card.dataset.level;
+
+                // Close modal
+                document.getElementById('compress-modal')?.classList.add('hidden');
+
+                if (!state.currentDoc) {
+                    ui.showToast('No document open', 'error');
+                    return;
+                }
+
+                try {
+                    // Pick save location
+                    const { save } = window.__TAURI__.dialog;
+                    const savePath = await save({
+                        filters: [{ name: 'Compressed PDF', extensions: ['pdf'] }],
+                        defaultPath: state.currentDoc.replace('.pdf', '_compressed.pdf')
+                    });
+
+                    if (savePath) {
+                        ui.showLoading(`Compressing (${level})...`);
+                        const result = await api.compressPdf(state.currentDoc, savePath, level);
+
+                        ui.hideLoading();
+                        ui.showToast(`Compressed! Saved ${result.savings_percent}% (${formatBytes(result.original_size)} -> ${formatBytes(result.compressed_size)})`, 'success');
+                    }
+                } catch (e) {
+                    ui.hideLoading();
+                    ui.showToast('Compression failed: ' + e, 'error');
+                }
+            });
+        });
+
+        function formatBytes(bytes, decimals = 2) {
+            if (!+bytes) return '0 Bytes';
+            const k = 1024;
+            const dm = decimals < 0 ? 0 : decimals;
+            const sizes = ['Bytes', 'KB', 'MB', 'GB', 'TB'];
+            const i = Math.floor(Math.log(bytes) / Math.log(k));
+            return `${parseFloat((bytes / Math.pow(k, i)).toFixed(dm))} ${sizes[i]}`;
+        }
 
         // Batch Mode
         document.getElementById('btn-batch')?.addEventListener('click', () => {
