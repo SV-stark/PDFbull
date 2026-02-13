@@ -73,17 +73,6 @@ impl PdfState {
             active_doc: Arc::new(Mutex::new(None)),
         }
     }
-    
-    pub fn set_active(&self, path: &str) -> Result<(), String> {
-        let mut active = self.active_doc.lock().map_err(|e| e.to_string())?;
-        *active = Some(path.to_string());
-        Ok(())
-    }
-    
-    pub fn get_active_path(&self) -> Result<String, String> {
-        let active = self.active_doc.lock().map_err(|e| e.to_string())?;
-        active.clone().ok_or_else(|| "No active document".to_string())
-    }
 }
 
 pub fn with_doc<F, R>(state: &State<'_, PdfState>, f: F) -> Result<R, String>
@@ -93,18 +82,6 @@ where
     let active = state.active_doc.lock().map_err(|e| e.to_string())?;
     let path = active.as_ref().ok_or_else(|| "No active document".to_string())?;
     
-    let docs = state.docs.lock().map_err(|e| e.to_string())?;
-    if let Some(wrapper) = docs.get(path) {
-        f(&wrapper.0)
-    } else {
-        Err("Document not found".to_string())
-    }
-}
-
-pub fn with_doc_by_path<F, R>(state: &State<'_, PdfState>, path: &str, f: F) -> Result<R, String>
-where
-    F: FnOnce(&PdfDocument<'static>) -> Result<R, String>,
-{
     let docs = state.docs.lock().map_err(|e| e.to_string())?;
     if let Some(wrapper) = docs.get(path) {
         f(&wrapper.0)
@@ -307,7 +284,6 @@ pub async fn search_document(
     Ok(results)
 }
 
-/// Text rectangle for text layer rendering
 #[derive(serde::Serialize)]
 pub struct TextRect {
     pub text: String,
@@ -317,7 +293,6 @@ pub struct TextRect {
     pub h: f32,
 }
 
-/// Get text with coordinates for a single page (for text selection layer)
 #[tauri::command]
 pub async fn get_page_text_with_coords(
     state: tauri::State<'_, PdfState>,
@@ -484,7 +459,6 @@ fn apply_image_filter(dynamic_image: image::DynamicImage, filter_type: &str, int
              let luma = gray.into_luma8();
              let mut raw = luma.into_raw();
              
-             // Optimization: Iterate over raw bytes for auto-vectorization
              raw.iter_mut().for_each(|freq| {
                  *freq = if *freq > threshold { 255 } else { 0 };
              });
@@ -504,7 +478,6 @@ fn apply_image_filter(dynamic_image: image::DynamicImage, filter_type: &str, int
             let luma = bright.into_luma8();
             let mut raw = luma.into_raw();
 
-            // Optimization: Iterate over raw bytes
              raw.iter_mut().for_each(|p| {
                  if *p > 200 { *p = 255; }
              });
@@ -523,15 +496,12 @@ fn apply_image_filter(dynamic_image: image::DynamicImage, filter_type: &str, int
 #[tauri::command]
 pub async fn apply_scanner_filter(
     app: tauri::AppHandle,
-    state: State<'_, PdfState>,
     doc_path: String,
     filter_type: String,
     intensity: f32,
 ) -> Result<(), String> {
     println!("[PDF Engine] Applying filter: {}, intensity: {}", filter_type, intensity);
     
-    let state_docs = state.docs.clone();
-    let state_active = state.active_doc.clone();
     let filter_type_clone = filter_type.clone();
     let doc_path_clone = doc_path.clone();
 
@@ -578,7 +548,6 @@ pub async fn apply_scanner_filter(
                 })
                 .collect();
 
-            // C. Add to New Document (Sequential)
             for result in processed_results {
                  let (w_pt, h_pt, processed_img) = result?;
                  
@@ -587,12 +556,12 @@ pub async fn apply_scanner_filter(
                  
                  let image_obj = PdfPageImageObject::new_with_width(&new_doc, &processed_img, pdf_w)
                      .map_err(|e| format!("Failed to create image object: {}", e))?;
-                  
-                  let mut new_page = new_doc.pages_mut().create_page_at_end(pdfium_render::prelude::PdfPagePaperSize::Custom(pdf_w, pdf_h))
+                   
+                 let mut new_page = new_doc.pages_mut().create_page_at_end(pdfium_render::prelude::PdfPagePaperSize::Custom(pdf_w, pdf_h))
                     .map_err(|e| e.to_string())?;
                   
-                  new_page.objects_mut().add_image_object(image_obj).map_err(|e| e.to_string())?;
-             }
+                 new_page.objects_mut().add_image_object(image_obj).map_err(|e| e.to_string())?;
+            }
         }
         
         let temp_path = format!("{}.tmp", doc_path_clone);

@@ -130,7 +130,7 @@ impl OcrEngine {
             .collect();
 
         for (index, result) in processed_results.iter().enumerate() {
-            if let Ok(page_result) = result {
+            if let Ok(_page_result) = result {
                 let current = index + 1;
                 let percentage = ((current as f32 / total_pages as f32) * 100.0) as u32;
                 let _ = window.emit(
