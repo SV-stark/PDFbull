@@ -128,6 +128,7 @@ export const search = {
                     }));
 
                     state.annotations.set(pageNum, [...pageAnns, ...newAnns]);
+                    state.isDirty = true;
                     renderer.drawAnnotations(pageNum);
                 });
 
@@ -180,10 +181,10 @@ export const search = {
     clearResults() {
         state.searchResults = [];
         state.currentSearchIndex = -1;
-        // Remove search annotations
         state.annotations.forEach((anns, page) => {
             const filtered = anns.filter(a => a.type !== 'search_highlight');
             state.annotations.set(page, filtered);
+            state.isDirty = true;
             renderer.drawAnnotations(page);
         });
         const counter = document.getElementById('search-counter');

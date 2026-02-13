@@ -41,7 +41,9 @@ async fn list_ocr_languages() -> Result<Vec<ocr::models::LanguageInfo>, String> 
 
 #[tauri::command]
 async fn unload_ocr_models() -> Result<(), String> {
-    // TODO: Implement model unloading
+    let engine = ocr::get_ocr_engine();
+    let mut engine_lock = engine.lock().map_err(|e| format!("Failed to lock OCR engine: {}", e))?;
+    engine_lock.unload();
     Ok(())
 }
 
@@ -84,6 +86,8 @@ pub fn run() {
             save_file,
             // PDF Engine
             pdf_engine::open_document,
+            pdf_engine::close_document,
+            pdf_engine::set_active_document,
             pdf_engine::load_document_from_bytes,
             pdf_engine::get_page_count,
             pdf_engine::render_page,

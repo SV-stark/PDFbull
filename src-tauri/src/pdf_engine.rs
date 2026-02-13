@@ -1,24 +1,20 @@
 use pdfium_render::prelude::*;
 use std::sync::{Arc, Mutex, OnceLock};
+use std::collections::HashMap;
 use tauri::{Manager, State};
 use rayon::prelude::*;
 use image::GenericImageView;
 
-
-// Wrapper for Pdfium to make it Sync (it is Send but not Sync)
 struct PdfiumWrapper(pub Pdfium);
 unsafe impl Sync for PdfiumWrapper {}
 unsafe impl Send for PdfiumWrapper {}
 
-// Global singleton for the PDFium library interface
-// We store the Result inside the OnceLock to avoid panicking during initialization.
 static PDFIUM: OnceLock<Result<PdfiumWrapper, String>> = OnceLock::new();
 
 fn get_pdfium(app: &tauri::AppHandle) -> Result<&'static Pdfium, String> {
     let result = PDFIUM.get_or_init(|| {
         println!("[PDF Engine] Initializing PDFium...");
         
-        // 1. Try to find the library in the resource directory (for production/installed app)
         let resource_path = app.path().resolve("pdfium.dll", tauri::path::BaseDirectory::Resource);
         
         let path_result = if let Ok(path) = resource_path {
@@ -29,14 +25,12 @@ fn get_pdfium(app: &tauri::AppHandle) -> Result<&'static Pdfium, String> {
             Err("Failed to resolve resource path".to_string())
         };
         
-        // 2. Fallback to current directory (for development)
         let path_result = path_result.or_else(|_| {
             println!("[PDF Engine] Falling back to current directory...");
             Pdfium::bind_to_library(Pdfium::pdfium_platform_library_name_at_path("./"))
                 .map_err(|e| format!("Current dir bind error: {:?}", e))
         });
 
-        // 3. Last fallback to system library
         let path_result = path_result.or_else(|_| {
             Pdfium::bind_to_library(Pdfium::pdfium_platform_library_name())
                 .map_err(|e| format!("System library bind error: {:?}", e))
@@ -61,7 +55,6 @@ fn get_pdfium(app: &tauri::AppHandle) -> Result<&'static Pdfium, String> {
     }
 }
 
-// Wrapper to make PdfDocument Send + Sync relies on Mutex for safety
 pub struct PdfWrapper(pub PdfDocument<'static>);
 
 unsafe impl Send for PdfWrapper {}
@@ -69,54 +62,68 @@ unsafe impl Sync for PdfWrapper {}
 
 #[derive(Clone)]
 pub struct PdfState {
-    pub doc: Arc<Mutex<Option<PdfWrapper>>>,
+    pub docs: Arc<Mutex<HashMap<String, PdfWrapper>>>,
+    pub active_doc: Arc<Mutex<Option<String>>>,
 }
 
 impl PdfState {
     pub fn new() -> Self {
         Self {
-            doc: Arc::new(Mutex::new(None)),
+            docs: Arc::new(Mutex::new(HashMap::new())),
+            active_doc: Arc::new(Mutex::new(None)),
         }
+    }
+    
+    pub fn set_active(&self, path: &str) -> Result<(), String> {
+        let mut active = self.active_doc.lock().map_err(|e| e.to_string())?;
+        *active = Some(path.to_string());
+        Ok(())
+    }
+    
+    pub fn get_active_path(&self) -> Result<String, String> {
+        let active = self.active_doc.lock().map_err(|e| e.to_string())?;
+        active.clone().ok_or_else(|| "No active document".to_string())
     }
 }
 
-// Helper to get optional doc ref
 pub fn with_doc<F, R>(state: &State<'_, PdfState>, f: F) -> Result<R, String>
 where
     F: FnOnce(&PdfDocument<'static>) -> Result<R, String>,
 {
-    let guard = state.doc.lock().map_err(|e| e.to_string())?;
-    if let Some(wrapper) = guard.as_ref() {
+    let active = state.active_doc.lock().map_err(|e| e.to_string())?;
+    let path = active.as_ref().ok_or_else(|| "No active document".to_string())?;
+    
+    let docs = state.docs.lock().map_err(|e| e.to_string())?;
+    if let Some(wrapper) = docs.get(path) {
         f(&wrapper.0)
     } else {
-        Err("No document open".to_string())
+        Err("Document not found".to_string())
     }
 }
 
-// Helper to get mutable doc ref
-pub fn with_mut_doc<F, R>(state: &State<'_, PdfState>, f: F) -> Result<R, String>
+pub fn with_doc_by_path<F, R>(state: &State<'_, PdfState>, path: &str, f: F) -> Result<R, String>
 where
-    F: FnOnce(&mut PdfDocument<'static>) -> Result<R, String>,
+    F: FnOnce(&PdfDocument<'static>) -> Result<R, String>,
 {
-    let mut guard = state.doc.lock().map_err(|e| e.to_string())?;
-    if let Some(wrapper) = guard.as_mut() {
-        f(&mut wrapper.0)
+    let docs = state.docs.lock().map_err(|e| e.to_string())?;
+    if let Some(wrapper) = docs.get(path) {
+        f(&wrapper.0)
     } else {
-        Err("No document open".to_string())
+        Err("Document not found".to_string())
     }
 }
 
 #[tauri::command]
 pub async fn open_document(app: tauri::AppHandle, state: State<'_, PdfState>, path: String) -> Result<i32, String> {
     println!("[PDF Engine] Attempting to open document at: {}", path);
-    // Clone state to move into blocking task
-    let state_clone = state.doc.clone();
+    let state_docs = state.docs.clone();
+    let state_active = state.active_doc.clone();
+    let path_clone = path.clone();
     
     tokio::task::spawn_blocking(move || {
         let pdfium = get_pdfium(&app)?;
         
-        // Performance: Use load_pdf_from_file for memory mapping
-        let doc = pdfium.load_pdf_from_file(&path, None)
+        let doc = pdfium.load_pdf_from_file(&path_clone, None)
             .map_err(|e| {
                 let err = format!("Failed to open PDF: {}", e);
                 eprintln!("[PDF Engine] {}", err);
@@ -126,15 +133,54 @@ pub async fn open_document(app: tauri::AppHandle, state: State<'_, PdfState>, pa
         let page_count = doc.pages().len();
         println!("[PDF Engine] Document opened. Page count: {}", page_count);
         
-        *state_clone.lock().map_err(|e| e.to_string())? = Some(PdfWrapper(doc));
+        let mut docs = state_docs.lock().map_err(|e| e.to_string())?;
+        docs.insert(path_clone.clone(), PdfWrapper(doc));
+        
+        drop(docs);
+        
+        let mut active = state_active.lock().map_err(|e| e.to_string())?;
+        *active = Some(path_clone);
         
         Ok(page_count as i32)
     }).await.map_err(|e| e.to_string())?
 }
 
 #[tauri::command]
+pub async fn close_document(state: State<'_, PdfState>, path: String) -> Result<(), String> {
+    let docs = state.docs.lock().map_err(|e| e.to_string())?;
+    docs.remove(&path);
+    drop(docs);
+    
+    let mut active = state.active_doc.lock().map_err(|e| e.to_string())?;
+    if active.as_ref() == Some(&path) {
+        *active = None;
+    }
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn set_active_document(state: State<'_, PdfState>, path: String) -> Result<(), String> {
+    let docs = state.docs.lock().map_err(|e| e.to_string())?;
+    if !docs.contains_key(&path) {
+        return Err("Document not found".to_string());
+    }
+    drop(docs);
+    
+    let mut active = state.active_doc.lock().map_err(|e| e.to_string())?;
+    *active = Some(path);
+    Ok(())
+}
+
+#[tauri::command]
 pub async fn get_page_count(state: State<'_, PdfState>) -> Result<i32, String> {
-    with_doc(&state, |doc| Ok(doc.pages().len() as i32))
+    let active = state.active_doc.lock().map_err(|e| e.to_string())?.clone();
+    let path = active.ok_or_else(|| "No active document".to_string())?;
+    let docs = state.docs.lock().map_err(|e| e.to_string())?;
+    if let Some(wrapper) = docs.get(&path) {
+        Ok(wrapper.0.pages().len() as i32)
+    } else {
+        Err("Document not found".to_string())
+    }
 }
 
 #[tauri::command]
@@ -144,11 +190,16 @@ pub fn load_document_from_bytes(_data: Vec<u8>) -> Result<(), String> {
 
 #[tauri::command]
 pub async fn get_page_text(state: State<'_, PdfState>, page_num: i32) -> Result<String, String> {
-    with_doc(&state, |doc| {
-        let page = doc.pages().get(page_num as u16).map_err(|e| e.to_string())?;
+    let active = state.active_doc.lock().map_err(|e| e.to_string())?.clone();
+    let path = active.ok_or_else(|| "No active document".to_string())?;
+    let docs = state.docs.lock().map_err(|e| e.to_string())?;
+    if let Some(wrapper) = docs.get(&path) {
+        let page = wrapper.0.pages().get(page_num as u16).map_err(|e| e.to_string())?;
         let text = page.text().map_err(|e| e.to_string())?;
         Ok(text.all())
-    })
+    } else {
+        Err("Document not found".to_string())
+    }
 }
 
 #[tauri::command]
@@ -157,8 +208,12 @@ pub fn search_text(
     page_num: i32,
     query: String,
 ) -> Result<Vec<(f32, f32, f32, f32)>, String> {
-    with_doc(&state, |doc| {
-        let page = doc.pages().get(page_num as u16).map_err(|e| e.to_string())?;
+    let active = state.active_doc.lock().map_err(|e| e.to_string())?.clone();
+    let path = active.ok_or_else(|| "No active document".to_string())?;
+    let docs = state.docs.lock().map_err(|e| e.to_string())?;
+    
+    if let Some(wrapper) = docs.get(&path) {
+        let page = wrapper.0.pages().get(page_num as u16).map_err(|e| e.to_string())?;
         let text = page.text().map_err(|e| e.to_string())?;
         
         let search = text.search(&query, &PdfSearchOptions::default()).map_err(|e| e.to_string())?;
@@ -177,7 +232,9 @@ pub fn search_text(
         }
 
         Ok(results)
-    })
+    } else {
+        Err("Document not found".to_string())
+    }
 }
 
 #[derive(serde::Serialize)]
@@ -194,48 +251,44 @@ pub async fn search_document(
     state: tauri::State<'_, PdfState>,
     query: String
 ) -> Result<Vec<SearchResult>, String> {
-    // Clone state to move into blocking task
-    let doc_clone = state.doc.clone();
+    let active = state.active_doc.lock().map_err(|e| e.to_string())?.clone();
+    let path = active.ok_or_else(|| "No active document".to_string())?;
+    let docs = state.docs.lock().map_err(|e| e.to_string())?;
     
-    // Run search on blocking thread to not block async runtime
-    tokio::task::spawn_blocking(move || {
-        let guard = doc_clone.lock().map_err(|e| e.to_string())?;
-        if let Some(wrapper) = guard.as_ref() {
-             let doc = &wrapper.0;
-             let page_count = doc.pages().len();
+    let doc = if let Some(wrapper) = docs.get(&path) {
+        &wrapper.0
+    } else {
+        return Err("Document not found".to_string());
+    };
+    
+    let page_count = doc.pages().len();
+    
+    let results: Vec<SearchResult> = (0..page_count).into_par_iter()
+        .flat_map(|i| {
+            let mut page_results = Vec::new();
+            if let Ok(page) = doc.pages().get(i) {
+                if let Ok(text) = page.text() {
+                    if let Ok(search) = text.search(&query, &PdfSearchOptions::default()) {
+                        for match_result in search.iter(PdfSearchDirection::SearchForward) {
+                            for segment in match_result.iter() {
+                                let rect = segment.bounds();
+                                page_results.push(SearchResult {
+                                    page: i as i32,
+                                    x: rect.left().value,
+                                    y: rect.top().value,
+                                    w: rect.width().value,
+                                    h: rect.height().value,
+                                });
+                            }
+                        }
+                    }
+                }
+            }
+            page_results
+        })
+        .collect();
 
-             // Sequential search across all pages (PdfDocument is not Sync)
-             let results: Vec<SearchResult> = (0..page_count).into_iter()
-                 .map(|i| {
-                     let mut page_results = Vec::new();
-                     if let Ok(page) = doc.pages().get(i) {
-                         if let Ok(text) = page.text() {
-                             if let Ok(search) = text.search(&query, &PdfSearchOptions::default()) {
-                                 for match_result in search.iter(PdfSearchDirection::SearchForward) {
-                                     for segment in match_result.iter() {
-                                         let rect = segment.bounds();
-                                         page_results.push(SearchResult {
-                                             page: i as i32,
-                                             x: rect.left().value,
-                                             y: rect.top().value,
-                                             w: rect.width().value,
-                                             h: rect.height().value,
-                                         });
-                                     }
-                                 }
-                             }
-                         }
-                     }
-                     page_results
-                 })
-                 .flatten()
-                 .collect();
-
-             Ok(results)
-        } else {
-             Err("No document open".to_string())
-        }
-    }).await.map_err(|e| e.to_string())?
+    Ok(results)
 }
 
 /// Text rectangle for text layer rendering
@@ -254,101 +307,93 @@ pub async fn get_page_text_with_coords(
     state: tauri::State<'_, PdfState>,
     page_num: i32,
 ) -> Result<Vec<TextRect>, String> {
-    let doc_clone = state.doc.clone();
+    let active = state.active_doc.lock().map_err(|e| e.to_string())?.clone();
+    let path = active.ok_or_else(|| "No active document".to_string())?;
+    let docs = state.docs.lock().map_err(|e| e.to_string())?;
     
-    tokio::task::spawn_blocking(move || {
-        let guard = doc_clone.lock().map_err(|e| e.to_string())?;
-        if let Some(wrapper) = guard.as_ref() {
-            let doc = &wrapper.0;
-            let page = doc.pages().get(page_num as u16).map_err(|e| e.to_string())?;
-            let text_page = page.text().map_err(|e| e.to_string())?;
-            
-            let mut results = Vec::new();
-            
-            // Iterate through characters and group into words
-            let mut current_word = String::new();
-            let mut word_bounds: Option<(f32, f32, f32, f32)> = None; // (min_x, min_y, max_x, max_y)
-            
-            for char_result in text_page.chars().iter() {
-                // Unwrap unicode_char() which returns Option<char>
-                let c = match char_result.unicode_char() {
-                    Some(ch) => ch,
-                    None => continue, // Skip characters that can't be decoded
-                };
-                
-                // Unwrap loose_bounds() which returns Result<PdfRect, PdfiumError>
-                let bounds = match char_result.loose_bounds() {
-                    Ok(rect) => rect,
-                    Err(_) => continue, // Skip characters without valid bounds
-                };
-                
-                let x = bounds.left().value;
-                let y = bounds.top().value;
-                let w = bounds.width().value;
-                let h = bounds.height().value;
-                
-                if c.is_whitespace() || c == '\n' || c == '\r' {
-                    // End current word
-                    if !current_word.is_empty() {
-                        if let Some((min_x, min_y, max_x, max_y)) = word_bounds {
-                            results.push(TextRect {
-                                text: current_word.clone(),
-                                x: min_x,
-                                y: min_y,
-                                w: max_x - min_x,
-                                h: max_y - min_y,
-                            });
-                        }
-                        current_word.clear();
-                        word_bounds = None;
-                    }
-                    
-                    // Add space as separate element if it's a regular space
-                    if c == ' ' {
-                        results.push(TextRect {
-                            text: " ".to_string(),
-                            x,
-                            y,
-                            w,
-                            h,
-                        });
-                    }
-                } else {
-                    // Add character to current word
-                    current_word.push(c);
-                    
-                    // Update word bounds
-                    if let Some((min_x, min_y, max_x, max_y)) = word_bounds {
-                        word_bounds = Some((
-                            min_x.min(x),
-                            min_y.min(y),
-                            max_x.max(x + w),
-                            max_y.max(y + h),
-                        ));
-                    } else {
-                        word_bounds = Some((x, y, x + w, y + h));
-                    }
-                }
-            }
-            
-            // Don't forget the last word
+    let doc = if let Some(wrapper) = docs.get(&path) {
+        &wrapper.0
+    } else {
+        return Err("Document not found".to_string());
+    };
+    
+    let page = doc.pages().get(page_num as u16).map_err(|e| e.to_string())?;
+    let text_page = page.text().map_err(|e| e.to_string())?;
+    
+    let mut results = Vec::new();
+    
+    let mut current_word = String::new();
+    let mut word_bounds: Option<(f32, f32, f32, f32)> = None;
+    
+    for char_result in text_page.chars().iter() {
+        let c = match char_result.unicode_char() {
+            Some(ch) => ch,
+            None => continue,
+        };
+        
+        let bounds = match char_result.loose_bounds() {
+            Ok(rect) => rect,
+            Err(_) => continue,
+        };
+        
+        let x = bounds.left().value;
+        let y = bounds.top().value;
+        let w = bounds.width().value;
+        let h = bounds.height().value;
+        
+        if c.is_whitespace() || c == '\n' || c == '\r' {
             if !current_word.is_empty() {
                 if let Some((min_x, min_y, max_x, max_y)) = word_bounds {
                     results.push(TextRect {
-                        text: current_word,
+                        text: current_word.clone(),
                         x: min_x,
                         y: min_y,
                         w: max_x - min_x,
                         h: max_y - min_y,
                     });
                 }
+                current_word.clear();
+                word_bounds = None;
             }
             
-            Ok(results)
+            if c == ' ' {
+                results.push(TextRect {
+                    text: " ".to_string(),
+                    x,
+                    y,
+                    w,
+                    h,
+                });
+            }
         } else {
-            Err("No document open".to_string())
+            current_word.push(c);
+            
+            if let Some((min_x, min_y, max_x, max_y)) = word_bounds {
+                word_bounds = Some((
+                    min_x.min(x),
+                    min_y.min(y),
+                    max_x.max(x + w),
+                    max_y.max(y + h),
+                ));
+            } else {
+                word_bounds = Some((x, y, x + w, y + h));
+            }
         }
-    }).await.map_err(|e| e.to_string())?
+    }
+    
+    if !current_word.is_empty() {
+        if let Some((min_x, min_y, max_x, max_y)) = word_bounds {
+            results.push(TextRect {
+                text: current_word,
+                x: min_x,
+                y: min_y,
+                w: max_x - min_x,
+                h: max_y - min_y,
+            });
+        }
+    }
+    
+    Ok(results)
 }
 
 #[tauri::command]
@@ -357,41 +402,48 @@ pub async fn render_page(
     page_num: i32,
     scale: f32,
 ) -> Result<tauri::ipc::Response, String> {
-    let doc_clone = state.doc.clone();
-    tokio::task::spawn_blocking(move || {
-        let guard = doc_clone.lock().map_err(|e| e.to_string())?;
-        if let Some(wrapper) = guard.as_ref() {
-             let doc = &wrapper.0;
-             let page = doc.pages().get(page_num as u16).map_err(|e| e.to_string())?;
-             let width = (page.width().value * scale) as i32;
-             let height = (page.height().value * scale) as i32;
-             let bitmap = page.render(width, height, None).map_err(|e| e.to_string())?;
-             
-             let raw_bytes = bitmap.as_raw_bytes();
+    let active = state.active_doc.lock().map_err(|e| e.to_string())?.clone();
+    let path = active.ok_or_else(|| "No active document".to_string())?;
+    let docs = state.docs.lock().map_err(|e| e.to_string())?;
+    
+    let doc = if let Some(wrapper) = docs.get(&path) {
+        &wrapper.0
+    } else {
+        return Err("Document not found".to_string());
+    };
+    
+    let page = doc.pages().get(page_num as u16).map_err(|e| e.to_string())?;
+    let width = (page.width().value * scale) as i32;
+    let height = (page.height().value * scale) as i32;
+    let bitmap = page.render(width, height, None).map_err(|e| e.to_string())?;
+    
+    let raw_bytes = bitmap.as_raw_bytes();
 
-             let mut body = Vec::with_capacity(8 + raw_bytes.len());
-             body.extend_from_slice(&width.to_be_bytes());
-             body.extend_from_slice(&height.to_be_bytes());
-             body.extend_from_slice(&raw_bytes);
+    let mut body = Vec::with_capacity(8 + raw_bytes.len());
+    body.extend_from_slice(&width.to_be_bytes());
+    body.extend_from_slice(&height.to_be_bytes());
+    body.extend_from_slice(&raw_bytes);
 
-             Ok(tauri::ipc::Response::new(body))
-        } else {
-             Err("No document open".to_string())
-        }
-    }).await.map_err(|e| e.to_string())?
+    Ok(tauri::ipc::Response::new(body))
 }
 
 #[tauri::command]
 pub fn get_page_dimensions(state: tauri::State<PdfState>) -> Result<Vec<(i32, i32)>, String> {
-    with_doc(&state, |doc| {
+    let active = state.active_doc.lock().map_err(|e| e.to_string())?.clone();
+    let path = active.ok_or_else(|| "No active document".to_string())?;
+    let docs = state.docs.lock().map_err(|e| e.to_string())?;
+    
+    if let Some(wrapper) = docs.get(&path) {
         let mut dimensions = Vec::new();
-        for page in doc.pages().iter() {
+        for page in wrapper.0.pages().iter() {
             let width = page.width().value as i32;
             let height = page.height().value as i32;
             dimensions.push((width, height));
         }
         Ok(dimensions)
-    })
+    } else {
+        Err("Document not found".to_string())
+    }
 }
 
 #[tauri::command]

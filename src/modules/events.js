@@ -567,21 +567,27 @@ export const events = {
     },
 
     updateZoom(newZoom) {
+        const oldZoom = state.currentZoom;
         state.currentZoom = newZoom;
         document.getElementById('pages-container').style.setProperty('--zoom-factor', state.currentZoom);
 
-        // Update zoom level display
         const zoomLevel = document.getElementById('zoom-level');
         if (zoomLevel) zoomLevel.textContent = `${Math.round(state.currentZoom * 100)}%`;
 
         ui.updateUI();
 
-        // Debounce commit
         if (state.zoomTimeout) clearTimeout(state.zoomTimeout);
+        
         state.zoomTimeout = setTimeout(() => {
+            if (Math.abs(oldZoom - state.currentZoom) < 0.01) return;
+            
             state.renderScale = state.currentZoom;
+            state.pageCache.clear();
+            state.currentCacheBytes = 0;
+            state.textLayerCache.clear();
+            renderer.clearCanvasContextCache();
             renderer.setupVirtualScroller();
-        }, 300);
+        }, 150);
     },
 
     bindKeyboardEvents() {

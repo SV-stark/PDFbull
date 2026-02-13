@@ -5,23 +5,20 @@ import { settings } from './settings.js';
 import { CONSTANTS } from './constants.js';
 
 export const renderer = {
-    // Cache Management
+    // Cache Management - Improved LRU with proper ordering
     getCachedPage(pageNum) {
-        if (state.pageCache.has(pageNum)) {
-            // LRU: Refresh item by deleting and re-inserting
-            const data = state.pageCache.get(pageNum);
-            state.pageCache.delete(pageNum);
-            state.pageCache.set(pageNum, data);
+        const cacheKey = `${pageNum}_${state.currentZoom}`;
+        if (state.pageCache.has(cacheKey)) {
+            const data = state.pageCache.get(cacheKey);
             return data;
         }
         return null;
     },
 
     setCachedPage(pageNum, data) {
-        // Calculate approximate size: width * height * 4 bytes (RGBA)
+        const cacheKey = `${pageNum}_${state.currentZoom}`;
         const pageSize = data.width * data.height * 4;
 
-        // Evict until we have space
         while (state.currentCacheBytes + pageSize > state.MAX_CACHE_BYTES && state.pageCache.size > 0) {
             const firstKey = state.pageCache.keys().next().value;
             const oldData = state.pageCache.get(firstKey);
@@ -35,8 +32,26 @@ export const renderer = {
             state.pageCache.delete(firstKey);
         }
 
-        state.pageCache.set(pageNum, data);
+        state.pageCache.set(cacheKey, data);
         state.currentCacheBytes += pageSize;
+    },
+
+    // Get or create cached canvas context
+    getCanvasContext(pageNum, canvasId) {
+        const key = `${pageNum}_${canvasId}`;
+        if (state.canvasContexts.has(key)) {
+            return state.canvasContexts.get(key);
+        }
+        const canvas = document.getElementById(`${canvasId}-${pageNum}`);
+        if (!canvas) return null;
+        const ctx = canvas.getContext('2d');
+        state.canvasContexts.set(key, ctx);
+        return ctx;
+    },
+
+    // Clear cached contexts when zoom changes
+    clearCanvasContextCache() {
+        state.canvasContexts.clear();
     },
 
     bindScrollEvents() {
@@ -240,6 +255,9 @@ export const renderer = {
     async renderPage(pageNum) {
         if (pageNum < 0 || pageNum >= state.totalPages) return;
 
+        const requestId = ++state.currentRenderRequest;
+        state.pageRenderRequests.set(pageNum, requestId);
+
         const pdfCanvas = /** @type {HTMLCanvasElement} */ (document.getElementById(`page-canvas-${pageNum}`));
         const annCanvas = /** @type {HTMLCanvasElement} */ (document.getElementById(`ann-canvas-${pageNum}`));
         const pdfCtx = pdfCanvas.getContext('2d');
@@ -247,7 +265,6 @@ export const renderer = {
 
         const cached = renderer.getCachedPage(pageNum);
 
-        // If cached and zoom matches, draw instantly
         if (cached && cached.zoom === state.currentZoom) {
             renderer.drawCachedPage(pageNum, cached);
             return;
@@ -256,19 +273,27 @@ export const renderer = {
         try {
             const responseBytes = await api.renderPage(pageNum, state.renderScale);
 
-            const view = new DataView(responseBytes);
-            const width = view.getInt32(0, false); // Big Endian
-            const height = view.getInt32(4, false); // Big Endian
+            if (state.pageRenderRequests.get(pageNum) !== requestId) {
+                return;
+            }
 
-            // Pixels start at offset 8
+            const view = new DataView(responseBytes);
+            const width = view.getInt32(0, false);
+            const height = view.getInt32(4, false);
+
             const pixels = new Uint8ClampedArray(responseBytes, 8);
 
             if (!state.visiblePages.has(pageNum)) return;
+            if (state.pageRenderRequests.get(pageNum) !== requestId) return;
 
             const imageData = new ImageData(pixels, width, height);
             const imageBitmap = await createImageBitmap(imageData);
 
             if (!state.visiblePages.has(pageNum)) {
+                imageBitmap.close();
+                return;
+            }
+            if (state.pageRenderRequests.get(pageNum) !== requestId) {
                 imageBitmap.close();
                 return;
             }
@@ -294,11 +319,14 @@ export const renderer = {
 
             renderer.drawAnnotations(pageNum);
 
-            // Render text layer for selection (async, non-blocking)
             renderer.renderTextLayer(pageNum, width, height);
 
         } catch (e) {
-            console.error(`Failed to render page ${pageNum}:`, e);
+            if (state.pageRenderRequests.get(pageNum) === requestId) {
+                console.error(`Failed to render page ${pageNum}:`, e);
+            }
+        } finally {
+            state.pageRenderRequests.delete(pageNum);
         }
     },
 
@@ -404,48 +432,59 @@ export const renderer = {
         const textLayer = /** @type {HTMLElement} */ (document.getElementById(`text-layer-${pageNum}`));
         if (!textLayer) return;
 
-        // Check if already rendering or rendered for this zoom
-        if (textLayer.dataset.rendered === String(state.currentZoom)) return;
+        const zoomKey = String(state.currentZoom);
+        
+        let pageTextCache = state.textLayerCache.get(pageNum);
+        if (!pageTextCache) {
+            pageTextCache = new Map();
+            state.textLayerCache.set(pageNum, pageTextCache);
+        }
+
+        if (pageTextCache.has(zoomKey)) {
+            if (textLayer.dataset.rendered === zoomKey) return;
+            textLayer.innerHTML = '';
+            textLayer.innerHTML = pageTextCache.get(zoomKey);
+            textLayer.dataset.rendered = zoomKey;
+            return;
+        }
+
+        if (textLayer.dataset.rendered === zoomKey) return;
 
         try {
             const textRects = await api.getPageTextRects(pageNum);
 
-            // Verify page is still visible
             if (!state.visiblePages.has(pageNum)) return;
 
-            // Get original page dimensions for coordinate conversion
             const [origWidth, origHeight] = state.pageDimensions[pageNum] || [0, 0];
             if (origWidth === 0) return;
 
-            // Scale factors
             const scaleX = canvasWidth / origWidth;
             const scaleY = canvasHeight / origHeight;
 
-            // Clear and populate
             textLayer.innerHTML = '';
 
             textRects.forEach(rect => {
-                if (!rect.text.trim() && rect.text !== ' ') return; // Skip empty
+                if (!rect.text.trim() && rect.text !== ' ') return;
 
                 const span = document.createElement('span');
                 span.textContent = rect.text;
 
-                // Convert PDF coordinates (0,0 at bottom-left) to CSS (0,0 at top-left)
                 const cssX = rect.x * scaleX;
-                const cssY = (origHeight - rect.y) * scaleY; // Flip Y
+                const cssY = (origHeight - rect.y) * scaleY;
                 const cssW = rect.w * scaleX;
                 const cssH = rect.h * scaleY;
 
                 span.style.left = `${cssX}px`;
-                span.style.top = `${cssY - cssH}px`; // Adjust for text baseline
+                span.style.top = `${cssY - cssH}px`;
                 span.style.width = `${cssW}px`;
                 span.style.height = `${cssH}px`;
-                span.style.fontSize = `${cssH * 0.9}px`; // Approximate font size
+                span.style.fontSize = `${cssH * 0.9}px`;
 
                 textLayer.appendChild(span);
             });
 
-            textLayer.dataset.rendered = String(state.currentZoom);
+            pageTextCache.set(zoomKey, textLayer.innerHTML);
+            textLayer.dataset.rendered = zoomKey;
 
         } catch (e) {
             console.error(`Failed to render text layer for page ${pageNum}:`, e);
@@ -513,80 +552,91 @@ export const renderer = {
         if (!container) return;
         container.innerHTML = '';
 
+        const pages = [];
         for (let i = 0; i < state.totalPages; i++) {
             const thumb = document.createElement('div');
             thumb.className = 'thumbnail skeleton';
             thumb.dataset.page = String(i);
             thumb.innerHTML = `<span style="pointer-events:none;">${i + 1}</span>`;
 
-            // Highlight current page
             if (i === state.currentPage) thumb.classList.add('active');
 
             thumb.onclick = () => {
                 state.currentPage = i;
                 renderer.scrollToPage(i);
-                // updating UI active state logic can be here or in updateUI
                 document.querySelectorAll('.thumbnail').forEach(t => t.classList.remove('active'));
                 thumb.classList.add('active');
             };
             container.appendChild(thumb);
+            pages.push({ index: i, element: thumb });
         }
 
-        // Lazy-load visible thumbnails
         const Observer = new IntersectionObserver((entries) => {
-            entries.forEach(async (entry) => {
-                const target = /** @type {HTMLElement} */ (entry.target);
-                if (entry.isIntersecting && !target.dataset.rendered) {
-                    const pageNum = parseInt(target.dataset.page);
-                    target.dataset.rendered = 'true';
+            const visibleEntries = entries.filter(e => e.isIntersecting && !e.target.dataset.rendered);
+            
+            if (visibleEntries.length === 0) return;
 
-                    try {
-                        // Render at low scale (0.15)
-                        const responseBytes = await api.renderPage(pageNum, 0.15);
-                        const view = new DataView(responseBytes);
+            visibleEntries.forEach(entry => {
+                entry.target.dataset.rendered = 'true';
+            });
 
-                        // Parse header (same as renderPage)
-                        const width = view.getInt32(0, false);
-                        const height = view.getInt32(4, false);
-                        const pixels = new Uint8ClampedArray(responseBytes, 8);
+            const visiblePages = visibleEntries.map(e => parseInt(e.target.dataset.page));
 
-                        const imageData = new ImageData(pixels, width, height);
-                        const imageBitmap = await createImageBitmap(imageData);
+            Promise.all(visiblePages.map(async (pageNum) => {
+                try {
+                    const responseBytes = await api.renderPage(pageNum, 0.15);
+                    const view = new DataView(responseBytes);
 
-                        const canvas = document.createElement('canvas');
-                        canvas.width = width;
-                        canvas.height = height;
-                        canvas.style.width = '100%';
-                        canvas.style.height = 'auto';
+                    const width = view.getInt32(0, false);
+                    const height = view.getInt32(4, false);
+                    const pixels = new Uint8ClampedArray(responseBytes, 8);
 
-                        const ctx = canvas.getContext('2d');
-                        ctx.drawImage(imageBitmap, 0, 0);
+                    const imageData = new ImageData(pixels, width, height);
+                    const imageBitmap = await createImageBitmap(imageData);
 
-                        target.innerHTML = ''; // Clear number
-                        target.classList.remove('skeleton');
-                        target.style.background = 'transparent';
-                        target.appendChild(canvas);
-
-                        // Add page number overlay back
-                        const num = document.createElement('div');
-                        num.textContent = String(pageNum + 1);
-                        num.className = 'thumb-num';
-                        num.style.position = 'absolute';
-                        num.style.bottom = '2px';
-                        num.style.right = '2px';
-                        num.style.background = 'rgba(0,0,0,0.5)';
-                        num.style.color = 'white';
-                        num.style.padding = '2px 4px';
-                        num.style.borderRadius = '4px';
-                        num.style.fontSize = '10px';
-                        target.appendChild(num);
-                        target.style.position = 'relative';
-
-                        imageBitmap.close();
-                    } catch (e) {
-                        console.error('Thumb render failed', e);
-                    }
+                    return { pageNum, width, height, imageBitmap };
+                } catch (e) {
+                    console.error('Thumb render failed', e);
+                    return null;
                 }
+            })).then(results => {
+                results.forEach(result => {
+                    if (!result) return;
+                    const { pageNum, width, height, imageBitmap } = result;
+                    
+                    const target = container.querySelector(`[data-page="${pageNum}"]`);
+                    if (!target) return;
+
+                    const canvas = document.createElement('canvas');
+                    canvas.width = width;
+                    canvas.height = height;
+                    canvas.style.width = '100%';
+                    canvas.style.height = 'auto';
+
+                    const ctx = canvas.getContext('2d');
+                    ctx.drawImage(imageBitmap, 0, 0);
+
+                    target.innerHTML = '';
+                    target.classList.remove('skeleton');
+                    target.style.background = 'transparent';
+                    target.appendChild(canvas);
+
+                    const num = document.createElement('div');
+                    num.textContent = String(pageNum + 1);
+                    num.className = 'thumb-num';
+                    num.style.position = 'absolute';
+                    num.style.bottom = '2px';
+                    num.style.right = '2px';
+                    num.style.background = 'rgba(0,0,0,0.5)';
+                    num.style.color = 'white';
+                    num.style.padding = '2px 4px';
+                    num.style.borderRadius = '4px';
+                    num.style.fontSize = '10px';
+                    target.appendChild(num);
+                    target.style.position = 'relative';
+
+                    imageBitmap.close();
+                });
             });
         }, { root: container, rootMargin: '100px' });
 

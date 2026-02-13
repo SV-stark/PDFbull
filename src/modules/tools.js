@@ -40,6 +40,7 @@ export const tools = {
 
         pageAnnotations.push(annotation);
         state.annotations.set(state.currentPage, pageAnnotations);
+        state.isDirty = true;
 
         tools.saveState();
         renderer.drawAnnotations(state.currentPage);

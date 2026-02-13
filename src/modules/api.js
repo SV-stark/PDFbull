@@ -24,6 +24,20 @@ export const api = {
     openDocument: (path) => invoke('open_document', { path }),
 
     /**
+     * Close a PDF document
+     * @param {string} path - Document path to close
+     * @returns {Promise<void>}
+     */
+    closeDocument: (path) => invoke('close_document', { path }),
+
+    /**
+     * Set active document
+     * @param {string} path - Document path to activate
+     * @returns {Promise<void>}
+     */
+    setActiveDocument: (path) => invoke('set_active_document', { path }),
+
+    /**
      * Get the page count of the current document
      * @returns {Promise<number>}
      */

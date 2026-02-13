@@ -150,7 +150,26 @@ export const state = {
     pageObserver: null,
 
     /** @type {Set<number>} Currently visible page numbers */
-    visiblePages: new Set()
+    visiblePages: new Set(),
+    
+    // ─────────────────────────────────────
+    // PERFORMANCE
+    // ─────────────────────────────────────
+    
+    /** @type {number} Current render request ID for cancellation */
+    currentRenderRequest: 0,
+    
+    /** @type {Map<number, number>} Render request IDs per page */
+    pageRenderRequests: new Map(),
+    
+    /** @type {boolean} Whether there are unsaved changes */
+    isDirty: false,
+    
+    /** @type {Map<string, Map<number, Object>>} Text layer cache per zoom */
+    textLayerCache: new Map(),
+    
+    /** @type {Map<string, CanvasRenderingContext2D>} Cached canvas contexts */
+    canvasContexts: new Map()
 };
 
 /**
@@ -168,5 +187,9 @@ export function resetState() {
     state.visiblePages.clear();
     state.selectedPages.clear();
     state.batchMode = false;
+    state.isDirty = false;
+    state.pageRenderRequests.clear();
+    state.textLayerCache.clear();
+    state.canvasContexts.clear();
 }
 

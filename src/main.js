@@ -45,7 +45,6 @@ const app = {
   switchToTab(tabId) {
     if (!state.openDocuments.has(tabId)) return;
 
-    // Save current state
     if (state.activeTabId) {
       const currentDoc = state.openDocuments.get(state.activeTabId);
       if (currentDoc) {
@@ -54,7 +53,6 @@ const app = {
       }
     }
 
-    // Switch to new tab
     state.activeTabId = tabId;
     const doc = state.openDocuments.get(tabId);
 
@@ -63,24 +61,30 @@ const app = {
     state.currentPage = doc.currentPage;
     state.currentZoom = doc.zoom;
 
-    // Update UI
     ui.updateActiveTab(tabId);
 
-    state.pageCache.clear(); // Or manage per tab? Original code cleared it.
-    // loadAnnotations(); // Need to migrate loadAnnotations
+    api.setActiveDocument(doc.path).catch(console.error);
+    
+    state.pageCache.clear();
+    state.currentCacheBytes = 0;
+    state.textLayerCache.clear();
+    state.canvasContexts.clear();
     app.loadAnnotations();
     app.loadBookmarks();
 
-    // Update visual zoom state
     state.renderScale = state.currentZoom;
     renderer.setupVirtualScroller();
     renderer.renderThumbnails();
   },
 
   closeTab(tabId) {
-    // Remove tab UI
     const tab = document.getElementById(tabId);
     if (tab) tab.remove();
+
+    const doc = state.openDocuments.get(tabId);
+    if (doc) {
+      api.closeDocument(doc.path).catch(console.error);
+    }
 
     state.openDocuments.delete(tabId);
 
@@ -95,6 +99,7 @@ const app = {
         state.annotations.clear();
         state.history = [];
         state.historyIndex = -1;
+        state.isDirty = false;
         const pagesContainer = ui.elements.pagesContainer();
         if (pagesContainer) pagesContainer.innerHTML = '';
         ui.updateUI();
@@ -124,6 +129,7 @@ const app = {
 
     if (docAnnotations) {
       state.annotations = new Map(docAnnotations.annotations);
+      state.isDirty = false;
       ui.showToast('Annotations loaded');
     }
   },
@@ -187,6 +193,10 @@ const app = {
     ui.updateBookmarkUI(pageNum);
   },
 
+  markDirty() {
+    state.isDirty = true;
+  },
+
   saveBookmarks() {
     if (!state.currentDoc) return;
     const all = JSON.parse(localStorage.getItem('pdfBookmarks') || '{}');
@@ -203,7 +213,6 @@ const app = {
     } else {
       state.bookmarks.clear();
     }
-    // Update UI if current page is bookmarked
     ui.updateBookmarkUI(state.currentPage);
   }
 };
@@ -303,31 +312,20 @@ function startAutoSave() {
 
   if (interval > 0) {
     autoSaveTimer = setInterval(() => {
-      if (state.currentDoc && state.annotations.size > 0) {
+      if (state.currentDoc && state.annotations.size > 0 && state.isDirty) {
         const saved = JSON.parse(localStorage.getItem('pdfAnnotations') || '{}');
-        // Only save if we have annotations for the current doc
         const currentAnns = state.annotations;
-        // logic to convert map to array for storage
         const annArray = [];
         currentAnns.forEach((anns, page) => {
           annArray.push({ page, annotations: anns });
         });
 
-        // Actually we need to match the loadAnnotations format
-        // loadAnnotations does: state.annotations = new Map(docAnnotations.annotations);
-        // So docAnnotations.annotations should be an array of [key, value] pairs or compatible?
-        // Wait, JSON.stringify(map) returns {}, maps don't stringify well.
-        // We need to convert Map to Array of entries.
-
         const serializableAnns = Array.from(state.annotations.entries());
 
         saved[state.currentDoc] = { annotations: serializableAnns };
         localStorage.setItem('pdfAnnotations', JSON.stringify(saved));
-
-        // Optional: toast only on first save or periodic? 
-        // Plan said toast "Auto-saved".
-        // Let's debounce the toast or it gets annoying.
-        // ui.showToast('Auto-saved', 'info', 1500);
+        
+        state.isDirty = false;
       }
     }, interval);
   }
