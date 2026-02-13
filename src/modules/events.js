@@ -9,6 +9,7 @@ import { scanner } from './scanner.js';
 import { settings } from './settings.js';
 import { exportManager } from './export.js';
 import { CONSTANTS } from './constants.js';
+import { debug } from './debug.js';
 
 const { listen } = window.__TAURI__?.event || { listen: () => () => { } };
 
@@ -431,10 +432,18 @@ export const events = {
             if (!state.currentDoc) return;
             ui.showLoading('Auto-cropping...');
             try {
+                debug.log(`Auto-cropping page ${state.currentPage}`);
                 await api.autoCrop(state.currentPage);
-                renderer.renderPage(state.currentPage);
+                
+                // Refresh page dimensions after crop
+                state.pageDimensions = await api.getPageDimensions();
+                await renderer.setupVirtualScroller();
+                await renderer.renderPage(state.currentPage);
+                
+                debug.log(`Crop complete, dimensions refreshed`);
                 ui.showToast('Page cropped');
             } catch (e) {
+                debug.error('Crop failed:', e);
                 ui.showToast('Crop failed: ' + e, 'error');
             } finally {
                 ui.hideLoading();
@@ -578,15 +587,17 @@ export const events = {
 
         if (state.zoomTimeout) clearTimeout(state.zoomTimeout);
         
-        state.zoomTimeout = setTimeout(() => {
-            if (Math.abs(oldZoom - state.currentZoom) < 0.01) return;
+        state.zoomTimeout = setTimeout(async () => {
+            debug.log(`Zoom debounce complete: ${oldZoom} -> ${newZoom}`);
             
             state.renderScale = state.currentZoom;
             state.pageCache.clear();
             state.currentCacheBytes = 0;
             state.textLayerCache.clear();
             renderer.clearCanvasContextCache();
-            renderer.setupVirtualScroller();
+            await renderer.setupVirtualScroller();
+            
+            debug.log(`Virtual scroller re-setup complete`);
         }, 150);
     },
 

@@ -8,15 +8,28 @@ import { ocr } from './modules/ocr.js';
 import { CONSTANTS } from './modules/constants.js';
 import { CommandPalette } from './modules/commandPalette.js';
 import { ContextMenu } from './modules/contextMenu.js';
+import { debug } from './modules/debug.js';
 
 // Controller Logic
 const app = {
   async openNewTab(path) {
+    // Check if document is already open
+    for (const [tabId, doc] of state.openDocuments) {
+      if (doc.path === path) {
+        debug.log(`Document already open in tab ${tabId}, switching to it`);
+        app.switchToTab(tabId);
+        return;
+      }
+    }
+
     const tabId = `tab-${++state.tabCounter}`;
 
     try {
       ui.showLoading('Opening PDF...');
+      debug.log(`Opening document: ${path}`);
+      
       const pages = await api.openDocument(path);
+      debug.log(`Document opened with ${pages} pages`);
 
       state.openDocuments.set(tabId, {
         id: tabId,
@@ -29,21 +42,26 @@ const app = {
 
       app.addToRecentFiles(path);
       ui.createTabUI(tabId, state.openDocuments.get(tabId), app.switchToTab, app.closeTab);
-      app.switchToTab(tabId);
+      await app.switchToTab(tabId);
       ui.hideLoading();
 
       // Hide welcome screen
       const emptyState = document.getElementById('empty-state');
       if (emptyState) emptyState.style.display = 'none';
     } catch (e) {
-      console.error('Failed to open document:', e);
+      debug.error('Failed to open document:', e);
       ui.showToast('Error opening PDF: ' + e, 'error');
       ui.hideLoading();
     }
   },
 
-  switchToTab(tabId) {
-    if (!state.openDocuments.has(tabId)) return;
+  async switchToTab(tabId) {
+    if (!state.openDocuments.has(tabId)) {
+      debug.warn(`Tab ${tabId} not found`);
+      return;
+    }
+
+    debug.log(`Switching to tab: ${tabId}`);
 
     if (state.activeTabId) {
       const currentDoc = state.openDocuments.get(state.activeTabId);
@@ -63,7 +81,8 @@ const app = {
 
     ui.updateActiveTab(tabId);
 
-    api.setActiveDocument(doc.path).catch(console.error);
+    await api.setActiveDocument(doc.path);
+    debug.log(`Active document set to: ${doc.path}`);
     
     state.pageCache.clear();
     state.currentCacheBytes = 0;
@@ -73,8 +92,10 @@ const app = {
     app.loadBookmarks();
 
     state.renderScale = state.currentZoom;
-    renderer.setupVirtualScroller();
+    await renderer.setupVirtualScroller();
     renderer.renderThumbnails();
+    
+    debug.log(`Tab switch complete`);
   },
 
   closeTab(tabId) {
@@ -83,6 +104,7 @@ const app = {
 
     const doc = state.openDocuments.get(tabId);
     if (doc) {
+      debug.log(`Closing document: ${doc.path}`);
       api.closeDocument(doc.path).catch(console.error);
     }
 
@@ -293,6 +315,9 @@ document.addEventListener('app:scan-forms', async () => {
 
 // Init Events
 events.init();
+
+// Init Debug Module
+debug.init();
 
 // Init OCR module
 ocr.init();

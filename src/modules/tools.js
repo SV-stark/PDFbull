@@ -217,9 +217,18 @@ export const tools = {
         }
 
         state.currentPage = savedPage;
-        tools.currentDrawingPage = -1;
-        tools.tempCanvas = null;
+        tools.cleanup();
+    },
+    
+    cleanup() {
+        if (tools.tempCanvas) {
+            tools.tempCanvas.width = 0;
+            tools.tempCanvas.height = 0;
+            tools.tempCanvas = null;
+        }
         tools.tempCtx = null;
+        tools.isDrawing = false;
+        tools.currentDrawingPage = -1;
     },
 
     restoreState(historyState) {

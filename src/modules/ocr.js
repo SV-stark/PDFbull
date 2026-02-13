@@ -7,6 +7,7 @@ import { state } from './state.js';
 import { api } from './api.js';
 import { ui } from './ui.js';
 import { renderer } from './renderer.js';
+import { debug } from './debug.js';
 
 const { listen } = window.__TAURI__.event || { listen: async () => () => { } };
 
@@ -58,9 +59,12 @@ export const ocr = {
                 select.innerHTML = languages.map(lang =>
                     `<option value="${lang.code}">${lang.name}</option>`
                 ).join('');
+                debug.log(`Loaded ${languages.length} OCR languages`);
+            } else {
+                debug.warn('No OCR languages found');
             }
         } catch (error) {
-            console.warn('Failed to load OCR languages:', error);
+            debug.warn('Failed to load OCR languages:', error);
         }
     },
 

@@ -3,6 +3,7 @@ import { api } from './api.js';
 import { ui } from './ui.js';
 import { settings } from './settings.js';
 import { CONSTANTS } from './constants.js';
+import { debug } from './debug.js';
 
 export const renderer = {
     // Cache Management - Improved LRU with proper ordering
@@ -230,17 +231,21 @@ export const renderer = {
         const annCanvas = /** @type {HTMLCanvasElement} */ (document.getElementById(`ann-canvas-${pageNum}`));
         const placeholder = /** @type {HTMLElement} */ (document.querySelector(`#page-container-${pageNum} .page-placeholder`));
 
-        if (pdfCanvas && pdfCanvas.style.display !== 'none') {
+        if (pdfCanvas && pdfCanvas.width > 0 && pdfCanvas.height > 0) {
             const ctx = pdfCanvas.getContext('2d');
-            ctx.clearRect(0, 0, pdfCanvas.width, pdfCanvas.height);
+            if (ctx) {
+                ctx.clearRect(0, 0, pdfCanvas.width, pdfCanvas.height);
+            }
             pdfCanvas.width = 0;
             pdfCanvas.height = 0;
             pdfCanvas.style.display = 'none';
         }
 
-        if (annCanvas) {
+        if (annCanvas && annCanvas.width > 0 && annCanvas.height > 0) {
             const ctx = annCanvas.getContext('2d');
-            ctx.clearRect(0, 0, annCanvas.width, annCanvas.height);
+            if (ctx) {
+                ctx.clearRect(0, 0, annCanvas.width, annCanvas.height);
+            }
             annCanvas.width = 0;
             annCanvas.height = 0;
         }
@@ -250,6 +255,17 @@ export const renderer = {
         // Clear text layer
         const textLayer = document.getElementById(`text-layer-${pageNum}`);
         if (textLayer) textLayer.innerHTML = '';
+        
+        // Remove from cache
+        const cacheKey = `${pageNum}_${state.currentZoom}`;
+        const cached = state.pageCache.get(cacheKey);
+        if (cached && cached.bitmap) {
+            cached.bitmap.close();
+            state.currentCacheBytes -= cached.width * cached.height * 4;
+            state.pageCache.delete(cacheKey);
+        }
+        
+        debug.log(`Unloaded page ${pageNum}, cache size: ${state.currentCacheBytes} bytes`);
     },
 
     async renderPage(pageNum) {
@@ -263,17 +279,22 @@ export const renderer = {
         const pdfCtx = pdfCanvas.getContext('2d');
         const placeholder = /** @type {HTMLElement} */ (document.querySelector(`#page-container-${pageNum} .page-placeholder`));
 
+        const currentZoom = state.currentZoom;
         const cached = renderer.getCachedPage(pageNum);
 
-        if (cached && cached.zoom === state.currentZoom) {
+        if (cached && cached.zoom === currentZoom) {
+            debug.log(`Cache hit for page ${pageNum} at zoom ${currentZoom}`);
             renderer.drawCachedPage(pageNum, cached);
             return;
         }
 
+        debug.log(`Rendering page ${pageNum} at zoom ${currentZoom} (cache miss)`);
+
         try {
-            const responseBytes = await api.renderPage(pageNum, state.renderScale);
+            const responseBytes = await api.renderPage(pageNum, currentZoom);
 
             if (state.pageRenderRequests.get(pageNum) !== requestId) {
+                debug.log(`Render cancelled for page ${pageNum}`);
                 return;
             }
 
@@ -312,7 +333,7 @@ export const renderer = {
 
             renderer.setCachedPage(pageNum, {
                 bitmap: imageBitmap,
-                zoom: state.renderScale,
+                zoom: currentZoom,
                 width: width,
                 height: height
             });
@@ -323,7 +344,7 @@ export const renderer = {
 
         } catch (e) {
             if (state.pageRenderRequests.get(pageNum) === requestId) {
-                console.error(`Failed to render page ${pageNum}:`, e);
+                debug.error(`Failed to render page ${pageNum}:`, e);
             }
         } finally {
             state.pageRenderRequests.delete(pageNum);

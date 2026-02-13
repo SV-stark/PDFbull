@@ -169,7 +169,14 @@ export const state = {
     textLayerCache: new Map(),
     
     /** @type {Map<string, CanvasRenderingContext2D>} Cached canvas contexts */
-    canvasContexts: new Map()
+    canvasContexts: new Map(),
+    
+    // ─────────────────────────────────────
+    // DEBUG
+    // ─────────────────────────────────────
+    
+    /** @type {boolean} Verbose debug logging mode */
+    verboseDebug: false
 };
 
 /**

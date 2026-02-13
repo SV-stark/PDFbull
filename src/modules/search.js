@@ -2,6 +2,7 @@ import { state } from './state.js';
 import { api } from './api.js';
 import { ui } from './ui.js';
 import { renderer } from './renderer.js';
+import { debug } from './debug.js';
 
 export const search = {
     isSearchOpen: false,
@@ -28,10 +29,12 @@ export const search = {
         try {
             ui.showLoading('Searching...');
             search.clearResults();
+            
+            console.log(`[DEBUG] Searching for: "${query}" (caseSensitive: ${caseSensitive}, wholeWord: ${wholeWord})`);
 
             // Perform global search
-            const results = await api.searchDocument(query)
-                .catch(e => { throw e; });
+            const results = await api.searchDocument(query);
+            debug.log(`Found ${results.length} raw results`);
 
             // Client-side filtering for case sensitivity and whole word
             let filteredResults = results;
