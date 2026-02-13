@@ -113,6 +113,21 @@ where
     }
 }
 
+pub fn with_mut_doc<F, R>(state: &State<'_, PdfState>, f: F) -> Result<R, String>
+where
+    F: FnOnce(&mut PdfDocument<'static>) -> Result<R, String>,
+{
+    let active = state.active_doc.lock().map_err(|e| e.to_string())?;
+    let path = active.as_ref().ok_or_else(|| "No active document".to_string())?;
+    
+    let mut docs = state.docs.lock().map_err(|e| e.to_string())?;
+    if let Some(wrapper) = docs.get_mut(path) {
+        f(&mut wrapper.0)
+    } else {
+        Err("Document not found".to_string())
+    }
+}
+
 #[tauri::command]
 pub async fn open_document(app: tauri::AppHandle, state: State<'_, PdfState>, path: String) -> Result<i32, String> {
     println!("[PDF Engine] Attempting to open document at: {}", path);
@@ -147,7 +162,7 @@ pub async fn open_document(app: tauri::AppHandle, state: State<'_, PdfState>, pa
 
 #[tauri::command]
 pub async fn close_document(state: State<'_, PdfState>, path: String) -> Result<(), String> {
-    let docs = state.docs.lock().map_err(|e| e.to_string())?;
+    let mut docs = state.docs.lock().map_err(|e| e.to_string())?;
     docs.remove(&path);
     drop(docs);
     
@@ -263,7 +278,8 @@ pub async fn search_document(
     
     let page_count = doc.pages().len();
     
-    let results: Vec<SearchResult> = (0..page_count).into_par_iter()
+    let results: Vec<SearchResult> = (0..page_count)
+        .into_iter()
         .flat_map(|i| {
             let mut page_results = Vec::new();
             if let Ok(page) = doc.pages().get(i) {
@@ -514,30 +530,27 @@ pub async fn apply_scanner_filter(
 ) -> Result<(), String> {
     println!("[PDF Engine] Applying filter: {}, intensity: {}", filter_type, intensity);
     
-    let state_doc_clone = state.doc.clone();
+    let state_docs = state.docs.clone();
+    let state_active = state.active_doc.clone();
     let filter_type_clone = filter_type.clone();
     let doc_path_clone = doc_path.clone();
 
     tokio::task::spawn_blocking(move || {
-        // 1. Load original document
         let pdfium = get_pdfium(&app)?;
         let doc = pdfium.load_pdf_from_file(&doc_path_clone, None).map_err(|e| e.to_string())?;
         
-        // 2. Create new document
         let mut new_doc = pdfium.create_new_pdf().map_err(|e| e.to_string())?;
         
         let page_count = doc.pages().len();
-        let chunk_size = 4; // Process 4 pages at a time to balance memory and parallelism
+        let chunk_size = 4;
 
         for chunk_start in (0..page_count).step_by(chunk_size as usize) {
             let end = std::cmp::min(chunk_start + chunk_size, page_count);
             let mut raw_pages = Vec::with_capacity((end - chunk_start) as usize);
 
-            // A. Render Chunk (Sequential due to PDFium single-threadedness)
             for i in chunk_start..end {
                  let page = doc.pages().get(i).map_err(|e| e.to_string())?;
                  
-                 // Render to high-res image (2.0 scale for quality)
                  let scale = 2.0; 
                  let width_px = (page.width().value * scale) as i32;
                  let height_px = (page.height().value * scale) as i32;
@@ -553,8 +566,6 @@ pub async fn apply_scanner_filter(
                  ));
             }
 
-            // B. Process Chunk (Parallel using Rayon)
-            // This is the "Most Beneficial Usage": Parallelizing the heavy image processing
             let processed_results: Vec<Result<_, String>> = raw_pages.into_par_iter()
                 .map(|(w_pt, h_pt, w_px, h_px, bytes)| {
                     let img_buffer = image::ImageBuffer::<image::Rgba<u8>, _>::from_raw(w_px as u32, h_px as u32, bytes)
@@ -576,30 +587,20 @@ pub async fn apply_scanner_filter(
                  
                  let image_obj = PdfPageImageObject::new_with_width(&new_doc, &processed_img, pdf_w)
                      .map_err(|e| format!("Failed to create image object: {}", e))?;
-                     
-                 let mut new_page = new_doc.pages_mut().create_page_at_end(pdfium_render::prelude::PdfPagePaperSize::Custom(pdf_w, pdf_h))
+                  
+                  let mut new_page = new_doc.pages_mut().create_page_at_end(pdfium_render::prelude::PdfPagePaperSize::Custom(pdf_w, pdf_h))
                     .map_err(|e| e.to_string())?;
-                 
-                 new_page.objects_mut().add_image_object(image_obj).map_err(|e| e.to_string())?;
-            }
+                  
+                  new_page.objects_mut().add_image_object(image_obj).map_err(|e| e.to_string())?;
+             }
         }
         
-        // 3. Save to file
-        // 3.1 Close global state doc (if it matches doc_path)
-        {
-            let mut guard = state_doc_clone.lock().map_err(|e| e.to_string())?;
-            *guard = None; 
-        }
-        
-        // 3.2 Save to a temporary file first
         let temp_path = format!("{}.tmp", doc_path_clone);
         new_doc.save_to_file(&temp_path).map_err(|e| format!("Failed to save temp PDF: {}", e))?;
         
-        // 3.3 Drop local doc handles to release file locks
         drop(doc);
         drop(new_doc);
         
-        // 3.4 Move temp to target
         std::fs::rename(&temp_path, &doc_path_clone).map_err(|e| format!("Failed to overwrite file: {}", e))?;
         
         Ok(())
