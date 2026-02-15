@@ -3,93 +3,148 @@
 
 mod pdf_engine;
 
-use slint::Weak;
 use slint::{ComponentHandle, Image, Rgba8Pixel, SharedPixelBuffer};
-use std::rc::Rc;
-use std::sync::{Arc, Mutex};
+use std::sync::mpsc;
 
 slint::include_modules!();
+
+enum PdfCommand {
+    Open(String, mpsc::Sender<Result<i32, String>>),
+    Render(i32, f32, mpsc::Sender<Result<(u32, u32, Vec<u8>), String>>),
+    Close,
+}
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let ui = AppWindow::new()?;
     let ui_handle = ui.as_weak();
 
-    let pdf_state = Arc::new(Mutex::new(pdf_engine::PdfState::new()));
+    // Create channel for PDF worker
+    let (cmd_tx, cmd_rx) = mpsc::channel::<PdfCommand>();
+
+    // Spawn PDF worker thread
+    let worker = std::thread::spawn(move || {
+        let mut state = pdf_engine::PdfState::new();
+
+        while let Ok(cmd) = cmd_rx.recv() {
+            match cmd {
+                PdfCommand::Open(path, resp) => {
+                    let result = state.open_document(&path);
+                    let _ = resp.send(result);
+                }
+                PdfCommand::Render(page, scale, resp) => {
+                    let result = state.render_page(page, scale);
+                    let _ = resp.send(result);
+                }
+                PdfCommand::Close => {
+                    state.close_document();
+                }
+            }
+        }
+    });
 
     // Handler for "Open Document" button
     ui.on_open_document({
         let ui_handle = ui_handle.clone();
-        let pdf_state = pdf_state.clone();
+        let cmd_tx = cmd_tx.clone();
         move || {
             let ui = ui_handle.unwrap();
 
-            // Native File Dialog (Pure Rust - No Tauri)
             if let Some(path) = rfd::FileDialog::new()
                 .add_filter("PDF Files", &["pdf"])
                 .pick_file()
             {
                 let path_str = path.to_string_lossy().to_string();
-                let mut state = pdf_state.lock().unwrap();
+                let filename = path
+                    .file_name()
+                    .map(|n| n.to_string_lossy().to_string())
+                    .unwrap_or_default();
 
-                match state.open_document(&path_str) {
-                    Ok(count) => {
-                        ui.set_total_pages(count);
-                        ui.set_current_page(0);
-                        ui.set_status_text(format!("Loaded: {}", path_str).into());
+                ui.set_status_text("Loading PDF...".into());
 
-                        // Trigger initial render
-                        ui.invoke_request_render(0, 1.0);
+                let (resp_tx, resp_rx) = mpsc::channel();
+                let _ = cmd_tx.send(PdfCommand::Open(path_str, resp_tx));
+
+                // Spawn thread to wait for result
+                let ui_handle2 = ui_handle.clone();
+                std::thread::spawn(move || {
+                    if let Ok(result) = resp_rx.recv() {
+                        let ui = ui_handle2.unwrap();
+                        match result {
+                            Ok(count) => {
+                                ui.set_total_pages(count);
+                                ui.set_current_page(0);
+                                ui.set_status_text(format!("Loaded: {}", filename).into());
+                                ui.invoke_request_render(0, 1.0);
+                            }
+                            Err(e) => {
+                                ui.set_status_text(format!("Error: {}", e).into());
+                            }
+                        }
                     }
-                    Err(e) => {
-                        ui.set_status_text(format!("Error: {}", e).into());
-                    }
-                }
+                });
             }
+        }
+    });
+
+    // Handler for close_document callback
+    ui.on_close_document({
+        let ui_handle = ui_handle.clone();
+        let cmd_tx = cmd_tx.clone();
+        move || {
+            let ui = ui_handle.unwrap();
+            let _ = cmd_tx.send(PdfCommand::Close);
+            ui.set_total_pages(0);
+            ui.set_current_page(0);
+            ui.set_status_text("Document closed - Open a PDF to begin".into());
+            let empty_buffer = SharedPixelBuffer::<Rgba8Pixel>::new(1, 1);
+            ui.set_pdf_page_image(Image::from_rgba8(empty_buffer));
         }
     });
 
     // Handler for request_render callback
-    // Called when page or zoom changes in UI
     ui.on_request_render({
-        let ui_handle = ui_handle.clone(); // Need handle to set property?
-                                           // Actually, callback closure argument is NOT the UI handle.
-                                           // But we are inside `ui.on_request_render`, so we can capture `ui_handle`.
-        let pdf_state = pdf_state.clone();
+        let ui_handle = ui_handle.clone();
+        let cmd_tx = cmd_tx.clone();
 
         move |page_num, scale| {
             let ui = ui_handle.unwrap();
-            let state = pdf_state.lock().unwrap();
+            let (resp_tx, resp_rx) = mpsc::channel();
+            let _ = cmd_tx.send(PdfCommand::Render(page_num, scale, resp_tx));
 
-            match state.render_page(page_num, scale) {
-                Ok((w, h, bytes)) => {
-                    let mut buffer = SharedPixelBuffer::<Rgba8Pixel>::new(w, h);
+            let ui_handle2 = ui_handle.clone();
+            std::thread::spawn(move || {
+                if let Ok(result) = resp_rx.recv() {
+                    let ui = ui_handle2.unwrap();
+                    match result {
+                        Ok((w, h, bytes)) => {
+                            let mut buffer = SharedPixelBuffer::<Rgba8Pixel>::new(w, h);
+                            let slice = buffer.make_mut_bytes();
 
-                    // Direct access to the pixel buffer for maximum performance
-                    let slice = buffer.make_mut_bytes();
-
-                    // PDFium renders as BGRA; Slint expects RGBA.
-                    for (i, chunk) in bytes.chunks(4).enumerate() {
-                        if i * 4 + 3 < slice.len() {
                             // BGRA -> RGBA
-                            slice[i * 4] = chunk[2]; // R
-                            slice[i * 4 + 1] = chunk[1]; // G
-                            slice[i * 4 + 2] = chunk[0]; // B
-                            slice[i * 4 + 3] = chunk[3]; // A
-                        }
-                    }
+                            for (i, chunk) in bytes.chunks(4).enumerate() {
+                                if i * 4 + 3 < slice.len() {
+                                    slice[i * 4] = chunk[2];
+                                    slice[i * 4 + 1] = chunk[1];
+                                    slice[i * 4 + 2] = chunk[0];
+                                    slice[i * 4 + 3] = chunk[3];
+                                }
+                            }
 
-                    let image = Image::from_rgba8(buffer);
-                    ui.set_pdf_page_image(image);
+                            let image = Image::from_rgba8(buffer);
+                            ui.set_pdf_page_image(image);
+                        }
+                        Err(_) => {}
+                    }
                 }
-                Err(e) => {
-                    // Log error to status?
-                    // ui.set_status_text(format!("Render error: {}", e).into());
-                    // Avoid infinite loop if render keeps failing?
-                }
-            }
+            });
         }
     });
 
     ui.run()?;
+
+    // Clean up worker
+    drop(cmd_tx);
+    let _ = worker.join();
+
     Ok(())
 }

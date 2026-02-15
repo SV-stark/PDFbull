@@ -1,28 +1,14 @@
 import { Button, HorizontalBox, ScrollView, VerticalBox } from "std-widgets.slint";
 
-export struct PdfPage {
-    width: int,
-    height: int,
-    image_data: image,
-}
-
-export struct AppState {
-    current_page: int,
-    total_pages: int,
-    zoom: float,
-    status_text: string,
-    document_path: string,
-}
-
 export component AppWindow inherits Window {
-    title: "PDFbull - Slint Edition";
-    width: 1024px;
-    height: 768px;
+    title: "PDFbull";
+    width: 1200px;
+    height: 800px;
 
     in-out property<int> current_page: 0;
     in-out property<int> total_pages: 0;
     in-out property<float> zoom: 1.0;
-    in-out property<string> status_text: "Ready";
+    in-out property<string> status_text: "Ready - Open a PDF to begin";
     in-out property<bool> sidebar_visible: true;
     in-out property<image> pdf_page_image; 
 
@@ -35,25 +21,28 @@ export component AppWindow inherits Window {
         request_render(current_page, zoom);
     }
     
-    background: #f0f0f0;
+    background: #2d2d2d;
 
     VerticalBox {
         padding: 0px;
 
         Rectangle {
-            background: #e0e0e0;
-            height: 32px;
+            background: #1a1a1a;
+            height: 48px;
             
             HorizontalBox {
-                padding: 4px;
+                padding: 8px;
+                spacing: 12px;
                 alignment: start;
                 
                 Button {
-                    text: "Open";
+                    text: "📂 Open PDF";
                     clicked => { open_document(); }
+                    min_width: 100px;
                 }
                 Button {
-                    text: "View";
+                    text: "Close";
+                    clicked => { close_document(); }
                 }
             }
         }
@@ -63,12 +52,28 @@ export component AppWindow inherits Window {
             spacing: 0px;
 
             if sidebar_visible : Rectangle {
-                width: 200px;
-                background: #ffffff;
+                width: 220px;
+                background: #252525;
+                
+                Rectangle {
+                    width: 1px;
+                    background: #3d3d3d;
+                    x: parent.width - 1px;
+                }
                 
                 VerticalBox {
-                    padding: 8px;
-                    Text { text: "Thumbnails"; font_size: 14px; font_weight: 700; }
+                    padding: 12px;
+                    Text { 
+                        text: "Thumbnails"; 
+                        font_size: 16px; 
+                        font_weight: 700; 
+                        color: #ffffff;
+                    }
+                    Text { 
+                        text: "Page navigation coming soon"; 
+                        font_size: 12px; 
+                        color: #888888;
+                    }
                 }
             }
 
@@ -77,39 +82,50 @@ export component AppWindow inherits Window {
                 spacing: 0px;
 
                 Rectangle {
-                    height: 40px;
-                    background: #ffffff;
+                    height: 52px;
+                    background: #1a1a1a;
+                    
+                    Rectangle {
+                        height: 1px;
+                        background: #3d3d3d;
+                        y: parent.height - 1px;
+                    }
                     
                     HorizontalBox {
-                        padding: 4px;
-                        spacing: 8px;
+                        padding: 8px;
+                        spacing: 12px;
                         alignment: start;
 
                         Button {
-                            text: "◀";
+                            text: "◀ Prev";
                             clicked => {
                                 if (current_page > 0) {
                                     current_page -= 1;
                                 }
                             }
+                            min_width: 80px;
                         }
 
                         Text {
-                            text: (current_page + 1) + " / " + total_pages;
+                            text: "Page " + (current_page + 1) + " of " + total_pages;
                             vertical_alignment: center;
+                            color: #ffffff;
+                            font_size: 16px;
+                            font_weight: 600;
                         }
 
                         Button {
-                            text: "▶";
+                            text: "Next ▶";
                             clicked => {
                                 if (current_page < total_pages - 1) {
                                     current_page += 1;
                                 }
                             }
+                            min_width: 80px;
                         }
 
                         Button {
-                            text: "−";
+                            text: "− Zoom Out";
                             clicked => { 
                                 zoom = max(0.25, zoom / 1.25); 
                                 request_render(current_page, zoom);
@@ -119,10 +135,13 @@ export component AppWindow inherits Window {
                         Text {
                             text: round(zoom * 100) + "%";
                             vertical_alignment: center;
+                            color: #ffffff;
+                            font_size: 16px;
+                            font_weight: 600;
                         }
 
                         Button {
-                            text: "+";
+                            text: "+ Zoom In";
                             clicked => { 
                                 zoom = min(5.0, zoom * 1.25); 
                                 request_render(current_page, zoom);
@@ -133,13 +152,12 @@ export component AppWindow inherits Window {
 
                 ScrollView {
                     Rectangle {
-                        background: #cccccc;
+                        background: #404040;
                         
                         HorizontalLayout { alignment: center; 
                             VerticalLayout { alignment: center;
                                 Image {
                                     source: pdf_page_image;
-                                    // Use natural size from source
                                 }
                             }
                         }
@@ -149,15 +167,22 @@ export component AppWindow inherits Window {
         }
 
         Rectangle {
-            height: 24px;
-            background: #e0e0e0;
+            height: 32px;
+            background: #1a1a1a;
+            
+            Rectangle {
+                height: 1px;
+                background: #3d3d3d;
+                y: 0px;
+            }
             
             HorizontalBox {
-                padding: 4px;
+                padding: 8px;
                 alignment: start;
                 Text {
                     text: status_text;
-                    font_size: 12px;
+                    font_size: 14px;
+                    color: #cccccc;
                 }
             }
         }

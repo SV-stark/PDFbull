@@ -1,22 +1,20 @@
 use pdfium_render::prelude::*;
-use std::sync::{Arc, Mutex, OnceLock};
+use std::sync::OnceLock;
 
-struct PdfiumWrapper(pub Pdfium);
-unsafe impl Sync for PdfiumWrapper {}
+struct PdfiumWrapper(Pdfium);
 unsafe impl Send for PdfiumWrapper {}
+unsafe impl Sync for PdfiumWrapper {}
 
 static PDFIUM: OnceLock<Result<PdfiumWrapper, String>> = OnceLock::new();
 
-pub fn get_pdfium() -> Result<&'static Pdfium, String> {
+fn get_pdfium() -> Result<&'static Pdfium, String> {
     let result = PDFIUM.get_or_init(|| {
         println!("[PDF Engine] Initializing PDFium...");
 
-        // Try current directory first
         let path_result =
             Pdfium::bind_to_library(Pdfium::pdfium_platform_library_name_at_path("./"))
                 .map_err(|e| format!("Current dir bind error: {:?}", e));
 
-        // Fallback to system library
         let path_result = path_result.or_else(|_| {
             Pdfium::bind_to_library(Pdfium::pdfium_platform_library_name())
                 .map_err(|e| format!("System library bind error: {:?}", e))
@@ -46,7 +44,6 @@ pub fn get_pdfium() -> Result<&'static Pdfium, String> {
 
 pub struct PdfState {
     active_doc: Option<PdfDocument<'static>>,
-    #[allow(dead_code)]
     current_path: Option<String>,
 }
 
@@ -56,6 +53,11 @@ impl PdfState {
             active_doc: None,
             current_path: None,
         }
+    }
+
+    pub fn close_document(&mut self) {
+        self.active_doc = None;
+        self.current_path = None;
     }
 
     pub fn open_document(&mut self, path: &str) -> Result<i32, String> {
