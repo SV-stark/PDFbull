@@ -1,0 +1,31 @@
+[package]
+name = "pdfbull"
+version = "0.1.0"
+description = "A lightweight PDF reader"
+authors = ["SV-stark"]
+edition = "2021"
+license = "MIT"
+homepage = "https://github.com/SV-stark/PDFbull"
+repository = "https://github.com/SV-stark/PDFbull"
+readme = "README.md"
+
+[[bin]]
+name = "pdfbull"
+path = "src/main.rs"
+
+[build-dependencies]
+slint-build = "1.15"
+
+[dependencies]
+slint = { version = "1.15", features = ["renderer-winit-skia"] }
+rfd = "0.14"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+pdfium-render = "0.8"
+image = "0.25"
+tokio = { version = "1", features = ["full"] }
+rayon = "1.10"
+oar-ocr = "0.6"
+ort = { version = "2.0.0-rc.10", features = ["load-dynamic"] }
+lopdf = "0.32"
+base64 = "0.22"

@@ -1,0 +1,165 @@
+import { Button, HorizontalBox, ScrollView, VerticalBox } from "std-widgets.slint";
+
+export struct PdfPage {
+    width: int,
+    height: int,
+    image_data: image,
+}
+
+export struct AppState {
+    current_page: int,
+    total_pages: int,
+    zoom: float,
+    status_text: string,
+    document_path: string,
+}
+
+export component AppWindow inherits Window {
+    title: "PDFbull - Slint Edition";
+    width: 1024px;
+    height: 768px;
+
+    in-out property<int> current_page: 0;
+    in-out property<int> total_pages: 0;
+    in-out property<float> zoom: 1.0;
+    in-out property<string> status_text: "Ready";
+    in-out property<bool> sidebar_visible: true;
+    in-out property<image> pdf_page_image; 
+
+    // Callbacks to request updates
+    callback open_document();
+    callback close_document();
+    callback request_render(int, float);
+
+    changed current_page => {
+        request_render(current_page, zoom);
+    }
+    
+    background: #f0f0f0;
+
+    VerticalBox {
+        padding: 0px;
+
+        Rectangle {
+            background: #e0e0e0;
+            height: 32px;
+            
+            HorizontalBox {
+                padding: 4px;
+                alignment: start;
+                
+                Button {
+                    text: "Open";
+                    clicked => { open_document(); }
+                }
+                Button {
+                    text: "View";
+                }
+            }
+        }
+
+        HorizontalLayout {
+            padding: 0px;
+            spacing: 0px;
+
+            if sidebar_visible : Rectangle {
+                width: 200px;
+                background: #ffffff;
+                
+                VerticalBox {
+                    padding: 8px;
+                    Text { text: "Thumbnails"; font_size: 14px; font_weight: 700; }
+                }
+            }
+
+            VerticalLayout {
+                padding: 0px;
+                spacing: 0px;
+
+                Rectangle {
+                    height: 40px;
+                    background: #ffffff;
+                    
+                    HorizontalBox {
+                        padding: 4px;
+                        spacing: 8px;
+                        alignment: start;
+
+                        Button {
+                            text: "◀";
+                            clicked => {
+                                if (current_page > 0) {
+                                    current_page -= 1;
+                                }
+                            }
+                        }
+
+                        Text {
+                            text: (current_page + 1) + " / " + total_pages;
+                            vertical_alignment: center;
+                        }
+
+                        Button {
+                            text: "▶";
+                            clicked => {
+                                if (current_page < total_pages - 1) {
+                                    current_page += 1;
+                                }
+                            }
+                        }
+
+                        Button {
+                            text: "−";
+                            clicked => { 
+                                zoom = max(0.25, zoom / 1.25); 
+                                request_render(current_page, zoom);
+                            }
+                        }
+
+                        Text {
+                            text: round(zoom * 100) + "%";
+                            vertical_alignment: center;
+                        }
+
+                        Button {
+                            text: "+";
+                            clicked => { 
+                                zoom = min(5.0, zoom * 1.25); 
+                                request_render(current_page, zoom);
+                            }
+                        }
+                    }
+                }
+
+                ScrollView {
+                    Rectangle {
+                        background: #cccccc;
+                        
+                        HorizontalLayout { alignment: center; 
+                            VerticalLayout { alignment: center;
+                                Image {
+                                    source: pdf_page_image;
+                                    // Use natural size from source
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        Rectangle {
+            height: 24px;
+            background: #e0e0e0;
+            
+            HorizontalBox {
+                padding: 4px;
+                alignment: start;
+                Text {
+                    text: status_text;
+                    font_size: 12px;
+                }
+            }
+        }
+    }
+}
