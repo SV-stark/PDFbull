@@ -108,6 +108,21 @@
         <i class="ph ph-arrow-clockwise"></i>
       </button>
 
+      <div class="view-mode-group">
+        <button id="btn-view-single" class="view-mode-btn active" tooltip="Single Page">
+          <i class="ph ph-file"></i>
+        </button>
+        <button id="btn-view-continuous" class="view-mode-btn" tooltip="Continuous">
+          <i class="ph ph-list-dashes"></i>
+        </button>
+        <button id="btn-view-facing" class="view-mode-btn" tooltip="Facing Pages">
+          <i class="ph ph-columns"></i>
+        </button>
+        <button id="btn-view-book" class="view-mode-btn" tooltip="Book View">
+          <i class="ph ph-book-open"></i>
+        </button>
+      </div>
+
       <button id="btn-export" tooltip="Export (Ctrl+E)">
         <i class="ph ph-export"></i>
         <span class="toolbar-label">Export</span>
@@ -146,14 +161,33 @@
     <!-- Sidebar -->
     <!-- Left Sidebar: Thumbnails (Navigation) -->
     <div class="sidebar sidebar-left" id="sidebar-left">
-      <!-- Thumbnails - Navigation Panel -->
-      <div class="sidebar-section thumbnails-section">
-        <div class="sidebar-header">
+      <!-- Sidebar Navigation Tabs -->
+      <div class="sidebar-nav-tabs">
+        <button id="btn-nav-thumbnails" class="sidebar-nav-tab active" tooltip="Thumbnails">
           <i class="ph ph-images"></i>
+        </button>
+        <button id="btn-nav-outline" class="sidebar-nav-tab" tooltip="Table of Contents">
+          <i class="ph ph-list-dashes"></i>
+        </button>
+      </div>
+
+      <!-- Thumbnails - Navigation Panel -->
+      <div class="sidebar-section thumbnails-section" id="thumbnails-panel">
+        <div class="sidebar-header">
           <span>Thumbnails</span>
         </div>
         <div class="thumbnail-list" id="thumbnail-list">
           <!-- Thumbnails injected here -->
+        </div>
+      </div>
+
+      <!-- Outline/TOC Panel -->
+      <div class="sidebar-section outline-section hidden" id="outline-panel">
+        <div class="sidebar-header">
+          <span>Contents</span>
+        </div>
+        <div class="outline-list" id="outline-list">
+          <!-- Outline items injected here -->
         </div>
       </div>
     </div>

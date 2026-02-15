@@ -2,5 +2,5 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 fn main() {
-    pdfbull_lib::run()
+    pdfbull_lib::run();
 }

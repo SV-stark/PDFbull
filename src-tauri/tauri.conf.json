@@ -4,15 +4,20 @@
   "version": "0.1.0",
   "identifier": "com.pdfbull.app",
   "build": {
-    "frontendDist": "../src"
+    "devUrl": "http://localhost:5173"
   },
   "app": {
     "withGlobalTauri": true,
     "windows": [
       {
-        "title": "PDFbull",
-        "width": 800,
-        "height": 600
+        "title": "PDFbull - Slint Edition",
+        "width": 1024,
+        "height": 768,
+        "minWidth": 640,
+        "minHeight": 480,
+        "resizable": true,
+        "fullscreen": false,
+        "center": true
       }
     ],
     "security": {

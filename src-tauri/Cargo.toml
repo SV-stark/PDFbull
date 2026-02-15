@@ -9,32 +9,22 @@ homepage = "https://github.com/SV-stark/PDFbull"
 repository = "https://github.com/SV-stark/PDFbull"
 readme = "../README.md"
 
-# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
-
 [lib]
-# The `_lib` suffix may seem redundant but it is necessary
-# to make the lib name unique and wouldn't conflict with the bin name.
-# This seems to be only an issue on Windows, see https://github.com/rust-lang/cargo/issues/8519
 name = "pdfbull_lib"
 crate-type = ["staticlib", "cdylib", "rlib"]
 
 [build-dependencies]
-tauri-build = { version = "2", features = [] }
+slint-build = "1.15"
 
 [dependencies]
-tauri = { version = "2", features = [] }
-tauri-plugin-opener = "2"
-tauri-plugin-dialog = "2"
-tauri-plugin-fs = "2"
-tauri-plugin-single-instance = "2"
+slint = "1.15"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 pdfium-render = "0.8"
 image = "0.25"
 tokio = { version = "1", features = ["full"] }
 rayon = "1.10"
-oar-ocr = "0.6"
-ort = { version = "2.0.0-rc.10", features = ["load-dynamic"] }
-lopdf = "0.32"
-base64 = "0.22"
+rfd = "0.15"
 
+[target.'cfg(windows)'.dependencies]
+windows = { version = "0.58", features = ["Win32_Foundation", "Win32_UI_WindowsAndMessaging"] }

@@ -16,6 +16,13 @@ const { invoke } = window.__TAURI__.core;
  */
 export const api = {
     /**
+     * Open a PDF document with fast initial load
+     * @param {string} path - Absolute file path to the PDF
+     * @returns {Promise<{pageCount: number, firstPageDimensions: {width: number, height: number}}>} Document info
+     */
+    openDocumentFast: (path) => invoke('open_document_fast', { path }),
+
+    /**
      * Open a PDF document
      * @param {string} path - Absolute file path to the PDF
      * @returns {Promise<number>} Number of pages in the document
@@ -134,5 +141,32 @@ export const api = {
      * @returns {Promise<void>}
      */
     autoCrop: (pageNum) => invoke('auto_crop', { pageNum }),
+
+    /**
+     * Get PDF outline/table of contents
+     * @returns {Promise<Array>} Outline items with titles and page numbers
+     */
+    getOutline: () => invoke('get_outline'),
+
+    /**
+     * Get hyperlinks on a specific page
+     * @param {number} pageNum - Page number (0-indexed)
+     * @returns {Promise<Array>} Array of link objects with bounds and URLs
+     */
+    getPageLinks: (pageNum) => invoke('get_page_links', { pageNum }),
+
+    /**
+     * Rotate a page by specified degrees
+     * @param {number} pageNum - Page number (0-indexed)
+     * @param {number} rotation - Rotation in degrees (90, 180, 270)
+     * @returns {Promise<void>}
+     */
+    rotatePage: (pageNum, rotation) => invoke('rotate_page', { pageNum, rotation }),
+
+    /**
+     * Print the current document
+     * @returns {Promise<void>}
+     */
+    printPdf: () => invoke('print_pdf'),
 };
 

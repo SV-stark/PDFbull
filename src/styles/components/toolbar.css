@@ -235,3 +235,41 @@
 .theme-option i {
     font-size: 18px;
 }
+
+/* ─────────────────────────────────────
+   VIEW MODE BUTTONS
+   ───────────────────────────────────── */
+.view-mode-group {
+    display: flex;
+    gap: 2px;
+    background: var(--glass-bg);
+    border: 1px solid var(--glass-border);
+    border-radius: var(--radius-md);
+    padding: 2px;
+}
+
+.view-mode-btn {
+    padding: 6px 10px;
+    background: transparent;
+    border: none;
+    border-radius: var(--radius-sm);
+    color: var(--text-color);
+    cursor: pointer;
+    transition: all var(--transition-fast);
+    opacity: 0.7;
+}
+
+.view-mode-btn:hover {
+    background: var(--hover-bg);
+    opacity: 1;
+}
+
+.view-mode-btn.active {
+    background: var(--accent-color);
+    color: white;
+    opacity: 1;
+}
+
+.view-mode-btn i {
+    font-size: 16px;
+}

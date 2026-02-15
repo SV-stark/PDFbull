@@ -268,5 +268,48 @@ export const ui = {
     hideBatchControls() {
         const controls = document.getElementById('batch-controls');
         if (controls) controls.remove();
+    },
+
+    renderOutline(outline) {
+        const container = document.getElementById('outline-list');
+        if (!container) return;
+        
+        container.innerHTML = '';
+        
+        if (!outline || outline.length === 0) {
+            container.innerHTML = '<div class="outline-empty">No table of contents</div>';
+            return;
+        }
+        
+        const renderItem = (item, level = 0) => {
+            const div = document.createElement('div');
+            div.className = 'outline-item';
+            div.style.paddingLeft = `${12 + level * 16}px`;
+            
+            const icon = item.children?.length > 0 ? 'ph-folder' : 'ph-file';
+            div.innerHTML = `
+                <i class="ph ${icon}"></i>
+                <span class="outline-title">${item.title}</span>
+                ${item.page !== null ? `<span class="outline-page">${item.page + 1}</span>` : ''}
+            `;
+            
+            if (item.page !== null) {
+                div.addEventListener('click', () => {
+                    const { renderer } = window.__PDFBULL__?.modules || {};
+                    if (renderer && item.page !== null) {
+                        state.currentPage = item.page;
+                        renderer.scrollToPage(item.page);
+                    }
+                });
+            }
+            
+            container.appendChild(div);
+            
+            if (item.children?.length > 0) {
+                item.children.forEach(child => renderItem(child, level + 1));
+            }
+        };
+        
+        outline.forEach(item => renderItem(item));
     }
 };

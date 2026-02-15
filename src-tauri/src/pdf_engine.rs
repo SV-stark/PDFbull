@@ -4,6 +4,7 @@ use std::collections::HashMap;
 use tauri::{Manager, State};
 use rayon::prelude::*;
 use image::GenericImageView;
+use tauri_plugin_opener::OpenerExt;
 
 struct PdfiumWrapper(pub Pdfium);
 unsafe impl Sync for PdfiumWrapper {}
@@ -11,25 +12,16 @@ unsafe impl Send for PdfiumWrapper {}
 
 static PDFIUM: OnceLock<Result<PdfiumWrapper, String>> = OnceLock::new();
 
-fn get_pdfium(app: &tauri::AppHandle) -> Result<&'static Pdfium, String> {
+pub fn get_pdfium(app: &tauri::AppHandle) -> Result<&'static Pdfium, String> {
+    get_pdfium_internal()
+}
+
+pub fn get_pdfium_internal() -> Result<&'static Pdfium, String> {
     let result = PDFIUM.get_or_init(|| {
         println!("[PDF Engine] Initializing PDFium...");
         
-        let resource_path = app.path().resolve("pdfium.dll", tauri::path::BaseDirectory::Resource);
-        
-        let path_result = if let Ok(path) = resource_path {
-            println!("[PDF Engine] Resolved resource path: {:?}", path);
-            Pdfium::bind_to_library(path.to_string_lossy().to_string())
-                .map_err(|e| format!("Resource bind error: {:?}", e))
-        } else {
-            Err("Failed to resolve resource path".to_string())
-        };
-        
-        let path_result = path_result.or_else(|_| {
-            println!("[PDF Engine] Falling back to current directory...");
-            Pdfium::bind_to_library(Pdfium::pdfium_platform_library_name_at_path("./"))
-                .map_err(|e| format!("Current dir bind error: {:?}", e))
-        });
+        let path_result = Pdfium::bind_to_library(Pdfium::pdfium_platform_library_name_at_path("./"))
+            .map_err(|e| format!("Current dir bind error: {:?}", e));
 
         let path_result = path_result.or_else(|_| {
             Pdfium::bind_to_library(Pdfium::pdfium_platform_library_name())
@@ -134,6 +126,46 @@ pub async fn open_document(app: tauri::AppHandle, state: State<'_, PdfState>, pa
         *active = Some(path_clone);
         
         Ok(page_count as i32)
+    }).await.map_err(|e| e.to_string())?
+}
+
+#[tauri::command]
+pub async fn open_document_fast(_app: tauri::AppHandle, state: State<'_, PdfState>, path: String) -> Result<serde_json::Value, String> {
+    println!("[PDF Engine] Fast opening document: {}", path);
+    let state_docs = state.docs.clone();
+    let state_active = state.active_doc.clone();
+    let path_clone = path.clone();
+    
+    tokio::task::spawn_blocking(move || {
+        let pdfium = get_pdfium_internal()?;
+        
+        let doc = pdfium.load_pdf_from_file(&path_clone, None)
+            .map_err(|e| format!("Failed to open PDF: {}", e))?;
+        
+        let page_count = doc.pages().len();
+        
+        let page_dims = match doc.pages().get(0) {
+            Ok(first_page) => {
+                serde_json::json!({
+                    "width": first_page.width().value,
+                    "height": first_page.height().value
+                })
+            },
+            Err(_) => serde_json::json!({"width": 0, "height": 0})
+        };
+        
+        let mut docs = state_docs.lock().map_err(|e| e.to_string())?;
+        docs.insert(path_clone.clone(), PdfWrapper(doc));
+        
+        drop(docs);
+        
+        let mut active = state_active.lock().map_err(|e| e.to_string())?;
+        *active = Some(path_clone);
+        
+        Ok(serde_json::json!({
+            "pageCount": page_count,
+            "firstPageDimensions": page_dims
+        }))
     }).await.map_err(|e| e.to_string())?
 }
 
@@ -574,4 +606,9 @@ pub async fn apply_scanner_filter(
         
         Ok(())
     }).await.map_err(|e| e.to_string())?
+}
+
+#[tauri::command]
+pub async fn print_pdf(_state: tauri::State<'_, PdfState>) -> Result<(), String> {
+    Ok(())
 }

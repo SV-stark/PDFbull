@@ -277,3 +277,76 @@
     animation: skeleton-loading 1.5s infinite;
     border-radius: var(--radius-lg);
 }
+
+/* ─────────────────────────────────────
+   CONTINUOUS SCROLL MODE
+   ───────────────────────────────────── */
+#pages-container.continuous-mode {
+    flex-direction: column;
+    align-items: center;
+}
+
+/* ─────────────────────────────────────
+   FACING PAGES MODE (Dual Page)
+   ───────────────────────────────────── */
+#pages-container.facing-mode {
+    display: grid;
+    grid-template-columns: repeat(2, 1fr);
+    gap: 20px;
+    padding: 20px;
+    align-items: start;
+}
+
+#pages-container.facing-mode .page-container {
+    width: calc(var(--page-width) * var(--zoom-factor));
+    margin: 0 auto;
+}
+
+/* Ensure odd pages are on the left in facing mode */
+#pages-container.facing-mode .page-container:nth-child(odd) {
+    grid-column: 1;
+}
+
+/* Even pages on the right */
+#pages-container.facing-mode .page-container:nth-child(even) {
+    grid-column: 2;
+}
+
+/* Make the container span full width in facing mode */
+#pages-container.facing-mode {
+    width: 100%;
+    max-width: calc(100vw - 350px);
+}
+
+/* ─────────────────────────────────────
+   BOOK VIEW MODE (Right-to-Left)
+   ───────────────────────────────────── */
+#pages-container.book-view {
+    direction: rtl;
+}
+
+#pages-container.book-view .page-container {
+    direction: ltr;
+}
+
+/* Book view shows pages in reverse order for RTL reading */
+#pages-container.book-view {
+    display: grid;
+    grid-template-columns: repeat(2, 1fr);
+    gap: 20px;
+    padding: 20px;
+    align-items: start;
+}
+
+#pages-container.book-view .page-container:nth-child(odd) {
+    grid-column: 2;
+}
+
+#pages-container.book-view .page-container:nth-child(even) {
+    grid-column: 1;
+}
+
+#pages-container.book-view {
+    width: 100%;
+    max-width: calc(100vw - 350px);
+}

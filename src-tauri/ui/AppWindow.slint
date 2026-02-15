@@ -1,0 +1,61 @@
+import { Button } from "std-widgets.slint";
+
+export component AppWindow inherits Window {
+    title: "PDFbull - Native";
+    width: 800px;
+    height: 600px;
+    
+    in property<int> current_page: 0;
+    in property<int> total_pages: 0;
+    in property<float> zoom: 1.0;
+    in property<string> document_path: "";
+    in property<string> status_text: "Ready";
+    in property<bool> sidebar_visible: true;
+    
+    callback open_file();
+    callback previous_page();
+    callback next_page();
+    callback zoom_in();
+    
+    background: #1e1e1e;
+    
+    VerticalLayout {
+        padding: 8px;
+        spacing: 8px;
+        
+        Rectangle {
+            height: 40px;
+            background: #2d2d2d;
+            HorizontalLayout {
+                padding: 8px;
+                spacing: 8px;
+                
+                Button {
+                    text: "Open";
+                    clicked => { open_file(); }
+                }
+                Button {
+                    text: "<";
+                    clicked => { previous_page(); }
+                }
+                Button {
+                    text: ">";
+                    clicked => { next_page(); }
+                }
+                Button {
+                    text: "+";
+                    clicked => { zoom_in(); }
+                }
+            }
+        }
+        
+        Rectangle {
+            background: #404040;
+        }
+        
+        Rectangle {
+            height: 24px;
+            background: #2d2d2d;
+        }
+    }
+}

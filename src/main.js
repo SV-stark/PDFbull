@@ -28,14 +28,23 @@ const app = {
       ui.showLoading('Opening PDF...');
       debug.log(`Opening document: ${path}`);
       
-      const pages = await api.openDocument(path);
-      debug.log(`Document opened with ${pages} pages`);
+      // Try fast open first for instant feedback
+      let pageCount;
+      try {
+        const docInfo = await api.openDocumentFast(path);
+        pageCount = docInfo.pageCount;
+      } catch (e) {
+        // Fallback to regular open
+        pageCount = await api.openDocument(path);
+      }
+      
+      debug.log(`Document opened with ${pageCount} pages`);
 
       state.openDocuments.set(tabId, {
         id: tabId,
         path: path,
         name: path.split(/[/\\]/).pop(),
-        totalPages: pages,
+        totalPages: pageCount,
         currentPage: 0,
         zoom: 1.0
       });
@@ -43,6 +52,10 @@ const app = {
       app.addToRecentFiles(path);
       ui.createTabUI(tabId, state.openDocuments.get(tabId), app.switchToTab, app.closeTab);
       await app.switchToTab(tabId);
+      
+      // Render first page immediately for instant display
+      await renderer.renderPage(0);
+      
       ui.hideLoading();
 
       // Hide welcome screen

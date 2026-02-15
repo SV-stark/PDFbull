@@ -117,6 +117,55 @@ export const state = {
     bookmarks: new Set(),
 
     // ─────────────────────────────────────
+    // VIEW MODES
+    // ─────────────────────────────────────
+
+    /** @type {string} Current view mode ('single', 'continuous', 'facing', 'book') */
+    viewMode: 'single',
+
+    /** @type {boolean} Is continuous scroll mode */
+    continuousMode: false,
+
+    /** @type {boolean} Is facing (dual page) mode */
+    facingMode: false,
+
+    /** @type {boolean} Is book view (right-to-left) */
+    bookView: false,
+
+    // ─────────────────────────────────────
+    // OUTLINE / TOC
+    // ─────────────────────────────────────
+
+    /** @type {Array} PDF outline/table of contents */
+    outline: [],
+
+    // ─────────────────────────────────────
+    // LINKS
+    // ─────────────────────────────────────
+
+    /** @type {Array} Links on current page */
+    pageLinks: [],
+
+    // ─────────────────────────────────────
+    // PAN / DRAG SCROLL
+    // ─────────────────────────────────────
+
+    /** @type {boolean} Is currently panning (drag scroll) */
+    isPanning: false,
+
+    /** @type {number} Pan start X */
+    panStartX: 0,
+
+    /** @type {number} Pan start Y */
+    panStartY: 0,
+
+    /** @type {number} Scroll container start scrollLeft */
+    scrollStartLeft: 0,
+
+    /** @type {number} Scroll container start scrollTop */
+    scrollStartTop: 0,
+
+    // ─────────────────────────────────────
     // HISTORY (UNDO/REDO)
     // ─────────────────────────────────────
 

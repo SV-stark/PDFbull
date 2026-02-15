@@ -164,8 +164,50 @@ export const events = {
         });
 
         // Print
-        document.getElementById('btn-print')?.addEventListener('click', () => {
-            window.print();
+        document.getElementById('btn-print')?.addEventListener('click', async () => {
+            if (!state.currentDoc) {
+                ui.showToast('No document open', 'error');
+                return;
+            }
+            try {
+                await api.printPdf();
+                ui.showToast('Print dialog opened');
+            } catch (e) {
+                console.error('Print failed:', e);
+                ui.showToast('Print failed: ' + e, 'error');
+            }
+        });
+
+        // View Mode Buttons
+        document.getElementById('btn-view-single')?.addEventListener('click', () => events.setViewMode('single'));
+        document.getElementById('btn-view-continuous')?.addEventListener('click', () => events.setViewMode('continuous'));
+        document.getElementById('btn-view-facing')?.addEventListener('click', () => events.setViewMode('facing'));
+        document.getElementById('btn-view-book')?.addEventListener('click', () => events.setViewMode('book'));
+
+        // Sidebar Navigation Tabs
+        document.getElementById('btn-nav-thumbnails')?.addEventListener('click', () => {
+            document.getElementById('btn-nav-thumbnails').classList.add('active');
+            document.getElementById('btn-nav-outline').classList.remove('active');
+            document.getElementById('thumbnails-panel').classList.remove('hidden');
+            document.getElementById('outline-panel').classList.add('hidden');
+        });
+
+        document.getElementById('btn-nav-outline')?.addEventListener('click', async () => {
+            document.getElementById('btn-nav-outline').classList.add('active');
+            document.getElementById('btn-nav-thumbnails').classList.remove('active');
+            document.getElementById('thumbnails-panel').classList.add('hidden');
+            document.getElementById('outline-panel').classList.remove('hidden');
+            
+            // Load outline if not loaded
+            if (state.outline.length === 0 && state.currentDoc) {
+                try {
+                    const outline = await api.getOutline();
+                    state.outline = outline;
+                    ui.renderOutline(outline);
+                } catch (e) {
+                    console.error('Failed to load outline:', e);
+                }
+            }
         });
 
         // Undo/Redo
@@ -601,6 +643,53 @@ export const events = {
         }, 150);
     },
 
+    async setViewMode(mode) {
+        // Update button states
+        document.getElementById('btn-view-single')?.classList.remove('active');
+        document.getElementById('btn-view-continuous')?.classList.remove('active');
+        document.getElementById('btn-view-facing')?.classList.remove('active');
+        document.getElementById('btn-view-book')?.classList.remove('active');
+        
+        state.viewMode = mode;
+        state.continuousMode = false;
+        state.facingMode = false;
+        state.bookView = false;
+        
+        const pagesContainer = document.getElementById('pages-container');
+        
+        switch (mode) {
+            case 'single':
+                document.getElementById('btn-view-single')?.classList.add('active');
+                break;
+            case 'continuous':
+                document.getElementById('btn-view-continuous')?.classList.add('active');
+                state.continuousMode = true;
+                break;
+            case 'facing':
+                document.getElementById('btn-view-facing')?.classList.add('active');
+                state.facingMode = true;
+                pagesContainer?.classList.add('facing-mode');
+                break;
+            case 'book':
+                document.getElementById('btn-view-book')?.classList.add('active');
+                state.facingMode = true;
+                state.bookView = true;
+                pagesContainer?.classList.add('book-view');
+                break;
+        }
+        
+        if (mode !== 'facing' && mode !== 'book') {
+            pagesContainer?.classList.remove('facing-mode', 'book-view');
+        }
+        
+        ui.showToast(`View: ${mode.charAt(0).toUpperCase() + mode.slice(1)}`);
+        
+        // Re-render pages
+        state.pageCache.clear();
+        state.currentCacheBytes = 0;
+        await renderer.setupVirtualScroller();
+    },
+
     bindKeyboardEvents() {
         document.addEventListener('keydown', (e) => {
             // Don't capture shortcuts when typing in inputs
@@ -679,6 +768,40 @@ export const events = {
                         e.preventDefault();
                         document.getElementById('btn-sidebar-right-toggle')?.click();
                         break;
+                    case '2':
+                        e.preventDefault();
+                        events.setViewMode('facing');
+                        break;
+                    case '1':
+                        e.preventDefault();
+                        events.setViewMode('single');
+                        break;
+                    case '3':
+                        e.preventDefault();
+                        events.setViewMode('continuous');
+                        break;
+                }
+            }
+
+            // Alt shortcuts for view modes
+            if (e.altKey && !e.ctrlKey) {
+                switch (e.key.toLowerCase()) {
+                    case '1':
+                        e.preventDefault();
+                        events.setViewMode('single');
+                        break;
+                    case '2':
+                        e.preventDefault();
+                        events.setViewMode('continuous');
+                        break;
+                    case '3':
+                        e.preventDefault();
+                        events.setViewMode('facing');
+                        break;
+                    case '4':
+                        e.preventDefault();
+                        events.setViewMode('book');
+                        break;
                 }
             }
 
@@ -697,6 +820,37 @@ export const events = {
                             renderer.scrollToPage(state.currentPage);
                         }
                         break;
+                    case 'Home':
+                        e.preventDefault();
+                        state.currentPage = 0;
+                        renderer.scrollToPage(0);
+                        break;
+                    case 'End':
+                        e.preventDefault();
+                        state.currentPage = state.totalPages - 1;
+                        renderer.scrollToPage(state.totalPages - 1);
+                        break;
+                    case 'PageUp':
+                        e.preventDefault();
+                        if (state.currentPage > 0) {
+                            state.currentPage--;
+                            renderer.scrollToPage(state.currentPage);
+                        }
+                        break;
+                    case 'PageDown':
+                        e.preventDefault();
+                        if (state.currentPage < state.totalPages - 1) {
+                            state.currentPage++;
+                            renderer.scrollToPage(state.currentPage);
+                        }
+                        break;
+                    case ' ':
+                        e.preventDefault();
+                        if (state.currentPage < state.totalPages - 1) {
+                            state.currentPage++;
+                            renderer.scrollToPage(state.currentPage);
+                        }
+                        break;
                     case '?':
                     case 'F1':
                         e.preventDefault();
@@ -705,6 +859,26 @@ export const events = {
                     case 'F11':
                         e.preventDefault();
                         document.getElementById('btn-fullscreen')?.click();
+                        break;
+                    case 'w':
+                        e.preventDefault();
+                        document.getElementById('zoom-select').value = 'fit-width';
+                        document.getElementById('zoom-select').dispatchEvent(new Event('change'));
+                        break;
+                    case 'W':
+                        e.preventDefault();
+                        document.getElementById('zoom-select').value = 'fit-width';
+                        document.getElementById('zoom-select').dispatchEvent(new Event('change'));
+                        break;
+                    case 'z':
+                        e.preventDefault();
+                        document.getElementById('zoom-select').value = 'fit-page';
+                        document.getElementById('zoom-select').dispatchEvent(new Event('change'));
+                        break;
+                    case 'Z':
+                        e.preventDefault();
+                        document.getElementById('zoom-select').value = 'fit-page';
+                        document.getElementById('zoom-select').dispatchEvent(new Event('change'));
                         break;
                     case 'Escape':
                         // Close any open modal
@@ -737,17 +911,47 @@ export const events = {
         const viewer = ui.elements.viewerContainer();
         if (!viewer) return;
 
+        // Drag-to-pan functionality
         viewer.addEventListener('mousedown', (e) => {
-            if (state.currentTool === 'view') return;
-            tools.handleMouseDown && tools.handleMouseDown(e);
+            // Only enable pan when in view tool and left mouse button
+            if (state.currentTool === 'view' && e.button === 0) {
+                state.isPanning = true;
+                state.panStartX = e.clientX;
+                state.panStartY = e.clientY;
+                state.scrollStartLeft = viewer.scrollLeft;
+                state.scrollStartTop = viewer.scrollTop;
+                viewer.style.cursor = 'grabbing';
+                e.preventDefault();
+            } else if (state.currentTool !== 'view') {
+                tools.handleMouseDown && tools.handleMouseDown(e);
+            }
         });
 
         viewer.addEventListener('mousemove', (e) => {
-            tools.handleMouseMove && tools.handleMouseMove(e);
+            if (state.isPanning) {
+                const dx = e.clientX - state.panStartX;
+                const dy = e.clientY - state.panStartY;
+                viewer.scrollLeft = state.scrollStartLeft - dx;
+                viewer.scrollTop = state.scrollStartTop - dy;
+            } else if (state.currentTool !== 'view') {
+                tools.handleMouseMove && tools.handleMouseMove(e);
+            }
         });
 
         viewer.addEventListener('mouseup', (e) => {
-            tools.handleMouseUp && tools.handleMouseUp(e);
+            if (state.isPanning) {
+                state.isPanning = false;
+                viewer.style.cursor = 'default';
+            } else if (state.currentTool !== 'view') {
+                tools.handleMouseUp && tools.handleMouseUp(e);
+            }
+        });
+
+        viewer.addEventListener('mouseleave', () => {
+            if (state.isPanning) {
+                state.isPanning = false;
+                viewer.style.cursor = 'default';
+            }
         });
 
         // Double-click action - Smart Zoom
