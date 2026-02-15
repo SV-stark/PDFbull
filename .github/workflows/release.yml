@@ -16,12 +16,6 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Setup Node.js
-        uses: actions/setup-node@v4
-        with:
-          node-version: 20
-          cache: 'npm'
-
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
         with:
@@ -29,44 +23,59 @@ jobs:
 
       - name: Rust cache
         uses: swatinem/rust-cache@v2
-        with:
-          workspaces: |
-            ./src-tauri -> target
 
-      - name: Install dependencies
-        run: npm install
-
-      - name: Download ONNX Runtime and OCR Models
+      - name: Download Build Resources (PDFium, ONNX)
         shell: pwsh
         run: |
-          # Create resources directories
-          mkdir -p src-tauri/resources/ocr_models/en
+          # Create resources directory
+          mkdir -p resources/ocr_models/en
           
+          # Download PDFium (Required for pdfium-render)
+          $pdfium_ver = "6899"
+          $pdfium_url = "https://github.com/bblanchon/pdfium-binaries/releases/download/chromium%2F$pdfium_ver/pdfium-win-x64.tgz"
+          Invoke-WebRequest -Uri $pdfium_url -OutFile pdfium.tgz
+          tar -xzf pdfium.tgz
+          Move-Item -Path "bin/pdfium.dll" -Destination "./pdfium.dll" -Force
+          Remove-Item -Recurse -Force pdfium.tgz, bin, include, lib
+
           # Download ONNX Runtime (CPU)
           $onnx_ver = "1.19.2"
           $onnx_url = "https://github.com/microsoft/onnxruntime/releases/download/v$onnx_ver/onnxruntime-win-x64-$onnx_ver.zip"
           Invoke-WebRequest -Uri $onnx_url -OutFile onnxruntime.zip
           Expand-Archive -Path onnxruntime.zip -DestinationPath onnx_temp
-          Move-Item -Path "onnx_temp/onnxruntime-win-x64-$onnx_ver/lib/onnxruntime.dll" -Destination "src-tauri/onnxruntime.dll" -Force
+          Move-Item -Path "onnx_temp/onnxruntime-win-x64-$onnx_ver/lib/onnxruntime.dll" -Destination "./onnxruntime.dll" -Force
           Remove-Item -Recurse -Force onnxruntime.zip, onnx_temp
 
-          # Download PP-OCRv5 English Models from Hugging Face
+          # Download PP-OCRv5 English Models
           $base_url = "https://huggingface.co/monkt/paddleocr-onnx/resolve/main"
-          Invoke-WebRequest -Uri "$base_url/detection/v5/det.onnx" -OutFile "src-tauri/resources/ocr_models/en/det.onnx"
-          Invoke-WebRequest -Uri "$base_url/languages/english/rec.onnx" -OutFile "src-tauri/resources/ocr_models/en/rec.onnx"
-          # monkt repo uses dict.txt for the english dictionary
-          Invoke-WebRequest -Uri "$base_url/languages/english/dict.txt" -OutFile "src-tauri/resources/ocr_models/en/keys.txt"
-          # Download classification model for orientation correction
-          Invoke-WebRequest -Uri "$base_url/preprocessing/doc-orientation/PP-LCNet_x1_0_doc_ori.onnx" -OutFile "src-tauri/resources/ocr_models/en/cls.onnx"
+          Invoke-WebRequest -Uri "$base_url/detection/v5/det.onnx" -OutFile "resources/ocr_models/en/det.onnx"
+          Invoke-WebRequest -Uri "$base_url/languages/english/rec.onnx" -OutFile "resources/ocr_models/en/rec.onnx"
+          Invoke-WebRequest -Uri "$base_url/languages/english/dict.txt" -OutFile "resources/ocr_models/en/keys.txt"
+          Invoke-WebRequest -Uri "$base_url/preprocessing/doc-orientation/PP-LCNet_x1_0_doc_ori.onnx" -OutFile "resources/ocr_models/en/cls.onnx"
 
-      - name: Build and Release (Nightly)
-        uses: tauri-apps/tauri-action@v0
+      - name: Build PDFbull (Release)
+        run: cargo build --release
+
+      - name: Prepare Release Artifacts
+        shell: pwsh
+        run: |
+          mkdir release_dist
+          Copy-Item -Path "target/release/pdfbull.exe" -Destination "release_dist/"
+          Copy-Item -Path "pdfium.dll" -Destination "release_dist/"
+          Copy-Item -Path "onnxruntime.dll" -Destination "release_dist/"
+          Copy-Item -Path "resources" -Destination "release_dist/resources" -Recurse
+
+      - name: Create Nightly Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: nightly
+          name: 'PDFbull Nightly Build (Pure Slint)'
+          body: 'This is an automated nightly build of the pure Slint version. It is significantly faster and lighter than the previous Tauri version.'
+          files: |
+            release_dist/pdfbull.exe
+            release_dist/pdfium.dll
+            release_dist/onnxruntime.dll
+          draft: false
+          prerelease: true
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        with:
-          tagName: nightly
-          releaseName: 'PDFbull Nightly Build'
-          releaseBody: 'This is an automated nightly build. It contains the latest changes.'
-          releaseDraft: false
-          prerelease: true
-          args: --target x86_64-pc-windows-msvc
