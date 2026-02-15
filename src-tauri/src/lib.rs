@@ -1,7 +1,6 @@
 use pdfium_render::prelude::*;
 use slint::{Image, SharedPixelBuffer};
-use std::collections::HashMap;
-use std::sync::{Arc, Mutex, OnceLock};
+use std::sync::{Mutex, OnceLock};
 
 struct PdfiumWrapper(pub Pdfium);
 unsafe impl Sync for PdfiumWrapper {}
@@ -41,22 +40,24 @@ fn get_pdfium_internal() -> Result<&'static Pdfium, String> {
     }
 }
 
-pub struct PdfWrapper(pub PdfDocument<'static>);
-unsafe impl Send for PdfWrapper {}
-unsafe impl Sync for PdfWrapper {}
-
-pub struct PdfState {
-    pub docs: Arc<Mutex<HashMap<String, PdfWrapper>>>,
-    pub active_doc: Arc<Mutex<Option<String>>>,
+struct AppState {
+    current_path: Option<String>,
+    current_page: i32,
+    total_pages: i32,
+    zoom: f32,
 }
 
-impl PdfState {
-    pub fn new() -> Self {
-        Self {
-            docs: Arc::new(Mutex::new(HashMap::new())),
-            active_doc: Arc::new(Mutex::new(None)),
-        }
-    }
+static APP_STATE: OnceLock<Mutex<AppState>> = OnceLock::new();
+
+fn get_state() -> &'static Mutex<AppState> {
+    APP_STATE.get_or_init(|| {
+        Mutex::new(AppState {
+            current_path: None,
+            current_page: 0,
+            total_pages: 0,
+            zoom: 1.0,
+        })
+    })
 }
 
 slint::include_modules!();
@@ -69,19 +70,15 @@ pub fn run() {
     }));
 
     let app = AppWindow::new().expect("Failed to create window");
+    let app2 = app.clone_strong();
+    let app3 = app2.clone_strong();
+    let app4 = app3.clone_strong();
+    let app5 = app4.clone_strong();
+    let app6 = app5.clone_strong();
+    let app7 = app6.clone_strong();
+    let app8 = app7.clone_strong();
 
-    let h1 = app.clone_strong();
-    let h2 = h1.clone_strong();
-    let h3 = h2.clone_strong();
-    let h4 = h3.clone_strong();
-    let h5 = h4.clone_strong();
-    let h6 = h5.clone_strong();
-    let h7 = h6.clone_strong();
-    let h8 = h7.clone_strong();
-    let h9 = h8.clone_strong();
-    let h10 = h9.clone_strong();
-
-    h1.on_open_file(move || {
+    app.on_open_file(move || {
         if let Some(file_path) = rfd::FileDialog::new()
             .add_filter("PDF Files", &["pdf"])
             .pick_file()
@@ -91,40 +88,60 @@ pub fn run() {
 
             match open_pdf(&path) {
                 Ok(page_count) => {
-                    h2.set_current_page(0);
-                    h2.set_total_pages(page_count as i32);
-                    h2.set_document_path(path.into());
-                    h2.set_status_text("Document loaded".into());
+                    let mut state = get_state().lock().unwrap();
+                    state.current_path = Some(path.clone());
+                    state.current_page = 0;
+                    state.total_pages = page_count as i32;
+                    state.zoom = 1.0;
+                    drop(state);
+
+                    app2.set_current_page(0);
+                    app2.set_total_pages(page_count as i32);
+                    app2.set_document_path(path.into());
+                    app2.set_status_text(format!("Loaded - {} pages", page_count).into());
+                    app2.set_zoom(1.0);
                 }
                 Err(e) => {
-                    h2.set_status_text(format!("Error: {}", e).into());
+                    app2.set_status_text(format!("Error: {}", e).into());
                 }
             }
         }
     });
 
-    h3.on_previous_page(move || {
-        let c = h4.get_current_page();
-        if c > 0 {
-            h4.set_current_page(c - 1);
+    app3.on_close_file(move || {
+        let mut state = get_state().lock().unwrap();
+        state.current_path = None;
+        state.current_page = 0;
+        state.total_pages = 0;
+        drop(state);
+
+        app4.set_document_path("".into());
+        app4.set_current_page(0);
+        app4.set_total_pages(0);
+        app4.set_status_text("Ready".into());
+    });
+
+    app5.on_previous_page(move || {
+        let mut state = get_state().lock().unwrap();
+        if state.current_page > 0 {
+            state.current_page -= 1;
+            let page = state.current_page;
+            drop(state);
+            app6.set_current_page(page);
         }
     });
 
-    h5.on_next_page(move || {
-        let c = h6.get_current_page();
-        let t = h6.get_total_pages();
-        if c < t - 1 {
-            h6.set_current_page(c + 1);
+    app7.on_next_page(move || {
+        let mut state = get_state().lock().unwrap();
+        if state.current_page < state.total_pages - 1 {
+            state.current_page += 1;
+            let page = state.current_page;
+            drop(state);
+            app8.set_current_page(page);
         }
     });
 
-    h7.on_zoom_in(move || {
-        let c = h8.get_zoom();
-        let nz = (c + 0.25).min(5.0);
-        h8.set_zoom(nz);
-    });
-
-    app.run();
+    let _ = app.run();
 }
 
 pub fn open_pdf(path: &str) -> Result<usize, String> {
