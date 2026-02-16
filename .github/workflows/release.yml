@@ -65,6 +65,11 @@ jobs:
           Copy-Item -Path "onnxruntime.dll" -Destination "release_dist/"
           Copy-Item -Path "resources" -Destination "release_dist/resources" -Recurse
 
+      - name: Build NSIS Installer
+        uses: katahiromz/nsis-action@master
+        with:
+          script: installer.nsi
+
       - name: Create Nightly Release
         uses: softprops/action-gh-release@v2
         with:
@@ -75,6 +80,7 @@ jobs:
             release_dist/pdfbull.exe
             release_dist/pdfium.dll
             release_dist/onnxruntime.dll
+            PDFbull-Setup.exe
           draft: false
           prerelease: true
         env:
