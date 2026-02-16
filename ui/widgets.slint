@@ -1,0 +1,94 @@
+import { Theme } from "theme.slint";
+
+export component Divider inherits Rectangle {
+    height: 1px;
+    background: Theme.border;
+    width: 100%;
+}
+
+export component ModernButton inherits Rectangle {
+    in property <string> text;
+    in property <bool> primary: false;
+    callback clicked <=> touch.clicked;
+
+    width: layout.preferred-width;
+    height: 36px;
+    border-radius: Theme.radius-md;
+    background: root.primary ? Theme.accent : 
+               touch.has-hover ? Theme.surface-hover : Theme.surface;
+    border-width: root.primary ? 0px : 1px;
+    border-color: Theme.border;
+
+    animate background { duration: 150ms; }
+
+    touch := TouchArea {
+    }
+
+    layout := HorizontalLayout {
+        padding-left: Theme.padding-lg;
+        padding-right: Theme.padding-lg;
+        alignment: center;
+        
+        Text {
+            text: root.text;
+            color: root.primary ? Theme.on-accent : Theme.text-primary;
+            font-size: Theme.font-md;
+            font-weight: 500;
+            vertical-alignment: center;
+        }
+    }
+}
+
+export component IconButton inherits Rectangle {
+    in property <string> text; // Optional text
+    in property <bool> enabled: true;
+    callback clicked <=> touch.clicked;
+
+    width: (root.text != "") ? layout.preferred-width : 36px;
+    height: 36px;
+    border-radius: Theme.radius-md;
+    background: touch.has-hover ? Theme.surface-hover : Colors.transparent;
+
+    animate background { duration: 150ms; }
+
+    touch := TouchArea {
+        enabled: root.enabled;
+    }
+
+    layout := HorizontalLayout {
+        padding-left: (root.text != "") ? Theme.padding-md : 0px;
+        padding-right: (root.text != "") ? Theme.padding-md : 0px;
+        alignment: center;
+        spacing: Theme.padding-sm;
+
+        // If we had icons, we would put an Image here. For now using text as icon placeholder if needed, 
+        // or just text button with icon-style hover.
+        Text {
+            text: root.text;
+            color: root.enabled ? Theme.text-primary : Theme.text-secondary;
+            font-size: Theme.font-md;
+            vertical-alignment: center;
+        }
+    }
+}
+
+export component ThemeToggle inherits Rectangle {
+    callback toggled();
+    
+    width: 36px;
+    height: 36px;
+    border-radius: 18px;
+    background: touch.has-hover ? Theme.surface-hover : Colors.transparent;
+
+    touch := TouchArea {
+        clicked => { root.toggled(); }
+    }
+
+    Text {
+        text: Theme.is-dark ? "☀" : "☾";
+        color: Theme.text-primary;
+        font-size: Theme.font-lg;
+        vertical-alignment: center;
+        horizontal-alignment: center;
+    }
+}

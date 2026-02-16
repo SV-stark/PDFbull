@@ -1,0 +1,29 @@
+export global Theme {
+    in-out property <bool> is-dark: true;
+
+    // Fonts
+    out property <length> font-sm: 12px;
+    out property <length> font-md: 14px;
+    out property <length> font-lg: 16px;
+    out property <length> font-xl: 20px;
+
+    // Spacing & Layout
+    out property <length> padding-sm: 4px;
+    out property <length> padding-md: 8px;
+    out property <length> padding-lg: 16px;
+    out property <length> radius-sm: 4px;
+    out property <length> radius-md: 8px;
+
+    // Colors - Dynamic based on is-dark
+    out property <brush> background: is-dark ? #1e1e1e : #f0f0f0;
+    out property <brush> surface: is-dark ? #2d2d2d : #ffffff;
+    out property <brush> surface-hover: is-dark ? #3d3d3d : #e0e0e0;
+    out property <brush> border: is-dark ? #404040 : #cccccc;
+    
+    out property <brush> text-primary: is-dark ? #ffffff : #1a1a1a;
+    out property <brush> text-secondary: is-dark ? #aaaaaa : #666666;
+    
+    out property <brush> accent: #3b82f6; // Blue-500
+    out property <brush> accent-hover: #2563eb; // Blue-600
+    out property <brush> on-accent: #ffffff;
+}

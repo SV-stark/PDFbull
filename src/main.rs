@@ -68,8 +68,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 let ui_handle2 = ui_handle.clone();
                 std::thread::spawn(move || {
                     if let Ok(result) = resp_rx.recv() {
-                        let ui = ui_handle2.unwrap();
-                        match result {
+                        let _ = ui_handle2.upgrade_in_event_loop(move |ui| match result {
                             Ok(count) => {
                                 ui.set_total_pages(count);
                                 ui.set_current_page(0);
@@ -79,7 +78,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                             Err(e) => {
                                 ui.set_status_text(format!("Error: {}", e).into());
                             }
-                        }
+                        });
                     }
                 });
             }
@@ -107,34 +106,34 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         let cmd_tx = cmd_tx.clone();
 
         move |page_num, scale| {
-            let ui = ui_handle.unwrap();
             let (resp_tx, resp_rx) = mpsc::channel();
             let _ = cmd_tx.send(PdfCommand::Render(page_num, scale, resp_tx));
 
             let ui_handle2 = ui_handle.clone();
             std::thread::spawn(move || {
                 if let Ok(result) = resp_rx.recv() {
-                    let ui = ui_handle2.unwrap();
-                    match result {
-                        Ok((w, h, bytes)) => {
-                            let mut buffer = SharedPixelBuffer::<Rgba8Pixel>::new(w, h);
-                            let slice = buffer.make_mut_bytes();
+                    let _ = ui_handle2.upgrade_in_event_loop(move |ui| {
+                        match result {
+                            Ok((w, h, bytes)) => {
+                                let mut buffer = SharedPixelBuffer::<Rgba8Pixel>::new(w, h);
+                                let slice = buffer.make_mut_bytes();
 
-                            // BGRA -> RGBA
-                            for (i, chunk) in bytes.chunks(4).enumerate() {
-                                if i * 4 + 3 < slice.len() {
-                                    slice[i * 4] = chunk[2];
-                                    slice[i * 4 + 1] = chunk[1];
-                                    slice[i * 4 + 2] = chunk[0];
-                                    slice[i * 4 + 3] = chunk[3];
+                                // BGRA -> RGBA
+                                for (i, chunk) in bytes.chunks(4).enumerate() {
+                                    if i * 4 + 3 < slice.len() {
+                                        slice[i * 4] = chunk[2];
+                                        slice[i * 4 + 1] = chunk[1];
+                                        slice[i * 4 + 2] = chunk[0];
+                                        slice[i * 4 + 3] = chunk[3];
+                                    }
                                 }
-                            }
 
-                            let image = Image::from_rgba8(buffer);
-                            ui.set_pdf_page_image(image);
+                                let image = Image::from_rgba8(buffer);
+                                ui.set_pdf_page_image(image);
+                            }
+                            Err(_) => {}
                         }
-                        Err(_) => {}
-                    }
+                    });
                 }
             });
         }

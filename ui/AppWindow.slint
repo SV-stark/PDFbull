@@ -1,9 +1,12 @@
-import { Button, HorizontalBox, ScrollView, VerticalBox } from "std-widgets.slint";
+import { Button, VerticalBox, HorizontalBox, ScrollView } from "std-widgets.slint";
+import { Theme } from "theme.slint";
+import { ModernButton, IconButton, Divider, ThemeToggle } from "widgets.slint";
 
 export component AppWindow inherits Window {
     title: "PDFbull";
     width: 1200px;
     height: 800px;
+    background: Theme.background;
 
     in-out property<int> current_page: 0;
     in-out property<int> total_pages: 0;
@@ -11,7 +14,7 @@ export component AppWindow inherits Window {
     in-out property<string> status_text: "Ready - Open a PDF to begin";
     in-out property<bool> sidebar_visible: true;
     in-out property<image> pdf_page_image; 
-
+    
     // Callbacks to request updates
     callback open_document();
     callback close_document();
@@ -21,143 +24,192 @@ export component AppWindow inherits Window {
         request_render(current_page, zoom);
     }
     
-    background: #2d2d2d;
-
-    VerticalBox {
+    VerticalLayout {
         padding: 0px;
 
+        // Top Toolbar
         Rectangle {
-            background: #1a1a1a;
             height: 48px;
+            background: Theme.surface;
             
-            HorizontalBox {
-                padding: 8px;
-                spacing: 12px;
-                alignment: start;
-                
-                Button {
-                    text: "📂 Open PDF";
-                    clicked => { open_document(); }
-                    min_width: 100px;
+            HorizontalLayout {
+                padding-left: Theme.padding-md;
+                padding-right: Theme.padding-md;
+                spacing: Theme.padding-md;
+                alignment: center;
+
+                // Left side controls
+                HorizontalLayout {
+                    alignment: start;
+                    spacing: Theme.padding-md;
+                    
+                    ModernButton {
+                        text: "📂 Open PDF";
+                        primary: true;
+                        clicked => { open_document(); }
+                    }
+                    ModernButton {
+                        text: "Close";
+                        clicked => { close_document(); }
+                    }
                 }
-                Button {
-                    text: "Close";
-                    clicked => { close_document(); }
+                
+                // Spacer
+                Rectangle { horizontal-stretch: 1; }
+
+                // Right side controls
+                ThemeToggle {
+                    toggled => { Theme.is-dark = !Theme.is-dark; }
                 }
             }
+            
+            // Bottom border
+            Divider { y: parent.height - 1px; }
         }
 
         HorizontalLayout {
-            padding: 0px;
-            spacing: 0px;
-
+            // Sidebar
             if sidebar_visible : Rectangle {
-                width: 220px;
-                background: #252525;
+                width: 250px;
+                background: Theme.surface;
                 
+                // Right border
                 Rectangle {
                     width: 1px;
-                    background: #3d3d3d;
+                    background: Theme.border;
                     x: parent.width - 1px;
                 }
                 
-                VerticalBox {
-                    padding: 12px;
+                VerticalLayout {
+                    padding: Theme.padding-lg;
+                    spacing: Theme.padding-md;
+                    
                     Text { 
                         text: "Thumbnails"; 
-                        font_size: 16px; 
-                        font_weight: 700; 
-                        color: #ffffff;
+                        font_size: Theme.font-lg; 
+                        font-weight: 700; 
+                        color: Theme.text-primary;
                     }
+                    
                     Text { 
                         text: "Page navigation coming soon"; 
-                        font_size: 12px; 
-                        color: #888888;
+                        font_size: Theme.font-sm; 
+                        color: Theme.text-secondary;
                     }
                 }
             }
 
+            // Main Content Area
             VerticalLayout {
-                padding: 0px;
-                spacing: 0px;
-
+                // Secondary Toolbar (Navigation)
                 Rectangle {
                     height: 52px;
-                    background: #1a1a1a;
+                    background: Theme.surface;
                     
-                    Rectangle {
-                        height: 1px;
-                        background: #3d3d3d;
-                        y: parent.height - 1px;
-                    }
+                    // Bottom border
+                    Divider { y: parent.height - 1px; }
                     
-                    HorizontalBox {
-                        padding: 8px;
-                        spacing: 12px;
-                        alignment: start;
+                    HorizontalLayout {
+                        padding-left: Theme.padding-lg;
+                        padding-right: Theme.padding-lg;
+                        spacing: Theme.padding-lg;
+                        alignment: center;
 
-                        Button {
+                        ModernButton {
                             text: "◀ Prev";
                             clicked => {
                                 if (current_page > 0) {
                                     current_page -= 1;
                                 }
                             }
-                            min_width: 80px;
                         }
 
                         Text {
-                            text: "Page " + (current_page + 1) + " of " + total_pages;
+                            text: "Page " + (current_page + 1) + " of " + (total_pages > 0 ? total_pages : 1);
                             vertical_alignment: center;
-                            color: #ffffff;
-                            font_size: 16px;
-                            font_weight: 600;
+                            color: Theme.text-primary;
+                            font_size: Theme.font-lg;
+                            font_weight: 500;
                         }
 
-                        Button {
+                        ModernButton {
                             text: "Next ▶";
                             clicked => {
                                 if (current_page < total_pages - 1) {
                                     current_page += 1;
                                 }
                             }
-                            min_width: 80px;
                         }
 
-                        Button {
-                            text: "− Zoom Out";
-                            clicked => { 
-                                zoom = max(0.25, zoom / 1.25); 
-                                request_render(current_page, zoom);
+                        // Spacer
+                        Rectangle { width: 20px; }
+
+                        HorizontalLayout {
+                            spacing: Theme.padding-md;
+                            
+                            ModernButton {
+                                text: "−";
+                                clicked => { 
+                                    zoom = max(0.25, zoom / 1.25); 
+                                    request_render(current_page, zoom);
+                                }
                             }
-                        }
 
-                        Text {
-                            text: round(zoom * 100) + "%";
-                            vertical_alignment: center;
-                            color: #ffffff;
-                            font_size: 16px;
-                            font_weight: 600;
-                        }
+                            Text {
+                                text: round(zoom * 100) + "%";
+                                vertical_alignment: center;
+                                color: Theme.text-primary;
+                                font_size: Theme.font-lg;
+                                font_weight: 500;
+                                width: 50px;
+                                horizontal-alignment: center;
+                            }
 
-                        Button {
-                            text: "+ Zoom In";
-                            clicked => { 
-                                zoom = min(5.0, zoom * 1.25); 
-                                request_render(current_page, zoom);
+                            ModernButton {
+                                text: "+";
+                                clicked => { 
+                                    zoom = min(5.0, zoom * 1.25); 
+                                    request_render(current_page, zoom);
+                                }
                             }
                         }
                     }
                 }
 
+                // PDF View Area
                 ScrollView {
+                    viewport-width: pdf_page_image.width * 1px;
+                    viewport-height: pdf_page_image.height * 1px;
+                    
                     Rectangle {
-                        background: #404040;
+                        background: Theme.background;
                         
-                        HorizontalLayout { alignment: center; 
-                            VerticalLayout { alignment: center;
-                                Image {
-                                    source: pdf_page_image;
+                        HorizontalLayout { 
+                            alignment: center; 
+                            VerticalLayout { 
+                                alignment: center;
+                                padding: Theme.padding-lg;
+                                
+                                Rectangle {
+                                    width: pdf_page_image.width * 1px;
+                                    height: pdf_page_image.height * 1px;
+
+                                    // Shadow
+                                    Rectangle {
+                                        x: 4px;
+                                        y: 4px;
+                                        width: 100%;
+                                        height: 100%;
+                                        background: #000000;
+                                        opacity: 0.2;
+                                    }
+
+                                    // Image
+                                    Image {
+                                        width: 100%;
+                                        height: 100%;
+                                        source: pdf_page_image;
+                                    }
                                 }
                             }
                         }
@@ -166,23 +218,23 @@ export component AppWindow inherits Window {
             }
         }
 
+        // Status Bar
         Rectangle {
             height: 32px;
-            background: #1a1a1a;
+            background: Theme.surface;
             
-            Rectangle {
-                height: 1px;
-                background: #3d3d3d;
-                y: 0px;
-            }
+            // Top border
+            Divider { y: 0px; }
             
-            HorizontalBox {
-                padding: 8px;
+            HorizontalLayout {
+                padding-left: Theme.padding-md;
                 alignment: start;
+                
                 Text {
                     text: status_text;
-                    font_size: 14px;
-                    color: #cccccc;
+                    font_size: Theme.font-sm;
+                    color: Theme.text-secondary;
+                    vertical-alignment: center;
                 }
             }
         }
