@@ -1,6 +1,22 @@
-import { Button, VerticalBox, HorizontalBox, ScrollView } from "std-widgets.slint";
+import {
+    Button,
+    VerticalBox,
+    HorizontalBox,
+    ScrollView,
+    ListView,
+} from "std-widgets.slint";
 import { Theme } from "theme.slint";
-import { ModernButton, IconButton, Divider, ThemeToggle } from "widgets.slint";
+import {
+    ModernButton,
+    IconButton,
+    Divider,
+    ThemeToggle,
+    FolderIcon,
+    ChevronLeftIcon,
+    ChevronRightIcon,
+    PlusIcon,
+    MinusIcon,
+} from "widgets.slint";
 
 export component AppWindow inherits Window {
     title: "PDFbull";
@@ -8,12 +24,12 @@ export component AppWindow inherits Window {
     height: 800px;
     background: Theme.background;
 
-    in-out property<int> current_page: 0;
-    in-out property<int> total_pages: 0;
-    in-out property<float> zoom: 1.0;
-    in-out property<string> status_text: "Ready - Open a PDF to begin";
-    in-out property<bool> sidebar_visible: true;
-    in-out property<image> pdf_page_image; 
+    in-out property <int> current_page: 0;
+    in-out property <int> total_pages: 0;
+    in-out property <float> zoom: 1.0;
+    in-out property <string> status_text: "Ready - Open a PDF to begin";
+    in-out property <bool> sidebar_visible: true;
+    in-out property <image> pdf_page_image; 
     
     // Callbacks to request updates
     callback open_document();
@@ -23,7 +39,6 @@ export component AppWindow inherits Window {
     changed current_page => {
         request_render(current_page, zoom);
     }
-    
     VerticalLayout {
         padding: 0px;
 
@@ -31,7 +46,6 @@ export component AppWindow inherits Window {
         Rectangle {
             height: 48px;
             background: Theme.surface;
-            
             HorizontalLayout {
                 padding-left: Theme.padding-md;
                 padding-right: Theme.padding-md;
@@ -42,34 +56,47 @@ export component AppWindow inherits Window {
                 HorizontalLayout {
                     alignment: start;
                     spacing: Theme.padding-md;
-                    
                     ModernButton {
-                        text: "📂 Open PDF";
+                        text: "Open PDF";
                         primary: true;
-                        clicked => { open_document(); }
+                        clicked => {
+                            open_document();
+                        }
+                        FolderIcon {
+                            icon-color: Theme.on-accent;
+                        }
                     }
+
                     ModernButton {
                         text: "Close";
-                        clicked => { close_document(); }
+                        clicked => {
+                            close_document();
+                        }
                     }
                 }
                 
                 // Spacer
-                Rectangle { horizontal-stretch: 1; }
+                Rectangle {
+                    horizontal-stretch: 1;
+                }
 
                 // Right side controls
                 ThemeToggle {
-                    toggled => { Theme.is-dark = !Theme.is-dark; }
+                    toggled => {
+                        Theme.is-dark = !Theme.is-dark;
+                    }
                 }
             }
             
             // Bottom border
-            Divider { y: parent.height - 1px; }
+            Divider {
+                y: parent.height - 1px;
+            }
         }
 
         HorizontalLayout {
             // Sidebar
-            if sidebar_visible : Rectangle {
+            if sidebar_visible: Rectangle {
                 width: 250px;
                 background: Theme.surface;
                 
@@ -79,22 +106,47 @@ export component AppWindow inherits Window {
                     background: Theme.border;
                     x: parent.width - 1px;
                 }
-                
+
                 VerticalLayout {
-                    padding: Theme.padding-lg;
-                    spacing: Theme.padding-md;
-                    
-                    Text { 
-                        text: "Thumbnails"; 
-                        font_size: Theme.font-lg; 
-                        font-weight: 700; 
-                        color: Theme.text-primary;
+                    padding: 0px;
+                    Rectangle {
+                        height: 48px;
+                        HorizontalLayout {
+                            padding-left: Theme.padding-lg;
+                            alignment: center;
+                            Text {
+                                text: "Pages";
+                                font_size: Theme.font-lg;
+                                font-weight: 700;
+                                color: Theme.text-primary;
+                                vertical-alignment: center;
+                            }
+                        }
                     }
-                    
-                    Text { 
-                        text: "Page navigation coming soon"; 
-                        font_size: Theme.font-sm; 
-                        color: Theme.text-secondary;
+
+                    ListView {
+                        for page_idx in total_pages: Rectangle {
+                            height: 40px;
+                            background: touch.has-hover ? Theme.surface-hover : (current_page == page_idx ? Theme.accent.with_alpha(0.2) : Colors.transparent);
+                            touch := TouchArea {
+                                clicked => {
+                                    current_page = page_idx;
+                                }
+                            }
+
+                            HorizontalLayout {
+                                padding-left: Theme.padding-lg;
+                                padding-right: Theme.padding-lg;
+                                spacing: Theme.padding-md;
+                                alignment: start;
+                                Text {
+                                    text: "Page " + (page_idx + 1);
+                                    color: current_page == page_idx ? Theme.accent : Theme.text-primary;
+                                    font_size: Theme.font-md;
+                                    vertical-alignment: center;
+                                }
+                            }
+                        }
                     }
                 }
             }
@@ -107,8 +159,10 @@ export component AppWindow inherits Window {
                     background: Theme.surface;
                     
                     // Bottom border
-                    Divider { y: parent.height - 1px; }
-                    
+                    Divider {
+                        y: parent.height - 1px;
+                    }
+
                     HorizontalLayout {
                         padding-left: Theme.padding-lg;
                         padding-right: Theme.padding-lg;
@@ -116,12 +170,13 @@ export component AppWindow inherits Window {
                         alignment: center;
 
                         ModernButton {
-                            text: "◀ Prev";
+                            text: "Prev";
                             clicked => {
                                 if (current_page > 0) {
                                     current_page -= 1;
                                 }
                             }
+                            ChevronLeftIcon { }
                         }
 
                         Text {
@@ -133,26 +188,31 @@ export component AppWindow inherits Window {
                         }
 
                         ModernButton {
-                            text: "Next ▶";
+                            text: "Next";
                             clicked => {
                                 if (current_page < total_pages - 1) {
                                     current_page += 1;
                                 }
                             }
+                            ChevronRightIcon { }
                         }
 
                         // Spacer
-                        Rectangle { width: 20px; }
+                        Rectangle {
+                            width: 20px;
+                        }
 
                         HorizontalLayout {
                             spacing: Theme.padding-md;
-                            
                             ModernButton {
-                                text: "−";
-                                clicked => { 
-                                    zoom = max(0.25, zoom / 1.25); 
+                                text: "";
+                                clicked => {
+                                    zoom = max(0.25, zoom / 1.25);
                                     request_render(current_page, zoom);
                                 }
+                                width: 36px;
+                                padding-horizontal: 0px;
+                                MinusIcon { }
                             }
 
                             Text {
@@ -160,17 +220,20 @@ export component AppWindow inherits Window {
                                 vertical_alignment: center;
                                 color: Theme.text-primary;
                                 font_size: Theme.font-lg;
-                                font_weight: 500;
+                                font-weight: 500;
                                 width: 50px;
                                 horizontal-alignment: center;
                             }
 
                             ModernButton {
-                                text: "+";
-                                clicked => { 
-                                    zoom = min(5.0, zoom * 1.25); 
+                                text: "";
+                                clicked => {
+                                    zoom = min(5.0, zoom * 1.25);
                                     request_render(current_page, zoom);
                                 }
+                                width: 36px;
+                                padding-horizontal: 0px;
+                                PlusIcon { }
                             }
                         }
                     }
@@ -180,16 +243,13 @@ export component AppWindow inherits Window {
                 ScrollView {
                     viewport-width: pdf_page_image.width * 1px;
                     viewport-height: pdf_page_image.height * 1px;
-                    
                     Rectangle {
                         background: Theme.background;
-                        
-                        HorizontalLayout { 
-                            alignment: center; 
-                            VerticalLayout { 
+                        HorizontalLayout {
+                            alignment: center;
+                            VerticalLayout {
                                 alignment: center;
                                 padding: Theme.padding-lg;
-                                
                                 Rectangle {
                                     width: pdf_page_image.width * 1px;
                                     height: pdf_page_image.height * 1px;
@@ -224,12 +284,13 @@ export component AppWindow inherits Window {
             background: Theme.surface;
             
             // Top border
-            Divider { y: 0px; }
-            
+            Divider {
+                y: 0px;
+            }
+
             HorizontalLayout {
                 padding-left: Theme.padding-md;
                 alignment: start;
-                
                 Text {
                     text: status_text;
                     font_size: Theme.font-sm;

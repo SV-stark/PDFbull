@@ -1,5 +1,58 @@
 import { Theme } from "theme.slint";
 
+export component Icon inherits Path {
+    in property <brush> icon-color: Theme.text-primary;
+    width: 18px;
+    height: 18px;
+    stroke: root.icon-color;
+    stroke-width: 2px;
+}
+
+export component ChevronLeftIcon inherits Icon {
+    viewbox-width: 24;
+    viewbox-height: 24;
+    commands: "M 15 18 L 9 12 L 15 6";
+}
+
+export component ChevronRightIcon inherits Icon {
+    viewbox-width: 24;
+    viewbox-height: 24;
+    commands: "M 9 18 L 15 12 L 9 6";
+}
+
+export component PlusIcon inherits Icon {
+    viewbox-width: 24;
+    viewbox-height: 24;
+    commands: "M 12 5 L 12 19 M 5 12 L 19 12";
+}
+
+export component MinusIcon inherits Icon {
+    viewbox-width: 24;
+    viewbox-height: 24;
+    commands: "M 5 12 L 19 12";
+}
+
+export component FolderIcon inherits Icon {
+    viewbox-width: 24;
+    viewbox-height: 24;
+    commands: "M 22 19 a 2 2 0 0 1 -2 2 H 4 a 2 2 0 0 1 -2 -2 V 5 a 2 2 0 0 1 2 -2 h 5 l 2 3 h 9 a 2 2 0 0 1 2 2 z";
+    fill: Colors.transparent;
+}
+
+export component SunIcon inherits Icon {
+    viewbox-width: 24;
+    viewbox-height: 24;
+    commands: "M 12 1 v 2 M 12 21 v 2 M 4.22 4.22 l 1.42 1.42 M 18.36 18.36 l 1.42 1.42 M 1 12 h 2 M 21 12 h 2 M 4.22 19.78 l 1.42 -1.42 M 18.36 5.64 l 1.42 -1.42 M 12 7 a 5 5 0 1 0 10 0 a 5 5 0 0 0 -10 0";
+    stroke-width: 1.5px;
+}
+
+export component MoonIcon inherits Icon {
+    viewbox-width: 24;
+    viewbox-height: 24;
+    commands: "M 21 12.79 A 9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79 z";
+    stroke-width: 1.5px;
+}
+
 export component Divider inherits Rectangle {
     height: 1px;
     background: Theme.border;
@@ -9,27 +62,24 @@ export component Divider inherits Rectangle {
 export component ModernButton inherits Rectangle {
     in property <string> text;
     in property <bool> primary: false;
+    in property <length> padding-horizontal: Theme.padding-lg;
     callback clicked <=> touch.clicked;
-
     width: layout.preferred-width;
     height: 36px;
     border-radius: Theme.radius-md;
-    background: root.primary ? Theme.accent : 
-               touch.has-hover ? Theme.surface-hover : Theme.surface;
+    background: root.primary ? Theme.accent : touch.has-hover ? Theme.surface-hover : Theme.surface;
     border-width: root.primary ? 0px : 1px;
     border-color: Theme.border;
-
     animate background { duration: 150ms; }
-
-    touch := TouchArea {
-    }
+    touch := TouchArea { }
 
     layout := HorizontalLayout {
-        padding-left: Theme.padding-lg;
-        padding-right: Theme.padding-lg;
+        padding-left: root.padding-horizontal;
+        padding-right: root.padding-horizontal;
         alignment: center;
-        
-        Text {
+        spacing: Theme.padding-md;
+        @children
+        if root.text != "": Text {
             text: root.text;
             color: root.primary ? Theme.on-accent : Theme.text-primary;
             font-size: Theme.font-md;
@@ -40,55 +90,48 @@ export component ModernButton inherits Rectangle {
 }
 
 export component IconButton inherits Rectangle {
-    in property <string> text; // Optional text
     in property <bool> enabled: true;
     callback clicked <=> touch.clicked;
-
-    width: (root.text != "") ? layout.preferred-width : 36px;
+    width: 36px;
     height: 36px;
     border-radius: Theme.radius-md;
     background: touch.has-hover ? Theme.surface-hover : Colors.transparent;
-
     animate background { duration: 150ms; }
-
     touch := TouchArea {
         enabled: root.enabled;
     }
 
-    layout := HorizontalLayout {
-        padding-left: (root.text != "") ? Theme.padding-md : 0px;
-        padding-right: (root.text != "") ? Theme.padding-md : 0px;
+    HorizontalLayout {
         alignment: center;
-        spacing: Theme.padding-sm;
-
-        // If we had icons, we would put an Image here. For now using text as icon placeholder if needed, 
-        // or just text button with icon-style hover.
-        Text {
-            text: root.text;
-            color: root.enabled ? Theme.text-primary : Theme.text-secondary;
-            font-size: Theme.font-md;
-            vertical-alignment: center;
-        }
+        padding: 9px;
+        @children
     }
 }
 
 export component ThemeToggle inherits Rectangle {
     callback toggled();
-    
     width: 36px;
     height: 36px;
     border-radius: 18px;
     background: touch.has-hover ? Theme.surface-hover : Colors.transparent;
-
     touch := TouchArea {
-        clicked => { root.toggled(); }
+        clicked => {
+            root.toggled();
+        }
     }
 
-    Text {
-        text: Theme.is-dark ? "☀" : "☾";
-        color: Theme.text-primary;
-        font-size: Theme.font-lg;
-        vertical-alignment: center;
-        horizontal-alignment: center;
+    HorizontalLayout {
+        padding: 9px;
+        alignment: center;
+        if Theme.is-dark: SunIcon {
+            icon-color: Theme.text-primary;
+            width: 100%;
+            height: 100%;
+        }
+        if !Theme.is-dark: MoonIcon {
+            icon-color: Theme.text-primary;
+            width: 100%;
+            height: 100%;
+        }
     }
 }
