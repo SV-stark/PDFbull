@@ -4,6 +4,7 @@ import {
     HorizontalBox,
     ScrollView,
     ListView,
+    ProgressIndicator,
 } from "std-widgets.slint";
 import { Theme } from "theme.slint";
 import {
@@ -23,12 +24,15 @@ export component AppWindow inherits Window {
     width: 1200px;
     height: 800px;
     background: Theme.background;
+    preferred-width: 1000px;
+    preferred-height: 700px;
 
     in-out property <int> current_page: 0;
-    in-out property <int> total_pages: 0;
+    in-out property <int> total_pages: 0; // If 0, no document loaded
     in-out property <float> zoom: 1.0;
     in-out property <string> status_text: "Ready - Open a PDF to begin";
     in-out property <bool> sidebar_visible: true;
+    in-out property <bool> is_loading: false;
     in-out property <image> pdf_page_image; 
     
     // Callbacks to request updates
@@ -36,266 +40,348 @@ export component AppWindow inherits Window {
     callback close_document();
     callback request_render(int, float);
 
+    // Trigger render when page or zoom changes
+    // Debouncing would be ideal but for now we just react
     changed current_page => {
-        request_render(current_page, zoom);
+        if (total_pages > 0) {
+            request_render(current_page, zoom);
+        }
     }
-    VerticalLayout {
-        padding: 0px;
 
-        // Top Toolbar
-        Rectangle {
-            height: 48px;
-            background: Theme.surface;
-            HorizontalLayout {
-                padding-left: Theme.padding-md;
-                padding-right: Theme.padding-md;
-                spacing: Theme.padding-md;
-                alignment: center;
-
-                // Left side controls
-                HorizontalLayout {
-                    alignment: start;
-                    spacing: Theme.padding-md;
-                    ModernButton {
-                        text: "Open PDF";
-                        primary: true;
-                        clicked => {
-                            open_document();
-                        }
-                        FolderIcon {
-                            icon-color: Theme.on-accent;
-                        }
-                    }
-
-                    ModernButton {
-                        text: "Close";
-                        clicked => {
-                            close_document();
-                        }
-                    }
-                }
-                
-                // Spacer
-                Rectangle {
-                    horizontal-stretch: 1;
-                }
-
-                // Right side controls
-                ThemeToggle {
-                    toggled => {
-                        Theme.is-dark = !Theme.is-dark;
-                    }
+    // Main Focus Scope for Keyboard Events
+    FocusScope {
+        width: parent.width;
+        height: parent.height;
+        key-pressed(event) => {
+            if (event.text == " ") {
+                 // Space -> Next Page
+                 if (current-page < total-pages - 1) {
+                    current-page += 1;
+                    return accept;
                 }
             }
-            
-            // Bottom border
-            Divider {
-                y: parent.height - 1px;
+            if (event.text == Key.RightArrow || event.text == Key.DownArrow) {
+                if (current-page < total-pages - 1) {
+                    current-page += 1;
+                    return accept;
+                }
             }
+            if (event.text == Key.LeftArrow || event.text == Key.UpArrow) {
+                if (current-page > 0) {
+                    current-page -= 1;
+                    return accept;
+                }
+            }
+            if (event.modifiers.control) {
+                if (event.text == "=" || event.text == "+") {
+                    zoom = min(5.0, zoom * 1.25);
+                    request_render(current_page, zoom);
+                    return accept;
+                }
+                if (event.text == "-") {
+                    zoom = max(0.25, zoom / 1.25);
+                    request_render(current_page, zoom);
+                    return accept;
+                }
+                if (event.text == "0") {
+                    zoom = 1.0;
+                    request_render(current_page, zoom);
+                    return accept;
+                }
+            }
+            reject
         }
 
-        HorizontalLayout {
-            // Sidebar
-            if sidebar_visible: Rectangle {
-                width: 250px;
-                background: Theme.surface;
-                
-                // Right border
-                Rectangle {
-                    width: 1px;
-                    background: Theme.border;
-                    x: parent.width - 1px;
-                }
+        VerticalLayout {
+            padding: 0px;
 
-                VerticalLayout {
-                    padding: 0px;
-                    Rectangle {
-                        height: 48px;
-                        HorizontalLayout {
-                            padding-left: Theme.padding-lg;
-                            alignment: center;
-                            Text {
-                                text: "Pages";
-                                font_size: Theme.font-lg;
-                                font-weight: 700;
-                                color: Theme.text-primary;
-                                vertical-alignment: center;
+            // Top Toolbar
+            Rectangle {
+                height: 48px;
+                background: Theme.surface;
+                HorizontalLayout {
+                    padding-left: Theme.padding-md;
+                    padding-right: Theme.padding-md;
+                    spacing: Theme.padding-md;
+                    alignment: center;
+
+                    // Left side controls
+                    HorizontalLayout {
+                        alignment: start;
+                        spacing: Theme.padding-md;
+                        ModernButton {
+                            text: "Open PDF";
+                            primary: true;
+                            enabled: !is_loading;
+                            clicked => {
+                                open_document();
+                            }
+                            FolderIcon {
+                                icon-color: Theme.on-accent;
+                            }
+                        }
+
+                        ModernButton {
+                            text: "Close";
+                            enabled: total_pages > 0 && !is_loading;
+                            clicked => {
+                                close_document();
                             }
                         }
                     }
+                    
+                    // Spacer
+                    Rectangle {
+                        horizontal-stretch: 1;
+                    }
 
-                    ListView {
-                        for page_idx in total_pages: Rectangle {
-                            height: 40px;
-                            background: touch.has-hover ? Theme.surface-hover : (current_page == page_idx ? Theme.accent.with_alpha(0.2) : Colors.transparent);
-                            touch := TouchArea {
-                                clicked => {
-                                    current_page = page_idx;
-                                }
-                            }
+                    // Right side controls
+                    ThemeToggle {
+                        toggled => {
+                            Theme.is-dark = !Theme.is-dark;
+                        }
+                    }
+                }
+                
+                // Bottom border
+                Divider {
+                    y: parent.height - 1px;
+                }
+            }
 
+            HorizontalLayout {
+                // Sidebar
+                if sidebar_visible && total_pages > 0: Rectangle {
+                    width: 250px;
+                    background: Theme.surface;
+                    
+                    // Right border
+                    Rectangle {
+                        width: 1px;
+                        background: Theme.border;
+                        x: parent.width - 1px;
+                    }
+
+                    VerticalLayout {
+                        padding: 0px;
+                        Rectangle {
+                            height: 48px;
                             HorizontalLayout {
                                 padding-left: Theme.padding-lg;
-                                padding-right: Theme.padding-lg;
-                                spacing: Theme.padding-md;
-                                alignment: start;
+                                alignment: center;
                                 Text {
-                                    text: "Page " + (page_idx + 1);
-                                    color: current_page == page_idx ? Theme.accent : Theme.text-primary;
-                                    font_size: Theme.font-md;
+                                    text: "Pages";
+                                    font_size: Theme.font-lg;
+                                    font-weight: 700;
+                                    color: Theme.text-primary;
                                     vertical-alignment: center;
                                 }
                             }
                         }
+
+                        ListView {
+                            for page_idx in total_pages: Rectangle {
+                                height: 40px;
+                                background: touch.has-hover ? Theme.surface-hover : (current_page == page_idx ? Theme.accent.with_alpha(0.2) : Colors.transparent);
+                                touch := TouchArea {
+                                    clicked => {
+                                        current_page = page_idx;
+                                    }
+                                }
+
+                                HorizontalLayout {
+                                    padding-left: Theme.padding-lg;
+                                    padding-right: Theme.padding-lg;
+                                    spacing: Theme.padding-md;
+                                    alignment: start;
+                                    Text {
+                                        text: "Page " + (page_idx + 1);
+                                        color: current_page == page_idx ? Theme.accent : Theme.text-primary;
+                                        font_size: Theme.font-md;
+                                        vertical-alignment: center;
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+
+                // Main Content Area
+                VerticalLayout {
+                    // Secondary Toolbar (Navigation)
+                    if total_pages > 0: Rectangle {
+                        height: 52px;
+                        background: Theme.surface;
+                        
+                        // Bottom border
+                        Divider {
+                            y: parent.height - 1px;
+                        }
+
+                        HorizontalLayout {
+                            padding-left: Theme.padding-lg;
+                            padding-right: Theme.padding-lg;
+                            spacing: Theme.padding-lg;
+                            alignment: center;
+
+                            prev-btn := ModernButton {
+                                text: "Prev";
+                                enabled: current_page > 0;
+                                clicked => {
+                                    if (current_page > 0) {
+                                        current_page -= 1;
+                                    }
+                                }
+                                ChevronLeftIcon {
+                                    icon-color: prev-btn.enabled ? Theme.text-primary : Theme.text-secondary;
+                                }
+                            }
+
+                            Text {
+                                text: "Page " + (current_page + 1) + " of " + (total_pages > 0 ? total_pages : 1);
+                                vertical_alignment: center;
+                                color: Theme.text-primary;
+                                font_size: Theme.font-lg;
+                                font_weight: 500;
+                            }
+
+                            next-btn := ModernButton {
+                                text: "Next";
+                                enabled: current_page < total_pages - 1;
+                                clicked => {
+                                    if (current_page < total_pages - 1) {
+                                        current_page += 1;
+                                    }
+                                }
+                                ChevronRightIcon {
+                                    icon-color: next-btn.enabled ? Theme.text-primary : Theme.text-secondary;
+                                }
+                            }
+
+                            // Spacer
+                            Rectangle {
+                                width: 20px;
+                            }
+
+                            HorizontalLayout {
+                                spacing: Theme.padding-md;
+                                IconButton {
+                                    clicked => {
+                                        zoom = max(0.25, zoom / 1.25);
+                                        request_render(current_page, zoom);
+                                    }
+                                    MinusIcon { }
+                                }
+
+                                Text {
+                                    text: round(zoom * 100) + "%";
+                                    vertical_alignment: center;
+                                    color: Theme.text-primary;
+                                    font_size: Theme.font-lg;
+                                    font_weight: 500;
+                                    width: 50px;
+                                    horizontal-alignment: center;
+                                }
+
+                                IconButton {
+                                    clicked => {
+                                        zoom = min(5.0, zoom * 1.25);
+                                        request_render(current_page, zoom);
+                                    }
+                                    PlusIcon { }
+                                }
+                            }
+                        }
+                    }
+
+                    // PDF View Area
+                    ScrollView {
+                        viewport-width: max(parent.width, pdf_page_image.width * 1px);
+                        viewport-height: max(parent.height, pdf_page_image.height * 1px);
+                        Rectangle {
+                            background: Theme.background;
+                            HorizontalLayout {
+                                alignment: center;
+                                VerticalLayout {
+                                    alignment: center;
+                                    padding: Theme.padding-lg;
+                                    if total_pages > 0: Rectangle {
+                                        width: pdf_page_image.width * 1px;
+                                        height: pdf_page_image.height * 1px;
+
+                                        // Shadow
+                                        Rectangle {
+                                            x: 4px;
+                                            y: 4px;
+                                            width: 100%;
+                                            height: 100%;
+                                            background: #000000;
+                                            opacity: 0.2;
+                                        }
+
+                                        // Image
+                                        Image {
+                                            width: 100%;
+                                            height: 100%;
+                                            source: pdf_page_image;
+                                        }
+                                    }
+                                    if total_pages == 0: Text {
+                                        text: "No PDF Loaded";
+                                        color: Theme.text-secondary;
+                                        font-size: Theme.font-xl;
+                                    }
+                                }
+                            }
+                        }
                     }
                 }
             }
 
-            // Main Content Area
-            VerticalLayout {
-                // Secondary Toolbar (Navigation)
-                Rectangle {
-                    height: 52px;
-                    background: Theme.surface;
-                    
-                    // Bottom border
-                    Divider {
-                        y: parent.height - 1px;
-                    }
-
-                    HorizontalLayout {
-                        padding-left: Theme.padding-lg;
-                        padding-right: Theme.padding-lg;
-                        spacing: Theme.padding-lg;
-                        alignment: center;
-
-                        ModernButton {
-                            text: "Prev";
-                            clicked => {
-                                if (current_page > 0) {
-                                    current_page -= 1;
-                                }
-                            }
-                            ChevronLeftIcon { }
-                        }
-
-                        Text {
-                            text: "Page " + (current_page + 1) + " of " + (total_pages > 0 ? total_pages : 1);
-                            vertical_alignment: center;
-                            color: Theme.text-primary;
-                            font_size: Theme.font-lg;
-                            font_weight: 500;
-                        }
-
-                        ModernButton {
-                            text: "Next";
-                            clicked => {
-                                if (current_page < total_pages - 1) {
-                                    current_page += 1;
-                                }
-                            }
-                            ChevronRightIcon { }
-                        }
-
-                        // Spacer
-                        Rectangle {
-                            width: 20px;
-                        }
-
-                        HorizontalLayout {
-                            spacing: Theme.padding-md;
-                            ModernButton {
-                                text: "";
-                                clicked => {
-                                    zoom = max(0.25, zoom / 1.25);
-                                    request_render(current_page, zoom);
-                                }
-                                width: 36px;
-                                padding-horizontal: 0px;
-                                MinusIcon { }
-                            }
-
-                            Text {
-                                text: round(zoom * 100) + "%";
-                                vertical_alignment: center;
-                                color: Theme.text-primary;
-                                font_size: Theme.font-lg;
-                                font-weight: 500;
-                                width: 50px;
-                                horizontal-alignment: center;
-                            }
-
-                            ModernButton {
-                                text: "";
-                                clicked => {
-                                    zoom = min(5.0, zoom * 1.25);
-                                    request_render(current_page, zoom);
-                                }
-                                width: 36px;
-                                padding-horizontal: 0px;
-                                PlusIcon { }
-                            }
-                        }
-                    }
+            // Status Bar
+            Rectangle {
+                height: 32px;
+                background: Theme.surface;
+                
+                // Top border
+                Divider {
+                    y: 0px;
                 }
 
-                // PDF View Area
-                ScrollView {
-                    viewport-width: pdf_page_image.width * 1px;
-                    viewport-height: pdf_page_image.height * 1px;
-                    Rectangle {
-                        background: Theme.background;
-                        HorizontalLayout {
-                            alignment: center;
-                            VerticalLayout {
-                                alignment: center;
-                                padding: Theme.padding-lg;
-                                Rectangle {
-                                    width: pdf_page_image.width * 1px;
-                                    height: pdf_page_image.height * 1px;
-
-                                    // Shadow
-                                    Rectangle {
-                                        x: 4px;
-                                        y: 4px;
-                                        width: 100%;
-                                        height: 100%;
-                                        background: #000000;
-                                        opacity: 0.2;
-                                    }
-
-                                    // Image
-                                    Image {
-                                        width: 100%;
-                                        height: 100%;
-                                        source: pdf_page_image;
-                                    }
-                                }
-                            }
-                        }
+                HorizontalLayout {
+                    padding-left: Theme.padding-md;
+                    alignment: start;
+                    Text {
+                        text: status_text;
+                        font_size: Theme.font-sm;
+                        color: Theme.text-secondary;
+                        vertical-alignment: center;
                     }
                 }
             }
         }
-
-        // Status Bar
-        Rectangle {
-            height: 32px;
-            background: Theme.surface;
-            
-            // Top border
-            Divider {
-                y: 0px;
-            }
-
-            HorizontalLayout {
-                padding-left: Theme.padding-md;
-                alignment: start;
+        
+        // Loading Overlay
+        if is_loading: Rectangle {
+            width: 100%;
+            height: 100%;
+            background: Theme.background.with-alpha(0.8);
+            TouchArea { } // Block input
+             
+             VerticalLayout {
+                alignment: center;
+                spacing: Theme.padding-md;
                 Text {
-                    text: status_text;
-                    font_size: Theme.font-sm;
-                    color: Theme.text-secondary;
-                    vertical-alignment: center;
+                    text: "Loading...";
+                    font-size: Theme.font-xl;
+                    color: Theme.text-primary;
+                    horizontal-alignment: center;
+                }
+
+                ProgressIndicator {
+                    indeterminate: true;
+                    width: 200px;
+                    height: 4px;
                 }
             }
         }

@@ -5,7 +5,7 @@ export component Icon inherits Path {
     width: 18px;
     height: 18px;
     stroke: root.icon-color;
-    stroke-width: 2px;
+    stroke-width: 1.5px;
 }
 
 export component ChevronLeftIcon inherits Icon {
@@ -43,14 +43,12 @@ export component SunIcon inherits Icon {
     viewbox-width: 24;
     viewbox-height: 24;
     commands: "M 12 1 v 2 M 12 21 v 2 M 4.22 4.22 l 1.42 1.42 M 18.36 18.36 l 1.42 1.42 M 1 12 h 2 M 21 12 h 2 M 4.22 19.78 l 1.42 -1.42 M 18.36 5.64 l 1.42 -1.42 M 12 7 a 5 5 0 1 0 10 0 a 5 5 0 0 0 -10 0";
-    stroke-width: 1.5px;
 }
 
 export component MoonIcon inherits Icon {
     viewbox-width: 24;
     viewbox-height: 24;
     commands: "M 21 12.79 A 9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79 z";
-    stroke-width: 1.5px;
 }
 
 export component Divider inherits Rectangle {
@@ -62,20 +60,32 @@ export component Divider inherits Rectangle {
 export component ModernButton inherits Rectangle {
     in property <string> text;
     in property <bool> primary: false;
+    in property <bool> enabled: true;
     in property <length> padding-horizontal: Theme.padding-lg;
     callback clicked <=> touch.clicked;
     width: layout.preferred-width;
     height: 36px;
     border-radius: Theme.radius-md;
+    
+    // Background logic:
+    // If disabled: Transparent or very button-like but grayed out?
+    // Let's go with: Primary Disabled -> Desaturated/Darker accent using opacity
+    // Secondary Disabled -> Transparent with lower opacity text
+    // Actually, simple opacity on the whole button is often easiest for "disabled" look in Slint
+    opacity: root.enabled ? 1.0 : 0.5;
     background: root.primary ? Theme.accent : touch.has-hover ? Theme.surface-hover : Theme.surface;
     border-width: root.primary ? 0px : 1px;
     border-color: Theme.border;
     animate background { duration: 150ms; }
-    touch := TouchArea { }
+    touch := TouchArea {
+        enabled: root.enabled;
+    }
 
     layout := HorizontalLayout {
         padding-left: root.padding-horizontal;
         padding-right: root.padding-horizontal;
+        padding-top: 9px;
+        padding-bottom: 9px;
         alignment: center;
         spacing: Theme.padding-md;
         @children
