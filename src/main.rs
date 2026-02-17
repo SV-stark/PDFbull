@@ -3,113 +3,310 @@
 
 mod pdf_engine;
 
-use slint::{ComponentHandle, Image, Rgba8Pixel, SharedPixelBuffer};
-use std::sync::mpsc;
+use slint::{
+    ComponentHandle, Image, Model, ModelNotify, ModelTracker,
+    SharedPixelBuffer, VecModel, 
+};
+use std::collections::{HashMap, HashSet};
+use std::rc::Rc;
+use std::sync::{mpsc, Arc, Mutex, atomic::{AtomicUsize, Ordering}};
 use std::thread;
 
 slint::include_modules!();
 
 enum PdfCommand {
-    Open(String, mpsc::Sender<Result<i32, String>>),
-    Render(i32, f32, mpsc::Sender<Result<(u32, u32, Vec<u8>), String>>),
+    Open(String, usize, mpsc::Sender<Result<(usize, Vec<f32>, f32, Vec<pdf_engine::Bookmark>), String>>),
+    Render(i32, f32, usize, mpsc::Sender<Result<(usize, u32, u32, Arc<Vec<u8>>), String>>),
+    PreRender(i32, f32, usize),
     Close,
+}
+
+// Shared data between UI and background threads
+struct PdfData {
+    images: HashMap<usize, SharedPixelBuffer<slint::Rgba8Pixel>>,
+    requested: HashSet<usize>,
+    current_zoom: f32,
+    count: usize,
+}
+
+struct PdfModel {
+    data: Arc<Mutex<PdfData>>,
+    cmd_tx: mpsc::Sender<PdfCommand>,
+    resp_tx: mpsc::Sender<Result<(usize, u32, u32, Arc<Vec<u8>>), String>>,
+    generation: Arc<AtomicUsize>,
+    notify: ModelNotify,
+}
+
+impl PdfModel {
+    fn new(
+        cmd_tx: mpsc::Sender<PdfCommand>,
+        resp_tx: mpsc::Sender<Result<(usize, u32, u32, Arc<Vec<u8>>), String>>,
+        generation: Arc<AtomicUsize>,
+    ) -> Self {
+        Self {
+            data: Arc::new(Mutex::new(PdfData {
+                images: HashMap::new(),
+                requested: HashSet::new(),
+                current_zoom: 1.0,
+                count: 0,
+            })),
+            cmd_tx,
+            resp_tx,
+            generation,
+            notify: ModelNotify::default(),
+        }
+    }
+
+    fn set_page_count(&self, count: usize) {
+        let mut data = self.data.lock().unwrap();
+        data.count = count;
+        data.images.clear();
+        data.requested.clear();
+        self.notify.reset(); 
+    }
+
+    fn set_zoom(&self, zoom: f32) {
+        let mut data = self.data.lock().unwrap();
+        if (zoom - data.current_zoom).abs() > 0.001 {
+            data.current_zoom = zoom;
+            data.images.clear();
+            data.requested.clear();
+            // Invalidate all
+            self.notify.reset();
+        }
+    }
+}
+
+impl Model for PdfModel {
+    type Data = Image;
+
+    fn row_count(&self) -> usize {
+        self.data.lock().unwrap().count
+    }
+
+    fn row_data(&self, row: usize) -> Option<Self::Data> {
+        let mut data = self.data.lock().unwrap();
+        if row >= data.count {
+            return None;
+        }
+
+        if let Some(buffer) = data.images.get(&row) {
+            return Some(Image::from_rgba8(buffer.clone()));
+        }
+
+        if !data.requested.contains(&row) {
+            data.requested.insert(row);
+            let zoom = data.current_zoom;
+            let gen = self.generation.load(Ordering::SeqCst);
+            
+            let _ = self.cmd_tx.send(PdfCommand::Render(
+                row as i32, 
+                zoom, 
+                gen, 
+                self.resp_tx.clone()
+            ));
+        }
+
+        Some(Image::from_rgba8(SharedPixelBuffer::new(1, 1)))
+    }
+
+    fn model_tracker(&self) -> &dyn ModelTracker {
+        &self.notify
+    }
+
+    fn as_any(&self) -> &dyn std::any::Any {
+        self
+    }
+}
+
+// Thumbnail Model
+struct ThumbnailModel {
+    data: Arc<Mutex<PdfData>>,
+    cmd_tx: mpsc::Sender<PdfCommand>,
+    resp_tx: mpsc::Sender<Result<(usize, u32, u32, Arc<Vec<u8>>), String>>,
+    generation: Arc<AtomicUsize>,
+    notify: ModelNotify,
+}
+
+impl ThumbnailModel {
+    fn new(
+        data: Arc<Mutex<PdfData>>,
+        cmd_tx: mpsc::Sender<PdfCommand>,
+        resp_tx: mpsc::Sender<Result<(usize, u32, u32, Arc<Vec<u8>>), String>>,
+        generation: Arc<AtomicUsize>,
+    ) -> Self {
+        Self {
+            data,
+            cmd_tx,
+            resp_tx,
+            generation,
+            notify: ModelNotify::default(),
+        }
+    }
+}
+
+impl Model for ThumbnailModel {
+    type Data = Image;
+    fn row_count(&self) -> usize {
+        self.data.lock().unwrap().count
+    }
+    fn row_data(&self, row: usize) -> Option<Self::Data> {
+        let data = self.data.lock().unwrap();
+        if row >= data.count { return None; }
+        // Simple placeholder for now, verified build first
+        Some(Image::from_rgba8(SharedPixelBuffer::new(1, 1)))
+    }
+    fn model_tracker(&self) -> &dyn ModelTracker { &self.notify }
+    fn as_any(&self) -> &dyn std::any::Any { self }
+}
+
+fn flatten_outline(items: &[pdf_engine::Bookmark], level: i32, result: &mut Vec<OutlineItem>) {
+    for item in items {
+        result.push(OutlineItem {
+            title: item.title.clone().into(),
+            page_index: item.page_index as i32,
+            level,
+        });
+        flatten_outline(&item.children, level + 1, result);
+    }
 }
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let ui = AppWindow::new()?;
     let ui_handle = ui.as_weak();
-
-    // Create channel for PDF worker
+    let generation = Arc::new(AtomicUsize::new(0));
     let (cmd_tx, cmd_rx) = mpsc::channel::<PdfCommand>();
+    let (render_resp_tx, render_resp_rx) = mpsc::channel();
 
-    // Spawn PDF worker thread
-    let worker = thread::spawn(move || {
-        // Initialize Pdfium inside the worker thread to ensure thread-locality/safety
+    let pdf_model = Rc::new(PdfModel::new(
+        cmd_tx.clone(),
+        render_resp_tx.clone(),
+        generation.clone()
+    ));
+    ui.set_pdf_pages(pdf_model.clone().into());
+
+    let thumb_model = Rc::new(ThumbnailModel::new(
+        pdf_model.data.clone(),
+        cmd_tx.clone(),
+        render_resp_tx.clone(),
+        generation.clone()
+    ));
+    ui.set_pdf_thumbnails(thumb_model.clone().into());
+
+    let outline_model = Rc::new(VecModel::<OutlineItem>::default());
+    ui.set_outline(outline_model.clone().into());
+
+    // Worker Thread
+    let worker_cmd_rx = cmd_rx;
+    let _worker = thread::spawn(move || {
         let pdfium = match pdf_engine::PdfEngine::init_pdfium() {
             Ok(p) => p,
-            Err(e) => {
-                eprintln!("Failed to initialize Pdfium: {}", e);
-                return;
-            }
+            Err(_) => return,
         };
-
-        // PdfEngine borrows pdfium
         let mut engine = pdf_engine::PdfEngine::new(&pdfium);
+        let mut current_gen = 0;
 
-        while let Ok(cmd) = cmd_rx.recv() {
+        while let Ok(cmd) = worker_cmd_rx.recv() {
             match cmd {
-                PdfCommand::Open(path, resp) => {
-                    let result = engine.open_document(&path);
-                    if let Err(e) = resp.send(result) {
-                        eprintln!("Failed to send open result: {}", e);
+                PdfCommand::Open(path, gen, resp) => {
+                    current_gen = gen;
+                    match engine.open_document(&path) {
+                        Ok((c, h, w)) => {
+                            let outline = engine.get_outline();
+                            let _ = resp.send(Ok((c, h, w, outline)));
+                        }
+                        Err(e) => { let _ = resp.send(Err(e)); }
                     }
                 }
-                PdfCommand::Render(page, scale, resp) => {
-                    let result = engine.render_page(page, scale);
-                    if let Err(e) = resp.send(result) {
-                        eprintln!("Failed to send render result: {}", e);
+                PdfCommand::Render(page, scale, gen, resp) => {
+                    if gen >= current_gen {
+                        if let Ok((w, h, data)) = engine.render_page(page, scale) {
+                            let _ = resp.send(Ok((page as usize, w, h, data)));
+                        } else {
+                            let _ = resp.send(Err("Fail".into()));
+                        }
                     }
                 }
-                PdfCommand::Close => {
-                    engine.close_document();
+                PdfCommand::PreRender(page, scale, gen) => {
+                    if gen >= current_gen { let _ = engine.render_page(page, scale); }
                 }
+                PdfCommand::Close => { engine.close_document(); }
             }
         }
     });
 
-    // Handler for "Open Document" button
-    ui.on_open_document({
-        let ui_handle = ui_handle.clone();
-        let cmd_tx = cmd_tx.clone();
-        move || {
-            // We don't strictly need to upgrade here since we spawn a thread that will upgrade later,
-            // but it's a good check. 
-            // However, to avoid "unused variable" warning and keep it simple:
-            if ui_handle.upgrade().is_none() {
-                return;
+    // Bridge
+    let bridge_rx = render_resp_rx;
+    let bridge_data = pdf_model.data.clone();
+    let bridge_ui = ui_handle.clone();
+    thread::spawn(move || {
+        while let Ok(Ok((idx, w, h, data))) = bridge_rx.recv() {
+            let mut buf = SharedPixelBuffer::new(w, h);
+            buf.make_mut_bytes().copy_from_slice(&*data);
+            {
+                let mut d = bridge_data.lock().unwrap();
+                d.images.insert(idx, buf);
+                d.requested.remove(&idx);
             }
+            let ui_w = bridge_ui.clone();
+            let _ = slint::invoke_from_event_loop(move || {
+                if let Some(ui) = ui_w.upgrade() { ui.invoke_notify_render_complete(idx as i32); }
+            });
+        }
+    });
 
-            let ui_handle = ui_handle.clone();
-            let cmd_tx = cmd_tx.clone();
+    // Callbacks
+    ui.on_notify_render_complete({
+        let m = pdf_model.clone();
+        move |idx| { m.notify.row_changed(idx as usize); }
+    });
 
-            // Spawn a thread for the file dialog to avoid blocking the UI thread
+    ui.on_notify_open_complete({
+        let pm = pdf_model.clone();
+        let am = outline_model.clone();
+        move |count, _, _, outline| {
+            pm.set_page_count(count as usize);
+            am.set_vec(outline.iter().collect());
+        }
+    });
+
+    ui.on_open_document({
+        let cmd_tx = cmd_tx.clone();
+        let ui_h = ui.as_weak();
+        let gen = generation.clone();
+        move || {
+            let ui_w = ui_h.clone();
+            let tx = cmd_tx.clone();
+            let g = gen.clone();
             thread::spawn(move || {
-                if let Some(path) = rfd::FileDialog::new()
-                    .add_filter("PDF Files", &["pdf"])
-                    .pick_file() 
-                {
-                    let path_str = path.to_string_lossy().to_string();
-                    let filename = path
-                        .file_name()
-                        .map(|n| n.to_string_lossy().to_string())
-                        .unwrap_or_default();
-
-                    // Update UI from UI thread
-                    let _ = ui_handle.upgrade_in_event_loop(move |ui| {
-                        ui.set_status_text("Loading PDF...".into());
-                        ui.set_is_loading(true);
-                    });
-
-                    let (resp_tx, resp_rx) = mpsc::channel();
-                    if let Err(e) = cmd_tx.send(PdfCommand::Open(path_str, resp_tx)) {
-                        eprintln!("Failed to send Open command: {}", e);
-                        return;
-                    }
-
-                    if let Ok(result) = resp_rx.recv() {
-                        let _ = ui_handle.upgrade_in_event_loop(move |ui| {
-                            ui.set_is_loading(false);
-                            match result {
-                                Ok(count) => {
-                                    ui.set_total_pages(count);
-                                    ui.set_current_page(0);
-                                    ui.set_status_text(format!("Loaded: {}", filename).into());
-                                    // Trigger initial render
-                                    ui.invoke_request_render(0, ui.get_zoom());
-                                }
-                                Err(e) => {
-                                    ui.set_status_text(format!("Error: {}", e).into());
-                                }
+                if let Some(path) = rfd::FileDialog::new().add_filter("PDF", &["pdf"]).pick_file() {
+                    let path_s = path.to_string_lossy().to_string();
+                    let next_gen = g.fetch_add(1, Ordering::SeqCst) + 1;
+                    let (res_tx, res_rx) = mpsc::channel();
+                    let _ = tx.send(PdfCommand::Open(path_s, next_gen, res_tx));
+                    if let Ok(Ok((count, heights, max_w, outline))) = res_rx.recv() {
+                        let ui_w2 = ui_w.clone();
+                        let heights_v = heights.clone();
+                        let _ = slint::invoke_from_event_loop(move || {
+                            if let Some(ui) = ui_w2.upgrade() {
+                                ui.set_total_pages(count as i32);
+                                ui.set_pdf_page_width(max_w);
+                                ui.set_total_height(heights_v.iter().sum());
+                                ui.set_pdf_page_heights(Rc::new(VecModel::from(heights_v.clone())).into());
+                                
+                                let mut flat = Vec::new();
+                                flatten_outline(&outline, 0, &mut flat);
+                                
+                                // Signal model update on UI thread
+                                ui.invoke_notify_open_complete(
+                                    count as i32, 
+                                    Rc::new(VecModel::from(heights_v)).into(), 
+                                    max_w,
+                                    Rc::new(VecModel::from(flat)).into()
+                                );
+                                
+                                ui.set_is_loading(false);
+                                ui.set_current_page(0);
                             }
                         });
                     }
@@ -118,82 +315,23 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
     });
 
-    // Handler for close_document callback
     ui.on_close_document({
-        let ui_handle = ui_handle.clone();
-        let cmd_tx = cmd_tx.clone();
-        move || {
-            let ui = match ui_handle.upgrade() {
-                Some(ui) => ui,
-                None => return,
-            };
-            
-            if let Err(e) = cmd_tx.send(PdfCommand::Close) {
-                eprintln!("Failed to send Close command: {}", e);
-            }
-            
-            ui.set_total_pages(0);
-            ui.set_current_page(0);
-            ui.set_status_text("Document closed - Open a PDF to begin".into());
-            
-            let empty_buffer = SharedPixelBuffer::<Rgba8Pixel>::new(1, 1);
-            ui.set_pdf_page_image(Image::from_rgba8(empty_buffer));
-        }
+        let tx = cmd_tx.clone();
+        let m = pdf_model.clone();
+        move || { let _ = tx.send(PdfCommand::Close); m.set_page_count(0); }
     });
 
-    // Handler for request_render callback
     ui.on_request_render({
-        let ui_handle = ui_handle.clone();
-        let cmd_tx = cmd_tx.clone();
+        let m = pdf_model.clone();
+        let g = generation.clone();
+        move |_, zoom| { g.fetch_add(1, Ordering::SeqCst); m.set_zoom(zoom); }
+    });
 
-        move |page_num, scale| {
-            let (resp_tx, resp_rx) = mpsc::channel();
-            if let Err(e) = cmd_tx.send(PdfCommand::Render(page_num, scale, resp_tx)) {
-                eprintln!("Failed to send Render command: {}", e);
-                return;
-            }
-
-            let ui_handle2 = ui_handle.clone();
-            thread::spawn(move || {
-                if let Ok(result) = resp_rx.recv() {
-                    let _ = ui_handle2.upgrade_in_event_loop(move |ui| {
-                        match result {
-                            Ok((w, h, bytes)) => {
-                                let mut buffer = SharedPixelBuffer::<Rgba8Pixel>::new(w, h);
-                                let slice = buffer.make_mut_bytes();
-
-                                // BGRA -> RGBA (fix loop safety)
-                                // Standard loop is safer than iterator zip when sizes might mismatch slightly
-                                // though chunks(4) is good. We just need to be careful with bounds.
-                                let len = slice.len();
-                                for (i, chunk) in bytes.chunks(4).enumerate() {
-                                    let offset = i * 4;
-                                    if offset + 3 < len {
-                                        slice[offset] = chunk[2];     // B -> R
-                                        slice[offset + 1] = chunk[1]; // G -> G
-                                        slice[offset + 2] = chunk[0]; // R -> B
-                                        slice[offset + 3] = chunk[3]; // A -> A
-                                    }
-                                }
-
-                                let image = Image::from_rgba8(buffer);
-                                ui.set_pdf_page_image(image);
-                            }
-                            Err(e) => {
-                                eprintln!("Render error: {}", e);
-                            }
-                        }
-                    });
-                }
-            });
-        }
+    ui.on_jump_to_page({
+        let ui_h = ui.as_weak();
+        move |p| { if let Some(ui) = ui_h.upgrade() { ui.set_current_page(p); } }
     });
 
     ui.run()?;
-
-    // Clean up worker
-    drop(cmd_tx);
-    let _ = worker.join();
-
     Ok(())
 }

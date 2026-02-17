@@ -17,7 +17,14 @@ import {
     ChevronRightIcon,
     PlusIcon,
     MinusIcon,
+    MenuIcon,
 } from "widgets.slint";
+
+struct OutlineItem {
+    title: string,
+    page_index: int,
+    level: int,
+}
 
 export component AppWindow inherits Window {
     title: "PDFbull";
@@ -33,12 +40,20 @@ export component AppWindow inherits Window {
     in-out property <string> status_text: "Ready - Open a PDF to begin";
     in-out property <bool> sidebar_visible: true;
     in-out property <bool> is_loading: false;
-    in-out property <image> pdf_page_image; 
-    
-    // Callbacks to request updates
+    in-out property <[image]> pdf_pages; // Model for list view
+    in-out property <[float]> pdf_page_heights; // Height cache for layout
+    in-out property <float> pdf_page_width; // Assumes uniform width for now, or use max
+    in-out property <float> total_height;
+    in-out property <[OutlineItem]> outline;
+    in-out property <[image]> pdf_thumbnails;
+
+    // Callbacks onto Rust
     callback open_document();
     callback close_document();
     callback request_render(int, float);
+    callback jump_to_page(int);
+    callback notify_render_complete(int);
+    callback notify_open_complete(int, [float], float, [OutlineItem]); // count, heights, max_w, outline // New: Signal UI that a page is ready in the cache
 
     // Trigger render when page or zoom changes
     // Debouncing would be ideal but for now we just react
@@ -109,6 +124,16 @@ export component AppWindow inherits Window {
                     HorizontalLayout {
                         alignment: start;
                         spacing: Theme.padding-md;
+                        IconButton {
+                            enabled: !is_loading;
+                            clicked => {
+                                sidebar_visible = !sidebar_visible;
+                            }
+                            MenuIcon {
+                                icon-color: Theme.text-primary;
+                            }
+                        }
+
                         ModernButton {
                             text: "Open PDF";
                             primary: true;
@@ -237,12 +262,35 @@ export component AppWindow inherits Window {
                                 }
                             }
 
+                            Rectangle {
+                                width: 100px;
+                                height: 30px;
+                                background: Theme.background;
+                                border-radius: Theme.radius-sm;
+                                border-width: 1px;
+                                border-color: Theme.border;
+
+                                TextInput {
+                                    text: (current_page + 1);
+                                    color: Theme.text-primary;
+                                    font-size: Theme.font-md;
+                                    vertical-alignment: center;
+                                    horizontal-alignment: center;
+                                    width: 100%;
+                                    height: 100%;
+                                    accepted => {
+                                        if (self.text.is-float()) {
+                                            jump_to_page(self.text.to-float() - 1);
+                                        }
+                                    }
+                                }
+                            }
+
                             Text {
-                                text: "Page " + (current_page + 1) + " of " + (total_pages > 0 ? total_pages : 1);
+                                text: " / " + (total_pages > 0 ? total_pages : 1);
                                 vertical_alignment: center;
-                                color: Theme.text-primary;
-                                font_size: Theme.font-lg;
-                                font_weight: 500;
+                                color: Theme.text-secondary;
+                                font_size: Theme.font-md;
                             }
 
                             next-btn := ModernButton {
@@ -264,6 +312,26 @@ export component AppWindow inherits Window {
                             }
 
                             HorizontalLayout {
+                                spacing: Theme.padding-sm;
+                                ModernButton {
+                                    text: "Fit W";
+                                    enabled: total_pages > 0 && !is_loading;
+                                    clicked => {
+                                        if (pdf-page-width > 0) {
+                                            root.zoom = ((scroll-view.width - 60px) / 1px) / pdf-page-width;
+                                             // Force re-render of current view
+                                             request_render(current_page, root.zoom);
+                                        }
+                                    }
+                                }
+                            }
+                            
+                            // Spacer
+                            Rectangle {
+                                width: 20px;
+                            }
+
+                            HorizontalLayout {
                                 spacing: Theme.padding-md;
                                 IconButton {
                                     clicked => {
@@ -273,14 +341,34 @@ export component AppWindow inherits Window {
                                     MinusIcon { }
                                 }
 
+                                Rectangle {
+                                    width: 60px;
+                                    height: 30px;
+                                    background: Theme.background;
+                                    border-radius: Theme.radius-sm;
+                                    border-width: 1px;
+                                    border-color: Theme.border;
+                                    TextInput {
+                                        text: round(zoom * 100);
+                                        color: Theme.text-primary;
+                                        font-size: Theme.font-md;
+                                        vertical-alignment: center;
+                                        horizontal-alignment: center;
+                                        width: 100%;
+                                        height: 100%;
+                                        accepted => {
+                                            if (self.text.is-float()) {
+                                                zoom = max(0.25, min(5.0, self.text.to-float() / 100.0));
+                                                request_render(current_page, zoom);
+                                            }
+                                        }
+                                    }
+                                }
+
                                 Text {
-                                    text: round(zoom * 100) + "%";
-                                    vertical_alignment: center;
+                                    text: "%";
+                                    vertical-alignment: center;
                                     color: Theme.text-primary;
-                                    font_size: Theme.font-lg;
-                                    font_weight: 500;
-                                    width: 50px;
-                                    horizontal-alignment: center;
                                 }
 
                                 IconButton {
@@ -294,42 +382,38 @@ export component AppWindow inherits Window {
                         }
                     }
 
-                    // PDF View Area
-                    ScrollView {
-                        viewport-width: max(parent.width, pdf_page_image.width * 1px);
-                        viewport-height: max(parent.height, pdf_page_image.height * 1px);
-                        Rectangle {
-                            background: Theme.background;
-                            HorizontalLayout {
-                                alignment: center;
-                                VerticalLayout {
-                                    alignment: center;
-                                    padding: Theme.padding-lg;
-                                    if total_pages > 0: Rectangle {
-                                        width: pdf_page_image.width * 1px;
-                                        height: pdf_page_image.height * 1px;
+                    // Continuous PDF View Area
+                    scroll-view := ScrollView {
+                        viewport-width: max(parent.width, pdf_page_width * 1px * zoom);
+                        viewport-height: max(parent.height, total_height * 1px);
 
-                                        // Shadow
-                                        Rectangle {
-                                            x: 4px;
-                                            y: 4px;
-                                            width: 100%;
-                                            height: 100%;
-                                            background: #000000;
-                                            opacity: 0.2;
-                                        }
-
-                                        // Image
-                                        Image {
-                                            width: 100%;
-                                            height: 100%;
-                                            source: pdf_page_image;
-                                        }
+                        // Layout for pages
+                        VerticalLayout {
+                            alignment: start;
+                            padding: 20px;
+                            spacing: 10px;
+                            for page_idx in total_pages: Rectangle {
+                                height: (pdf_page_heights[page_idx] * 1px * zoom) + 20px; // Add spacing
+                                width: 100%;
+                                Rectangle {
+                                    width: pdf_page_width * 1px * zoom;
+                                    height: pdf_page_heights[page_idx] * 1px * zoom;
+                                    
+                                    // Shadow
+                                    Rectangle {
+                                        x: 4px;
+                                        y: 4px;
+                                        width: 100%;
+                                        height: 100%;
+                                        background: #000000;
+                                        opacity: 0.2;
                                     }
-                                    if total_pages == 0: Text {
-                                        text: "No PDF Loaded";
-                                        color: Theme.text-secondary;
-                                        font-size: Theme.font-xl;
+
+                                    // Page Image
+                                    Image {
+                                        width: 100%;
+                                        height: 100%;
+                                        source: pdf_pages[page_idx];
                                     }
                                 }
                             }

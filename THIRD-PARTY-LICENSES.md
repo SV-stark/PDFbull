@@ -19,19 +19,33 @@ THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS" AND 
 
 ---
 
-## 🦀 Tauri & Rust Dependencies
-**Licenses:** MIT / Apache-2.0
+## 🖥️ Slint UI Toolkit
+**License:** GPLv3 / Slint Royalty Free License / Commercial
 
-Portions of this software are derived from the following Rust crates:
-- `tauri`, `tauri-build`, `tauri-plugin-opener`, `tauri-plugin-dialog`, `tauri-plugin-fs` (MIT/Apache-2.0)
-- `pdfium-render` (MIT)
-- `image`, `imageproc` (MIT/Apache-2.0)
-- `serde`, `serde_json` (MIT/Apache-2.0)
-- `base64` (MIT/Apache-2.0)
+PDFbull is built using the Slint UI toolkit.
+
+- **Slint Core & Renderer:** GPLv3 OR Slint Royalty Free License (for qualifying applications).
+- See [Slint Licensing](https://slint.dev/license) for more details.
 
 ---
 
-## 🎨 Frontend Dependencies
+## 🦀 Rust Dependencies
 **Licenses:** MIT / Apache-2.0
 
-- `@tauri-apps/api`, `@tauri-apps/plugin-dialog` (MIT/Apache-2.0)
+Portions of this software are derived from the following Rust crates:
+
+- `pdfium-render` (MIT)
+- `moka` (MIT / Apache-2.0)
+- `rayon` (MIT / Apache-2.0)
+- `tokio` (MIT)
+- `image` (MIT)
+- `rfd` (MIT)
+- `serde`, `serde_json` (MIT / Apache-2.0)
+- `base64` (MIT / Apache-2.0)
+
+---
+
+## 🎨 Assets
+**Licenses:** MIT / CC-BY
+
+- **Phosphor Icons**: MIT License. Copyright (c) 2020 Phosphor Icons.
