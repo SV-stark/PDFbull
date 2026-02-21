@@ -148,7 +148,7 @@ impl<'a> PdfEngine<'a> {
                 .set_maximum_height((page.height().value * scale) as i32)
                 .rotate(PdfPageRenderRotation::None, false);
 
-            // Render to bitmap (BGRA)
+            // Render to bitmap
             let bitmap = page
                 .render_with_config(&render_config)
                 .map_err(|e| e.to_string())?;
@@ -156,15 +156,8 @@ impl<'a> PdfEngine<'a> {
             let w = bitmap.width() as u32;
             let h = bitmap.height() as u32;
 
-            // Optimize: Convert BGRA -> RGBA
-            let mut bytes = bitmap.as_raw_bytes().to_vec();
-
-            // Optimized BGRA -> RGBA conversion
-            for chunk in bytes.chunks_exact_mut(4) {
-                chunk.swap(0, 2); // Swap B and R
-            }
-
-            let result_data = Arc::new(bytes);
+            // Use pdfium-render's built-in RGBA conversion
+            let result_data = Arc::new(bitmap.as_rgba_bytes());
             let result = (w, h, result_data);
 
             // Store in cache

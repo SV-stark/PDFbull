@@ -10,10 +10,7 @@ use tokio::sync::mpsc;
 use std::path::PathBuf;
 
 pub fn main() -> iced::Result {
-    println!("Starting PDFbull...");
-    let result = iced::run(PdfBullApp::update, PdfBullApp::view);
-    println!("PDFbull exited with: {:?}", result);
-    result
+    iced::run(PdfBullApp::update, PdfBullApp::view)
 }
 
 #[derive(Debug, Clone)]
@@ -79,7 +76,6 @@ impl Default for PdfBullApp {
 
 impl PdfBullApp {
     fn update(&mut self, message: Message) -> iced::Task<Message> {
-        println!("DEBUG: Received message: {:?}", message);
         match message {
             Message::OpenDocument => {
                 if self.engine.is_none() {
@@ -156,7 +152,26 @@ impl PdfBullApp {
                 self.current_page = 0;
                 self.is_loading = false;
                 self.rendered_pages.clear();
-                return self.update(Message::RequestRender(0));
+                // Request all pages to be rendered for continuous scroll
+                let mut tasks = iced::Task::none();
+                for page_idx in 0..count {
+                    if let Some(engine) = &self.engine {
+                        let (resp_tx, mut resp_rx) = mpsc::channel(1);
+                        let cmd_tx = engine.cmd_tx.clone();
+                        let zoom = self.zoom;
+                        tasks = iced::Task::batch([
+                            tasks,
+                            iced::Task::perform(
+                                async move {
+                                    let _ = cmd_tx.send(PdfCommand::Render(page_idx as i32, zoom, resp_tx)).await;
+                                    resp_rx.recv().await.unwrap_or(Err("Channel closed".into()))
+                                },
+                                Message::PageRendered
+                            )
+                        ]);
+                    }
+                }
+                return tasks;
             }
             Message::DocumentOpened(Err(e)) => {
                 self.is_loading = false;
@@ -230,9 +245,7 @@ impl PdfBullApp {
             text(format!("{}%", (self.zoom * 100.0) as u32)),
             button("+").on_press(Message::ZoomIn),
             Space::new().width(Length::Fixed(20.0)),
-            button("Prev").on_press(Message::PrevPage),
-            text(format!("Page {} of {}", self.current_page + 1, self.total_pages.max(1))),
-            button("Next").on_press(Message::NextPage),
+            text(format!("Page {}/{}", self.current_page + 1, self.total_pages.max(1))),
         ]
         .padding(10)
         .spacing(10)
@@ -246,16 +259,19 @@ impl PdfBullApp {
                 .center_y(Length::Fill)
                 .into()
         } else {
-            let mut pdf_column = column![].spacing(20).padding(20).align_x(iced::Alignment::Center);
+            let mut pdf_column = column![].spacing(10).padding(10).align_x(iced::Alignment::Center);
             
-            if let Some(handle) = self.rendered_pages.get(&self.current_page) {
-                let img = iced::widget::Image::new(handle.clone());
-                pdf_column = pdf_column.push(container(img).padding(5));
-            } else {
-                pdf_column = pdf_column.push(text("Rendering..."));
+            // Show all pages for continuous scroll
+            for page_idx in 0..self.total_pages {
+                if let Some(handle) = self.rendered_pages.get(&page_idx) {
+                    let img = iced::widget::Image::new(handle.clone());
+                    pdf_column = pdf_column.push(container(img).padding(5));
+                } else {
+                    pdf_column = pdf_column.push(container(text(format!("Rendering page {}...", page_idx + 1))).padding(20));
+                }
             }
 
-            scrollable(container(pdf_column).width(Length::Fill).center_x(Length::Fill))
+            scrollable(container(pdf_column).width(Length::Fill))
                 .height(Length::Fill)
                 .into()
         };
