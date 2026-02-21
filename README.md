@@ -2,10 +2,10 @@
 
 [![Nightly Release](https://github.com/SV-stark/PDFbull/actions/workflows/release.yml/badge.svg)](https://github.com/SV-stark/PDFbull/releases/tag/nightly)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
-[![Built with Slint](https://img.shields.io/badge/Built%20with-Slint-orange)](https://slint.dev/)
+[![Built with Iced](https://img.shields.io/badge/Built%20with-Iced-blue)](https://iced.rs/)
 [![Rust](https://img.shields.io/badge/Backend-Rust-black?logo=rust)](https://www.rust-lang.org/)
 
-**PDFbull** is a professional, high-performance PDF reader and editor engineered for efficiency. By combining the power of **Google's PDFium engine** with the safety of **Rust** and the lightweight, native UI toolkit **Slint**, PDFbull delivers a desktop experience that is significantly faster and more resource-efficient than traditional Electron or WebView-based alternatives.
+**PDFbull** is a professional, high-performance PDF reader and editor engineered for efficiency. By combining the power of **Google's PDFium engine** with the safety of **Rust** and the declarative, native UI toolkit **Iced**, PDFbull delivers a desktop experience that is significantly faster and more resource-efficient than traditional Electron or WebView-based alternatives.
 
 ---
 
@@ -13,7 +13,7 @@
 
 PDFbull is built from the ground up for speed, leveraging modern Rust ecosystem powerhouses:
 
-- **Native UI with Slint**: A lightweight, GPU-accelerated UI toolkit that compiles to native code, eliminating the overhead of a web browser engine.
+- **Native UI with Iced**: A lightweight, cross-platform UI toolkit written entirely in Rust, producing native code without any web dependencies.
 - **Zero-Copy Rendering**: Pages are processed in native Rust memory space and rendered directly to the UI buffer, bypassing unnecessary data copying.
 - **Parallel Processing**: Powered by **Rayon**, heavy computational tasks like rendering and search are parallelized across all available CPU cores.
 - **Smart Caching**: Powered by **Moka**, a high-performance, concurrent cache library, ensuring instant access to recently viewed pages.
@@ -73,12 +73,12 @@ PDFbull is built from the ground up for speed, leveraging modern Rust ecosystem 
 
 ## 🛰️ Technology Stack
 
-- **UI Toolkit**: [Slint](https://slint.dev/) (Native, GPU-accelerated)
+- **UI Toolkit**: [Iced](https://iced.rs/) (Native, Cross-platform, Pure Rust)
 - **Language**: [Rust](https://www.rust-lang.org/)
 - **Concurrency**: [Tokio](https://tokio.rs/) (Async Runtime) & [Rayon](https://github.com/rayon-rs/rayon) (Data Parallelism)
 - **PDF Engine**: [PDFium](https://pdfium.googlesource.com/pdfium/) via [pdfium-render](https://crates.io/crates/pdfium-render)
 - **Caching**: [Moka](https://github.com/moka-rs/moka)
-- **Icons**: [Phosphor Icons](https://phosphoricons.com/) (SVG Paths)
+- **File Dialogs**: [rfd](https://github.com/Empson/rye) (Native file dialogs)
 
 ---
 
@@ -89,7 +89,7 @@ PDFbull is built from the ground up for speed, leveraging modern Rust ecosystem 
 | **Engine** | PDFium (Rust) | Proprietary | PDFium (C++) | MuPDF (C++) |
 | **Startup Time** | **~50ms** | ~1.5-2.5s | ~300ms | ~50ms |
 | **RAM (50-page PDF)** | **~60MB** | ~350-450MB | ~200-280MB | ~60-100MB |
-| **Architecture** | **Slint + Rust** | Electron-like | Browser Embedded | Native C++ |
+| **Architecture** | **Iced + Rust** | Electron-like | Browser Embedded | Native C++ |
 | **Rendering** | **Zero-Copy Stream** | DOM-based | Canvas-based | Native Raster |
 | **Annotations** | **Multi-Layer + Export** | Full Enterprise Suite | Minimal (Highlight only) | Read-only |
 | **Search** | **Document-wide + Nav** | Advanced (OCR) | Page-limited | Basic Text Search |
@@ -107,7 +107,7 @@ PDFbull is built from the ground up for speed, leveraging modern Rust ecosystem 
 - [x] **High-Performance Rendering Engine** (Tokio + Rayon integration)
 - [x] **Advanced Annotation System** (Shapes, Text, Highlights)
 - [x] **Zero-Copy Architecture** implementation
-- [x] **Migration to Pure Slint UI**
+- [x] **Migration to Iced UI** (Replaced Slint with Iced)
 - [ ] **OCR Capability**: Built-in Optical Character Recognition for scanned documents.
 - [ ] **Tabbed Interface 2.0**: Enhanced multi-document management with session recovery.
 - [ ] **Digital Signatures**: Professional cryptographic signing and verification.
@@ -126,15 +126,19 @@ Download the latest binaries from the [Releases Page](https://github.com/SV-star
 **Prerequisites**:
 - Windows (Current target platform)
 - Rust (Stable)
+- pdfium.dll (Required - copy to project root)
 
 ```bash
 # 1. Clone & Enter
 git clone https://github.com/SV-stark/PDFbull.git && cd PDFbull
 
-# 2. Run Development Build
+# 2. Get pdfium.dll (required)
+# Copy pdfium.dll to the project root directory
+
+# 3. Run Development Build
 cargo run
 
-# 3. Production Build
+# 4. Production Build
 cargo build --release
 ```
 
