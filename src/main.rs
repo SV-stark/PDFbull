@@ -47,6 +47,23 @@ pub struct PageBookmark {
     pub created_at: u64,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum RenderFilter {
+    None,
+    Grayscale,
+    Inverted,
+    Eco,
+    BlackWhite,
+    Lighten,
+    NoShadow,
+}
+
+impl Default for RenderFilter {
+    fn default() -> Self {
+        RenderFilter::None
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct DocumentTab {
     pub path: PathBuf,
@@ -55,7 +72,10 @@ pub struct DocumentTab {
     pub current_page: usize,
     pub zoom: f32,
     pub rotation: i32,
+    pub render_filter: RenderFilter,
+    pub auto_crop: bool,
     pub rendered_pages: std::collections::HashMap<usize, iced_image::Handle>,
+    pub thumbnails: std::collections::HashMap<usize, iced_image::Handle>,
     pub page_heights: Vec<f32>,
     pub page_width: f32,
     pub search_results: Vec<SearchResult>,
@@ -88,7 +108,10 @@ impl DocumentTab {
             current_page: 0,
             zoom: 1.0,
             rotation: 0,
+            render_filter: RenderFilter::None,
+            auto_crop: false,
             rendered_pages: std::collections::HashMap::new(),
+            thumbnails: std::collections::HashMap::new(),
             page_heights: Vec::new(),
             page_width: 0.0,
             search_results: Vec::new(),
@@ -149,6 +172,7 @@ impl DocumentTab {
 enum PdfCommand {
     Open(String, mpsc::Sender<Result<(usize, Vec<f32>, f32, Vec<pdf_engine::Bookmark>), String>>),
     Render(i32, f32, i32, mpsc::Sender<Result<(usize, u32, u32, Arc<Vec<u8>>), String>>),
+    RenderThumbnail(i32, mpsc::Sender<Result<(usize, u32, u32, Arc<Vec<u8>>), String>>),
     ExtractText(i32, mpsc::Sender<Result<String, String>>),
     ExportImage(i32, f32, String, mpsc::Sender<Result<(), String>>),
     Search(String, mpsc::Sender<Result<Vec<(usize, String, f32)>, String>>),
@@ -195,6 +219,14 @@ enum Message {
     AddBookmark(usize),
     RemoveBookmark(usize, usize),
     JumpToBookmark(usize, usize),
+    SetFilter(RenderFilter),
+    ToggleAutoCrop,
+    RequestThumbnail(usize, usize),
+    ThumbnailRendered(Result<(usize, u32, u32, Arc<Vec<u8>>), String>),
+    OpenBatchMode,
+    CloseBatchMode,
+    AddToBatch(String),
+    ProcessBatch,
 }
 
 #[derive(Debug, Clone)]
@@ -212,6 +244,8 @@ struct PdfBullApp {
     show_sidebar: bool,
     show_keyboard_help: bool,
     is_fullscreen: bool,
+    show_batch_mode: bool,
+    batch_files: Vec<String>,
     search_query: String,
     engine: Option<EngineState>,
 }
@@ -227,6 +261,8 @@ impl Default for PdfBullApp {
             show_sidebar: false,
             show_keyboard_help: false,
             is_fullscreen: false,
+            show_batch_mode: false,
+            batch_files: Vec::new(),
             search_query: String::new(),
             engine: None,
         }
@@ -365,6 +401,70 @@ impl PdfBullApp {
                 }
                 Task::none()
             }
+            Message::SetFilter(filter) => {
+                if self.active_tab < self.tabs.len() {
+                    let tab = &mut self.tabs[self.active_tab];
+                    if tab.render_filter != filter {
+                        tab.render_filter = filter;
+                        tab.rendered_pages.clear();
+                    }
+                }
+                Task::none()
+            }
+            Message::ToggleAutoCrop => {
+                if self.active_tab < self.tabs.len() {
+                    let tab = &mut self.tabs[self.active_tab];
+                    tab.auto_crop = !tab.auto_crop;
+                    tab.rendered_pages.clear();
+                }
+                Task::none()
+            }
+            Message::RequestThumbnail(tab_idx, page_idx) => {
+                if tab_idx < self.tabs.len() {
+                    let tab = &mut self.tabs[tab_idx];
+                    if !tab.thumbnails.contains_key(&page_idx) {
+                        if let Some(engine) = &self.engine {
+                            let (resp_tx, mut resp_rx) = mpsc::channel(1);
+                            let cmd_tx = engine.cmd_tx.clone();
+                            return Task::perform(
+                                async move {
+                                    let _ = cmd_tx.send(PdfCommand::RenderThumbnail(page_idx as i32, resp_tx)).await;
+                                    resp_rx.recv().await.unwrap_or(Err("Channel closed".into()))
+                                },
+                                Message::ThumbnailRendered
+                            );
+                        }
+                    }
+                }
+                Task::none()
+            }
+            Message::ThumbnailRendered(result) => {
+                if let Ok((page, width, height, data)) = result {
+                    for tab in &mut self.tabs {
+                        tab.thumbnails.insert(page, iced_image::Handle::from_rgba(width, height, data.as_ref().clone()));
+                    }
+                }
+                Task::none()
+            }
+            Message::OpenBatchMode => {
+                self.show_batch_mode = true;
+                self.batch_files.clear();
+                Task::none()
+            }
+            Message::CloseBatchMode => {
+                self.show_batch_mode = false;
+                Task::none()
+            }
+            Message::AddToBatch(path) => {
+                self.batch_files.push(path);
+                Task::none()
+            }
+            Message::ProcessBatch => {
+                // Process all files in batch
+                println!("Processing {} files in batch", self.batch_files.len());
+                self.show_batch_mode = false;
+                Task::none()
+            }
             Message::OpenDocument => {
                 if self.engine.is_none() {
                     return Task::perform(async {
@@ -385,6 +485,13 @@ impl PdfBullApp {
                                     }
                                     PdfCommand::Render(page, zoom, rotation, resp) => {
                                         let res = engine.render_page(page, zoom, rotation).map(|(w, h, data)| {
+                                            (page as usize, w, h, data)
+                                        });
+                                        let _ = resp.blocking_send(res);
+                                    }
+                                    PdfCommand::RenderThumbnail(page, resp) => {
+                                        // Render at thumbnail size (150px width)
+                                        let res = engine.render_page(page, 0.2, 0).map(|(w, h, data)| {
                                             (page as usize, w, h, data)
                                         });
                                         let _ = resp.blocking_send(res);
@@ -1035,6 +1142,7 @@ impl PdfBullApp {
         let toolbar = row![
             button("Open").on_press(Message::OpenDocument),
             button("Close").on_press(Message::CloseTab(self.active_tab)),
+            button("☰").on_press(Message::ToggleSidebar),
             Space::new().width(Length::Fixed(10.0)),
             button("-").on_press(Message::ZoomOut(self.active_tab)),
             text(format!("{}%", (tab.zoom * 100.0) as u32)),
@@ -1043,6 +1151,14 @@ impl PdfBullApp {
             button("↻R").on_press(Message::RotateClockwise(self.active_tab)),
             button("↺R").on_press(Message::RotateCounterClockwise(self.active_tab)),
             text(format!("{}°", tab.rotation)),
+            Space::new().width(Length::Fixed(10.0)),
+            button("Filter").on_press(Message::SetFilter(match tab.render_filter {
+                RenderFilter::None => RenderFilter::Grayscale,
+                RenderFilter::Grayscale => RenderFilter::Inverted,
+                RenderFilter::Inverted => RenderFilter::None,
+                _ => RenderFilter::None,
+            })),
+            button(if tab.auto_crop { "Crop✓" } else { "Crop" }).on_press(Message::ToggleAutoCrop),
             Space::new().width(Length::Fixed(10.0)),
             button("BM").on_press(Message::AddBookmark(self.active_tab)),
             Space::new().width(Length::Fixed(10.0)),
@@ -1053,6 +1169,7 @@ impl PdfBullApp {
             button("Text").on_press(Message::ExtractText(self.active_tab)),
             button("Export").on_press(Message::ExportImage(self.active_tab)),
             Space::new().width(Length::Fill),
+            button("Batch").on_press(Message::OpenBatchMode),
             button("?").on_press(Message::ToggleKeyboardHelp),
             button("⛶").on_press(Message::ToggleFullscreen),
             button("⚙").on_press(Message::OpenSettings),
@@ -1076,7 +1193,35 @@ impl PdfBullApp {
         ]
         .padding(5);
 
-        let content: Element<Message> = if tab.total_pages == 0 {
+        let content: Element<Message> = if self.show_sidebar {
+            // Thumbnail sidebar
+            let mut thumb_column = column![].spacing(5).padding(5).width(Length::Fixed(120.0));
+            for page_idx in 0..tab.total_pages.min(20) {
+                let page_label = text(format!("P{}", page_idx + 1));
+                thumb_column = thumb_column.push(
+                    button(page_label)
+                        .on_press(Message::JumpToPage(self.active_tab, page_idx))
+                        .width(Length::Fixed(100.0))
+                );
+            }
+            
+            let scroll_thumbs = scrollable(thumb_column).width(Length::Fixed(120.0));
+            
+            // Main content
+            let mut pdf_column = column![].spacing(10.0).padding(10.0);
+            for page_idx in 0..tab.total_pages {
+                if let Some(handle) = tab.rendered_pages.get(&page_idx) {
+                    let img = iced::widget::Image::new(handle.clone());
+                    pdf_column = pdf_column.push(container(img).padding(5));
+                } else {
+                    pdf_column = pdf_column.push(container(text(format!("Page {}", page_idx + 1))).padding(20));
+                }
+            }
+            
+            let main_content = scrollable(container(pdf_column).width(Length::Fill)).height(Length::Fill);
+            
+            row![scroll_thumbs, main_content].into()
+        } else if tab.total_pages == 0 {
             container(text(if tab.is_loading { "Loading..." } else { "No pages" }))
                 .width(Length::Fill)
                 .height(Length::Fill)
