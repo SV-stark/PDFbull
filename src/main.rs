@@ -4,6 +4,11 @@
 mod pdf_engine;
 mod models;
 mod commands;
+mod ui;
+mod ui_keyboard_help;
+mod ui_settings;
+mod ui_welcome;
+mod ui_document;
 
 use models::{AppSettings, RecentFile, DocumentTab, PageBookmark, SearchResult};
 use commands::PdfCommand;
@@ -89,6 +94,7 @@ pub struct PdfBullApp {
     pub batch_files: Vec<String>,
     pub search_query: String,
     pub engine: Option<EngineState>,
+    pub loaded: bool,
 }
 
 impl Default for PdfBullApp {
@@ -106,6 +112,7 @@ impl Default for PdfBullApp {
             batch_files: Vec::new(),
             search_query: String::new(),
             engine: None,
+            loaded: false,
         }
     }
 }
@@ -207,7 +214,8 @@ impl PdfBullApp {
 
     pub fn update(&mut self, message: Message) -> Task<Message> {
         // Lazy load settings on first update
-        if self.settings.theme.is_empty() {
+        if !self.loaded {
+            self.loaded = true;
             self.load_settings();
             self.load_recent_files();
         }
@@ -918,330 +926,7 @@ impl PdfBullApp {
     }
 
     pub fn view(&self) -> Element<Message> {
-        if self.show_keyboard_help {
-            return self.keyboard_help_view();
-        }
-        
-        if self.show_settings {
-            return self.settings_view();
-        }
-
-        if self.tabs.is_empty() {
-            return self.welcome_view();
-        }
-
-        self.document_view()
-    }
-
-    fn keyboard_help_view(&self) -> Element<Message> {
-        let shortcuts = column![
-            text("Keyboard Shortcuts").size(24),
-            Space::new().height(Length::Fixed(20.0)),
-            text("Navigation:").size(16),
-            text("Arrow Up/Down - Scroll"),
-            text("Page Up/Down - Next/Prev Page"),
-            text("Home/End - First/Last Page"),
-            Space::new().height(Length::Fixed(10.0)),
-            text("View:").size(16),
-            text("Ctrl + 0 - Reset Zoom"),
-            text("Ctrl + + - Zoom In"),
-            text("Ctrl + - - Zoom Out"),
-            text("F11 - Toggle Fullscreen"),
-            Space::new().height(Length::Fixed(10.0)),
-            text("Document:").size(16),
-            text("Ctrl + O - Open File"),
-            text("Ctrl + S - Save/Export"),
-            text("Ctrl + D - Add Bookmark"),
-            text("Ctrl + F - Search"),
-            Space::new().height(Length::Fixed(10.0)),
-            text("Press ? or F1 to close this help").size(12),
-        ]
-        .padding(30)
-        .align_x(iced::Alignment::Center);
-
-        container(column![
-            button("Close").on_press(Message::ToggleKeyboardHelp).padding(10),
-            shortcuts,
-        ])
-        .width(Length::Fill)
-        .height(Length::Fill)
-        .center_x(Length::Fill)
-        .center_y(Length::Fill)
-        .into()
-    }
-
-    fn welcome_view(&self) -> Element<Message> {
-        let recent_section = if !self.recent_files.is_empty() {
-            let mut files = column![];
-            for file in &self.recent_files {
-                let _name = file.name.clone();
-                files = files.push(
-                    button(text(file.name.clone()))
-                        .on_press(Message::OpenRecentFile(file.clone()))
-                        .width(Length::Fill)
-                );
-            }
-            column![
-                text("Recent Files").size(20),
-                Space::new().height(Length::Fixed(10.0)),
-                files,
-                Space::new().height(Length::Fixed(10.0)),
-                button("Clear Recent").on_press(Message::ClearRecentFiles),
-            ]
-            .padding(20)
-        } else {
-            column![]
-        };
-
-        column![
-            row![
-                text("PDFbull").size(32).width(Length::Fill),
-                button("Settings").on_press(Message::OpenSettings),
-            ]
-            .padding(20),
-            
-            column![
-                text("Welcome to PDFbull").size(24),
-                Space::new().height(Length::Fixed(20.0)),
-                button("Open PDF").on_press(Message::OpenDocument).padding(10),
-                Space::new().height(Length::Fixed(20.0)),
-                recent_section,
-            ]
-            .align_x(iced::Alignment::Center)
-            .width(Length::Fill)
-            .height(Length::Fill),
-        ]
-        .into()
-    }
-
-    fn settings_view(&self) -> Element<Message> {
-        let theme_buttons = row![
-            button("System").on_press({
-                let mut s = self.settings.clone();
-                s.theme = "System".to_string();
-                Message::SaveSettings(s)
-            }),
-            button("Light").on_press({
-                let mut s = self.settings.clone();
-                s.theme = "Light".to_string();
-                Message::SaveSettings(s)
-            }),
-            button("Dark").on_press({
-                let mut s = self.settings.clone();
-                s.theme = "Dark".to_string();
-                Message::SaveSettings(s)
-            }),
-        ].spacing(10);
-
-        let behavior_buttons = row![
-            button(if self.settings.remember_last_file { "Remember Last File ✓" } else { "Remember Last File" }).on_press({
-                let mut s = self.settings.clone();
-                s.remember_last_file = !s.remember_last_file;
-                Message::SaveSettings(s)
-            }),
-            button(if self.settings.auto_save { "Auto-save ✓" } else { "Auto-save" }).on_press({
-                let mut s = self.settings.clone();
-                s.auto_save = !s.auto_save;
-                Message::SaveSettings(s)
-            }),
-        ].spacing(10);
-
-        column![
-            row![
-                text("Settings").size(24),
-                Space::new().width(Length::Fill),
-                button("Close").on_press(Message::CloseSettings),
-            ]
-            .padding(20),
-            
-            column![
-                text("Appearance").size(18),
-                theme_buttons.padding(10),
-                Space::new().height(Length::Fixed(20.0)),
-                text("Behavior").size(18),
-                behavior_buttons.padding(10),
-            ]
-            .padding(20)
-            .width(Length::Fixed(400.0))
-        ]
-        .align_x(iced::Alignment::Center)
-        .into()
-    }
-
-    fn document_view(&self) -> Element<Message> {
-        let tab = &self.tabs[self.active_tab];
-        
-        let mut tabs_row = row![];
-        for (idx, t) in self.tabs.iter().enumerate() {
-            let _is_active = idx == self.active_tab;
-            let name = t.name.clone();
-            tabs_row = tabs_row.push(
-                button(text(name))
-                    .on_press(Message::SwitchTab(idx))
-            );
-        }
-        tabs_row = tabs_row.push(button("+").on_press(Message::OpenDocument));
-
-        let toolbar = row![
-            button("Open").on_press(Message::OpenDocument),
-            button("Close").on_press(Message::CloseTab(self.active_tab)),
-            button("☰").on_press(Message::ToggleSidebar),
-            Space::new().width(Length::Fixed(10.0)),
-            button("-").on_press(Message::ZoomOut(self.active_tab)),
-            text(format!("{}%", (tab.zoom * 100.0) as u32)),
-            button("+").on_press(Message::ZoomIn(self.active_tab)),
-            Space::new().width(Length::Fixed(10.0)),
-            button("↻R").on_press(Message::RotateClockwise(self.active_tab)),
-            button("↺R").on_press(Message::RotateCounterClockwise(self.active_tab)),
-            text(format!("{}°", tab.rotation)),
-            Space::new().width(Length::Fixed(10.0)),
-            button(match tab.render_filter {
-                RenderFilter::None => "Filter",
-                RenderFilter::Grayscale => "Gray",
-                RenderFilter::Inverted => "Invert",
-                RenderFilter::Eco => "Eco",
-                RenderFilter::BlackWhite => "B&W",
-                RenderFilter::Lighten => "Lighten",
-                RenderFilter::NoShadow => "NoShadow",
-            }).on_press(Message::SetFilter(match tab.render_filter {
-                RenderFilter::None => RenderFilter::Grayscale,
-                RenderFilter::Grayscale => RenderFilter::Inverted,
-                RenderFilter::Inverted => RenderFilter::Eco,
-                RenderFilter::Eco => RenderFilter::BlackWhite,
-                RenderFilter::BlackWhite => RenderFilter::Lighten,
-                RenderFilter::Lighten => RenderFilter::NoShadow,
-                RenderFilter::NoShadow => RenderFilter::None,
-            })),
-            button(if tab.auto_crop { "Crop✓" } else { "Crop" }).on_press(Message::ToggleAutoCrop),
-            Space::new().width(Length::Fixed(10.0)),
-            button("BM").on_press(Message::AddBookmark(self.active_tab)),
-            Space::new().width(Length::Fixed(10.0)),
-            text_input("Search...", &self.search_query)
-                .on_input(Message::Search)
-                .width(Length::Fixed(200.0)),
-            Space::new().width(Length::Fixed(10.0)),
-            button("Text").on_press(Message::ExtractText(self.active_tab)),
-            button("Export").on_press(Message::ExportImage(self.active_tab)),
-            Space::new().width(Length::Fill),
-            button("Batch").on_press(Message::OpenBatchMode),
-            button("?").on_press(Message::ToggleKeyboardHelp),
-            button("⛶").on_press(Message::ToggleFullscreen),
-            button("⚙").on_press(Message::OpenSettings),
-        ]
-        .padding(10);
-
-        let active_tab = self.active_tab;
-        let page_nav = row![
-            button("Prev").on_press(Message::PrevPage(self.active_tab)),
-            text(format!("Page {} of {}", tab.current_page + 1, tab.total_pages.max(1))),
-            button("Next").on_press(Message::NextPage(self.active_tab)),
-            Space::new().width(Length::Fixed(20.0)),
-            text_input("Go to page", &(tab.current_page + 1).to_string())
-                .on_input(move |v: String| {
-                    if let Ok(page) = v.parse::<usize>() {
-                        Message::JumpToPage(active_tab, page.saturating_sub(1))
-                    } else {
-                        Message::JumpToPage(active_tab, 0)
-                    }
-                })
-                .width(Length::Fixed(80.0)),
-        ]
-        .padding(5);
-
-        let content: Element<Message> = if self.show_sidebar {
-            let mut sidebar_col = column![].spacing(10).padding(5).width(Length::Fixed(150.0));
-            
-            if !tab.outline.is_empty() {
-                sidebar_col = sidebar_col.push(text("Outline").size(14));
-                for bookmark in &tab.outline {
-                    sidebar_col = sidebar_col.push(
-                        button(text(&bookmark.title))
-                            .on_press(Message::JumpToPage(self.active_tab, bookmark.page_index as usize))
-                            .width(Length::Fill)
-                    );
-                }
-            }
-            
-            if !tab.bookmarks.is_empty() {
-                sidebar_col = sidebar_col.push(text("Bookmarks").size(14));
-                for (idx, bookmark) in tab.bookmarks.iter().enumerate() {
-                    sidebar_col = sidebar_col.push(
-                        row![
-                            button(text(&bookmark.label))
-                                .on_press(Message::JumpToBookmark(self.active_tab, idx))
-                                .width(Length::Fill),
-                            button("×")
-                                .on_press(Message::RemoveBookmark(self.active_tab, idx))
-                        ]
-                    );
-                }
-            }
-            
-            sidebar_col = sidebar_col.push(text("Pages").size(14));
-            for page_idx in 0..tab.total_pages {
-                if let Some(handle) = tab.thumbnails.get(&page_idx) {
-                    let img = iced::widget::Image::new(handle.clone())
-                        .width(Length::Fixed(100.0));
-                    sidebar_col = sidebar_col.push(
-                        button(img)
-                            .on_press(Message::JumpToPage(self.active_tab, page_idx))
-                    );
-                } else {
-                    sidebar_col = sidebar_col.push(
-                        button(text(format!("P{}", page_idx + 1)))
-                            .on_press(Message::JumpToPage(self.active_tab, page_idx))
-                            .on_press(Message::RequestThumbnail(self.active_tab, page_idx))
-                            .width(Length::Fixed(100.0))
-                    );
-                }
-            }
-            
-            let scroll_sidebar = scrollable(sidebar_col).width(Length::Fixed(150.0));
-            
-            let mut pdf_column = column![].spacing(10.0).padding(10.0);
-            for page_idx in 0..tab.total_pages {
-                if let Some(handle) = tab.rendered_pages.get(&page_idx) {
-                    let img = iced::widget::Image::new(handle.clone());
-                    pdf_column = pdf_column.push(container(img).padding(5));
-                } else {
-                    pdf_column = pdf_column.push(container(text(format!("Page {}", page_idx + 1))).padding(20));
-                }
-            }
-            
-            let main_content = scrollable(container(pdf_column).width(Length::Fill)).height(Length::Fill);
-            
-            row![scroll_sidebar, main_content].into()
-        } else if tab.total_pages == 0 {
-            container(text(if tab.is_loading { "Loading..." } else { "No pages" }))
-                .width(Length::Fill)
-                .height(Length::Fill)
-                .center_x(Length::Fill)
-                .center_y(Length::Fill)
-                .into()
-        } else {
-            let mut pdf_column = column![].spacing(10.0).padding(10.0);
-            
-            for page_idx in 0..tab.total_pages {
-                if let Some(handle) = tab.rendered_pages.get(&page_idx) {
-                    let img = iced::widget::Image::new(handle.clone());
-                    pdf_column = pdf_column.push(container(img).padding(5));
-                } else {
-                    pdf_column = pdf_column.push(container(text(format!("Page {}", page_idx + 1))).padding(20));
-                }
-            }
-
-            scrollable(container(pdf_column).width(Length::Fill))
-                .height(Length::Fill)
-                .into()
-        };
-
-        column![
-            tabs_row,
-            toolbar,
-            page_nav,
-            content,
-        ]
-        .into()
+        ui::view(self)
     }
 }
 
