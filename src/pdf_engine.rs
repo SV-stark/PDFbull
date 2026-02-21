@@ -168,4 +168,83 @@ impl<'a> PdfEngine<'a> {
             Err("No active document".to_string())
         }
     }
+
+    pub fn extract_text(&self, page_num: i32) -> Result<String, String> {
+        if let Some(doc) = &self.active_doc {
+            if page_num < 0 || page_num as usize >= doc.pages().len() as usize {
+                return Err("Page number out of bounds".to_string());
+            }
+
+            let page = doc
+                .pages()
+                .get(page_num as u16)
+                .map_err(|e| e.to_string())?;
+
+            let text = page.text().map_err(|e| e.to_string())?;
+
+            Ok(text.to_string())
+        } else {
+            Err("No active document".to_string())
+        }
+    }
+
+    pub fn export_page_as_image(
+        &self,
+        page_num: i32,
+        scale: f32,
+        path: &str,
+    ) -> Result<(), String> {
+        if let Some(doc) = &self.active_doc {
+            if page_num < 0 || page_num as usize >= doc.pages().len() as usize {
+                return Err("Page number out of bounds".to_string());
+            }
+
+            let page = doc
+                .pages()
+                .get(page_num as u16)
+                .map_err(|e| e.to_string())?;
+
+            let render_config = PdfRenderConfig::new()
+                .set_target_width((page.width().value * scale) as i32)
+                .set_maximum_height((page.height().value * scale) as i32)
+                .rotate(PdfPageRenderRotation::None, false);
+
+            let bitmap = page
+                .render_with_config(&render_config)
+                .map_err(|e| e.to_string())?;
+
+            let img = bitmap.as_image();
+            let rgba = img.as_rgba8();
+            let image = match rgba {
+                Some(i) => i,
+                None => return Err("Failed to convert to RGBA8".to_string()),
+            };
+
+            image.save(path).map_err(|e| format!("{}", e))?;
+
+            Ok(())
+        } else {
+            Err("No active document".to_string())
+        }
+    }
+
+    pub fn search(&self, query: &str) -> Result<Vec<(usize, String, f32)>, String> {
+        if let Some(doc) = &self.active_doc {
+            let mut results = Vec::new();
+            let query_lower = query.to_lowercase();
+
+            for (idx, page) in doc.pages().iter().enumerate() {
+                if let Ok(text) = page.text() {
+                    let text_str = text.to_string();
+                    if text_str.to_lowercase().contains(&query_lower) {
+                        results.push((idx, text_str.chars().take(200).collect(), 0.0));
+                    }
+                }
+            }
+
+            Ok(results)
+        } else {
+            Err("No active document".to_string())
+        }
+    }
 }
