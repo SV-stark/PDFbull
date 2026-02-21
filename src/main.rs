@@ -593,7 +593,36 @@ impl PdfBullApp {
                 Task::none()
             }
             Message::SwitchTab(idx) => {
-                if idx < self.tabs.len() {
+                if idx < self.tabs.len() && idx != self.active_tab {
+                    let target_path = self.tabs[idx].path.to_string_lossy().to_string();
+                    
+                    // Check if we need to load a different document
+                    let need_load = match &self.engine {
+                        Some(engine) => {
+                            // For now, always reload when switching tabs since engine holds single doc
+                            // TODO: Implement document pool for true multi-tab support
+                            true
+                        }
+                        None => true,
+                    };
+                    
+                    if need_load {
+                        let tab_idx = idx;
+                        let path = target_path.clone();
+                        
+                        if let Some(engine) = &self.engine {
+                            let cmd_tx = engine.cmd_tx.clone();
+                            return Task::perform(
+                                async move {
+                                    let (resp_tx, mut resp_rx) = mpsc::channel(1);
+                                    let _ = cmd_tx.send(PdfCommand::Open(path, resp_tx)).await;
+                                    resp_rx.recv().await.unwrap_or(Err("Engine died".to_string()))
+                                },
+                                move |result| Message::DocumentOpened(tab_idx, result)
+                            );
+                        }
+                    }
+                    
                     self.active_tab = idx;
                 }
                 Task::none()

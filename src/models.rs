@@ -3,9 +3,32 @@ use iced::widget::image as iced_image;
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub enum AppTheme {
+    System,
+    Light,
+    Dark,
+}
+
+impl Default for AppTheme {
+    fn default() -> Self {
+        AppTheme::System
+    }
+}
+
+impl From<&str> for AppTheme {
+    fn from(s: &str) -> Self {
+        match s {
+            "Light" => AppTheme::Light,
+            "Dark" => AppTheme::Dark,
+            _ => AppTheme::System,
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AppSettings {
-    pub theme: String,
+    pub theme: AppTheme,
     pub auto_save: bool,
     pub remember_last_file: bool,
     pub default_zoom: f32,
@@ -14,7 +37,7 @@ pub struct AppSettings {
 impl Default for AppSettings {
     fn default() -> Self {
         Self {
-            theme: "System".to_string(),
+            theme: AppTheme::default(),
             auto_save: false,
             remember_last_file: true,
             default_zoom: 1.0,

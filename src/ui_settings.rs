@@ -1,21 +1,37 @@
+use crate::models::AppTheme;
 use iced::widget::{button, column, row, text, Space};
 use iced::{Alignment, Element, Length};
 
 pub fn settings_view(app: &crate::PdfBullApp) -> Element<crate::Message> {
     let theme_buttons = row![
-        button("System").on_press({
+        button(if app.settings.theme == AppTheme::System {
+            "System ✓"
+        } else {
+            "System"
+        })
+        .on_press({
             let mut s = app.settings.clone();
-            s.theme = "System".to_string();
+            s.theme = AppTheme::System;
             crate::Message::SaveSettings(s)
         }),
-        button("Light").on_press({
+        button(if app.settings.theme == AppTheme::Light {
+            "Light ✓"
+        } else {
+            "Light"
+        })
+        .on_press({
             let mut s = app.settings.clone();
-            s.theme = "Light".to_string();
+            s.theme = AppTheme::Light;
             crate::Message::SaveSettings(s)
         }),
-        button("Dark").on_press({
+        button(if app.settings.theme == AppTheme::Dark {
+            "Dark ✓"
+        } else {
+            "Dark"
+        })
+        .on_press({
             let mut s = app.settings.clone();
-            s.theme = "Dark".to_string();
+            s.theme = AppTheme::Dark;
             crate::Message::SaveSettings(s)
         }),
     ]

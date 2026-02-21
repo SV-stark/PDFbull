@@ -175,11 +175,7 @@ fn render_pdf_content(app: &PdfBullApp) -> Element<crate::Message> {
 pub fn document_view(app: &PdfBullApp) -> Element<crate::Message> {
     let tab = &app.tabs[app.active_tab];
 
-    let tabs_row = render_tabs(app);
-    let toolbar = render_toolbar(app);
-    let page_nav = render_page_nav(app);
-
-    let content: Element<crate::Message> = if app.show_sidebar {
+    let content: Element<crate::Message> = if app.show_sidebar && !app.is_fullscreen {
         let sidebar = render_sidebar(app);
         let main_content = render_pdf_content(app);
         row![sidebar, main_content].into()
@@ -198,5 +194,30 @@ pub fn document_view(app: &PdfBullApp) -> Element<crate::Message> {
         render_pdf_content(app)
     };
 
-    column![tabs_row, toolbar, page_nav, content,].into()
+    // In fullscreen mode, show minimal UI with exit hint
+    if app.is_fullscreen {
+        column![
+            content,
+            row![
+                button("Exit Fullscreen (F)").on_press(crate::Message::ToggleFullscreen),
+                container(text(format!(
+                    "Page {} of {}",
+                    tab.current_page + 1,
+                    tab.total_pages
+                )))
+                .padding(10),
+                button("-").on_press(crate::Message::ZoomOut(app.active_tab)),
+                text(format!("{}%", (tab.zoom * 100.0) as u32)),
+                button("+").on_press(crate::Message::ZoomIn(app.active_tab)),
+            ]
+            .padding(5)
+        ]
+        .into()
+    } else {
+        let tabs_row = render_tabs(app);
+        let toolbar = render_toolbar(app);
+        let page_nav = render_page_nav(app);
+
+        column![tabs_row, toolbar, page_nav, content].into()
+    }
 }
