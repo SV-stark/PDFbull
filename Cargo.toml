@@ -13,13 +13,12 @@ readme = "README.md"
 name = "pdfbull"
 path = "src/main.rs"
 
-[build-dependencies]
-slint-build = "1.15"
 
 [dependencies]
-slint = { version = "1.15", features = ["renderer-winit-femtovg"] }
 rfd = "0.14"
 pdfium-render = "0.8"
 image = "0.25"
 rayon = "1.10"
 moka = { version = "0.12", features = ["sync"] }
+iced = { version = "0.14.0", features = ["image", "canvas", "tokio"] }
+tokio = { version = "1.43.0", features = ["full"] }

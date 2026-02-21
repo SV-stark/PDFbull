@@ -29,6 +29,10 @@ src-tauri/resources/
 *.rs.bk
 .cargo/
 
+# PDFium DLL and errors
+pdfium.dll
+errors.txt
+
 # Packages build artifacts
 packages/**/target/
 packages/**/*.rlib

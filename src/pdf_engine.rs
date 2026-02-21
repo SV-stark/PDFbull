@@ -83,27 +83,34 @@ impl<'a> PdfEngine<'a> {
 
     pub fn get_outline(&self) -> Vec<Bookmark> {
         if let Some(doc) = &self.active_doc {
-            self.extract_bookmarks(&doc.bookmarks())
+            self.extract_bookmarks(doc.bookmarks().root().as_ref())
         } else {
             vec![]
         }
     }
 
-    fn extract_bookmarks(&self, bookmarks: &PdfBookmarks) -> Vec<Bookmark> {
+    fn extract_bookmarks(&self, bookmark: Option<&PdfBookmark>) -> Vec<Bookmark> {
         let mut result = Vec::new();
-        for bookmark in bookmarks.iter() {
+
+        let mut current = bookmark.and_then(|b| b.first_child());
+
+        while let Some(bm) = current {
             let mut item = Bookmark {
-                title: bookmark.title(),
+                title: bm.title().unwrap_or_default(),
                 page_index: 0,
                 children: Vec::new(),
             };
 
-            if let Some(dest) = bookmark.destination() {
-                item.page_index = dest.page_index();
+            if let Some(dest) = bm.destination() {
+                if let Ok(idx) = dest.page_index() {
+                    item.page_index = idx as u32;
+                }
             }
 
-            item.children = self.extract_bookmarks(&bookmark.children());
+            item.children = self.extract_bookmarks(Some(&bm));
             result.push(item);
+
+            current = bm.next_sibling();
         }
         result
     }
@@ -137,8 +144,8 @@ impl<'a> PdfEngine<'a> {
                 .map_err(|e| e.to_string())?;
 
             let render_config = PdfRenderConfig::new()
-                .set_target_width((page.width().value * scale) as u32)
-                .set_maximum_height((page.height().value * scale) as u32)
+                .set_target_width((page.width().value * scale) as i32)
+                .set_maximum_height((page.height().value * scale) as i32)
                 .rotate(PdfPageRenderRotation::None, false);
 
             // Render to bitmap (BGRA)
