@@ -40,6 +40,13 @@ pub struct RecentFile {
     pub last_opened: u64,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PageBookmark {
+    pub page: usize,
+    pub label: String,
+    pub created_at: u64,
+}
+
 #[derive(Debug, Clone)]
 pub struct DocumentTab {
     pub path: PathBuf,
@@ -47,6 +54,7 @@ pub struct DocumentTab {
     pub total_pages: usize,
     pub current_page: usize,
     pub zoom: f32,
+    pub rotation: i32,
     pub rendered_pages: std::collections::HashMap<usize, iced_image::Handle>,
     pub page_heights: Vec<f32>,
     pub page_width: f32,
@@ -54,6 +62,7 @@ pub struct DocumentTab {
     pub current_search_index: usize,
     pub is_loading: bool,
     pub outline: Vec<pdf_engine::Bookmark>,
+    pub bookmarks: Vec<PageBookmark>,
     pub viewport_y: f32,
     pub viewport_height: f32,
 }
@@ -78,6 +87,7 @@ impl DocumentTab {
             total_pages: 0,
             current_page: 0,
             zoom: 1.0,
+            rotation: 0,
             rendered_pages: std::collections::HashMap::new(),
             page_heights: Vec::new(),
             page_width: 0.0,
@@ -85,6 +95,7 @@ impl DocumentTab {
             current_search_index: 0,
             is_loading: false,
             outline: Vec::new(),
+            bookmarks: Vec::new(),
             viewport_y: 0.0,
             viewport_height: 600.0,
         }
@@ -137,7 +148,7 @@ impl DocumentTab {
 #[derive(Debug, Clone)]
 enum PdfCommand {
     Open(String, mpsc::Sender<Result<(usize, Vec<f32>, f32, Vec<pdf_engine::Bookmark>), String>>),
-    Render(i32, f32, mpsc::Sender<Result<(usize, u32, u32, Arc<Vec<u8>>), String>>),
+    Render(i32, f32, i32, mpsc::Sender<Result<(usize, u32, u32, Arc<Vec<u8>>), String>>),
     ExtractText(i32, mpsc::Sender<Result<String, String>>),
     ExportImage(i32, f32, String, mpsc::Sender<Result<(), String>>),
     Search(String, mpsc::Sender<Result<Vec<(usize, String, f32)>, String>>),
@@ -155,6 +166,8 @@ enum Message {
     ZoomIn(usize),
     ZoomOut(usize),
     SetZoom(usize, f32),
+    RotateClockwise(usize),
+    RotateCounterClockwise(usize),
     JumpToPage(usize, usize),
     ViewportChanged(usize, f32, f32),
     RequestRender(usize, usize),
@@ -177,6 +190,11 @@ enum Message {
     ToggleRecentFiles,
     ClearRecentFiles,
     ToggleSidebar,
+    ToggleFullscreen,
+    ToggleKeyboardHelp,
+    AddBookmark(usize),
+    RemoveBookmark(usize, usize),
+    JumpToBookmark(usize, usize),
 }
 
 #[derive(Debug, Clone)]
@@ -192,6 +210,8 @@ struct PdfBullApp {
     recent_files: Vec<RecentFile>,
     show_settings: bool,
     show_sidebar: bool,
+    show_keyboard_help: bool,
+    is_fullscreen: bool,
     search_query: String,
     engine: Option<EngineState>,
 }
@@ -205,6 +225,8 @@ impl Default for PdfBullApp {
             recent_files: Vec::new(),
             show_settings: false,
             show_sidebar: false,
+            show_keyboard_help: false,
+            is_fullscreen: false,
             search_query: String::new(),
             engine: None,
         }
@@ -283,6 +305,66 @@ impl PdfBullApp {
                 self.show_sidebar = !self.show_sidebar;
                 Task::none()
             }
+            Message::ToggleFullscreen => {
+                self.is_fullscreen = !self.is_fullscreen;
+                Task::none()
+            }
+            Message::ToggleKeyboardHelp => {
+                self.show_keyboard_help = !self.show_keyboard_help;
+                Task::none()
+            }
+            Message::RotateClockwise(tab_idx) => {
+                if tab_idx < self.tabs.len() {
+                    let tab = &mut self.tabs[tab_idx];
+                    tab.rotation = (tab.rotation + 90) % 360;
+                    tab.rendered_pages.clear();
+                }
+                Task::none()
+            }
+            Message::RotateCounterClockwise(tab_idx) => {
+                if tab_idx < self.tabs.len() {
+                    let tab = &mut self.tabs[tab_idx];
+                    tab.rotation = (tab.rotation - 90 + 360) % 360;
+                    tab.rendered_pages.clear();
+                }
+                Task::none()
+            }
+            Message::AddBookmark(tab_idx) => {
+                if tab_idx < self.tabs.len() {
+                    let tab = &mut self.tabs[tab_idx];
+                    let page = tab.current_page;
+                    let label = format!("Page {}", page + 1);
+                    let bookmark = PageBookmark {
+                        page,
+                        label,
+                        created_at: std::time::SystemTime::now()
+                            .duration_since(std::time::UNIX_EPOCH)
+                            .unwrap_or_default()
+                            .as_secs(),
+                    };
+                    if !tab.bookmarks.iter().any(|b| b.page == page) {
+                        tab.bookmarks.push(bookmark);
+                    }
+                }
+                Task::none()
+            }
+            Message::RemoveBookmark(tab_idx, bookmark_idx) => {
+                if tab_idx < self.tabs.len() {
+                    let tab = &mut self.tabs[tab_idx];
+                    if bookmark_idx < tab.bookmarks.len() {
+                        tab.bookmarks.remove(bookmark_idx);
+                    }
+                }
+                Task::none()
+            }
+            Message::JumpToBookmark(tab_idx, bookmark_idx) => {
+                if tab_idx < self.tabs.len() {
+                    if bookmark_idx < self.tabs[tab_idx].bookmarks.len() {
+                        self.tabs[tab_idx].current_page = self.tabs[tab_idx].bookmarks[bookmark_idx].page;
+                    }
+                }
+                Task::none()
+            }
             Message::OpenDocument => {
                 if self.engine.is_none() {
                     return Task::perform(async {
@@ -301,8 +383,8 @@ impl PdfBullApp {
                                         });
                                         let _ = resp.blocking_send(res);
                                     }
-                                    PdfCommand::Render(page, zoom, resp) => {
-                                        let res = engine.render_page(page, zoom).map(|(w, h, data)| {
+                                    PdfCommand::Render(page, zoom, rotation, resp) => {
+                                        let res = engine.render_page(page, zoom, rotation).map(|(w, h, data)| {
                                             (page as usize, w, h, data)
                                         });
                                         let _ = resp.blocking_send(res);
@@ -433,7 +515,7 @@ impl PdfBullApp {
                                         tasks,
                                         Task::perform(
                                             async move {
-                                                let _ = cmd_tx.send(PdfCommand::Render(page_idx as i32, zoom, resp_tx)).await;
+                                                let _ = cmd_tx.send(PdfCommand::Render(page_idx as i32, zoom, 0, resp_tx)).await;
                                                 resp_rx.recv().await.unwrap_or(Err("Channel closed".into()))
                                             },
                                             Message::PageRendered
@@ -503,7 +585,7 @@ impl PdfBullApp {
                                 tasks,
                                 Task::perform(
                                     async move {
-                                        let _ = cmd_tx.send(PdfCommand::Render(page_idx as i32, zoom, resp_tx)).await;
+                                        let _ = cmd_tx.send(PdfCommand::Render(page_idx as i32, zoom, 0, resp_tx)).await;
                                         resp_rx.recv().await.unwrap_or(Err("Channel closed".into()))
                                     },
                                     Message::PageRendered
@@ -531,7 +613,7 @@ impl PdfBullApp {
                                 tasks,
                                 Task::perform(
                                     async move {
-                                        let _ = cmd_tx.send(PdfCommand::Render(page_idx as i32, zoom, resp_tx)).await;
+                                        let _ = cmd_tx.send(PdfCommand::Render(page_idx as i32, zoom, 0, resp_tx)).await;
                                         resp_rx.recv().await.unwrap_or(Err("Channel closed".into()))
                                     },
                                     Message::PageRendered
@@ -559,7 +641,7 @@ impl PdfBullApp {
                                 tasks,
                                 Task::perform(
                                     async move {
-                                        let _ = cmd_tx.send(PdfCommand::Render(page_idx as i32, zoom_val, resp_tx)).await;
+                                        let _ = cmd_tx.send(PdfCommand::Render(page_idx as i32, zoom_val, 0, resp_tx)).await;
                                         resp_rx.recv().await.unwrap_or(Err("Channel closed".into()))
                                     },
                                     Message::PageRendered
@@ -608,7 +690,7 @@ impl PdfBullApp {
                                 tasks,
                                 Task::perform(
                                     async move {
-                                        let _ = cmd_tx.send(PdfCommand::Render(page_idx as i32, zoom, resp_tx)).await;
+                                        let _ = cmd_tx.send(PdfCommand::Render(page_idx as i32, zoom, 0, resp_tx)).await;
                                         resp_rx.recv().await.unwrap_or(Err("Channel closed".into()))
                                     },
                                     Message::PageRendered
@@ -630,7 +712,7 @@ impl PdfBullApp {
                             let zoom = tab.zoom;
                             return Task::perform(
                                 async move {
-                                    let _ = cmd_tx.send(PdfCommand::Render(page_idx as i32, zoom, resp_tx)).await;
+                                    let _ = cmd_tx.send(PdfCommand::Render(page_idx as i32, zoom, 0, resp_tx)).await;
                                     resp_rx.recv().await.unwrap_or(Err("Channel closed".into()))
                                 },
                                 Message::PageRendered
@@ -783,6 +865,10 @@ impl PdfBullApp {
     }
 
     fn view(&self) -> Element<Message> {
+        if self.show_keyboard_help {
+            return self.keyboard_help_view();
+        }
+        
         if self.show_settings {
             return self.settings_view();
         }
@@ -792,6 +878,43 @@ impl PdfBullApp {
         }
 
         self.document_view()
+    }
+
+    fn keyboard_help_view(&self) -> Element<Message> {
+        let shortcuts = column![
+            text("Keyboard Shortcuts").size(24),
+            Space::new().height(Length::Fixed(20.0)),
+            text("Navigation:").size(16),
+            text("Arrow Up/Down - Scroll"),
+            text("Page Up/Down - Next/Prev Page"),
+            text("Home/End - First/Last Page"),
+            Space::new().height(Length::Fixed(10.0)),
+            text("View:").size(16),
+            text("Ctrl + 0 - Reset Zoom"),
+            text("Ctrl + + - Zoom In"),
+            text("Ctrl + - - Zoom Out"),
+            text("F11 - Toggle Fullscreen"),
+            Space::new().height(Length::Fixed(10.0)),
+            text("Document:").size(16),
+            text("Ctrl + O - Open File"),
+            text("Ctrl + S - Save/Export"),
+            text("Ctrl + D - Add Bookmark"),
+            text("Ctrl + F - Search"),
+            Space::new().height(Length::Fixed(10.0)),
+            text("Press ? or F1 to close this help").size(12),
+        ]
+        .padding(30)
+        .align_x(iced::Alignment::Center);
+
+        container(column![
+            button("Close").on_press(Message::ToggleKeyboardHelp).padding(10),
+            shortcuts,
+        ])
+        .width(Length::Fill)
+        .height(Length::Fill)
+        .center_x(Length::Fill)
+        .center_y(Length::Fill)
+        .into()
     }
 
     fn welcome_view(&self) -> Element<Message> {
@@ -917,6 +1040,12 @@ impl PdfBullApp {
             text(format!("{}%", (tab.zoom * 100.0) as u32)),
             button("+").on_press(Message::ZoomIn(self.active_tab)),
             Space::new().width(Length::Fixed(10.0)),
+            button("↻R").on_press(Message::RotateClockwise(self.active_tab)),
+            button("↺R").on_press(Message::RotateCounterClockwise(self.active_tab)),
+            text(format!("{}°", tab.rotation)),
+            Space::new().width(Length::Fixed(10.0)),
+            button("BM").on_press(Message::AddBookmark(self.active_tab)),
+            Space::new().width(Length::Fixed(10.0)),
             text_input("Search...", &self.search_query)
                 .on_input(Message::Search)
                 .width(Length::Fixed(200.0)),
@@ -924,7 +1053,9 @@ impl PdfBullApp {
             button("Text").on_press(Message::ExtractText(self.active_tab)),
             button("Export").on_press(Message::ExportImage(self.active_tab)),
             Space::new().width(Length::Fill),
-            button("Settings").on_press(Message::OpenSettings),
+            button("?").on_press(Message::ToggleKeyboardHelp),
+            button("⛶").on_press(Message::ToggleFullscreen),
+            button("⚙").on_press(Message::OpenSettings),
         ]
         .padding(10);
 

@@ -119,10 +119,12 @@ impl<'a> PdfEngine<'a> {
         &self,
         page_num: i32,
         scale: f32,
+        rotation: i32,
     ) -> Result<(u32, u32, Arc<Vec<u8>>), String> {
-        // Higher precision key: 1.25 -> 12500
+        // Higher precision key: scale * 10000 + rotation
         let scale_key = (scale * 10000.0) as u32;
-        let cache_key = (page_num, scale_key);
+        let rotation_key = ((rotation + 360) % 360) as u32;
+        let cache_key = (page_num, scale_key * 100 + rotation_key);
 
         if let Some(cached) = self.page_cache.get(&cache_key) {
             return Ok(cached);
@@ -143,10 +145,18 @@ impl<'a> PdfEngine<'a> {
                 .get(page_num as u16)
                 .map_err(|e| e.to_string())?;
 
+            let render_rotation = match ((rotation + 360) % 360) / 90 {
+                0 => PdfPageRenderRotation::None,
+                1 => PdfPageRenderRotation::Degrees90,
+                2 => PdfPageRenderRotation::Degrees180,
+                3 => PdfPageRenderRotation::Degrees270,
+                _ => PdfPageRenderRotation::None,
+            };
+
             let render_config = PdfRenderConfig::new()
                 .set_target_width((page.width().value * scale) as i32)
                 .set_maximum_height((page.height().value * scale) as i32)
-                .rotate(PdfPageRenderRotation::None, false);
+                .rotate(render_rotation, false);
 
             // Render to bitmap
             let bitmap = page
