@@ -2,6 +2,12 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 mod pdf_engine;
+mod models;
+mod commands;
+
+use models::{AppSettings, RecentFile, DocumentTab, PageBookmark, SearchResult};
+use commands::PdfCommand;
+use pdf_engine::RenderFilter;
 
 use iced::widget::{
     button, column, container, image as iced_image, row, scrollable, text, 
@@ -12,160 +18,34 @@ use std::sync::Arc;
 use tokio::sync::mpsc;
 use std::path::PathBuf;
 use std::fs;
-use serde::{Deserialize, Serialize};
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct AppSettings {
-    pub theme: String,
-    pub auto_save: bool,
-    pub remember_last_file: bool,
-    pub default_zoom: f32,
-}
-
-impl Default for AppSettings {
-    fn default() -> Self {
-        Self {
-            theme: "System".to_string(),
-            auto_save: false,
-            remember_last_file: true,
-            default_zoom: 1.0,
-        }
-    }
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct RecentFile {
-    pub path: String,
-    pub name: String,
-    pub last_opened: u64,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct PageBookmark {
-    pub page: usize,
-    pub label: String,
-    pub created_at: u64,
-}
-
-use pdf_engine::RenderFilter;
 
 #[derive(Debug, Clone)]
-pub struct DocumentTab {
-    pub path: PathBuf,
-    pub name: String,
-    pub total_pages: usize,
-    pub current_page: usize,
-    pub zoom: f32,
-    pub rotation: i32,
-    pub render_filter: RenderFilter,
-    pub auto_crop: bool,
-    pub rendered_pages: std::collections::HashMap<usize, iced_image::Handle>,
-    pub thumbnails: std::collections::HashMap<usize, iced_image::Handle>,
-    pub page_heights: Vec<f32>,
-    pub page_width: f32,
-    pub search_results: Vec<SearchResult>,
-    pub current_search_index: usize,
-    pub is_loading: bool,
-    pub outline: Vec<pdf_engine::Bookmark>,
-    pub bookmarks: Vec<PageBookmark>,
-    pub viewport_y: f32,
-    pub viewport_height: f32,
-}
-
-const MAX_CACHED_PAGES: usize = 10;
-const VIEWPORT_BUFFER: usize = 3;
-
-#[derive(Debug, Clone)]
-pub struct SearchResult {
-    pub page: usize,
-    pub text: String,
-    pub y_position: f32,
-}
-
-impl DocumentTab {
-    fn new(path: PathBuf) -> Self {
-        Self {
-            name: path.file_name()
-                .map(|n| n.to_string_lossy().to_string())
-                .unwrap_or_else(|| "Untitled".to_string()),
-            path,
-            total_pages: 0,
-            current_page: 0,
-            zoom: 1.0,
-            rotation: 0,
-            render_filter: RenderFilter::None,
-            auto_crop: false,
-            rendered_pages: std::collections::HashMap::new(),
-            thumbnails: std::collections::HashMap::new(),
-            page_heights: Vec::new(),
-            page_width: 0.0,
-            search_results: Vec::new(),
-            current_search_index: 0,
-            is_loading: false,
-            outline: Vec::new(),
-            bookmarks: Vec::new(),
-            viewport_y: 0.0,
-            viewport_height: 600.0,
-        }
-    }
-    
-    fn get_visible_pages(&self) -> Vec<usize> {
-        let mut visible = Vec::new();
-        let mut y = 0.0;
-        
-        for (idx, height) in self.page_heights.iter().enumerate() {
-            let page_bottom = y + height + 10.0;
-            let viewport_top = self.viewport_y;
-            let viewport_bottom = self.viewport_y + self.viewport_height;
-            
-            if page_bottom >= viewport_top && y <= viewport_bottom {
-                visible.push(idx);
-            }
-            
-            if y > viewport_bottom + self.viewport_height * 2.0 {
-                break;
-            }
-            
-            y = page_bottom;
-        }
-        
-        visible
-    }
-    
-    fn cleanup_distant_pages(&mut self) {
-        let visible = self.get_visible_pages();
-        let pages_to_keep: Vec<usize> = visible.iter()
-            .flat_map(|&p| {
-                let start = p.saturating_sub(VIEWPORT_BUFFER);
-                let end = (p + VIEWPORT_BUFFER).min(self.total_pages);
-                start..end
-            })
-            .collect();
-        
-        let to_remove: Vec<usize> = self.rendered_pages.keys()
-            .copied()
-            .filter(|p| !pages_to_keep.contains(p))
-            .collect();
-        
-        for p in to_remove {
-            self.rendered_pages.remove(&p);
-        }
-    }
-}
-
-#[derive(Debug, Clone)]
-enum PdfCommand {
-    Open(String, mpsc::Sender<Result<(usize, Vec<f32>, f32, Vec<pdf_engine::Bookmark>), String>>),
-    Render(i32, f32, i32, RenderFilter, mpsc::Sender<Result<(usize, u32, u32, Arc<Vec<u8>>), String>>),
-    RenderThumbnail(i32, mpsc::Sender<Result<(usize, u32, u32, Arc<Vec<u8>>), String>>),
-    ExtractText(i32, mpsc::Sender<Result<String, String>>),
-    ExportImage(i32, f32, String, mpsc::Sender<Result<(), String>>),
-    Search(String, mpsc::Sender<Result<Vec<(usize, String, f32)>, String>>),
-    Close,
+struct EngineState {
+    cmd_tx: mpsc::Sender<PdfCommand>,
 }
 
 #[derive(Debug, Clone)]
 enum Message {
+    ResetZoom(usize),
+    OpenSettings,
+    CloseSettings,
+    SaveSettings(AppSettings),
+    ToggleSidebar,
+    ToggleFullscreen,
+    ToggleKeyboardHelp,
+    RotateClockwise(usize),
+    RotateCounterClockwise(usize),
+    AddBookmark(usize),
+    RemoveBookmark(usize, usize),
+    JumpToBookmark(usize, usize),
+    SetFilter(RenderFilter),
+    ToggleAutoCrop,
+    RequestThumbnail(usize, usize),
+    ThumbnailRendered(usize, Result<(usize, u32, u32, Arc<Vec<u8>>), String>),
+    OpenBatchMode,
+    CloseBatchMode,
+    AddToBatch(String),
+    ProcessBatch,
     OpenDocument,
     OpenFile(PathBuf),
     CloseTab(usize),
@@ -175,9 +55,6 @@ enum Message {
     ZoomIn(usize),
     ZoomOut(usize),
     SetZoom(usize, f32),
-    ResetZoom(usize),
-    RotateClockwise(usize),
-    RotateCounterClockwise(usize),
     JumpToPage(usize, usize),
     ViewportChanged(usize, f32, f32),
     RequestRender(usize, usize),
@@ -193,47 +70,24 @@ enum Message {
     TextExtracted(usize, Result<String, String>),
     ExportImage(usize),
     ImageExported(Result<String, String>),
-    OpenSettings,
-    CloseSettings,
-    SaveSettings(AppSettings),
     OpenRecentFile(RecentFile),
     ToggleRecentFiles,
     ClearRecentFiles,
-    ToggleSidebar,
-    ToggleFullscreen,
-    ToggleKeyboardHelp,
-    AddBookmark(usize),
-    RemoveBookmark(usize, usize),
-    JumpToBookmark(usize, usize),
-    SetFilter(RenderFilter),
-    ToggleAutoCrop,
-    RequestThumbnail(usize, usize),
-    ThumbnailRendered(usize, Result<(usize, u32, u32, Arc<Vec<u8>>), String>),
-    OpenBatchMode,
-    CloseBatchMode,
-    AddToBatch(String),
-    ProcessBatch,
 }
 
-#[derive(Debug, Clone)]
-struct EngineState {
-    cmd_tx: mpsc::Sender<PdfCommand>,
-}
-
-#[derive(Debug)]
-struct PdfBullApp {
-    tabs: Vec<DocumentTab>,
-    active_tab: usize,
-    settings: AppSettings,
-    recent_files: Vec<RecentFile>,
-    show_settings: bool,
-    show_sidebar: bool,
-    show_keyboard_help: bool,
-    is_fullscreen: bool,
-    show_batch_mode: bool,
-    batch_files: Vec<String>,
-    search_query: String,
-    engine: Option<EngineState>,
+pub struct PdfBullApp {
+    pub tabs: Vec<DocumentTab>,
+    pub active_tab: usize,
+    pub settings: AppSettings,
+    pub recent_files: Vec<RecentFile>,
+    pub show_settings: bool,
+    pub show_sidebar: bool,
+    pub show_keyboard_help: bool,
+    pub is_fullscreen: bool,
+    pub show_batch_mode: bool,
+    pub batch_files: Vec<String>,
+    pub search_query: String,
+    pub engine: Option<EngineState>,
 }
 
 impl Default for PdfBullApp {
@@ -256,7 +110,7 @@ impl Default for PdfBullApp {
 }
 
 impl PdfBullApp {
-    fn load_settings(&mut self) {
+    pub fn load_settings(&mut self) {
         if let Ok(data) = fs::read_to_string("settings.json") {
             if let Ok(settings) = serde_json::from_str(&data) {
                 self.settings = settings;
@@ -264,13 +118,13 @@ impl PdfBullApp {
         }
     }
 
-    fn save_settings(&self) {
+    pub fn save_settings(&self) {
         if let Ok(data) = serde_json::to_string_pretty(&self.settings) {
             let _ = fs::write("settings.json", data);
         }
     }
 
-    fn load_recent_files(&mut self) {
+    pub fn load_recent_files(&mut self) {
         if let Ok(data) = fs::read_to_string("recent_files.json") {
             if let Ok(files) = serde_json::from_str(&data) {
                 self.recent_files = files;
@@ -278,13 +132,13 @@ impl PdfBullApp {
         }
     }
 
-    fn save_recent_files(&self) {
+    pub fn save_recent_files(&self) {
         if let Ok(data) = serde_json::to_string_pretty(&self.recent_files) {
             let _ = fs::write("recent_files.json", data);
         }
     }
 
-    fn add_recent_file(&mut self, path: &PathBuf) {
+    pub fn add_recent_file(&mut self, path: &PathBuf) {
         let name = path.file_name()
             .map(|n| n.to_string_lossy().to_string())
             .unwrap_or_default();
@@ -307,7 +161,7 @@ impl PdfBullApp {
         self.save_recent_files();
     }
 
-    fn update(&mut self, message: Message) -> Task<Message> {
+    pub fn update(&mut self, message: Message) -> Task<Message> {
         match message {
             Message::ResetZoom(tab_idx) => {
                 if tab_idx < self.tabs.len() {
@@ -510,7 +364,6 @@ impl PdfBullApp {
                                         let _ = resp.blocking_send(res);
                                     }
                                     PdfCommand::RenderThumbnail(page, resp) => {
-                                        // Render at thumbnail size (0.2 scale)
                                         let res = engine.render_page(page, 0.2, 0, RenderFilter::None).map(|(w, h, data)| {
                                             (page as usize, w, h, data)
                                         });
@@ -630,7 +483,6 @@ impl PdfBullApp {
                             self.tabs[tab_idx].outline = outline;
                             self.tabs[tab_idx].is_loading = false;
                             
-                            // Only render first few pages initially (lazy loading)
                             let mut tasks = Task::none();
                             let initial_pages = (count as usize).min(5);
                             for page_idx in 0..initial_pages {
@@ -704,7 +556,6 @@ impl PdfBullApp {
                     let tab = &mut self.tabs[tab_idx];
                     tab.zoom = (tab.zoom * 1.25).min(5.0);
                     tab.rendered_pages.clear();
-                    // Only render first few pages on zoom
                     let mut tasks = Task::none();
                     for page_idx in 0..5.min(tab.total_pages) {
                         if let Some(engine) = &self.engine {
@@ -734,7 +585,6 @@ impl PdfBullApp {
                     let tab = &mut self.tabs[tab_idx];
                     tab.zoom = (tab.zoom / 1.25).max(0.25);
                     tab.rendered_pages.clear();
-                    // Only render first few pages on zoom
                     let mut tasks = Task::none();
                     for page_idx in 0..5.min(tab.total_pages) {
                         if let Some(engine) = &self.engine {
@@ -764,7 +614,6 @@ impl PdfBullApp {
                     let tab = &mut self.tabs[tab_idx];
                     tab.zoom = zoom.clamp(0.25, 5.0);
                     tab.rendered_pages.clear();
-                    // Only render first few pages
                     let mut tasks = Task::none();
                     for page_idx in 0..5.min(tab.total_pages) {
                         if let Some(engine) = &self.engine {
@@ -806,16 +655,13 @@ impl PdfBullApp {
                     tab.viewport_height = viewport_height;
                     let new_visible: Vec<usize> = tab.get_visible_pages();
                     
-                    // Find pages that became visible
                     let to_render: Vec<usize> = new_visible.iter()
                         .filter(|p| !old_visible.contains(p) && !tab.rendered_pages.contains_key(*p))
                         .copied()
                         .collect();
                     
-                    // Cleanup distant pages
                     tab.cleanup_distant_pages();
                     
-                    // Render newly visible pages
                     let mut tasks = Task::none();
                     for page_idx in to_render {
                         if let Some(engine) = &self.engine {
@@ -1014,7 +860,7 @@ impl PdfBullApp {
         }
     }
 
-    fn view(&self) -> Element<Message> {
+    pub fn view(&self) -> Element<Message> {
         if self.show_keyboard_help {
             return self.keyboard_help_view();
         }
@@ -1071,10 +917,9 @@ impl PdfBullApp {
         let recent_section = if !self.recent_files.is_empty() {
             let mut files = column![];
             for file in &self.recent_files {
-                let path = file.path.clone();
-                let name = file.name.clone();
+                let _name = file.name.clone();
                 files = files.push(
-                    button(text(name))
+                    button(text(file.name.clone()))
                         .on_press(Message::OpenRecentFile(file.clone()))
                         .width(Length::Fill)
                 );
@@ -1171,7 +1016,7 @@ impl PdfBullApp {
         
         let mut tabs_row = row![];
         for (idx, t) in self.tabs.iter().enumerate() {
-            let is_active = idx == self.active_tab;
+            let _is_active = idx == self.active_tab;
             let name = t.name.clone();
             tabs_row = tabs_row.push(
                 button(text(name))
@@ -1247,10 +1092,8 @@ impl PdfBullApp {
         .padding(5);
 
         let content: Element<Message> = if self.show_sidebar {
-            // Sidebar with thumbnails and outline
             let mut sidebar_col = column![].spacing(10).padding(5).width(Length::Fixed(150.0));
             
-            // Bookmarks/Outline section
             if !tab.outline.is_empty() {
                 sidebar_col = sidebar_col.push(text("Outline").size(14));
                 for bookmark in &tab.outline {
@@ -1262,7 +1105,6 @@ impl PdfBullApp {
                 }
             }
             
-            // Bookmarks section
             if !tab.bookmarks.is_empty() {
                 sidebar_col = sidebar_col.push(text("Bookmarks").size(14));
                 for (idx, bookmark) in tab.bookmarks.iter().enumerate() {
@@ -1278,7 +1120,6 @@ impl PdfBullApp {
                 }
             }
             
-            // Thumbnails section
             sidebar_col = sidebar_col.push(text("Pages").size(14));
             for page_idx in 0..tab.total_pages {
                 if let Some(handle) = tab.thumbnails.get(&page_idx) {
@@ -1300,7 +1141,6 @@ impl PdfBullApp {
             
             let scroll_sidebar = scrollable(sidebar_col).width(Length::Fixed(150.0));
             
-            // Main content
             let mut pdf_column = column![].spacing(10.0).padding(10.0);
             for page_idx in 0..tab.total_pages {
                 if let Some(handle) = tab.rendered_pages.get(&page_idx) {
