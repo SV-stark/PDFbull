@@ -42,6 +42,7 @@ enum Message {
     ToggleAutoCrop,
     RequestThumbnail(usize, usize),
     ThumbnailRendered(usize, Result<(usize, u32, u32, Arc<Vec<u8>>), String>),
+    DocumentOpenedWithPath((PathBuf, (usize, Vec<f32>, f32, Vec<pdf_engine::Bookmark>))),
     OpenBatchMode,
     CloseBatchMode,
     AddToBatch(String),
@@ -109,9 +110,16 @@ impl Default for PdfBullApp {
     }
 }
 
+fn get_config_dir() -> std::path::PathBuf {
+    dirs::config_dir()
+        .unwrap_or_else(|| std::path::PathBuf::from("."))
+        .join("pdfbull")
+}
+
 impl PdfBullApp {
     pub fn load_settings(&mut self) {
-        if let Ok(data) = fs::read_to_string("settings.json") {
+        let path = get_config_dir().join("settings.json");
+        if let Ok(data) = fs::read_to_string(&path) {
             if let Ok(settings) = serde_json::from_str(&data) {
                 self.settings = settings;
             }
@@ -119,13 +127,17 @@ impl PdfBullApp {
     }
 
     pub fn save_settings(&self) {
+        let dir = get_config_dir();
+        let _ = fs::create_dir_all(&dir);
+        let path = dir.join("settings.json");
         if let Ok(data) = serde_json::to_string_pretty(&self.settings) {
-            let _ = fs::write("settings.json", data);
+            let _ = fs::write(path, data);
         }
     }
 
     pub fn load_recent_files(&mut self) {
-        if let Ok(data) = fs::read_to_string("recent_files.json") {
+        let path = get_config_dir().join("recent_files.json");
+        if let Ok(data) = fs::read_to_string(&path) {
             if let Ok(files) = serde_json::from_str(&data) {
                 self.recent_files = files;
             }
@@ -133,8 +145,11 @@ impl PdfBullApp {
     }
 
     pub fn save_recent_files(&self) {
+        let dir = get_config_dir();
+        let _ = fs::create_dir_all(&dir);
+        let path = dir.join("recent_files.json");
         if let Ok(data) = serde_json::to_string_pretty(&self.recent_files) {
-            let _ = fs::write("recent_files.json", data);
+            let _ = fs::write(path, data);
         }
     }
 
@@ -161,7 +176,42 @@ impl PdfBullApp {
         self.save_recent_files();
     }
 
+    fn render_pages(&self, tab_idx: usize, pages: impl Iterator<Item = usize>) -> Task<Message> {
+        if tab_idx >= self.tabs.len() {
+            return Task::none();
+        }
+        let tab = &self.tabs[tab_idx];
+        let Some(engine) = &self.engine else {
+            return Task::none();
+        };
+        
+        let zoom = tab.zoom;
+        let rotation = tab.rotation;
+        let filter = tab.render_filter;
+        let cmd_tx = engine.cmd_tx.clone();
+        
+        pages
+            .map(|page_idx| {
+                let tx = cmd_tx.clone();
+                Task::perform(
+                    async move {
+                        let (resp_tx, mut resp_rx) = mpsc::channel(1);
+                        let _ = tx.send(PdfCommand::Render(page_idx as i32, zoom, rotation, filter, resp_tx)).await;
+                        resp_rx.recv().await.unwrap_or(Err("Channel closed".into()))
+                    },
+                    move |result| Message::PageRendered(tab_idx, result)
+                )
+            })
+            .fold(Task::none(), |acc, t| Task::batch([acc, t]))
+    }
+
     pub fn update(&mut self, message: Message) -> Task<Message> {
+        // Lazy load settings on first update
+        if self.settings.theme.is_empty() {
+            self.load_settings();
+            self.load_recent_files();
+        }
+        
         match message {
             Message::ResetZoom(tab_idx) => {
                 if tab_idx < self.tabs.len() {
@@ -414,15 +464,22 @@ impl PdfBullApp {
                         },
                         |result| {
                             match result {
-                                Ok((path, _)) => {
-                                    let tab = DocumentTab::new(path.clone());
-                                    let idx = 0;
-                                    Message::DocumentOpened(idx, Ok((0, Vec::new(), 0.0, Vec::new())))
-                                }
-                                Err(_) => Message::DocumentOpened(0, Err("Cancelled".into()))
+                                Ok((path, data)) => Message::DocumentOpenedWithPath((path, data)),
+                                Err(e) => Message::DocumentOpenedWithPath((PathBuf::new(), (0, Vec::new(), 0.0, Vec::new())))
                             }
                         }
                     );
+                }
+                Task::none()
+            }
+            Message::DocumentOpenedWithPath((path, data)) => {
+                if path.as_path().exists() {
+                    let tab_idx = self.tabs.len();
+                    let path_clone = path.clone();
+                    self.tabs.push(DocumentTab::new(path));
+                    self.active_tab = tab_idx;
+                    self.add_recent_file(&path_clone);
+                    return self.update(Message::DocumentOpened(tab_idx, Ok(data)));
                 }
                 Task::none()
             }
@@ -1189,9 +1246,5 @@ impl PdfBullApp {
 }
 
 pub fn main() -> iced::Result {
-    let mut app = PdfBullApp::default();
-    app.load_settings();
-    app.load_recent_files();
-    
     iced::run(PdfBullApp::update, PdfBullApp::view)
 }
