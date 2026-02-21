@@ -54,7 +54,12 @@ pub struct DocumentTab {
     pub current_search_index: usize,
     pub is_loading: bool,
     pub outline: Vec<pdf_engine::Bookmark>,
+    pub viewport_y: f32,
+    pub viewport_height: f32,
 }
+
+const MAX_CACHED_PAGES: usize = 10;
+const VIEWPORT_BUFFER: usize = 3;
 
 #[derive(Debug, Clone)]
 pub struct SearchResult {
@@ -80,6 +85,51 @@ impl DocumentTab {
             current_search_index: 0,
             is_loading: false,
             outline: Vec::new(),
+            viewport_y: 0.0,
+            viewport_height: 600.0,
+        }
+    }
+    
+    fn get_visible_pages(&self) -> Vec<usize> {
+        let mut visible = Vec::new();
+        let mut y = 0.0;
+        
+        for (idx, height) in self.page_heights.iter().enumerate() {
+            let page_bottom = y + height + 10.0;
+            let viewport_top = self.viewport_y;
+            let viewport_bottom = self.viewport_y + self.viewport_height;
+            
+            if page_bottom >= viewport_top && y <= viewport_bottom {
+                visible.push(idx);
+            }
+            
+            if y > viewport_bottom + self.viewport_height * 2.0 {
+                break;
+            }
+            
+            y = page_bottom;
+        }
+        
+        visible
+    }
+    
+    fn cleanup_distant_pages(&mut self) {
+        let visible = self.get_visible_pages();
+        let pages_to_keep: Vec<usize> = visible.iter()
+            .flat_map(|&p| {
+                let start = p.saturating_sub(VIEWPORT_BUFFER);
+                let end = (p + VIEWPORT_BUFFER).min(self.total_pages);
+                start..end
+            })
+            .collect();
+        
+        let to_remove: Vec<usize> = self.rendered_pages.keys()
+            .copied()
+            .filter(|p| !pages_to_keep.contains(p))
+            .collect();
+        
+        for p in to_remove {
+            self.rendered_pages.remove(&p);
         }
     }
 }
@@ -106,6 +156,7 @@ enum Message {
     ZoomOut(usize),
     SetZoom(usize, f32),
     JumpToPage(usize, usize),
+    ViewportChanged(usize, f32, f32),
     RequestRender(usize, usize),
     PageRendered(Result<(usize, u32, u32, Arc<Vec<u8>>), String>),
     DocumentOpened(usize, Result<(usize, Vec<f32>, f32, Vec<pdf_engine::Bookmark>), String>),
@@ -370,8 +421,10 @@ impl PdfBullApp {
                             self.tabs[tab_idx].outline = outline;
                             self.tabs[tab_idx].is_loading = false;
                             
+                            // Only render first few pages initially (lazy loading)
                             let mut tasks = Task::none();
-                            for page_idx in 0..count {
+                            let initial_pages = (count as usize).min(5);
+                            for page_idx in 0..initial_pages {
                                 if let Some(engine) = &self.engine {
                                     let (resp_tx, mut resp_rx) = mpsc::channel(1);
                                     let cmd_tx = engine.cmd_tx.clone();
@@ -439,8 +492,9 @@ impl PdfBullApp {
                     let tab = &mut self.tabs[tab_idx];
                     tab.zoom = (tab.zoom * 1.25).min(5.0);
                     tab.rendered_pages.clear();
+                    // Only render first few pages on zoom
                     let mut tasks = Task::none();
-                    for page_idx in 0..tab.total_pages {
+                    for page_idx in 0..5.min(tab.total_pages) {
                         if let Some(engine) = &self.engine {
                             let (resp_tx, mut resp_rx) = mpsc::channel(1);
                             let cmd_tx = engine.cmd_tx.clone();
@@ -466,8 +520,9 @@ impl PdfBullApp {
                     let tab = &mut self.tabs[tab_idx];
                     tab.zoom = (tab.zoom / 1.25).max(0.25);
                     tab.rendered_pages.clear();
+                    // Only render first few pages on zoom
                     let mut tasks = Task::none();
-                    for page_idx in 0..tab.total_pages {
+                    for page_idx in 0..5.min(tab.total_pages) {
                         if let Some(engine) = &self.engine {
                             let (resp_tx, mut resp_rx) = mpsc::channel(1);
                             let cmd_tx = engine.cmd_tx.clone();
@@ -493,6 +548,26 @@ impl PdfBullApp {
                     let tab = &mut self.tabs[tab_idx];
                     tab.zoom = zoom.clamp(0.25, 5.0);
                     tab.rendered_pages.clear();
+                    // Only render first few pages
+                    let mut tasks = Task::none();
+                    for page_idx in 0..5.min(tab.total_pages) {
+                        if let Some(engine) = &self.engine {
+                            let (resp_tx, mut resp_rx) = mpsc::channel(1);
+                            let cmd_tx = engine.cmd_tx.clone();
+                            let zoom_val = tab.zoom;
+                            tasks = Task::batch([
+                                tasks,
+                                Task::perform(
+                                    async move {
+                                        let _ = cmd_tx.send(PdfCommand::Render(page_idx as i32, zoom_val, resp_tx)).await;
+                                        resp_rx.recv().await.unwrap_or(Err("Channel closed".into()))
+                                    },
+                                    Message::PageRendered
+                                )
+                            ]);
+                        }
+                    }
+                    return tasks;
                 }
                 Task::none()
             }
@@ -502,6 +577,46 @@ impl PdfBullApp {
                     if page < tab.total_pages {
                         tab.current_page = page;
                     }
+                }
+                Task::none()
+            }
+            Message::ViewportChanged(tab_idx, viewport_y, viewport_height) => {
+                if tab_idx < self.tabs.len() {
+                    let tab = &mut self.tabs[tab_idx];
+                    let old_visible: Vec<usize> = tab.get_visible_pages();
+                    tab.viewport_y = viewport_y;
+                    tab.viewport_height = viewport_height;
+                    let new_visible: Vec<usize> = tab.get_visible_pages();
+                    
+                    // Find pages that became visible
+                    let to_render: Vec<usize> = new_visible.iter()
+                        .filter(|p| !old_visible.contains(p) && !tab.rendered_pages.contains_key(*p))
+                        .copied()
+                        .collect();
+                    
+                    // Cleanup distant pages
+                    tab.cleanup_distant_pages();
+                    
+                    // Render newly visible pages
+                    let mut tasks = Task::none();
+                    for page_idx in to_render {
+                        if let Some(engine) = &self.engine {
+                            let (resp_tx, mut resp_rx) = mpsc::channel(1);
+                            let cmd_tx = engine.cmd_tx.clone();
+                            let zoom = tab.zoom;
+                            tasks = Task::batch([
+                                tasks,
+                                Task::perform(
+                                    async move {
+                                        let _ = cmd_tx.send(PdfCommand::Render(page_idx as i32, zoom, resp_tx)).await;
+                                        resp_rx.recv().await.unwrap_or(Err("Channel closed".into()))
+                                    },
+                                    Message::PageRendered
+                                )
+                            ]);
+                        }
+                    }
+                    return tasks;
                 }
                 Task::none()
             }
