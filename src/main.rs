@@ -10,7 +10,10 @@ use tokio::sync::mpsc;
 use std::path::PathBuf;
 
 pub fn main() -> iced::Result {
-    iced::run(PdfBullApp::update, PdfBullApp::view)
+    println!("Starting PDFbull...");
+    let result = iced::run(PdfBullApp::update, PdfBullApp::view);
+    println!("PDFbull exited with: {:?}", result);
+    result
 }
 
 #[derive(Debug, Clone)]
@@ -24,6 +27,7 @@ enum PdfCommand {
     Close,
 }
 
+#[derive(Debug)]
 struct PdfBullApp {
     current_page: usize,
     total_pages: usize,
@@ -75,6 +79,7 @@ impl Default for PdfBullApp {
 
 impl PdfBullApp {
     fn update(&mut self, message: Message) -> iced::Task<Message> {
+        println!("DEBUG: Received message: {:?}", message);
         match message {
             Message::OpenDocument => {
                 if self.engine.is_none() {
