@@ -47,22 +47,7 @@ pub struct PageBookmark {
     pub created_at: u64,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-pub enum RenderFilter {
-    None,
-    Grayscale,
-    Inverted,
-    Eco,
-    BlackWhite,
-    Lighten,
-    NoShadow,
-}
-
-impl Default for RenderFilter {
-    fn default() -> Self {
-        RenderFilter::None
-    }
-}
+use pdf_engine::RenderFilter;
 
 #[derive(Debug, Clone)]
 pub struct DocumentTab {
@@ -171,7 +156,7 @@ impl DocumentTab {
 #[derive(Debug, Clone)]
 enum PdfCommand {
     Open(String, mpsc::Sender<Result<(usize, Vec<f32>, f32, Vec<pdf_engine::Bookmark>), String>>),
-    Render(i32, f32, i32, mpsc::Sender<Result<(usize, u32, u32, Arc<Vec<u8>>), String>>),
+    Render(i32, f32, i32, RenderFilter, mpsc::Sender<Result<(usize, u32, u32, Arc<Vec<u8>>), String>>),
     RenderThumbnail(i32, mpsc::Sender<Result<(usize, u32, u32, Arc<Vec<u8>>), String>>),
     ExtractText(i32, mpsc::Sender<Result<String, String>>),
     ExportImage(i32, f32, String, mpsc::Sender<Result<(), String>>),
@@ -190,12 +175,13 @@ enum Message {
     ZoomIn(usize),
     ZoomOut(usize),
     SetZoom(usize, f32),
+    ResetZoom(usize),
     RotateClockwise(usize),
     RotateCounterClockwise(usize),
     JumpToPage(usize, usize),
     ViewportChanged(usize, f32, f32),
     RequestRender(usize, usize),
-    PageRendered(Result<(usize, u32, u32, Arc<Vec<u8>>), String>),
+    PageRendered(usize, Result<(usize, u32, u32, Arc<Vec<u8>>), String>),
     DocumentOpened(usize, Result<(usize, Vec<f32>, f32, Vec<pdf_engine::Bookmark>), String>),
     EngineInitialized(EngineState),
     Search(String),
@@ -222,7 +208,7 @@ enum Message {
     SetFilter(RenderFilter),
     ToggleAutoCrop,
     RequestThumbnail(usize, usize),
-    ThumbnailRendered(Result<(usize, u32, u32, Arc<Vec<u8>>), String>),
+    ThumbnailRendered(usize, Result<(usize, u32, u32, Arc<Vec<u8>>), String>),
     OpenBatchMode,
     CloseBatchMode,
     AddToBatch(String),
@@ -323,6 +309,35 @@ impl PdfBullApp {
 
     fn update(&mut self, message: Message) -> Task<Message> {
         match message {
+            Message::ResetZoom(tab_idx) => {
+                if tab_idx < self.tabs.len() {
+                    let tab = &mut self.tabs[tab_idx];
+                    tab.zoom = 1.0;
+                    tab.rendered_pages.clear();
+                    let mut tasks = Task::none();
+                    for page_idx in 0..5.min(tab.total_pages) {
+                        if let Some(engine) = &self.engine {
+                            let (resp_tx, mut resp_rx) = mpsc::channel(1);
+                            let cmd_tx = engine.cmd_tx.clone();
+                            let zoom = tab.zoom;
+                            let rotation = tab.rotation;
+                            let filter = tab.render_filter;
+                            tasks = Task::batch([
+                                tasks,
+                                Task::perform(
+                                    async move {
+                                        let _ = cmd_tx.send(PdfCommand::Render(page_idx as i32, zoom, rotation, filter, resp_tx)).await;
+                                        resp_rx.recv().await.unwrap_or(Err("Channel closed".into()))
+                                    },
+                                    move |result| Message::PageRendered(tab_idx, result)
+                                )
+                            ]);
+                        }
+                    }
+                    return tasks;
+                }
+                Task::none()
+            }
             Message::OpenSettings => {
                 self.show_settings = true;
                 Task::none()
@@ -431,17 +446,17 @@ impl PdfBullApp {
                                     let _ = cmd_tx.send(PdfCommand::RenderThumbnail(page_idx as i32, resp_tx)).await;
                                     resp_rx.recv().await.unwrap_or(Err("Channel closed".into()))
                                 },
-                                Message::ThumbnailRendered
+                                move |result| Message::ThumbnailRendered(tab_idx, result)
                             );
                         }
                     }
                 }
                 Task::none()
             }
-            Message::ThumbnailRendered(result) => {
+            Message::ThumbnailRendered(tab_idx, result) => {
                 if let Ok((page, width, height, data)) = result {
-                    for tab in &mut self.tabs {
-                        tab.thumbnails.insert(page, iced_image::Handle::from_rgba(width, height, data.as_ref().clone()));
+                    if tab_idx < self.tabs.len() {
+                        self.tabs[tab_idx].thumbnails.insert(page, iced_image::Handle::from_rgba(width, height, data.as_ref().clone()));
                     }
                 }
                 Task::none()
@@ -460,9 +475,14 @@ impl PdfBullApp {
                 Task::none()
             }
             Message::ProcessBatch => {
-                // Process all files in batch
-                println!("Processing {} files in batch", self.batch_files.len());
+                let files = self.batch_files.clone();
                 self.show_batch_mode = false;
+                if let Some(first_file) = files.first() {
+                    let remaining: Vec<String> = files[1..].to_vec();
+                    self.batch_files = remaining;
+                    let path = PathBuf::from(first_file);
+                    return self.update(Message::OpenFile(path));
+                }
                 Task::none()
             }
             Message::OpenDocument => {
@@ -483,15 +503,15 @@ impl PdfBullApp {
                                         });
                                         let _ = resp.blocking_send(res);
                                     }
-                                    PdfCommand::Render(page, zoom, rotation, resp) => {
-                                        let res = engine.render_page(page, zoom, rotation).map(|(w, h, data)| {
+                                    PdfCommand::Render(page, zoom, rotation, filter, resp) => {
+                                        let res = engine.render_page(page, zoom, rotation, filter).map(|(w, h, data)| {
                                             (page as usize, w, h, data)
                                         });
                                         let _ = resp.blocking_send(res);
                                     }
                                     PdfCommand::RenderThumbnail(page, resp) => {
-                                        // Render at thumbnail size (150px width)
-                                        let res = engine.render_page(page, 0.2, 0).map(|(w, h, data)| {
+                                        // Render at thumbnail size (0.2 scale)
+                                        let res = engine.render_page(page, 0.2, 0, RenderFilter::None).map(|(w, h, data)| {
                                             (page as usize, w, h, data)
                                         });
                                         let _ = resp.blocking_send(res);
@@ -617,15 +637,18 @@ impl PdfBullApp {
                                 if let Some(engine) = &self.engine {
                                     let (resp_tx, mut resp_rx) = mpsc::channel(1);
                                     let cmd_tx = engine.cmd_tx.clone();
-                                    let zoom = self.tabs[tab_idx].zoom;
+                                    let tab = &self.tabs[tab_idx];
+                                    let zoom = tab.zoom;
+                                    let rotation = tab.rotation;
+                                    let filter = tab.render_filter;
                                     tasks = Task::batch([
                                         tasks,
                                         Task::perform(
                                             async move {
-                                                let _ = cmd_tx.send(PdfCommand::Render(page_idx as i32, zoom, 0, resp_tx)).await;
+                                                let _ = cmd_tx.send(PdfCommand::Render(page_idx as i32, zoom, rotation, filter, resp_tx)).await;
                                                 resp_rx.recv().await.unwrap_or(Err("Channel closed".into()))
                                             },
-                                            Message::PageRendered
+                                            move |result| Message::PageRendered(tab_idx, result)
                                         )
                                     ]);
                                 }
@@ -688,14 +711,16 @@ impl PdfBullApp {
                             let (resp_tx, mut resp_rx) = mpsc::channel(1);
                             let cmd_tx = engine.cmd_tx.clone();
                             let zoom = tab.zoom;
+                            let rotation = tab.rotation;
+                            let filter = tab.render_filter;
                             tasks = Task::batch([
                                 tasks,
                                 Task::perform(
                                     async move {
-                                        let _ = cmd_tx.send(PdfCommand::Render(page_idx as i32, zoom, 0, resp_tx)).await;
+                                        let _ = cmd_tx.send(PdfCommand::Render(page_idx as i32, zoom, rotation, filter, resp_tx)).await;
                                         resp_rx.recv().await.unwrap_or(Err("Channel closed".into()))
                                     },
-                                    Message::PageRendered
+                                    move |result| Message::PageRendered(tab_idx, result)
                                 )
                             ]);
                         }
@@ -716,14 +741,16 @@ impl PdfBullApp {
                             let (resp_tx, mut resp_rx) = mpsc::channel(1);
                             let cmd_tx = engine.cmd_tx.clone();
                             let zoom = tab.zoom;
+                            let rotation = tab.rotation;
+                            let filter = tab.render_filter;
                             tasks = Task::batch([
                                 tasks,
                                 Task::perform(
                                     async move {
-                                        let _ = cmd_tx.send(PdfCommand::Render(page_idx as i32, zoom, 0, resp_tx)).await;
+                                        let _ = cmd_tx.send(PdfCommand::Render(page_idx as i32, zoom, rotation, filter, resp_tx)).await;
                                         resp_rx.recv().await.unwrap_or(Err("Channel closed".into()))
                                     },
-                                    Message::PageRendered
+                                    move |result| Message::PageRendered(tab_idx, result)
                                 )
                             ]);
                         }
@@ -744,14 +771,16 @@ impl PdfBullApp {
                             let (resp_tx, mut resp_rx) = mpsc::channel(1);
                             let cmd_tx = engine.cmd_tx.clone();
                             let zoom_val = tab.zoom;
+                            let rotation = tab.rotation;
+                            let filter = tab.render_filter;
                             tasks = Task::batch([
                                 tasks,
                                 Task::perform(
                                     async move {
-                                        let _ = cmd_tx.send(PdfCommand::Render(page_idx as i32, zoom_val, 0, resp_tx)).await;
+                                        let _ = cmd_tx.send(PdfCommand::Render(page_idx as i32, zoom_val, rotation, filter, resp_tx)).await;
                                         resp_rx.recv().await.unwrap_or(Err("Channel closed".into()))
                                     },
-                                    Message::PageRendered
+                                    move |result| Message::PageRendered(tab_idx, result)
                                 )
                             ]);
                         }
@@ -793,14 +822,16 @@ impl PdfBullApp {
                             let (resp_tx, mut resp_rx) = mpsc::channel(1);
                             let cmd_tx = engine.cmd_tx.clone();
                             let zoom = tab.zoom;
+                            let rotation = tab.rotation;
+                            let filter = tab.render_filter;
                             tasks = Task::batch([
                                 tasks,
                                 Task::perform(
                                     async move {
-                                        let _ = cmd_tx.send(PdfCommand::Render(page_idx as i32, zoom, 0, resp_tx)).await;
+                                        let _ = cmd_tx.send(PdfCommand::Render(page_idx as i32, zoom, rotation, filter, resp_tx)).await;
                                         resp_rx.recv().await.unwrap_or(Err("Channel closed".into()))
                                     },
-                                    Message::PageRendered
+                                    move |result| Message::PageRendered(tab_idx, result)
                                 )
                             ]);
                         }
@@ -817,22 +848,24 @@ impl PdfBullApp {
                             let (resp_tx, mut resp_rx) = mpsc::channel(1);
                             let cmd_tx = engine.cmd_tx.clone();
                             let zoom = tab.zoom;
+                            let rotation = tab.rotation;
+                            let filter = tab.render_filter;
                             return Task::perform(
                                 async move {
-                                    let _ = cmd_tx.send(PdfCommand::Render(page_idx as i32, zoom, 0, resp_tx)).await;
+                                    let _ = cmd_tx.send(PdfCommand::Render(page_idx as i32, zoom, rotation, filter, resp_tx)).await;
                                     resp_rx.recv().await.unwrap_or(Err("Channel closed".into()))
                                 },
-                                Message::PageRendered
+                                move |result| Message::PageRendered(tab_idx, result)
                             );
                         }
                     }
                 }
                 Task::none()
             }
-            Message::PageRendered(result) => {
+            Message::PageRendered(tab_idx, result) => {
                 if let Ok((page, width, height, data)) = result {
-                    for tab in &mut self.tabs {
-                        tab.rendered_pages.insert(page, iced_image::Handle::from_rgba(width, height, data.as_ref().clone()));
+                    if tab_idx < self.tabs.len() {
+                        self.tabs[tab_idx].rendered_pages.insert(page, iced_image::Handle::from_rgba(width, height, data.as_ref().clone()));
                     }
                 }
                 Task::none()
@@ -942,23 +975,33 @@ impl PdfBullApp {
                     let page = tab.current_page as i32;
                     let zoom = tab.zoom;
                     
-                    return Task::perform(
-                        async move {
-                            let file = rfd::AsyncFileDialog::new()
-                                .add_filter("PNG", &["png"])
-                                .set_file_name("page.png")
-                                .save_file()
-                                .await;
-                            
-                            match file {
-                                Some(f) => Ok(f.path().to_string_lossy().to_string()),
-                                None => Err("Cancelled".to_string()),
-                            }
-                        },
-                        |result: Result<String, String>| {
-                            Message::ImageExported(result)
-                        }
-                    );
+                    if let Some(engine) = &self.engine {
+                        let cmd_tx = engine.cmd_tx.clone();
+                        return Task::perform(
+                            async move {
+                                let file = rfd::AsyncFileDialog::new()
+                                    .add_filter("PNG", &["png"])
+                                    .set_file_name("page.png")
+                                    .save_file()
+                                    .await;
+                                
+                                match file {
+                                    Some(f) => {
+                                        let path = f.path().to_string_lossy().to_string();
+                                        let (resp_tx, mut resp_rx) = mpsc::channel(1);
+                                        let _ = cmd_tx.send(PdfCommand::ExportImage(page, zoom, path.clone(), resp_tx)).await;
+                                        match resp_rx.recv().await {
+                                            Some(Ok(())) => Ok(path),
+                                            Some(Err(e)) => Err(e),
+                                            None => Err("Engine died".into()),
+                                        }
+                                    }
+                                    None => Err("Cancelled".to_string()),
+                                }
+                            },
+                            Message::ImageExported
+                        );
+                    }
                 }
                 Task::none()
             }
@@ -1063,7 +1106,6 @@ impl PdfBullApp {
                 recent_section,
             ]
             .align_x(iced::Alignment::Center)
-            .align_x(iced::Alignment::Center)
             .width(Length::Fill)
             .height(Length::Fill),
         ]
@@ -1121,7 +1163,6 @@ impl PdfBullApp {
             .width(Length::Fixed(400.0))
         ]
         .align_x(iced::Alignment::Center)
-        .align_x(iced::Alignment::Center)
         .into()
     }
 
@@ -1152,11 +1193,22 @@ impl PdfBullApp {
             button("↺R").on_press(Message::RotateCounterClockwise(self.active_tab)),
             text(format!("{}°", tab.rotation)),
             Space::new().width(Length::Fixed(10.0)),
-            button("Filter").on_press(Message::SetFilter(match tab.render_filter {
+            button(match tab.render_filter {
+                RenderFilter::None => "Filter",
+                RenderFilter::Grayscale => "Gray",
+                RenderFilter::Inverted => "Invert",
+                RenderFilter::Eco => "Eco",
+                RenderFilter::BlackWhite => "B&W",
+                RenderFilter::Lighten => "Lighten",
+                RenderFilter::NoShadow => "NoShadow",
+            }).on_press(Message::SetFilter(match tab.render_filter {
                 RenderFilter::None => RenderFilter::Grayscale,
                 RenderFilter::Grayscale => RenderFilter::Inverted,
-                RenderFilter::Inverted => RenderFilter::None,
-                _ => RenderFilter::None,
+                RenderFilter::Inverted => RenderFilter::Eco,
+                RenderFilter::Eco => RenderFilter::BlackWhite,
+                RenderFilter::BlackWhite => RenderFilter::Lighten,
+                RenderFilter::Lighten => RenderFilter::NoShadow,
+                RenderFilter::NoShadow => RenderFilter::None,
             })),
             button(if tab.auto_crop { "Crop✓" } else { "Crop" }).on_press(Message::ToggleAutoCrop),
             Space::new().width(Length::Fixed(10.0)),
@@ -1176,17 +1228,18 @@ impl PdfBullApp {
         ]
         .padding(10);
 
+        let active_tab = self.active_tab;
         let page_nav = row![
             button("Prev").on_press(Message::PrevPage(self.active_tab)),
             text(format!("Page {} of {}", tab.current_page + 1, tab.total_pages.max(1))),
             button("Next").on_press(Message::NextPage(self.active_tab)),
             Space::new().width(Length::Fixed(20.0)),
-            text_input("Go to page", &tab.current_page.to_string())
-                .on_input(move |v| {
+            text_input("Go to page", &(tab.current_page + 1).to_string())
+                .on_input(move |v: String| {
                     if let Ok(page) = v.parse::<usize>() {
-                        Message::JumpToPage(self.active_tab, page.saturating_sub(1))
+                        Message::JumpToPage(active_tab, page.saturating_sub(1))
                     } else {
-                        Message::JumpToPage(self.active_tab, 0)
+                        Message::JumpToPage(active_tab, 0)
                     }
                 })
                 .width(Length::Fixed(80.0)),
@@ -1194,18 +1247,58 @@ impl PdfBullApp {
         .padding(5);
 
         let content: Element<Message> = if self.show_sidebar {
-            // Thumbnail sidebar
-            let mut thumb_column = column![].spacing(5).padding(5).width(Length::Fixed(120.0));
-            for page_idx in 0..tab.total_pages.min(20) {
-                let page_label = text(format!("P{}", page_idx + 1));
-                thumb_column = thumb_column.push(
-                    button(page_label)
-                        .on_press(Message::JumpToPage(self.active_tab, page_idx))
-                        .width(Length::Fixed(100.0))
-                );
+            // Sidebar with thumbnails and outline
+            let mut sidebar_col = column![].spacing(10).padding(5).width(Length::Fixed(150.0));
+            
+            // Bookmarks/Outline section
+            if !tab.outline.is_empty() {
+                sidebar_col = sidebar_col.push(text("Outline").size(14));
+                for bookmark in &tab.outline {
+                    sidebar_col = sidebar_col.push(
+                        button(text(&bookmark.title))
+                            .on_press(Message::JumpToPage(self.active_tab, bookmark.page_index as usize))
+                            .width(Length::Fill)
+                    );
+                }
             }
             
-            let scroll_thumbs = scrollable(thumb_column).width(Length::Fixed(120.0));
+            // Bookmarks section
+            if !tab.bookmarks.is_empty() {
+                sidebar_col = sidebar_col.push(text("Bookmarks").size(14));
+                for (idx, bookmark) in tab.bookmarks.iter().enumerate() {
+                    sidebar_col = sidebar_col.push(
+                        row![
+                            button(text(&bookmark.label))
+                                .on_press(Message::JumpToBookmark(self.active_tab, idx))
+                                .width(Length::Fill),
+                            button("×")
+                                .on_press(Message::RemoveBookmark(self.active_tab, idx))
+                        ]
+                    );
+                }
+            }
+            
+            // Thumbnails section
+            sidebar_col = sidebar_col.push(text("Pages").size(14));
+            for page_idx in 0..tab.total_pages {
+                if let Some(handle) = tab.thumbnails.get(&page_idx) {
+                    let img = iced::widget::Image::new(handle.clone())
+                        .width(Length::Fixed(100.0));
+                    sidebar_col = sidebar_col.push(
+                        button(img)
+                            .on_press(Message::JumpToPage(self.active_tab, page_idx))
+                    );
+                } else {
+                    sidebar_col = sidebar_col.push(
+                        button(text(format!("P{}", page_idx + 1)))
+                            .on_press(Message::JumpToPage(self.active_tab, page_idx))
+                            .on_press(Message::RequestThumbnail(self.active_tab, page_idx))
+                            .width(Length::Fixed(100.0))
+                    );
+                }
+            }
+            
+            let scroll_sidebar = scrollable(sidebar_col).width(Length::Fixed(150.0));
             
             // Main content
             let mut pdf_column = column![].spacing(10.0).padding(10.0);
@@ -1220,7 +1313,7 @@ impl PdfBullApp {
             
             let main_content = scrollable(container(pdf_column).width(Length::Fill)).height(Length::Fill);
             
-            row![scroll_thumbs, main_content].into()
+            row![scroll_sidebar, main_content].into()
         } else if tab.total_pages == 0 {
             container(text(if tab.is_loading { "Loading..." } else { "No pages" }))
                 .width(Length::Fill)

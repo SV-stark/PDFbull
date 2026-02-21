@@ -3,12 +3,29 @@ use pdfium_render::prelude::*;
 use std::sync::Arc;
 use std::time::Duration;
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum RenderFilter {
+    None,
+    Grayscale,
+    Inverted,
+    Eco,
+    BlackWhite,
+    Lighten,
+    NoShadow,
+}
+
+impl Default for RenderFilter {
+    fn default() -> Self {
+        RenderFilter::None
+    }
+}
+
 pub struct PdfEngine<'a> {
     pdfium: &'a Pdfium,
     active_doc: Option<PdfDocument<'a>>,
-    // Cache key: (page_index, scale_key) -> (width, height, rgba_data)
+    // Cache key: (page_index, scale_key, filter) -> (width, height, rgba_data)
     // Scale stored as u32 (scale * 10000) to be hashable and precise
-    page_cache: Cache<(i32, u32), (u32, u32, Arc<Vec<u8>>)>,
+    page_cache: Cache<(i32, u32, u32), (u32, u32, Arc<Vec<u8>>)>,
 }
 
 #[derive(Clone, Debug)]
@@ -120,22 +137,19 @@ impl<'a> PdfEngine<'a> {
         page_num: i32,
         scale: f32,
         rotation: i32,
+        filter: RenderFilter,
     ) -> Result<(u32, u32, Arc<Vec<u8>>), String> {
         // Higher precision key: scale * 10000 + rotation
         let scale_key = (scale * 10000.0) as u32;
         let rotation_key = ((rotation + 360) % 360) as u32;
-        let cache_key = (page_num, scale_key * 100 + rotation_key);
+        let filter_key = filter as u32;
+        let cache_key = (page_num, scale_key * 100 + rotation_key, filter_key);
 
         if let Some(cached) = self.page_cache.get(&cache_key) {
             return Ok(cached);
         }
 
         if let Some(doc) = &self.active_doc {
-            // Fix u16 overflow: cast to usize directly (assuming PDFium supports it, but len() returns u16 in wrapper usually)
-            // pdfium-render uses u16 for paging in some versions, let's check safety.
-            // doc.pages() returns PdfPages which has .len() -> u16.
-            // So if PDF > 65535 pages, we have a bigger problem with the library wrapper.
-            // But let's just properly check bounds against len()
             if page_num < 0 || page_num as usize >= doc.pages().len() as usize {
                 return Err("Page number out of bounds".to_string());
             }
@@ -158,7 +172,6 @@ impl<'a> PdfEngine<'a> {
                 .set_maximum_height((page.height().value * scale) as i32)
                 .rotate(render_rotation, false);
 
-            // Render to bitmap
             let bitmap = page
                 .render_with_config(&render_config)
                 .map_err(|e| e.to_string())?;
@@ -166,17 +179,91 @@ impl<'a> PdfEngine<'a> {
             let w = bitmap.width() as u32;
             let h = bitmap.height() as u32;
 
-            // Use pdfium-render's built-in RGBA conversion
-            let result_data = Arc::new(bitmap.as_rgba_bytes());
+            let rgba_data = bitmap.as_rgba_bytes().to_vec();
+            let filtered_data = Self::apply_filter(rgba_data, w, h, filter);
+            let result_data = Arc::new(filtered_data);
             let result = (w, h, result_data);
 
-            // Store in cache
             self.page_cache.insert(cache_key, result.clone());
 
             Ok(result)
         } else {
             Err("No active document".to_string())
         }
+    }
+
+    fn apply_filter(data: Vec<u8>, width: u32, height: u32, filter: RenderFilter) -> Vec<u8> {
+        if filter == RenderFilter::None {
+            return data;
+        }
+
+        let mut result = data.clone();
+        let total_pixels = (width * height) as usize;
+
+        match filter {
+            RenderFilter::Grayscale => {
+                for i in (0..total_pixels * 4).step_by(4) {
+                    let gray = (result[i] as u32 * 299
+                        + result[i + 1] as u32 * 587
+                        + result[i + 2] as u32 * 114)
+                        / 1000;
+                    result[i] = gray as u8;
+                    result[i + 1] = gray as u8;
+                    result[i + 2] = gray as u8;
+                }
+            }
+            RenderFilter::Inverted => {
+                for i in (0..total_pixels * 4).step_by(4) {
+                    result[i] = 255 - result[i];
+                    result[i + 1] = 255 - result[i + 1];
+                    result[i + 2] = 255 - result[i + 2];
+                }
+            }
+            RenderFilter::Eco => {
+                for i in (0..total_pixels * 4).step_by(4) {
+                    let avg = ((result[i] as u32 + result[i + 1] as u32 + result[i + 2] as u32) / 3)
+                        as u8;
+                    let eco = (avg as u32 * 8 / 10) as u8;
+                    result[i] = eco;
+                    result[i + 1] = eco;
+                    result[i + 2] = eco;
+                }
+            }
+            RenderFilter::BlackWhite => {
+                for i in (0..total_pixels * 4).step_by(4) {
+                    let gray = (result[i] as u32 * 299
+                        + result[i + 1] as u32 * 587
+                        + result[i + 2] as u32 * 114)
+                        / 1000;
+                    let bw = if gray > 128 { 255 } else { 0 };
+                    result[i] = bw;
+                    result[i + 1] = bw;
+                    result[i + 2] = bw;
+                }
+            }
+            RenderFilter::Lighten => {
+                for i in (0..total_pixels * 4).step_by(4) {
+                    let lighten = |c: u8| (c as u32 * 3 / 2).min(255) as u8;
+                    result[i] = lighten(result[i]);
+                    result[i + 1] = lighten(result[i + 1]);
+                    result[i + 2] = lighten(result[i + 2]);
+                }
+            }
+            RenderFilter::NoShadow => {
+                for i in (0..total_pixels * 4).step_by(4) {
+                    let avg = ((result[i] as u32 + result[i + 1] as u32 + result[i + 2] as u32) / 3)
+                        as u8;
+                    if avg < 64 {
+                        result[i] = (result[i] + 64).min(255);
+                        result[i + 1] = (result[i + 1] + 64).min(255);
+                        result[i + 2] = (result[i + 2] + 64).min(255);
+                    }
+                }
+            }
+            RenderFilter::None => {}
+        }
+
+        result
     }
 
     pub fn extract_text(&self, page_num: i32) -> Result<String, String> {
