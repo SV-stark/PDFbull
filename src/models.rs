@@ -46,6 +46,7 @@ pub struct AppSettings {
     pub render_quality: RenderQuality,
     pub default_filter: RenderFilter,
     pub accent_color: String,
+    pub restore_session: bool,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
@@ -67,9 +68,15 @@ impl Default for AppSettings {
             render_quality: RenderQuality::Medium,
             default_filter: RenderFilter::None,
             accent_color: "#3b82f6".to_string(),
+            restore_session: true,
         }
     }
 }
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SessionData {
+    pub open_tabs: Vec<PathBuf>,
+    pub active_tab: usize,
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RecentFile {
@@ -92,6 +99,24 @@ pub struct SearchResult {
     pub y_position: f32,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub enum AnnotationStyle {
+    Text { text: String, color: String, font_size: u32 },
+    Rectangle { color: String, thickness: f32, fill: bool },
+    Highlight { color: String },
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Annotation {
+    pub id: u64,
+    pub page: usize,
+    pub style: AnnotationStyle,
+    pub x: f32,
+    pub y: f32,
+    pub width: f32,
+    pub height: f32,
+}
+
 pub struct DocumentTab {
     pub id: DocumentId,
     pub path: PathBuf,
@@ -111,18 +136,19 @@ pub struct DocumentTab {
     pub is_loading: bool,
     pub outline: Vec<crate::pdf_engine::Bookmark>,
     pub bookmarks: Vec<PageBookmark>,
+    pub annotations: Vec<Annotation>,
     pub viewport_y: f32,
     pub viewport_height: f32,
 }
 
 const VIEWPORT_BUFFER: usize = 3;
 
-static mut NEXT_DOC_ID: u64 = 1;
+static mut NEXT_DOC_ID_MODELS: u64 = 1;
 
 fn next_doc_id() -> DocumentId {
     unsafe {
-        let id = NEXT_DOC_ID;
-        NEXT_DOC_ID += 1;
+        let id = NEXT_DOC_ID_MODELS;
+        NEXT_DOC_ID_MODELS += 1;
         DocumentId(id)
     }
 }
@@ -151,6 +177,7 @@ impl DocumentTab {
             is_loading: false,
             outline: Vec::new(),
             bookmarks: Vec::new(),
+            annotations: Vec::new(),
             viewport_y: 0.0,
             viewport_height: 800.0,
         }

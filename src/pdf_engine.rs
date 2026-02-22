@@ -225,32 +225,22 @@ impl<'a> PdfEngine<'a> {
             let w = bitmap.width() as u32;
             let h = bitmap.height() as u32;
 
-            let rgba_data = bitmap.as_rgba_bytes().to_vec();
-            let filtered_data = Self::apply_filter(rgba_data, w, h, filter);
+            let mut result_data = Self::apply_filter(bitmap.as_rgba_bytes().to_vec(), w, h, filter);
 
             // Apply crop offset if auto_crop was used
-            let result_data = if let Some((ox, oy)) = crop_offset {
+            if let Some((ox, oy)) = crop_offset {
                 if ox > 0 || oy > 0 {
-                    let mut cropped = vec![255u8; (w * h * 4) as usize];
-                    for y in 0..h.min(oy as u32) {
-                        for x in 0..w {
-                            let src_idx = ((y as usize) * w as usize + x as usize) * 4;
-                            let dst_idx = ((y as usize) * w as usize + x as usize) * 4;
-                            if dst_idx < cropped.len() {
-                                cropped[dst_idx] = 255;
-                                cropped[dst_idx + 1] = 255;
-                                cropped[dst_idx + 2] = 255;
-                                cropped[dst_idx + 3] = 255;
-                            }
+                    let crop_y = oy.min(h as i32) as u32;
+                    for y in 0..crop_y {
+                        let row_start = (y * w) as usize * 4;
+                        let row_end = row_start + (w as usize * 4);
+                        if row_end <= result_data.len() {
+                            // Turn cropped out top pixels white
+                            result_data[row_start..row_end].fill(255);
                         }
                     }
-                    cropped
-                } else {
-                    filtered_data
                 }
-            } else {
-                filtered_data
-            };
+            }
 
             let result_data = Arc::new(result_data);
             let result = (w, h, result_data);
@@ -432,7 +422,7 @@ impl<'a> PdfEngine<'a> {
         }
     }
 
-    pub fn search(&self, query: &str) -> Result<Vec<(usize, String, f32)>, String> {
+    pub fn search(&self, query: &str, sender: Option<tokio::sync::mpsc::Sender<Result<Vec<(usize, String, f32)>, String>>>) -> Result<Vec<(usize, String, f32)>, String> {
         if let Some(doc) = &self.active_doc {
             let mut results = Vec::new();
             let query_lower = query.to_lowercase();
@@ -441,7 +431,14 @@ impl<'a> PdfEngine<'a> {
                 if let Ok(text) = page.text() {
                     let text_str = text.to_string();
                     if text_str.to_lowercase().contains(&query_lower) {
-                        results.push((idx, text_str.chars().take(200).collect(), 0.0));
+                        let result = (idx, text_str.chars().take(200).collect(), 0.0);
+                        results.push(result.clone());
+                        if let Some(tx) = &sender {
+                            if tx.blocking_send(Ok(vec![result])).is_err() {
+                                // Channel closed, stop searching.
+                                break;
+                            }
+                        }
                     }
                 }
             }

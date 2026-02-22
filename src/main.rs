@@ -9,7 +9,7 @@ mod ui_settings;
 mod ui_welcome;
 mod ui_document;
 
-use models::{AppSettings, AppTheme, DocumentId, DocumentTab, PageBookmark, RecentFile, SearchResult};
+use models::{AppSettings, AppTheme, DocumentId, DocumentTab, PageBookmark, RecentFile, SearchResult, SessionData};
 use commands::PdfCommand;
 use pdf_engine::RenderFilter;
 
@@ -40,6 +40,8 @@ enum Message {
     AddBookmark,
     RemoveBookmark(usize),
     JumpToBookmark(usize),
+    AddHighlight,
+    AddRectangle,
     SetFilter(RenderFilter),
     ToggleAutoCrop,
     DocumentOpenedWithPath((PathBuf, (DocumentId, usize, Vec<f32>, f32, Vec<pdf_engine::Bookmark>))),
@@ -188,6 +190,34 @@ impl PdfBullApp {
         }
         self.save_recent_files();
     }
+    
+    pub fn load_session(&mut self) -> Option<SessionData> {
+        let path = get_config_dir().join("session.json");
+        if let Ok(data) = fs::read_to_string(&path) {
+            if let Ok(session) = serde_json::from_str(&data) {
+                return Some(session);
+            }
+        }
+        None
+    }
+
+    pub fn save_session(&self) {
+        if !self.settings.restore_session {
+            return;
+        }
+        let dir = get_config_dir();
+        let _ = fs::create_dir_all(&dir);
+        let path = dir.join("session.json");
+        
+        let session = SessionData {
+            open_tabs: self.tabs.iter().map(|t| t.path.clone()).collect(),
+            active_tab: self.active_tab,
+        };
+
+        if let Ok(data) = serde_json::to_string_pretty(&session) {
+            let _ = fs::write(path, data);
+        }
+    }
 
     fn current_tab(&self) -> Option<&DocumentTab> {
         self.tabs.get(self.active_tab)
@@ -235,10 +265,25 @@ impl PdfBullApp {
             self.loaded = true;
             self.load_settings();
             self.load_recent_files();
+            let session = self.load_session();
             if self.settings.theme == AppTheme::System {
                 match dark_light::detect() {
                     dark_light::Mode::Dark => self.settings.theme = AppTheme::Dark,
                     _ => self.settings.theme = AppTheme::Light,
+                }
+            }
+            if self.settings.restore_session {
+                if let Some(mut session_data) = session {
+                    let mut tasks = Vec::new();
+                    for path in session_data.open_tabs.drain(..) {
+                        tasks.push(self.update(Message::OpenFile(path)));
+                    }
+                    if session_data.active_tab < self.tabs.len() {
+                        self.active_tab = session_data.active_tab;
+                    }
+                    if !tasks.is_empty() {
+                        return Task::batch(tasks);
+                    }
                 }
             }
         }
@@ -325,6 +370,40 @@ impl PdfBullApp {
                 }
                 Task::none()
             }
+            Message::AddHighlight => {
+                if let Some(tab) = self.current_tab_mut() {
+                    let page = tab.current_page;
+                    let annotation = models::Annotation {
+                        id: std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_millis() as u64,
+                        page,
+                        style: models::AnnotationStyle::Highlight { color: self.settings.accent_color.clone() },
+                        x: 100.0,
+                        y: 100.0,
+                        width: 200.0,
+                        height: 50.0,
+                    };
+                    tab.annotations.push(annotation);
+                }
+                self.save_session();
+                Task::none()
+            }
+            Message::AddRectangle => {
+                if let Some(tab) = self.current_tab_mut() {
+                    let page = tab.current_page;
+                    let annotation = models::Annotation {
+                        id: std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_millis() as u64,
+                        page,
+                        style: models::AnnotationStyle::Rectangle { color: "#ff0000".to_string(), thickness: 2.0, fill: false },
+                        x: 150.0,
+                        y: 150.0,
+                        width: 150.0,
+                        height: 100.0,
+                    };
+                    tab.annotations.push(annotation);
+                }
+                self.save_session();
+                Task::none()
+            }
             Message::SetFilter(filter) => {
                 if let Some(tab) = self.current_tab_mut() {
                     if tab.render_filter != filter {
@@ -354,8 +433,8 @@ impl PdfBullApp {
                             }
                         };
                         
-                        let mut engines: std::collections::HashMap<DocumentId, pdf_engine::PdfEngine> = 
-                            std::collections::HashMap::new();
+                        let engines: Arc<tokio::sync::Mutex<std::collections::HashMap<DocumentId, Arc<tokio::sync::Mutex<pdf_engine::PdfEngine>>>>> = 
+                            Arc::new(tokio::sync::Mutex::new(std::collections::HashMap::new()));
                         let mut doc_paths: std::collections::HashMap<DocumentId, String> = 
                             std::collections::HashMap::new();
                         static mut NEXT_ID: u64 = 1;
@@ -367,65 +446,110 @@ impl PdfBullApp {
                                 DocumentId(id)
                             }
                         }
+
+                        // Create a multi-thread Tokio runtime for blocking tasks
+                        let rt = tokio::runtime::Builder::new_multi_thread()
+                            .worker_threads(4)
+                            .enable_all()
+                            .build()
+                            .unwrap();
                         
-                        while let Some(cmd) = cmd_rx.blocking_recv() {
-                            match cmd {
-                                PdfCommand::Open(path, resp) => {
-                                    let id = next_id();
-                                    let mut engine = pdf_engine::PdfEngine::new(&pdfium);
-                                    match engine.open_document(&path) {
-                                        Ok((count, heights, width)) => {
-                                            let outline = engine.get_outline();
-                                            engines.insert(id, engine);
-                                            doc_paths.insert(id, path.clone());
-                                            let _ = resp.blocking_send(Ok((id, count, heights, width, outline)));
-                                        }
-                                        Err(e) => {
-                                            let _ = resp.blocking_send(Err(e));
-                                        }
-                                    }
-                                }
-                                PdfCommand::Render(doc_id, page, zoom, rotation, filter, auto_crop, resp) => {
-                                    if let Some(engine) = engines.get(&doc_id) {
-                                        match engine.render_page(page, zoom, rotation, filter, auto_crop) {
-                                            Ok((w, h, data)) => {
-                                                let _ = resp.blocking_send(Ok((page as usize, w, h, data)));
+                        rt.block_on(async move {
+                            while let Some(cmd) = cmd_rx.recv().await {
+                                let engines = engines.clone();
+                                match cmd {
+                                    PdfCommand::Open(path, resp) => {
+                                        let id = next_id();
+                                        // Need to create the engine synchronously due to Pdfium bindings
+                                        // Then wrap it carefully
+                                        let mut engine = pdf_engine::PdfEngine::new(&pdfium);
+                                        match engine.open_document(&path) {
+                                            Ok((count, heights, width)) => {
+                                                let outline = engine.get_outline();
+                                                /*
+                                                 * We cannot pass the `pdfium` reference into `tokio::task::spawn_blocking` safely because `pdfium` is bounded to `'a`. 
+                                                 * Refactoring `PdfEngine` to take an `Arc<Pdfium>` is an ideal fix, but since `pdfium-render` might not play well with `Send`,
+                                                 * we might need to do operations on the created engine from the main thread instead of using `tokio::spawn`.
+                                                 * Wait, to use `tokio::task::spawn_blocking`, the closure must be `'static` and `Send`.
+                                                 * `PdfEngine<'a>` has a lifetime bound to `Pdfium`.
+                                                 * For now, because we are still within the `rt.block_on` and `engines` is still referencing engines with lifetime of `pdfium`,
+                                                 * we can use `rt.spawn` if it doesn't need `'static` (which it does).
+                                                 * Okay, we MUST process it on the single thread if it's tied to lifetimes.
+                                                 * Since we want to parallelize, we have an issue: `PdfEngine` has `&'a Pdfium`.
+                                                 */
+                                                engines.lock().await.insert(id, Arc::new(tokio::sync::Mutex::new(engine)));
+                                                
+                                                let _ = resp.blocking_send(Ok((id, count, heights, width, outline)));
                                             }
                                             Err(e) => {
                                                 let _ = resp.blocking_send(Err(e));
                                             }
                                         }
-                                    } else {
-                                        let _ = resp.blocking_send(Err("Document not found".into()));
                                     }
-                                }
-                                PdfCommand::ExtractText(doc_id, page, resp) => {
-                                    if let Some(engine) = engines.get(&doc_id) {
-                                        let _ = resp.blocking_send(engine.extract_text(page));
-                                    } else {
-                                        let _ = resp.blocking_send(Err("Document not found".into()));
+                                    PdfCommand::Render(doc_id, page, zoom, rotation, filter, auto_crop, resp) => {
+                                        let engines_clone = engines.clone();
+                                        // Since we can't spawn `'static`, we might just have to block the Tokio block_on loop, BUT wait.
+                                        // The original goal is to not block the Iced UI thread, which we achieve if we are in another thread.
+                                        // The current code ALREADY has a single thread handling all this. We want parallel rendering!
+                                        // But PdfEngine has a lifetime. We'll deal with making PdfEngine `'static` in `pdf_engine.rs` later if we want real async.
+                                        // For now, let's just make it not block the other things by executing it here.
+                                        // We will NOT spawn blocking here yet because of the lifetime. 
+                                        if let Some(engine_arc) = engines.lock().await.get(&doc_id).cloned() {
+                                            let res = {
+                                                let engine = engine_arc.lock().await;
+                                                engine.render_page(page, zoom, rotation, filter, auto_crop)
+                                            };
+                                            match res {
+                                                Ok((w, h, data)) => {
+                                                    let _ = resp.blocking_send(Ok((page as usize, w, h, data)));
+                                                }
+                                                Err(e) => {
+                                                    let _ = resp.blocking_send(Err(e));
+                                                }
+                                            }
+                                        } else {
+                                            let _ = resp.blocking_send(Err("Document not found".into()));
+                                        }
                                     }
-                                }
-                                PdfCommand::ExportImage(doc_id, page, zoom, path, resp) => {
-                                    if let Some(engine) = engines.get(&doc_id) {
-                                        let _ = resp.blocking_send(engine.export_page_as_image(page, zoom, &path));
-                                    } else {
-                                        let _ = resp.blocking_send(Err("Document not found".into()));
+                                    PdfCommand::ExtractText(doc_id, page, resp) => {
+                                        if let Some(engine_arc) = engines.lock().await.get(&doc_id).cloned() {
+                                            let res = {
+                                                let engine = engine_arc.lock().await;
+                                                engine.extract_text(page)
+                                            };
+                                            let _ = resp.blocking_send(res);
+                                        } else {
+                                            let _ = resp.blocking_send(Err("Document not found".into()));
+                                        }
                                     }
-                                }
-                                PdfCommand::Search(doc_id, query, resp) => {
-                                    if let Some(engine) = engines.get(&doc_id) {
-                                        let _ = resp.blocking_send(engine.search(&query));
-                                    } else {
-                                        let _ = resp.blocking_send(Err("Document not found".into()));
+                                    PdfCommand::ExportImage(doc_id, page, zoom, path, resp) => {
+                                        if let Some(engine_arc) = engines.lock().await.get(&doc_id).cloned() {
+                                            let res = {
+                                                let engine = engine_arc.lock().await;
+                                                engine.export_page_as_image(page, zoom, &path)
+                                            };
+                                            let _ = resp.blocking_send(res);
+                                        } else {
+                                            let _ = resp.blocking_send(Err("Document not found".into()));
+                                        }
                                     }
-                                }
-                                PdfCommand::Close(doc_id) => {
-                                    engines.remove(&doc_id);
-                                    doc_paths.remove(&doc_id);
+                                    PdfCommand::Search(doc_id, query, resp) => {
+                                        if let Some(engine_arc) = engines.lock().await.get(&doc_id).cloned() {
+                                            let res = {
+                                                let engine = engine_arc.lock().await;
+                                                engine.search(&query, None)
+                                            };
+                                            let _ = resp.blocking_send(res);
+                                        } else {
+                                            let _ = resp.blocking_send(Err("Document not found".into()));
+                                        }
+                                    }
+                                    PdfCommand::Close(doc_id) => {
+                                        engines.lock().await.remove(&doc_id);
+                                    }
                                 }
                             }
-                        }
+                        });
                     });
                     
                     self.engine = Some(EngineState { 
@@ -499,6 +623,7 @@ impl PdfBullApp {
                             tab.zoom = default_zoom;
                             tab.render_filter = default_filter;
                         }
+                        self.save_session();
                         self.render_visible_pages()
                     }
                     Err(e) => {
@@ -558,11 +683,13 @@ impl PdfBullApp {
                 if self.active_tab >= self.tabs.len() && !self.tabs.is_empty() {
                     self.active_tab = self.tabs.len() - 1;
                 }
+                self.save_session();
                 Task::none()
             }
             Message::SwitchTab(idx) => {
                 if idx < self.tabs.len() && idx != self.active_tab {
                     self.active_tab = idx;
+                    self.save_session();
                 }
                 Task::none()
             }
@@ -665,13 +792,21 @@ impl PdfBullApp {
             Message::Search(query) => {
                 self.search_query = query.clone();
                 if query.is_empty() {
+                    if let Some(tab) = self.current_tab_mut() {
+                        tab.search_results.clear();
+                        tab.current_search_index = 0;
+                    }
                     return Task::none();
                 }
 
-                let tab = match self.current_tab() {
+                let tab = match self.current_tab_mut() {
                     Some(t) => t,
                     None => return Task::none(),
                 };
+                
+                // Clear old results while searching
+                tab.search_results.clear();
+                tab.current_search_index = 0;
                 
                 let doc_id = tab.id;
                 
@@ -683,9 +818,19 @@ impl PdfBullApp {
                 let cmd_tx = engine.cmd_tx.clone();
                 Task::perform(
                     async move {
+                        // NOTE: In streaming search, `PdfCommand::Search` could yield partial chunks via a channel.
+                        // For simplicity in this non-blocking architecture, we'll wait for the standard response but it won't block the UI thread.
                         let (resp_tx, mut resp_rx) = mpsc::channel(1);
                         let _ = cmd_tx.send(PdfCommand::Search(doc_id, query, resp_tx)).await;
-                        resp_rx.recv().await.unwrap_or(Err("Search failed".into()))
+                        // Accumulate all streamed results if we use a streaming channel in the future
+                        let mut all_results = Vec::new();
+                        while let Some(res) = resp_rx.recv().await {
+                            match res {
+                                Ok(mut batch) => all_results.append(&mut batch),
+                                Err(e) => return Err(e),
+                            }
+                        }
+                        Ok(all_results)
                     },
                     Message::SearchResult,
                 )
@@ -694,13 +839,11 @@ impl PdfBullApp {
                 match result {
                     Ok(results) => {
                         if let Some(tab) = self.current_tab_mut() {
-                            tab.search_results = results
-                                .into_iter()
-                                .map(|(page, text, y)| SearchResult { page, text, y_position: y })
-                                .collect();
-                            tab.current_search_index = 0;
+                            for (page, text, y) in results {
+                                tab.search_results.push(SearchResult { page, text, y_position: y });
+                            }
                             
-                            if !tab.search_results.is_empty() {
+                            if !tab.search_results.is_empty() && tab.current_search_index == 0 {
                                 tab.current_page = tab.search_results[0].page;
                             }
                         }
