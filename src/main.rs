@@ -304,8 +304,11 @@ impl PdfBullApp {
                         tasks.push(self.update(Message::OpenFile(path)));
                     }
                     if !tasks.is_empty() {
-                        self.active_tab = target_tab;
-                        return Task::batch(tasks);
+                        return Task::batch(tasks).and_then(move |_| {
+                            Task::perform(async move {
+                                Message::SwitchTab(target_tab)
+                            }, |m| m)
+                        });
                     }
                 }
             }
@@ -846,6 +849,12 @@ impl PdfBullApp {
                     tab.cleanup_distant_pages();
                 }
                 self.render_visible_pages()
+            }
+            Message::SidebarViewportChanged(y) => {
+                if let Some(tab) = self.current_tab_mut() {
+                    tab.sidebar_viewport_y = y;
+                }
+                Task::none()
             }
             Message::RequestRender(page_idx) => {
                 let tab = match self.current_tab() {

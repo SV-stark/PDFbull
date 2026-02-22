@@ -6,6 +6,17 @@ use iced::widget::{
 };
 use iced::{Element, Length};
 
+fn hex_to_rgb(hex: &str) -> (f32, f32, f32) {
+    let hex = hex.trim_start_matches('#');
+    if hex.len() != 6 {
+        return (0.0, 0.0, 0.0);
+    }
+    let r = u8::from_str_radix(&hex[0..2], 16).unwrap_or(0) as f32 / 255.0;
+    let g = u8::from_str_radix(&hex[2..4], 16).unwrap_or(0) as f32 / 255.0;
+    let b = u8::from_str_radix(&hex[4..6], 16).unwrap_or(0) as f32 / 255.0;
+    (r, g, b)
+}
+
 fn render_toolbar(app: &PdfBullApp) -> Element<crate::Message> {
     let tab = &app.tabs[app.active_tab];
 
@@ -15,7 +26,7 @@ fn render_toolbar(app: &PdfBullApp) -> Element<crate::Message> {
         row![]
     };
 
-    row![
+    let row1 = row![
         button("Open").on_press(crate::Message::OpenDocument),
         button("Close").on_press(crate::Message::CloseTab(app.active_tab)),
         button("☰").on_press(crate::Message::ToggleSidebar),
@@ -48,7 +59,15 @@ fn render_toolbar(app: &PdfBullApp) -> Element<crate::Message> {
         })),
         button(if tab.auto_crop { "Crop✓" } else { "Crop" })
             .on_press(crate::Message::ToggleAutoCrop),
+        Space::new().width(Length::Fill),
+        loading_indicator,
         Space::new().width(Length::Fixed(10.0)),
+        button("?").on_press(crate::Message::ToggleKeyboardHelp),
+        button("⛶").on_press(crate::Message::ToggleFullscreen),
+        button("⚙").on_press(crate::Message::OpenSettings),
+    ].spacing(5).align_items(iced::Alignment::Center);
+
+    let row2 = row![
         button("BM").on_press(crate::Message::AddBookmark),
         button("HiLite").on_press(crate::Message::AddHighlight),
         button("Rect").on_press(crate::Message::AddRectangle),
@@ -61,15 +80,9 @@ fn render_toolbar(app: &PdfBullApp) -> Element<crate::Message> {
         button("Text").on_press(crate::Message::ExtractText),
         button("Export").on_press(crate::Message::ExportImage),
         button("ExpAll").on_press(crate::Message::ExportImages),
-        Space::new().width(Length::Fixed(10.0)),
-        loading_indicator,
-        Space::new().width(Length::Fill),
-        button("?").on_press(crate::Message::ToggleKeyboardHelp),
-        button("⛶").on_press(crate::Message::ToggleFullscreen),
-        button("⚙").on_press(crate::Message::OpenSettings),
-    ]
-    .padding(10)
-    .into()
+    ].spacing(5).align_items(iced::Alignment::Center);
+
+    column![row1, row2].spacing(10).padding(10).into()
 }
 
 fn render_page_nav(app: &PdfBullApp) -> Element<crate::Message> {
@@ -155,7 +168,17 @@ fn render_sidebar(app: &PdfBullApp) -> Element<crate::Message> {
     }
 
     sidebar_col = sidebar_col.push(text("Pages").size(14));
-    for page_idx in 0..tab.total_pages {
+    
+    // Virtualization logic
+    let thumbnail_height = 40.0; // Estimate height of a text button. If it's an image, it expands, but we'll use a fixed estimate for the viewport calculation.
+    let start_idx = (tab.sidebar_viewport_y / thumbnail_height).max(0.0) as usize;
+    let end_idx = (start_idx + 30).min(tab.total_pages);
+    
+    if start_idx > 0 {
+        sidebar_col = sidebar_col.push(Space::new(Length::Fill, Length::Fixed(start_idx as f32 * thumbnail_height)));
+    }
+    
+    for page_idx in start_idx..end_idx {
         if let Some(handle) = tab.thumbnails.get(&page_idx) {
             let img = iced::widget::Image::new(handle.clone()).width(Length::Fixed(100.0));
             sidebar_col =
@@ -168,8 +191,17 @@ fn render_sidebar(app: &PdfBullApp) -> Element<crate::Message> {
             );
         }
     }
+    
+    let remaining = tab.total_pages.saturating_sub(end_idx);
+    if remaining > 0 {
+        sidebar_col = sidebar_col.push(Space::new(Length::Fill, Length::Fixed(remaining as f32 * thumbnail_height)));
+    }
 
-    scrollable(sidebar_col).width(Length::Fixed(150.0)).into()
+    scrollable(sidebar_col)
+        .id(Id::new("sidebar_scroll"))
+        .on_scroll(|viewport| crate::Message::SidebarViewportChanged(viewport.absolute_offset().y))
+        .width(Length::Fixed(150.0))
+        .into()
 }
 
 fn render_tabs(app: &PdfBullApp) -> Element<crate::Message> {
@@ -207,7 +239,56 @@ fn render_pdf_content(app: &PdfBullApp) -> Element<crate::Message> {
         if visible_pages.contains(&page_idx) {
             if let Some(handle) = tab.rendered_pages.get(&page_idx) {
                 let img = iced::widget::Image::new(handle.clone()).width(Length::Fill);
-                pdf_column = pdf_column.push(container(img).padding(5));
+                
+                let mut page_stack = iced::widget::Stack::new().push(img);
+                
+                for ann in &tab.annotations {
+                    if ann.page == page_idx {
+                        let ann_overlay = match &ann.style {
+                            crate::models::AnnotationStyle::Highlight { color } => {
+                                let (r, g, b) = hex_to_rgb(color);
+                                container(Space::new(Length::Fixed(ann.width), Length::Fixed(ann.height)))
+                                    .style(move |_| iced::widget::container::Appearance {
+                                        background: Some(iced::Background::Color(iced::Color::from_rgba(r, g, b, 0.4))),
+                                        ..Default::default()
+                                    })
+                            }
+                            crate::models::AnnotationStyle::Rectangle { color, thickness, fill } => {
+                                let (r, g, b) = hex_to_rgb(color);
+                                container(Space::new(Length::Fixed(ann.width), Length::Fixed(ann.height)))
+                                    .style(move |_| iced::widget::container::Appearance {
+                                        background: if *fill {
+                                            Some(iced::Background::Color(iced::Color::from_rgba(r, g, b, 0.2)))
+                                        } else {
+                                            None
+                                        },
+                                        border: iced::Border {
+                                            color: iced::Color::from_rgb(r, g, b),
+                                            width: *thickness,
+                                            radius: iced::border::Radius::from(0.0),
+                                        },
+                                        ..Default::default()
+                                    })
+                            }
+                            crate::models::AnnotationStyle::Text { text, color, size } => {
+                                let (r, g, b) = hex_to_rgb(color);
+                                container(iced::widget::text(text.clone()).size(*size).color(iced::Color::from_rgb(r, g, b)))
+                            }
+                        };
+                        
+                        page_stack = page_stack.push(
+                            container(ann_overlay)
+                                .padding(iced::Padding {
+                                    top: ann.y,
+                                    right: 0.0,
+                                    bottom: 0.0,
+                                    left: ann.x,
+                                })
+                        );
+                    }
+                }
+                
+                pdf_column = pdf_column.push(container(page_stack).padding(5));
             } else {
                 pdf_column = pdf_column.push(placeholder);
             }
