@@ -1278,5 +1278,18 @@ pub fn main() -> iced::Result {
             .and_then(|mut f| std::io::Write::write_all(&mut f, log_entry.as_bytes()));
     }));
     
-    iced::run(PdfBullApp::update, PdfBullApp::view)
+    let icon = match iced::window::icon::from_file_data(
+        include_bytes!("../PDFbull.png"),
+        None,
+    ) {
+        Ok(icon) => Some(icon),
+        Err(_) => None,
+    };
+
+    iced::application("PDFbull", PdfBullApp::update, PdfBullApp::view)
+        .window(iced::window::Settings {
+            icon,
+            ..Default::default()
+        })
+        .run()
 }

@@ -1,5 +1,9 @@
 # 🐂 PDFbull
 
+<p align="center">
+  <img src="PDFbull.png" width="200" alt="PDFbull Logo">
+</p>
+
 [![Nightly Release](https://github.com/SV-stark/PDFbull/actions/workflows/release.yml/badge.svg)](https://github.com/SV-stark/PDFbull/releases/tag/nightly)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 [![Built with Iced](https://img.shields.io/badge/Built%20with-Iced-blue)](https://iced.rs/)
