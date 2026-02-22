@@ -1,11 +1,26 @@
 use crate::models::{AppSettings, AppTheme, RecentFile, SessionData};
 use std::fs;
+use std::io::{self, Write};
 use std::path::PathBuf;
 
 pub fn get_config_dir() -> PathBuf {
     dirs::config_dir()
         .unwrap_or_else(|| PathBuf::from("."))
         .join("pdfbull")
+}
+
+fn atomic_write(path: &PathBuf, data: &str) -> io::Result<()> {
+    let tmp_path = path.with_extension("tmp");
+    
+    {
+        let mut file = fs::File::create(&tmp_path)?;
+        file.write_all(data.as_bytes())?;
+        file.sync_all()?;
+    }
+    
+    fs::rename(&tmp_path, path)?;
+    
+    Ok(())
 }
 
 pub fn load_settings() -> AppSettings {
@@ -16,7 +31,6 @@ pub fn load_settings() -> AppSettings {
             settings = loaded;
         } else {
             eprintln!("Warning: Corrupted settings.json, using defaults");
-            // Try to parse old format with fewer fields
             if let Ok(value) = serde_json::from_str::<serde_json::Value>(&data) {
                 if let Some(obj) = value.as_object() {
                     if let Some(theme) = obj.get("theme").and_then(|v| v.as_str()) {
@@ -40,10 +54,15 @@ pub fn load_settings() -> AppSettings {
 
 pub fn save_settings(settings: &AppSettings) {
     let dir = get_config_dir();
-    let _ = fs::create_dir_all(&dir);
+    if let Err(e) = fs::create_dir_all(&dir) {
+        eprintln!("Failed to create config directory: {}", e);
+        return;
+    }
     let path = dir.join("settings.json");
     if let Ok(data) = serde_json::to_string_pretty(settings) {
-        let _ = fs::write(path, data);
+        if let Err(e) = atomic_write(&path, &data) {
+            eprintln!("Failed to save settings: {}", e);
+        }
     }
 }
 
@@ -61,10 +80,15 @@ pub fn load_recent_files() -> Vec<RecentFile> {
 
 pub fn save_recent_files(recent_files: &Vec<RecentFile>) {
     let dir = get_config_dir();
-    let _ = fs::create_dir_all(&dir);
+    if let Err(e) = fs::create_dir_all(&dir) {
+        eprintln!("Failed to create config directory: {}", e);
+        return;
+    }
     let path = dir.join("recent_files.json");
     if let Ok(data) = serde_json::to_string_pretty(recent_files) {
-        let _ = fs::write(path, data);
+        if let Err(e) = atomic_write(&path, &data) {
+            eprintln!("Failed to save recent files: {}", e);
+        }
     }
 }
 
@@ -105,10 +129,15 @@ pub fn load_session() -> Option<SessionData> {
 
 pub fn save_session(session: &SessionData) {
     let dir = get_config_dir();
-    let _ = fs::create_dir_all(&dir);
+    if let Err(e) = fs::create_dir_all(&dir) {
+        eprintln!("Failed to create config directory: {}", e);
+        return;
+    }
     let path = dir.join("session.json");
 
     if let Ok(data) = serde_json::to_string_pretty(session) {
-        let _ = fs::write(path, data);
+        if let Err(e) = atomic_write(&path, &data) {
+            eprintln!("Failed to save session: {}", e);
+        }
     }
 }
