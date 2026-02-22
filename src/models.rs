@@ -144,14 +144,12 @@ pub struct DocumentTab {
 
 const VIEWPORT_BUFFER: usize = 3;
 
-static mut NEXT_DOC_ID_MODELS: u64 = 1;
+use std::sync::atomic::{AtomicU64, Ordering};
+
+static NEXT_DOC_ID_MODELS: AtomicU64 = AtomicU64::new(1);
 
 fn next_doc_id() -> DocumentId {
-    unsafe {
-        let id = NEXT_DOC_ID_MODELS;
-        NEXT_DOC_ID_MODELS += 1;
-        DocumentId(id)
-    }
+    DocumentId(NEXT_DOC_ID_MODELS.fetch_add(1, Ordering::Relaxed))
 }
 
 impl DocumentTab {
@@ -184,8 +182,8 @@ impl DocumentTab {
         }
     }
 
-    pub fn get_visible_pages(&self) -> Vec<usize> {
-        let mut visible = Vec::new();
+    pub fn get_visible_pages(&self) -> std::collections::HashSet<usize> {
+        let mut visible = std::collections::HashSet::new();
         let mut y = 0.0;
 
         for (idx, height) in self.page_heights.iter().enumerate() {
@@ -194,7 +192,7 @@ impl DocumentTab {
             let viewport_bottom = self.viewport_y + self.viewport_height;
 
             if page_bottom >= viewport_top && y <= viewport_bottom {
-                visible.push(idx);
+                visible.insert(idx);
             }
 
             if y > viewport_bottom + self.viewport_height * 2.0 {
@@ -209,7 +207,7 @@ impl DocumentTab {
 
     pub fn cleanup_distant_pages(&mut self) {
         let visible = self.get_visible_pages();
-        let pages_to_keep: Vec<usize> = visible
+        let pages_to_keep: std::collections::HashSet<usize> = visible
             .iter()
             .flat_map(|&p| {
                 let start = p.saturating_sub(VIEWPORT_BUFFER);

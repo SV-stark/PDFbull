@@ -20,38 +20,6 @@ use tokio::sync::mpsc;
 use std::path::PathBuf;
 use std::fs;
 
-std::panic::set_hook(Box::new(|panic_info| {
-    let msg = if let Some(s) = panic_info.payload().downcast_ref::<&str>() {
-        s.to_string()
-    } else if let Some(s) = panic_info.payload().downcast_ref::<String>() {
-        s.clone()
-    } else {
-        "Unknown panic".to_string()
-    };
-    
-    let location = panic_info.location()
-        .map(|l| format!("{}:{}:{}", l.file(), l.line(), l.column()))
-        .unwrap_or_else(|| "unknown location".to_string());
-    
-    eprintln!("PANIC at {}: {}", location, msg);
-    
-    let config_dir = dirs::config_dir()
-        .unwrap_or_else(|| std::path::PathBuf::from("."))
-        .join("pdfbull");
-    let _ = std::fs::create_dir_all(&config_dir);
-    let crash_log = config_dir.join("crash.log");
-    let timestamp = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| d.as_secs())
-        .unwrap_or(0);
-    let log_entry = format!("[{}] PANIC at {}: {}\n", timestamp, location, msg);
-    let _ = std::fs::OpenOptions::new()
-        .create(true)
-        .append(true)
-        .open(&crash_log)
-        .and_then(|mut f| std::io::Write::write_all(&mut f, log_entry.as_bytes()));
-}));
-
 #[derive(Debug, Clone)]
 struct EngineState {
     cmd_tx: mpsc::Sender<PdfCommand>,
@@ -94,6 +62,7 @@ enum Message {
     DocumentOpened(Result<(DocumentId, usize, Vec<f32>, f32, Vec<pdf_engine::Bookmark>), String>),
     EngineInitialized(EngineState),
     Search(String),
+    PerformSearch,
     SearchResult(Result<Vec<(usize, String, f32)>, String>),
     NextSearchResult,
     PrevSearchResult,
@@ -108,6 +77,7 @@ enum Message {
     ImageExported(Result<String, String>),
     OpenRecentFile(RecentFile),
     Error(String),
+    ClearStatus,
 }
 
 pub struct PdfBullApp {
@@ -120,6 +90,8 @@ pub struct PdfBullApp {
     pub show_keyboard_help: bool,
     pub is_fullscreen: bool,
     pub search_query: String,
+    pub search_pending: Option<String>,
+    pub status_message: Option<String>,
     pub engine: Option<EngineState>,
     pub loaded: bool,
     pub rendering_count: usize,
@@ -137,6 +109,8 @@ impl Default for PdfBullApp {
             show_keyboard_help: false,
             is_fullscreen: false,
             search_query: String::new(),
+            search_pending: None,
+            status_message: None,
             engine: None,
             loaded: false,
             rendering_count: 0,
@@ -276,12 +250,16 @@ impl PdfBullApp {
             None => return Task::none(),
         };
         
+        let visible_pages: Vec<usize> = tab.get_visible_pages().iter().cloned().collect();
+        if visible_pages.is_empty() {
+            return Task::none();
+        }
+        
         let doc_id = tab.id;
         let zoom = tab.zoom;
         let rotation = tab.rotation;
         let filter = tab.render_filter;
         let auto_crop = tab.auto_crop;
-        let total = tab.total_pages;
         
         let engine = match &self.engine {
             Some(e) => e,
@@ -289,7 +267,10 @@ impl PdfBullApp {
         };
         
         let mut tasks = Vec::new();
-        for page_idx in 0..5.min(total) {
+        for page_idx in visible_pages {
+            if tab.rendered_pages.contains_key(&page_idx) {
+                continue;
+            }
             let cmd_tx = engine.cmd_tx.clone();
             tasks.push(Task::perform(
                 async move {
@@ -321,11 +302,13 @@ impl PdfBullApp {
                     for path in session_data.open_tabs.drain(..) {
                         tasks.push(self.update(Message::OpenFile(path)));
                     }
-                    if session_data.active_tab < self.tabs.len() {
-                        self.active_tab = session_data.active_tab;
-                    }
                     if !tasks.is_empty() {
-                        return Task::batch(tasks);
+                        let target_tab = session_data.active_tab;
+                        return Task::batch(tasks).and_then(move |_| {
+                            Task::perform(async move {
+                                Message::SwitchTab(target_tab)
+                            }, |m| m)
+                        });
                     }
                 }
             }
@@ -370,14 +353,14 @@ impl PdfBullApp {
                     tab.rotation = (tab.rotation + 90) % 360;
                     tab.rendered_pages.clear();
                 }
-                Task::none()
+                self.render_visible_pages()
             }
             Message::RotateCounterClockwise => {
                 if let Some(tab) = self.current_tab_mut() {
                     tab.rotation = (tab.rotation - 90 + 360) % 360;
                     tab.rendered_pages.clear();
                 }
-                Task::none()
+                self.render_visible_pages()
             }
             Message::AddBookmark => {
                 if let Some(tab) = self.current_tab_mut() {
@@ -467,14 +450,14 @@ impl PdfBullApp {
                         tab.rendered_pages.clear();
                     }
                 }
-                Task::none()
+                self.render_visible_pages()
             }
             Message::ToggleAutoCrop => {
                 if let Some(tab) = self.current_tab_mut() {
                     tab.auto_crop = !tab.auto_crop;
                     tab.rendered_pages.clear();
                 }
-                Task::none()
+                self.render_visible_pages()
             }
             Message::OpenDocument => {
                 if self.engine.is_none() {
@@ -759,7 +742,7 @@ impl PdfBullApp {
                 if let Some(tab) = self.tabs.iter_mut().find(|t| t.id == doc_id) {
                     tab.annotations = annotations;
                 }
-                Task::none()
+                self.render_visible_pages()
             }
             Message::OpenFile(path) => {
                 if self.engine.is_none() {
@@ -803,7 +786,7 @@ impl PdfBullApp {
                 if let Some(engine) = &self.engine {
                     let cmd_tx = engine.cmd_tx.clone();
                     let doc_id = tab.id;
-                    let _ = cmd_tx.blocking_send(PdfCommand::Close(doc_id));
+                    let _ = cmd_tx.try_send(PdfCommand::Close(doc_id));
                 }
                 
                 if self.active_tab >= self.tabs.len() && !self.tabs.is_empty() {
@@ -868,8 +851,9 @@ impl PdfBullApp {
                 if let Some(tab) = self.current_tab_mut() {
                     tab.viewport_y = y;
                     tab.viewport_height = height;
+                    tab.cleanup_distant_pages();
                 }
-                Task::none()
+                self.render_visible_pages()
             }
             Message::RequestRender(page_idx) => {
                 let tab = match self.current_tab() {
@@ -881,6 +865,7 @@ impl PdfBullApp {
                     return Task::none();
                 }
                 
+                self.rendering_count += 1;
                 let doc_id = tab.id;
                 let zoom = tab.zoom;
                 let rotation = tab.rotation;
@@ -903,10 +888,12 @@ impl PdfBullApp {
                 )
             }
             Message::PageRendered(result) => {
+                self.rendering_count = self.rendering_count.saturating_sub(1);
                 match result {
                     Ok((page, width, height, data)) => {
                         if let Some(tab) = self.current_tab_mut() {
-                            tab.rendered_pages.insert(page, iced_image::Handle::from_rgba(width, height, (*data).clone()));
+                            let rgba_data = Arc::try_unwrap(data).unwrap_or_else(|arc| (*arc).clone());
+                            tab.rendered_pages.insert(page, iced_image::Handle::from_rgba(width, height, rgba_data));
                         }
                     }
                     Err(e) => {
@@ -924,13 +911,30 @@ impl PdfBullApp {
                     }
                     return Task::none();
                 }
+                self.search_pending = Some(query.clone());
+                Task::perform(
+                    async move {
+                        tokio::time::sleep(std::time::Duration::from_millis(300)).await;
+                        Message::PerformSearch
+                    },
+                    |m| m,
+                )
+            }
+            Message::PerformSearch => {
+                let query = match self.search_pending.take() {
+                    Some(q) => q,
+                    None => return Task::none(),
+                };
+
+                if query.is_empty() {
+                    return Task::none();
+                }
 
                 let tab = match self.current_tab_mut() {
                     Some(t) => t,
                     None => return Task::none(),
                 };
                 
-                // Clear old results while searching
                 tab.search_results.clear();
                 tab.current_search_index = 0;
                 
@@ -944,11 +948,9 @@ impl PdfBullApp {
                 let cmd_tx = engine.cmd_tx.clone();
                 Task::perform(
                     async move {
-                        // NOTE: In streaming search, `PdfCommand::Search` could yield partial chunks via a channel.
-                        // For simplicity in this non-blocking architecture, we'll wait for the standard response but it won't block the UI thread.
+                        tokio::time::sleep(std::time::Duration::from_millis(300)).await;
                         let (resp_tx, mut resp_rx) = mpsc::channel(1);
                         let _ = cmd_tx.send(PdfCommand::Search(doc_id, query, resp_tx)).await;
-                        // Accumulate all streamed results if we use a streaming channel in the future
                         let mut all_results = Vec::new();
                         while let Some(res) = resp_rx.recv().await {
                             match res {
@@ -1093,8 +1095,8 @@ impl PdfBullApp {
             }
             Message::ImageExported(result) => {
                 match result {
-                    Ok(path) => eprintln!("Image exported to: {}", path),
-                    Err(e) => eprintln!("Export error: {}", e),
+                    Ok(path) => self.status_message = Some(format!("Exported to: {}", path)),
+                    Err(e) => self.status_message = Some(format!("Export error: {}", e)),
                 }
                 Task::none()
             }
@@ -1139,18 +1141,13 @@ impl PdfBullApp {
                 )
             }
             Message::SaveAnnotations => {
-                let tab = match self.current_tab() {
-                    Some(t) => t,
-                    None => return Task::none(),
+                let (doc_id, annotations, pdf_path) = match self.current_tab() {
+                    Some(t) if !t.annotations.is_empty() => (t.id, t.annotations.clone(), t.path.to_string_lossy().to_string()),
+                    _ => {
+                        eprintln!("No annotations to save");
+                        return Task::none();
+                    }
                 };
-                
-                if tab.annotations.is_empty() {
-                    eprintln!("No annotations to save");
-                    return Task::none();
-                }
-                
-                let annotations = tab.annotations.clone();
-                let pdf_path = tab.path.to_string_lossy().to_string();
                 
                 let engine = match &self.engine {
                     Some(e) => e,
@@ -1173,14 +1170,8 @@ impl PdfBullApp {
             }
             Message::AnnotationsSaved(result) => {
                 match result {
-                    Ok(msg) => eprintln!("{}", msg),
-                    Err(e) => eprintln!("Save annotations error: {}", e),
-                }
-                Task::none()
-            }
-            Message::AnnotationsLoaded(_doc_id, annotations) => {
-                if let Some(tab) = self.current_tab_mut() {
-                    tab.annotations = annotations;
+                    Ok(msg) => self.status_message = Some(msg),
+                    Err(e) => self.status_message = Some(format!("Save error: {}", e)),
                 }
                 Task::none()
             }
@@ -1189,7 +1180,12 @@ impl PdfBullApp {
                 Task::none()
             }
             Message::Error(e) => {
+                self.status_message = Some(format!("Error: {}", e));
                 eprintln!("Error: {}", e);
+                Task::none()
+            }
+            Message::ClearStatus => {
+                self.status_message = None;
                 Task::none()
             }
         }
@@ -1201,5 +1197,37 @@ impl PdfBullApp {
 }
 
 pub fn main() -> iced::Result {
+    std::panic::set_hook(Box::new(|panic_info| {
+        let msg = if let Some(s) = panic_info.payload().downcast_ref::<&str>() {
+            s.to_string()
+        } else if let Some(s) = panic_info.payload().downcast_ref::<String>() {
+            s.clone()
+        } else {
+            "Unknown panic".to_string()
+        };
+        
+        let location = panic_info.location()
+            .map(|l| format!("{}:{}:{}", l.file(), l.line(), l.column()))
+            .unwrap_or_else(|| "unknown location".to_string());
+        
+        eprintln!("PANIC at {}: {}", location, msg);
+        
+        let config_dir = dirs::config_dir()
+            .unwrap_or_else(|| std::path::PathBuf::from("."))
+            .join("pdfbull");
+        let _ = std::fs::create_dir_all(&config_dir);
+        let crash_log = config_dir.join("crash.log");
+        let timestamp = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_secs())
+            .unwrap_or(0);
+        let log_entry = format!("[{}] PANIC at {}: {}\n", timestamp, location, msg);
+        let _ = std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(&crash_log)
+            .and_then(|mut f| std::io::Write::write_all(&mut f, log_entry.as_bytes()));
+    }));
+    
     iced::run(PdfBullApp::update, PdfBullApp::view)
 }

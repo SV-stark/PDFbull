@@ -74,6 +74,16 @@ fn render_toolbar(app: &PdfBullApp) -> Element<crate::Message> {
 fn render_page_nav(app: &PdfBullApp) -> Element<crate::Message> {
     let tab = &app.tabs[app.active_tab];
 
+    let status = if let Some(ref msg) = app.status_message {
+        row![
+            Space::new().width(Length::Fill),
+            text(msg).size(12),
+            button("×").on_press(crate::Message::ClearStatus).padding(2),
+        ]
+    } else {
+        row![]
+    };
+
     row![
         button("Prev").on_press(crate::Message::PrevPage),
         text(format!(
@@ -92,6 +102,7 @@ fn render_page_nav(app: &PdfBullApp) -> Element<crate::Message> {
                 }
             })
             .width(Length::Fixed(80.0)),
+        status,
     ]
     .padding(5)
     .into()
@@ -164,7 +175,13 @@ fn render_tabs(app: &PdfBullApp) -> Element<crate::Message> {
     let mut tabs_row = row![];
     for (idx, t) in app.tabs.iter().enumerate() {
         let name = t.name.clone();
-        tabs_row = tabs_row.push(button(text(name)).on_press(crate::Message::SwitchTab(idx)));
+        let is_active = idx == app.active_tab;
+        let tab_button = if is_active {
+            button(text(format!("● {}", name)))
+        } else {
+            button(text(name))
+        };
+        tabs_row = tabs_row.push(tab_button.on_press(crate::Message::SwitchTab(idx)));
     }
     tabs_row
         .push(button("+").on_press(crate::Message::OpenDocument))

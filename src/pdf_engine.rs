@@ -36,6 +36,7 @@ impl Default for RenderFilter {
 pub struct PdfEngine<'a> {
     pdfium: &'a Pdfium,
     active_doc: Option<PdfDocument<'a>>,
+    active_path: Option<String>,
     // Cache key: (page_index, scale_key, filter) -> (width, height, rgba_data)
     // Scale stored as u32 (scale * 10000) to be hashable and precise
     page_cache: Cache<(i32, u32, u32), (u32, u32, Arc<Vec<u8>>)>,
@@ -61,6 +62,7 @@ impl<'a> PdfEngine<'a> {
         Self {
             pdfium,
             active_doc: None,
+            active_path: None,
             // Moka cache with weighted size (bytes) or capacity
             // Let's use a generous capacity for now, effectively "unlimited" relative to user navigation
             // but evicted by time-to-live or max capacity if needed.
@@ -74,6 +76,7 @@ impl<'a> PdfEngine<'a> {
 
     pub fn open_document(&mut self, path: &str) -> Result<(usize, Vec<f32>, f32), String> {
         self.page_cache.invalidate_all();
+        self.active_path = Some(path.to_string());
 
         // Load document
         let doc = self
