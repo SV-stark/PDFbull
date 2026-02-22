@@ -105,11 +105,11 @@ PDFbull is built from the ground up for speed, leveraging modern Rust ecosystem 
 ## 🗺️ Roadmap
 
 - [x] **High-Performance Rendering Engine** (Tokio + Rayon integration)
-- [x] **Advanced Annotation System** (Shapes, Text, Highlights)
+- [ ] **Advanced Annotation System** (Shapes, Text, Highlights - Infrastructure ready, implementation pending)
 - [x] **Zero-Copy Architecture** implementation
 - [x] **Migration to Iced UI** (Replaced Slint with Iced)
 - [ ] **OCR Capability**: Built-in Optical Character Recognition for scanned documents.
-- [ ] **Tabbed Interface 2.0**: Enhanced multi-document management with session recovery.
+- [/] **Tabbed Interface 2.0**: Enhanced multi-document management with session recovery (Skeletal implementation).
 - [ ] **Digital Signatures**: Professional cryptographic signing and verification.
 - [ ] **PDF Optimization**: Advanced structural compression and metadata sanitization.
 - [ ] **Mobile Layout**: Responsive UI for small-screen Windows tablets.
