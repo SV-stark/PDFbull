@@ -1,4 +1,3 @@
-// Prevent console window on Windows in release
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 mod pdf_engine;
@@ -10,15 +9,12 @@ mod ui_settings;
 mod ui_welcome;
 mod ui_document;
 
-use models::{AppSettings, AppTheme, RecentFile, DocumentTab, PageBookmark, SearchResult};
+use models::{AppSettings, AppTheme, DocumentId, DocumentTab, PageBookmark, RecentFile, SearchResult};
 use commands::PdfCommand;
 use pdf_engine::RenderFilter;
 
-use iced::widget::{
-    button, column, container, image as iced_image, row, scrollable, text, 
-    text_input, Space,
-};
-use iced::{Element, Length, Task};
+use iced::widget::image as iced_image;
+use iced::{Element, Task};
 use std::sync::Arc;
 use tokio::sync::mpsc;
 use std::path::PathBuf;
@@ -27,58 +23,52 @@ use std::fs;
 #[derive(Debug, Clone)]
 struct EngineState {
     cmd_tx: mpsc::Sender<PdfCommand>,
+    documents: std::collections::HashMap<DocumentId, String>,
 }
 
 #[derive(Debug, Clone)]
 enum Message {
-    ResetZoom(usize),
+    ResetZoom,
     OpenSettings,
     CloseSettings,
     SaveSettings(AppSettings),
     ToggleSidebar,
     ToggleFullscreen,
     ToggleKeyboardHelp,
-    RotateClockwise(usize),
-    RotateCounterClockwise(usize),
-    AddBookmark(usize),
-    RemoveBookmark(usize, usize),
-    JumpToBookmark(usize, usize),
+    RotateClockwise,
+    RotateCounterClockwise,
+    AddBookmark,
+    RemoveBookmark(usize),
+    JumpToBookmark(usize),
     SetFilter(RenderFilter),
     ToggleAutoCrop,
-    RequestThumbnail(usize, usize),
-    ThumbnailRendered(usize, Result<(usize, u32, u32, Arc<Vec<u8>>), String>),
-    DocumentOpenedWithPath((PathBuf, (usize, Vec<f32>, f32, Vec<pdf_engine::Bookmark>))),
-    OpenBatchMode,
-    CloseBatchMode,
-    AddToBatch(String),
-    ProcessBatch,
+    DocumentOpenedWithPath((PathBuf, (DocumentId, usize, Vec<f32>, f32, Vec<pdf_engine::Bookmark>))),
     OpenDocument,
     OpenFile(PathBuf),
     CloseTab(usize),
     SwitchTab(usize),
-    NextPage(usize),
-    PrevPage(usize),
-    ZoomIn(usize),
-    ZoomOut(usize),
-    SetZoom(usize, f32),
-    JumpToPage(usize, usize),
-    ViewportChanged(usize, f32, f32),
-    RequestRender(usize, usize),
-    PageRendered(usize, Result<(usize, u32, u32, Arc<Vec<u8>>), String>),
-    DocumentOpened(usize, Result<(usize, Vec<f32>, f32, Vec<pdf_engine::Bookmark>), String>),
+    NextPage,
+    PrevPage,
+    ZoomIn,
+    ZoomOut,
+    SetZoom(f32),
+    JumpToPage(usize),
+    ViewportChanged(f32, f32),
+    RequestRender(usize),
+    PageRendered(Result<(usize, u32, u32, Arc<Vec<u8>>), String>),
+    DocumentOpened(Result<(DocumentId, usize, Vec<f32>, f32, Vec<pdf_engine::Bookmark>), String>),
     EngineInitialized(EngineState),
     Search(String),
-    SearchResult(usize, Result<Vec<(usize, String, f32)>, String>),
-    NextSearchResult(usize),
-    PrevSearchResult(usize),
-    ClearSearch(usize),
-    ExtractText(usize),
-    TextExtracted(usize, Result<String, String>),
-    ExportImage(usize),
+    SearchResult(Result<Vec<(usize, String, f32)>, String>),
+    NextSearchResult,
+    PrevSearchResult,
+    ClearSearch,
+    ExtractText,
+    TextExtracted(Result<String, String>),
+    ExportImage,
     ImageExported(Result<String, String>),
     OpenRecentFile(RecentFile),
-    ToggleRecentFiles,
-    ClearRecentFiles,
+    Error(String),
 }
 
 pub struct PdfBullApp {
@@ -90,8 +80,6 @@ pub struct PdfBullApp {
     pub show_sidebar: bool,
     pub show_keyboard_help: bool,
     pub is_fullscreen: bool,
-    pub show_batch_mode: bool,
-    pub batch_files: Vec<String>,
     pub search_query: String,
     pub engine: Option<EngineState>,
     pub loaded: bool,
@@ -108,8 +96,6 @@ impl Default for PdfBullApp {
             show_sidebar: false,
             show_keyboard_help: false,
             is_fullscreen: false,
-            show_batch_mode: false,
-            batch_files: Vec::new(),
             search_query: String::new(),
             engine: None,
             loaded: false,
@@ -183,42 +169,51 @@ impl PdfBullApp {
         self.save_recent_files();
     }
 
-    fn render_pages(&self, tab_idx: usize, pages: impl Iterator<Item = usize>) -> Task<Message> {
-        if tab_idx >= self.tabs.len() {
-            return Task::none();
-        }
-        let tab = &self.tabs[tab_idx];
-        let Some(engine) = &self.engine else {
-            return Task::none();
+    fn current_tab(&self) -> Option<&DocumentTab> {
+        self.tabs.get(self.active_tab)
+    }
+
+    fn current_tab_mut(&mut self) -> Option<&mut DocumentTab> {
+        self.tabs.get_mut(self.active_tab)
+    }
+
+    fn render_visible_pages(&mut self) -> Task<Message> {
+        let tab = match self.current_tab() {
+            Some(t) => t,
+            None => return Task::none(),
         };
         
+        let doc_id = tab.id;
         let zoom = tab.zoom;
         let rotation = tab.rotation;
         let filter = tab.render_filter;
-        let cmd_tx = engine.cmd_tx.clone();
+        let total = tab.total_pages;
         
-        pages
-            .map(|page_idx| {
-                let tx = cmd_tx.clone();
-                Task::perform(
-                    async move {
-                        let (resp_tx, mut resp_rx) = mpsc::channel(1);
-                        let _ = tx.send(PdfCommand::Render(page_idx as i32, zoom, rotation, filter, resp_tx)).await;
-                        resp_rx.recv().await.unwrap_or(Err("Channel closed".into()))
-                    },
-                    move |result| Message::PageRendered(tab_idx, result)
-                )
-            })
-            .fold(Task::none(), |acc, t| Task::batch([acc, t]))
+        let engine = match &self.engine {
+            Some(e) => e,
+            None => return Task::none(),
+        };
+        
+        let mut tasks = Vec::new();
+        for page_idx in 0..5.min(total) {
+            let cmd_tx = engine.cmd_tx.clone();
+            tasks.push(Task::perform(
+                async move {
+                    let (resp_tx, mut resp_rx) = mpsc::channel(1);
+                    let _ = cmd_tx.send(PdfCommand::Render(doc_id, page_idx as i32, zoom, rotation, filter, resp_tx)).await;
+                    resp_rx.recv().await.unwrap_or(Err("Channel closed".into()))
+                },
+                Message::PageRendered,
+            ));
+        }
+        Task::batch(tasks)
     }
 
     pub fn update(&mut self, message: Message) -> Task<Message> {
-        // Lazy load settings on first update
         if !self.loaded {
             self.loaded = true;
             self.load_settings();
             self.load_recent_files();
-            // Detect system theme
             if self.settings.theme == AppTheme::System {
                 match dark_light::detect() {
                     dark_light::Mode::Dark => self.settings.theme = AppTheme::Dark,
@@ -228,34 +223,12 @@ impl PdfBullApp {
         }
         
         match message {
-            Message::ResetZoom(tab_idx) => {
-                if tab_idx < self.tabs.len() {
-                    let tab = &mut self.tabs[tab_idx];
+            Message::ResetZoom => {
+                if let Some(tab) = self.current_tab_mut() {
                     tab.zoom = 1.0;
                     tab.rendered_pages.clear();
-                    let mut tasks = Task::none();
-                    for page_idx in 0..5.min(tab.total_pages) {
-                        if let Some(engine) = &self.engine {
-                            let (resp_tx, mut resp_rx) = mpsc::channel(1);
-                            let cmd_tx = engine.cmd_tx.clone();
-                            let zoom = tab.zoom;
-                            let rotation = tab.rotation;
-                            let filter = tab.render_filter;
-                            tasks = Task::batch([
-                                tasks,
-                                Task::perform(
-                                    async move {
-                                        let _ = cmd_tx.send(PdfCommand::Render(page_idx as i32, zoom, rotation, filter, resp_tx)).await;
-                                        resp_rx.recv().await.unwrap_or(Err("Channel closed".into()))
-                                    },
-                                    move |result| Message::PageRendered(tab_idx, result)
-                                )
-                            ]);
-                        }
-                    }
-                    return tasks;
                 }
-                Task::none()
+                self.render_visible_pages()
             }
             Message::OpenSettings => {
                 self.show_settings = true;
@@ -283,25 +256,22 @@ impl PdfBullApp {
                 self.show_keyboard_help = !self.show_keyboard_help;
                 Task::none()
             }
-            Message::RotateClockwise(tab_idx) => {
-                if tab_idx < self.tabs.len() {
-                    let tab = &mut self.tabs[tab_idx];
+            Message::RotateClockwise => {
+                if let Some(tab) = self.current_tab_mut() {
                     tab.rotation = (tab.rotation + 90) % 360;
                     tab.rendered_pages.clear();
                 }
                 Task::none()
             }
-            Message::RotateCounterClockwise(tab_idx) => {
-                if tab_idx < self.tabs.len() {
-                    let tab = &mut self.tabs[tab_idx];
+            Message::RotateCounterClockwise => {
+                if let Some(tab) = self.current_tab_mut() {
                     tab.rotation = (tab.rotation - 90 + 360) % 360;
                     tab.rendered_pages.clear();
                 }
                 Task::none()
             }
-            Message::AddBookmark(tab_idx) => {
-                if tab_idx < self.tabs.len() {
-                    let tab = &mut self.tabs[tab_idx];
+            Message::AddBookmark => {
+                if let Some(tab) = self.current_tab_mut() {
                     let page = tab.current_page;
                     let label = format!("Page {}", page + 1);
                     let bookmark = PageBookmark {
@@ -318,26 +288,24 @@ impl PdfBullApp {
                 }
                 Task::none()
             }
-            Message::RemoveBookmark(tab_idx, bookmark_idx) => {
-                if tab_idx < self.tabs.len() {
-                    let tab = &mut self.tabs[tab_idx];
-                    if bookmark_idx < tab.bookmarks.len() {
-                        tab.bookmarks.remove(bookmark_idx);
+            Message::RemoveBookmark(idx) => {
+                if let Some(tab) = self.current_tab_mut() {
+                    if idx < tab.bookmarks.len() {
+                        tab.bookmarks.remove(idx);
                     }
                 }
                 Task::none()
             }
-            Message::JumpToBookmark(tab_idx, bookmark_idx) => {
-                if tab_idx < self.tabs.len() {
-                    if bookmark_idx < self.tabs[tab_idx].bookmarks.len() {
-                        self.tabs[tab_idx].current_page = self.tabs[tab_idx].bookmarks[bookmark_idx].page;
+            Message::JumpToBookmark(idx) => {
+                if let Some(tab) = self.current_tab_mut() {
+                    if idx < tab.bookmarks.len() {
+                        tab.current_page = tab.bookmarks[idx].page;
                     }
                 }
                 Task::none()
             }
             Message::SetFilter(filter) => {
-                if self.active_tab < self.tabs.len() {
-                    let tab = &mut self.tabs[self.active_tab];
+                if let Some(tab) = self.current_tab_mut() {
                     if tab.render_filter != filter {
                         tab.render_filter = filter;
                         tab.rendered_pages.clear();
@@ -346,112 +314,117 @@ impl PdfBullApp {
                 Task::none()
             }
             Message::ToggleAutoCrop => {
-                if self.active_tab < self.tabs.len() {
-                    let tab = &mut self.tabs[self.active_tab];
+                if let Some(tab) = self.current_tab_mut() {
                     tab.auto_crop = !tab.auto_crop;
                     tab.rendered_pages.clear();
                 }
                 Task::none()
             }
-            Message::RequestThumbnail(tab_idx, page_idx) => {
-                if tab_idx < self.tabs.len() {
-                    let tab = &mut self.tabs[tab_idx];
-                    if !tab.thumbnails.contains_key(&page_idx) {
-                        if let Some(engine) = &self.engine {
-                            let (resp_tx, mut resp_rx) = mpsc::channel(1);
-                            let cmd_tx = engine.cmd_tx.clone();
-                            return Task::perform(
-                                async move {
-                                    let _ = cmd_tx.send(PdfCommand::RenderThumbnail(page_idx as i32, resp_tx)).await;
-                                    resp_rx.recv().await.unwrap_or(Err("Channel closed".into()))
-                                },
-                                move |result| Message::ThumbnailRendered(tab_idx, result)
-                            );
-                        }
-                    }
-                }
-                Task::none()
-            }
-            Message::ThumbnailRendered(tab_idx, result) => {
-                if let Ok((page, width, height, data)) = result {
-                    if tab_idx < self.tabs.len() {
-                        self.tabs[tab_idx].thumbnails.insert(page, iced_image::Handle::from_rgba(width, height, data.as_ref().clone()));
-                    }
-                }
-                Task::none()
-            }
-            Message::OpenBatchMode => {
-                self.show_batch_mode = true;
-                self.batch_files.clear();
-                Task::none()
-            }
-            Message::CloseBatchMode => {
-                self.show_batch_mode = false;
-                Task::none()
-            }
-            Message::AddToBatch(path) => {
-                self.batch_files.push(path);
-                Task::none()
-            }
-            Message::ProcessBatch => {
-                let files = self.batch_files.clone();
-                self.show_batch_mode = false;
-                if let Some(first_file) = files.first() {
-                    let remaining: Vec<String> = files[1..].to_vec();
-                    self.batch_files = remaining;
-                    let path = PathBuf::from(first_file);
-                    return self.update(Message::OpenFile(path));
-                }
-                Task::none()
-            }
             Message::OpenDocument => {
                 if self.engine.is_none() {
-                    return Task::perform(async {
-                        let (cmd_tx, mut cmd_rx) = mpsc::channel(32);
-                        std::thread::spawn(move || {
-                            let pdfium = match pdf_engine::PdfEngine::init_pdfium() {
-                                Ok(p) => p,
-                                Err(e) => { println!("Engine init failed: {}", e); return; }
-                            };
-                            let mut engine = pdf_engine::PdfEngine::new(&pdfium);
-                            while let Some(cmd) = cmd_rx.blocking_recv() {
-                                match cmd {
-                                    PdfCommand::Open(path, resp) => {
-                                        let res = engine.open_document(&path).map(|(c, h, w)| {
-                                            (c, h, w, engine.get_outline())
-                                        });
-                                        let _ = resp.blocking_send(res);
+                    let (cmd_tx, mut cmd_rx) = mpsc::channel(32);
+                    
+                    std::thread::spawn(move || {
+                        let pdfium = match pdf_engine::PdfEngine::init_pdfium() {
+                            Ok(p) => p,
+                            Err(e) => {
+                                eprintln!("Failed to init pdfium: {}", e);
+                                return;
+                            }
+                        };
+                        
+                        let mut engines: std::collections::HashMap<DocumentId, pdf_engine::PdfEngine> = 
+                            std::collections::HashMap::new();
+                        let mut doc_paths: std::collections::HashMap<DocumentId, String> = 
+                            std::collections::HashMap::new();
+                        static mut NEXT_ID: u64 = 1;
+                        
+                        fn next_id() -> DocumentId {
+                            unsafe {
+                                let id = NEXT_ID;
+                                NEXT_ID += 1;
+                                DocumentId(id)
+                            }
+                        }
+                        
+                        while let Some(cmd) = cmd_rx.blocking_recv() {
+                            match cmd {
+                                PdfCommand::Open(path, resp) => {
+                                    let id = next_id();
+                                    let mut engine = pdf_engine::PdfEngine::new(&pdfium);
+                                    match engine.open_document(&path) {
+                                        Ok((count, heights, width)) => {
+                                            let outline = engine.get_outline();
+                                            engines.insert(id, engine);
+                                            doc_paths.insert(id, path.clone());
+                                            let _ = resp.blocking_send(Ok((id, count, heights, width, outline)));
+                                        }
+                                        Err(e) => {
+                                            let _ = resp.blocking_send(Err(e));
+                                        }
                                     }
-                                    PdfCommand::Render(page, zoom, rotation, filter, resp) => {
-                                        let res = engine.render_page(page, zoom, rotation, filter).map(|(w, h, data)| {
-                                            (page as usize, w, h, data)
-                                        });
-                                        let _ = resp.blocking_send(res);
+                                }
+                                PdfCommand::Render(doc_id, page, zoom, rotation, filter, resp) => {
+                                    if let Some(engine) = engines.get(&doc_id) {
+                                        match engine.render_page(page, zoom, rotation, filter) {
+                                            Ok((w, h, data)) => {
+                                                let _ = resp.blocking_send(Ok((page as usize, w, h, data)));
+                                            }
+                                            Err(e) => {
+                                                let _ = resp.blocking_send(Err(e));
+                                            }
+                                        }
+                                    } else {
+                                        let _ = resp.blocking_send(Err("Document not found".into()));
                                     }
-                                    PdfCommand::RenderThumbnail(page, resp) => {
-                                        let res = engine.render_page(page, 0.2, 0, RenderFilter::None).map(|(w, h, data)| {
-                                            (page as usize, w, h, data)
-                                        });
-                                        let _ = resp.blocking_send(res);
+                                }
+                                PdfCommand::RenderThumbnail(doc_id, page, resp) => {
+                                    if let Some(engine) = engines.get(&doc_id) {
+                                        match engine.render_page(page, 0.2, 0, RenderFilter::None) {
+                                            Ok((w, h, data)) => {
+                                                let _ = resp.blocking_send(Ok((page as usize, w, h, data)));
+                                            }
+                                            Err(e) => {
+                                                let _ = resp.blocking_send(Err(e));
+                                            }
+                                        }
+                                    } else {
+                                        let _ = resp.blocking_send(Err("Document not found".into()));
                                     }
-                                    PdfCommand::ExtractText(page, resp) => {
-                                        let res = engine.extract_text(page);
-                                        let _ = resp.blocking_send(res);
+                                }
+                                PdfCommand::ExtractText(doc_id, page, resp) => {
+                                    if let Some(engine) = engines.get(&doc_id) {
+                                        let _ = resp.blocking_send(engine.extract_text(page));
+                                    } else {
+                                        let _ = resp.blocking_send(Err("Document not found".into()));
                                     }
-                                    PdfCommand::ExportImage(page, zoom, path, resp) => {
-                                        let res = engine.export_page_as_image(page, zoom, &path);
-                                        let _ = resp.blocking_send(res);
+                                }
+                                PdfCommand::ExportImage(doc_id, page, zoom, path, resp) => {
+                                    if let Some(engine) = engines.get(&doc_id) {
+                                        let _ = resp.blocking_send(engine.export_page_as_image(page, zoom, &path));
+                                    } else {
+                                        let _ = resp.blocking_send(Err("Document not found".into()));
                                     }
-                                    PdfCommand::Search(query, resp) => {
-                                        let res = engine.search(&query);
-                                        let _ = resp.blocking_send(res);
+                                }
+                                PdfCommand::Search(doc_id, query, resp) => {
+                                    if let Some(engine) = engines.get(&doc_id) {
+                                        let _ = resp.blocking_send(engine.search(&query));
+                                    } else {
+                                        let _ = resp.blocking_send(Err("Document not found".into()));
                                     }
-                                    PdfCommand::Close => { engine.close_document(); }
+                                }
+                                PdfCommand::Close(doc_id) => {
+                                    engines.remove(&doc_id);
+                                    doc_paths.remove(&doc_id);
                                 }
                             }
-                        });
-                        EngineState { cmd_tx }
-                    }, Message::EngineInitialized);
+                        }
+                    });
+                    
+                    self.engine = Some(EngineState { 
+                        cmd_tx, 
+                        documents: std::collections::HashMap::new(),
+                    });
                 }
 
                 if let Some(engine) = &self.engine {
@@ -469,18 +442,17 @@ impl PdfBullApp {
                                 let (resp_tx, mut resp_rx) = mpsc::channel(1);
                                 let _ = cmd_tx.send(PdfCommand::Open(path_s, resp_tx)).await;
                                 match resp_rx.recv().await {
-                                    Some(Ok(data)) => Ok((path, data)),
-                                    Some(Err(e)) => Err(e),
-                                    None => Err("Engine died".into()),
+                                    Some(Ok(data)) => Some((path, data)),
+                                    _ => None,
                                 }
                             } else {
-                                Err("Cancelled".into())
+                                None
                             }
                         },
                         |result| {
                             match result {
-                                Ok((path, data)) => Message::DocumentOpenedWithPath((path, data)),
-                                Err(e) => Message::DocumentOpenedWithPath((PathBuf::new(), (0, Vec::new(), 0.0, Vec::new())))
+                                Some((path, data)) => Message::DocumentOpenedWithPath((path, data)),
+                                None => Message::DocumentOpened(Err("Cancelled".into())),
                             }
                         }
                     );
@@ -488,45 +460,65 @@ impl PdfBullApp {
                 Task::none()
             }
             Message::DocumentOpenedWithPath((path, data)) => {
-                if path.as_path().exists() {
-                    let tab_idx = self.tabs.len();
-                    let path_clone = path.clone();
-                    self.tabs.push(DocumentTab::new(path));
-                    self.active_tab = tab_idx;
-                    self.add_recent_file(&path_clone);
-                    return self.update(Message::DocumentOpened(tab_idx, Ok(data)));
+                if !path.as_path().exists() {
+                    return Task::none();
                 }
-                Task::none()
+                
+                let tab = DocumentTab::new(path.clone());
+                let tab_idx = self.tabs.len();
+                self.tabs.push(tab);
+                self.active_tab = tab_idx;
+                self.add_recent_file(&path);
+                
+                let doc_id = data.0;
+                if let Some(engine) = &mut self.engine {
+                    engine.documents.insert(doc_id, path.to_string_lossy().to_string());
+                }
+                
+                self.update(Message::DocumentOpened(Ok(data)))
+            }
+            Message::DocumentOpened(result) => {
+                match result {
+                    Ok((doc_id, count, heights, width, outline)) => {
+                        if let Some(tab) = self.current_tab_mut() {
+                            tab.id = doc_id;
+                            tab.total_pages = count;
+                            tab.page_heights = heights;
+                            tab.page_width = width;
+                            tab.outline = outline;
+                            tab.is_loading = false;
+                        }
+                        self.render_visible_pages()
+                    }
+                    Err(e) => {
+                        eprintln!("Error opening document: {}", e);
+                        if !self.tabs.is_empty() {
+                            self.tabs.pop();
+                        }
+                        Task::none()
+                    }
+                }
             }
             Message::OpenFile(path) => {
                 if self.engine.is_none() {
                     return self.update(Message::OpenDocument);
                 }
 
-                let path_s = path.to_string_lossy().to_string();
-                let tab_idx = self.tabs.len();
-                self.tabs.push(DocumentTab::new(path.clone()));
-                self.active_tab = tab_idx;
+                let tab = DocumentTab::new(path.clone());
+                self.tabs.push(tab);
+                self.active_tab = self.tabs.len() - 1;
                 self.add_recent_file(&path);
 
                 if let Some(engine) = &self.engine {
                     let cmd_tx = engine.cmd_tx.clone();
+                    let path_s = path.to_string_lossy().to_string();
                     return Task::perform(
                         async move {
                             let (resp_tx, mut resp_rx) = mpsc::channel(1);
                             let _ = cmd_tx.send(PdfCommand::Open(path_s, resp_tx)).await;
-                            match resp_rx.recv().await {
-                                Some(Ok(data)) => Ok((tab_idx, data)),
-                                Some(Err(e)) => Err(e),
-                                None => Err("Engine died".to_string()),
-                            }
+                            resp_rx.recv().await.unwrap_or(Err("Engine died".into()))
                         },
-                        move |result| {
-                            match result {
-                                Ok((idx, data)) => Message::DocumentOpened(idx, Ok(data)),
-                                Err(e) => Message::DocumentOpened(tab_idx, Err(e))
-                            }
-                        }
+                        Message::DocumentOpened,
                     );
                 }
                 Task::none()
@@ -540,422 +532,297 @@ impl PdfBullApp {
                 self.save_recent_files();
                 Task::none()
             }
-            Message::ToggleRecentFiles | Message::ClearRecentFiles => Task::none(),
-            Message::EngineInitialized(state) => {
-                self.engine = Some(state);
-                Task::none()
-            }
-            Message::DocumentOpened(tab_idx, result) => {
-                if tab_idx < self.tabs.len() {
-                    match result {
-                        Ok((count, heights, width, outline)) => {
-                            self.tabs[tab_idx].total_pages = count;
-                            self.tabs[tab_idx].page_heights = heights;
-                            self.tabs[tab_idx].page_width = width;
-                            self.tabs[tab_idx].outline = outline;
-                            self.tabs[tab_idx].is_loading = false;
-                            
-                            let mut tasks = Task::none();
-                            let initial_pages = (count as usize).min(5);
-                            for page_idx in 0..initial_pages {
-                                if let Some(engine) = &self.engine {
-                                    let (resp_tx, mut resp_rx) = mpsc::channel(1);
-                                    let cmd_tx = engine.cmd_tx.clone();
-                                    let tab = &self.tabs[tab_idx];
-                                    let zoom = tab.zoom;
-                                    let rotation = tab.rotation;
-                                    let filter = tab.render_filter;
-                                    tasks = Task::batch([
-                                        tasks,
-                                        Task::perform(
-                                            async move {
-                                                let _ = cmd_tx.send(PdfCommand::Render(page_idx as i32, zoom, rotation, filter, resp_tx)).await;
-                                                resp_rx.recv().await.unwrap_or(Err("Channel closed".into()))
-                                            },
-                                            move |result| Message::PageRendered(tab_idx, result)
-                                        )
-                                    ]);
-                                }
-                            }
-                            return tasks;
-                        }
-                        Err(e) => {
-                            println!("Error opening document: {}", e);
-                            self.tabs.remove(tab_idx);
-                            if self.active_tab >= self.tabs.len() && !self.tabs.is_empty() {
-                                self.active_tab = self.tabs.len() - 1;
-                            }
-                        }
-                    }
-                }
-                Task::none()
-            }
             Message::CloseTab(idx) => {
-                if idx < self.tabs.len() {
-                    self.tabs.remove(idx);
-                    if self.active_tab >= self.tabs.len() && !self.tabs.is_empty() {
-                        self.active_tab = self.tabs.len() - 1;
-                    }
+                if idx >= self.tabs.len() {
+                    return Task::none();
+                }
+                
+                let tab = self.tabs.remove(idx);
+                if let Some(engine) = &self.engine {
+                    let cmd_tx = engine.cmd_tx.clone();
+                    let doc_id = tab.id;
+                    let _ = cmd_tx.blocking_send(PdfCommand::Close(doc_id));
+                }
+                
+                if self.active_tab >= self.tabs.len() && !self.tabs.is_empty() {
+                    self.active_tab = self.tabs.len() - 1;
                 }
                 Task::none()
             }
             Message::SwitchTab(idx) => {
                 if idx < self.tabs.len() && idx != self.active_tab {
-                    let target_path = self.tabs[idx].path.to_string_lossy().to_string();
-                    
-                    // Check if we need to load a different document
-                    let need_load = match &self.engine {
-                        Some(engine) => {
-                            // For now, always reload when switching tabs since engine holds single doc
-                            // TODO: Implement document pool for true multi-tab support
-                            true
-                        }
-                        None => true,
-                    };
-                    
-                    if need_load {
-                        let tab_idx = idx;
-                        let path = target_path.clone();
-                        
-                        if let Some(engine) = &self.engine {
-                            let cmd_tx = engine.cmd_tx.clone();
-                            return Task::perform(
-                                async move {
-                                    let (resp_tx, mut resp_rx) = mpsc::channel(1);
-                                    let _ = cmd_tx.send(PdfCommand::Open(path, resp_tx)).await;
-                                    resp_rx.recv().await.unwrap_or(Err("Engine died".to_string()))
-                                },
-                                move |result| Message::DocumentOpened(tab_idx, result)
-                            );
-                        }
-                    }
-                    
                     self.active_tab = idx;
                 }
                 Task::none()
             }
-            Message::NextPage(tab_idx) => {
-                if tab_idx < self.tabs.len() {
-                    let tab = &mut self.tabs[tab_idx];
+            Message::NextPage => {
+                if let Some(tab) = self.current_tab_mut() {
                     if tab.current_page + 1 < tab.total_pages {
                         tab.current_page += 1;
                     }
                 }
                 Task::none()
             }
-            Message::PrevPage(tab_idx) => {
-                if tab_idx < self.tabs.len() {
-                    let tab = &mut self.tabs[tab_idx];
+            Message::PrevPage => {
+                if let Some(tab) = self.current_tab_mut() {
                     if tab.current_page > 0 {
                         tab.current_page -= 1;
                     }
                 }
                 Task::none()
             }
-            Message::ZoomIn(tab_idx) => {
-                if tab_idx < self.tabs.len() {
-                    let tab = &mut self.tabs[tab_idx];
+            Message::ZoomIn => {
+                if let Some(tab) = self.current_tab_mut() {
                     tab.zoom = (tab.zoom * 1.25).min(5.0);
                     tab.rendered_pages.clear();
-                    let mut tasks = Task::none();
-                    for page_idx in 0..5.min(tab.total_pages) {
-                        if let Some(engine) = &self.engine {
-                            let (resp_tx, mut resp_rx) = mpsc::channel(1);
-                            let cmd_tx = engine.cmd_tx.clone();
-                            let zoom = tab.zoom;
-                            let rotation = tab.rotation;
-                            let filter = tab.render_filter;
-                            tasks = Task::batch([
-                                tasks,
-                                Task::perform(
-                                    async move {
-                                        let _ = cmd_tx.send(PdfCommand::Render(page_idx as i32, zoom, rotation, filter, resp_tx)).await;
-                                        resp_rx.recv().await.unwrap_or(Err("Channel closed".into()))
-                                    },
-                                    move |result| Message::PageRendered(tab_idx, result)
-                                )
-                            ]);
-                        }
-                    }
-                    return tasks;
                 }
-                Task::none()
+                self.render_visible_pages()
             }
-            Message::ZoomOut(tab_idx) => {
-                if tab_idx < self.tabs.len() {
-                    let tab = &mut self.tabs[tab_idx];
+            Message::ZoomOut => {
+                if let Some(tab) = self.current_tab_mut() {
                     tab.zoom = (tab.zoom / 1.25).max(0.25);
                     tab.rendered_pages.clear();
-                    let mut tasks = Task::none();
-                    for page_idx in 0..5.min(tab.total_pages) {
-                        if let Some(engine) = &self.engine {
-                            let (resp_tx, mut resp_rx) = mpsc::channel(1);
-                            let cmd_tx = engine.cmd_tx.clone();
-                            let zoom = tab.zoom;
-                            let rotation = tab.rotation;
-                            let filter = tab.render_filter;
-                            tasks = Task::batch([
-                                tasks,
-                                Task::perform(
-                                    async move {
-                                        let _ = cmd_tx.send(PdfCommand::Render(page_idx as i32, zoom, rotation, filter, resp_tx)).await;
-                                        resp_rx.recv().await.unwrap_or(Err("Channel closed".into()))
-                                    },
-                                    move |result| Message::PageRendered(tab_idx, result)
-                                )
-                            ]);
-                        }
-                    }
-                    return tasks;
                 }
-                Task::none()
+                self.render_visible_pages()
             }
-            Message::SetZoom(tab_idx, zoom) => {
-                if tab_idx < self.tabs.len() {
-                    let tab = &mut self.tabs[tab_idx];
+            Message::SetZoom(zoom) => {
+                if let Some(tab) = self.current_tab_mut() {
                     tab.zoom = zoom.clamp(0.25, 5.0);
                     tab.rendered_pages.clear();
-                    let mut tasks = Task::none();
-                    for page_idx in 0..5.min(tab.total_pages) {
-                        if let Some(engine) = &self.engine {
-                            let (resp_tx, mut resp_rx) = mpsc::channel(1);
-                            let cmd_tx = engine.cmd_tx.clone();
-                            let zoom_val = tab.zoom;
-                            let rotation = tab.rotation;
-                            let filter = tab.render_filter;
-                            tasks = Task::batch([
-                                tasks,
-                                Task::perform(
-                                    async move {
-                                        let _ = cmd_tx.send(PdfCommand::Render(page_idx as i32, zoom_val, rotation, filter, resp_tx)).await;
-                                        resp_rx.recv().await.unwrap_or(Err("Channel closed".into()))
-                                    },
-                                    move |result| Message::PageRendered(tab_idx, result)
-                                )
-                            ]);
-                        }
-                    }
-                    return tasks;
                 }
-                Task::none()
+                self.render_visible_pages()
             }
-            Message::JumpToPage(tab_idx, page) => {
-                if tab_idx < self.tabs.len() {
-                    let tab = &mut self.tabs[tab_idx];
+            Message::JumpToPage(page) => {
+                if let Some(tab) = self.current_tab_mut() {
                     if page < tab.total_pages {
                         tab.current_page = page;
                     }
                 }
                 Task::none()
             }
-            Message::ViewportChanged(tab_idx, viewport_y, viewport_height) => {
-                if tab_idx < self.tabs.len() {
-                    let tab = &mut self.tabs[tab_idx];
-                    let old_visible: Vec<usize> = tab.get_visible_pages();
-                    tab.viewport_y = viewport_y;
-                    tab.viewport_height = viewport_height;
-                    let new_visible: Vec<usize> = tab.get_visible_pages();
-                    
-                    let to_render: Vec<usize> = new_visible.iter()
-                        .filter(|p| !old_visible.contains(p) && !tab.rendered_pages.contains_key(*p))
-                        .copied()
-                        .collect();
-                    
-                    tab.cleanup_distant_pages();
-                    
-                    let mut tasks = Task::none();
-                    for page_idx in to_render {
-                        if let Some(engine) = &self.engine {
-                            let (resp_tx, mut resp_rx) = mpsc::channel(1);
-                            let cmd_tx = engine.cmd_tx.clone();
-                            let zoom = tab.zoom;
-                            let rotation = tab.rotation;
-                            let filter = tab.render_filter;
-                            tasks = Task::batch([
-                                tasks,
-                                Task::perform(
-                                    async move {
-                                        let _ = cmd_tx.send(PdfCommand::Render(page_idx as i32, zoom, rotation, filter, resp_tx)).await;
-                                        resp_rx.recv().await.unwrap_or(Err("Channel closed".into()))
-                                    },
-                                    move |result| Message::PageRendered(tab_idx, result)
-                                )
-                            ]);
-                        }
-                    }
-                    return tasks;
+            Message::ViewportChanged(y, height) => {
+                if let Some(tab) = self.current_tab_mut() {
+                    tab.viewport_y = y;
+                    tab.viewport_height = height;
                 }
                 Task::none()
             }
-            Message::RequestRender(tab_idx, page_idx) => {
-                if tab_idx < self.tabs.len() {
-                    let tab = &mut self.tabs[tab_idx];
-                    if !tab.rendered_pages.contains_key(&page_idx) {
-                        if let Some(engine) = &self.engine {
-                            let (resp_tx, mut resp_rx) = mpsc::channel(1);
-                            let cmd_tx = engine.cmd_tx.clone();
-                            let zoom = tab.zoom;
-                            let rotation = tab.rotation;
-                            let filter = tab.render_filter;
-                            return Task::perform(
-                                async move {
-                                    let _ = cmd_tx.send(PdfCommand::Render(page_idx as i32, zoom, rotation, filter, resp_tx)).await;
-                                    resp_rx.recv().await.unwrap_or(Err("Channel closed".into()))
-                                },
-                                move |result| Message::PageRendered(tab_idx, result)
-                            );
+            Message::RequestRender(page_idx) => {
+                let tab = match self.current_tab() {
+                    Some(t) => t,
+                    None => return Task::none(),
+                };
+                
+                if tab.rendered_pages.contains_key(&page_idx) {
+                    return Task::none();
+                }
+                
+                let doc_id = tab.id;
+                let zoom = tab.zoom;
+                let rotation = tab.rotation;
+                let filter = tab.render_filter;
+                
+                let engine = match &self.engine {
+                    Some(e) => e,
+                    None => return Task::none(),
+                };
+                
+                let cmd_tx = engine.cmd_tx.clone();
+                Task::perform(
+                    async move {
+                        let (resp_tx, mut resp_rx) = mpsc::channel(1);
+                        let _ = cmd_tx.send(PdfCommand::Render(doc_id, page_idx as i32, zoom, rotation, filter, resp_tx)).await;
+                        resp_rx.recv().await.unwrap_or(Err("Channel closed".into()))
+                    },
+                    Message::PageRendered,
+                )
+            }
+            Message::PageRendered(result) => {
+                match result {
+                    Ok((page, width, height, data)) => {
+                        if let Some(tab) = self.current_tab_mut() {
+                            tab.rendered_pages.insert(page, iced_image::Handle::from_rgba(width, height, (*data).clone()));
                         }
                     }
-                }
-                Task::none()
-            }
-            Message::PageRendered(tab_idx, result) => {
-                if let Ok((page, width, height, data)) = result {
-                    if tab_idx < self.tabs.len() {
-                        self.tabs[tab_idx].rendered_pages.insert(page, iced_image::Handle::from_rgba(width, height, data.as_ref().clone()));
+                    Err(e) => {
+                        eprintln!("Render error: {}", e);
                     }
                 }
                 Task::none()
             }
             Message::Search(query) => {
                 self.search_query = query.clone();
-                if query.is_empty() || self.active_tab >= self.tabs.len() {
+                if query.is_empty() {
                     return Task::none();
                 }
 
-                let tab_idx = self.active_tab;
-                if let Some(engine) = &self.engine {
-                    let cmd_tx = engine.cmd_tx.clone();
-                    return Task::perform(
-                        async move {
-                            let (resp_tx, mut resp_rx) = mpsc::channel(1);
-                            let _ = cmd_tx.send(PdfCommand::Search(query, resp_tx)).await;
-                            resp_rx.recv().await.unwrap_or(Err("Search failed".into()))
-                        },
-                        move |result| Message::SearchResult(tab_idx, result)
-                    );
-                }
-                Task::none()
+                let tab = match self.current_tab() {
+                    Some(t) => t,
+                    None => return Task::none(),
+                };
+                
+                let doc_id = tab.id;
+                
+                let engine = match &self.engine {
+                    Some(e) => e,
+                    None => return Task::none(),
+                };
+                
+                let cmd_tx = engine.cmd_tx.clone();
+                Task::perform(
+                    async move {
+                        let (resp_tx, mut resp_rx) = mpsc::channel(1);
+                        let _ = cmd_tx.send(PdfCommand::Search(doc_id, query, resp_tx)).await;
+                        resp_rx.recv().await.unwrap_or(Err("Search failed".into()))
+                    },
+                    Message::SearchResult,
+                )
             }
-            Message::SearchResult(tab_idx, result) => {
-                if tab_idx < self.tabs.len() {
-                    if let Ok(results) = result {
-                        self.tabs[tab_idx].search_results = results
-                            .into_iter()
-                            .map(|(page, text, y)| SearchResult { page, text, y_position: y })
-                            .collect();
-                        self.tabs[tab_idx].current_search_index = 0;
-                        
-                        if !self.tabs[tab_idx].search_results.is_empty() {
-                            self.tabs[tab_idx].current_page = self.tabs[tab_idx].search_results[0].page;
+            Message::SearchResult(result) => {
+                match result {
+                    Ok(results) => {
+                        if let Some(tab) = self.current_tab_mut() {
+                            tab.search_results = results
+                                .into_iter()
+                                .map(|(page, text, y)| SearchResult { page, text, y_position: y })
+                                .collect();
+                            tab.current_search_index = 0;
+                            
+                            if !tab.search_results.is_empty() {
+                                tab.current_page = tab.search_results[0].page;
+                            }
                         }
+                    }
+                    Err(e) => {
+                        eprintln!("Search error: {}", e);
                     }
                 }
                 Task::none()
             }
-            Message::NextSearchResult(tab_idx) => {
-                if tab_idx < self.tabs.len() {
-                    let tab = &mut self.tabs[tab_idx];
+            Message::NextSearchResult => {
+                if let Some(tab) = self.current_tab_mut() {
                     if !tab.search_results.is_empty() {
                         tab.current_search_index = (tab.current_search_index + 1) % tab.search_results.len();
-                        let result = &tab.search_results[tab.current_search_index];
-                        tab.current_page = result.page;
+                        tab.current_page = tab.search_results[tab.current_search_index].page;
                     }
                 }
                 Task::none()
             }
-            Message::PrevSearchResult(tab_idx) => {
-                if tab_idx < self.tabs.len() {
-                    let tab = &mut self.tabs[tab_idx];
+            Message::PrevSearchResult => {
+                if let Some(tab) = self.current_tab_mut() {
                     if !tab.search_results.is_empty() {
-                        if tab.current_search_index == 0 {
-                            tab.current_search_index = tab.search_results.len() - 1;
+                        tab.current_search_index = if tab.current_search_index == 0 {
+                            tab.search_results.len() - 1
                         } else {
-                            tab.current_search_index -= 1;
-                        }
-                        let result = &tab.search_results[tab.current_search_index];
-                        tab.current_page = result.page;
+                            tab.current_search_index - 1
+                        };
+                        tab.current_page = tab.search_results[tab.current_search_index].page;
                     }
                 }
                 Task::none()
             }
-            Message::ClearSearch(tab_idx) => {
-                if tab_idx < self.tabs.len() {
-                    self.tabs[tab_idx].search_results.clear();
-                    self.tabs[tab_idx].current_search_index = 0;
+            Message::ClearSearch => {
+                if let Some(tab) = self.current_tab_mut() {
+                    tab.search_results.clear();
+                    tab.current_search_index = 0;
                 }
                 self.search_query.clear();
                 Task::none()
             }
-            Message::ExtractText(tab_idx) => {
-                if tab_idx < self.tabs.len() {
-                    let tab = &self.tabs[tab_idx];
-                    let page = tab.current_page as i32;
-                    
-                    if let Some(engine) = &self.engine {
-                        let cmd_tx = engine.cmd_tx.clone();
-                        return Task::perform(
-                            async move {
+            Message::ExtractText => {
+                let tab = match self.current_tab() {
+                    Some(t) => t,
+                    None => return Task::none(),
+                };
+                
+                let page = tab.current_page as i32;
+                let doc_id = tab.id;
+                let path = tab.path.clone();
+                
+                let engine = match &self.engine {
+                    Some(e) => e,
+                    None => return Task::none(),
+                };
+                
+                let cmd_tx = engine.cmd_tx.clone();
+                Task::perform(
+                    async move {
+                        let (resp_tx, mut resp_rx) = mpsc::channel(1);
+                        let _ = cmd_tx.send(PdfCommand::ExtractText(doc_id, page, resp_tx)).await;
+                        let result = resp_rx.recv().await.unwrap_or(Err("Extract failed".into()));
+                        (path, result)
+                    },
+                    |(path, result)| {
+                        let result_clone = result.clone();
+                        if let Ok(text) = result {
+                            let txt_path = path.with_extension("txt");
+                            let _ = fs::write(&txt_path, &text);
+                            eprintln!("Text extracted to: {}", txt_path.display());
+                        }
+                        Message::TextExtracted(result_clone)
+                    },
+                )
+            }
+            Message::TextExtracted(result) => {
+                if let Err(e) = result {
+                    eprintln!("Text extraction error: {}", e);
+                }
+                Task::none()
+            }
+            Message::ExportImage => {
+                let tab = match self.current_tab() {
+                    Some(t) => t,
+                    None => return Task::none(),
+                };
+                
+                let page = tab.current_page as i32;
+                let zoom = tab.zoom;
+                let doc_id = tab.id;
+                
+                let engine = match &self.engine {
+                    Some(e) => e,
+                    None => return Task::none(),
+                };
+                
+                let cmd_tx = engine.cmd_tx.clone();
+                Task::perform(
+                    async move {
+                        let file = rfd::AsyncFileDialog::new()
+                            .add_filter("PNG", &["png"])
+                            .set_file_name("page.png")
+                            .save_file()
+                            .await;
+                        
+                        match file {
+                            Some(f) => {
+                                let path = f.path().to_string_lossy().to_string();
                                 let (resp_tx, mut resp_rx) = mpsc::channel(1);
-                                let _ = cmd_tx.send(PdfCommand::ExtractText(page, resp_tx)).await;
-                                resp_rx.recv().await.unwrap_or(Err("Extract failed".into()))
-                            },
-                            move |result| Message::TextExtracted(tab_idx, result)
-                        );
-                    }
-                }
-                Task::none()
-            }
-            Message::TextExtracted(tab_idx, result) => {
-                if let Ok(text) = result {
-                    if let Some(tab) = self.tabs.get(tab_idx) {
-                        let txt_path = tab.path.with_extension("txt");
-                        let _ = fs::write(&txt_path, &text);
-                        println!("Text extracted to: {}", txt_path.display());
-                    }
-                }
-                Task::none()
-            }
-            Message::ExportImage(tab_idx) => {
-                if tab_idx < self.tabs.len() {
-                    let tab = &self.tabs[tab_idx];
-                    let page = tab.current_page as i32;
-                    let zoom = tab.zoom;
-                    
-                    if let Some(engine) = &self.engine {
-                        let cmd_tx = engine.cmd_tx.clone();
-                        return Task::perform(
-                            async move {
-                                let file = rfd::AsyncFileDialog::new()
-                                    .add_filter("PNG", &["png"])
-                                    .set_file_name("page.png")
-                                    .save_file()
-                                    .await;
-                                
-                                match file {
-                                    Some(f) => {
-                                        let path = f.path().to_string_lossy().to_string();
-                                        let (resp_tx, mut resp_rx) = mpsc::channel(1);
-                                        let _ = cmd_tx.send(PdfCommand::ExportImage(page, zoom, path.clone(), resp_tx)).await;
-                                        match resp_rx.recv().await {
-                                            Some(Ok(())) => Ok(path),
-                                            Some(Err(e)) => Err(e),
-                                            None => Err("Engine died".into()),
-                                        }
-                                    }
-                                    None => Err("Cancelled".to_string()),
+                                let _ = cmd_tx.send(PdfCommand::ExportImage(doc_id, page, zoom, path.clone(), resp_tx)).await;
+                                match resp_rx.recv().await {
+                                    Some(Ok(())) => Ok(path),
+                                    Some(Err(e)) => Err(e),
+                                    None => Err("Engine died".into()),
                                 }
-                            },
-                            Message::ImageExported
-                        );
-                    }
-                }
-                Task::none()
+                            }
+                            None => Err("Cancelled".into()),
+                        }
+                    },
+                    Message::ImageExported,
+                )
             }
             Message::ImageExported(result) => {
-                if let Ok(path) = result {
-                    println!("Image exported to: {}", path);
+                match result {
+                    Ok(path) => eprintln!("Image exported to: {}", path),
+                    Err(e) => eprintln!("Export error: {}", e),
                 }
+                Task::none()
+            }
+            Message::EngineInitialized(state) => {
+                self.engine = Some(state);
+                Task::none()
+            }
+            Message::Error(e) => {
+                eprintln!("Error: {}", e);
                 Task::none()
             }
         }

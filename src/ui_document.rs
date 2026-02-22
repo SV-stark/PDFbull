@@ -1,10 +1,9 @@
-use crate::models::DocumentTab;
 use crate::pdf_engine::RenderFilter;
 use crate::PdfBullApp;
 use iced::widget::{
     button, column, container, image as iced_image, row, scrollable, text, text_input, Space,
 };
-use iced::{Alignment, Element, Length};
+use iced::{Element, Length};
 
 fn render_toolbar(app: &PdfBullApp) -> Element<crate::Message> {
     let tab = &app.tabs[app.active_tab];
@@ -14,12 +13,12 @@ fn render_toolbar(app: &PdfBullApp) -> Element<crate::Message> {
         button("Close").on_press(crate::Message::CloseTab(app.active_tab)),
         button("☰").on_press(crate::Message::ToggleSidebar),
         Space::new().width(Length::Fixed(10.0)),
-        button("-").on_press(crate::Message::ZoomOut(app.active_tab)),
+        button("-").on_press(crate::Message::ZoomOut),
         text(format!("{}%", (tab.zoom * 100.0) as u32)),
-        button("+").on_press(crate::Message::ZoomIn(app.active_tab)),
+        button("+").on_press(crate::Message::ZoomIn),
         Space::new().width(Length::Fixed(10.0)),
-        button("↻R").on_press(crate::Message::RotateClockwise(app.active_tab)),
-        button("↺R").on_press(crate::Message::RotateCounterClockwise(app.active_tab)),
+        button("↻R").on_press(crate::Message::RotateClockwise),
+        button("↺R").on_press(crate::Message::RotateCounterClockwise),
         text(format!("{}°", tab.rotation)),
         Space::new().width(Length::Fixed(10.0)),
         button(match tab.render_filter {
@@ -43,16 +42,15 @@ fn render_toolbar(app: &PdfBullApp) -> Element<crate::Message> {
         button(if tab.auto_crop { "Crop✓" } else { "Crop" })
             .on_press(crate::Message::ToggleAutoCrop),
         Space::new().width(Length::Fixed(10.0)),
-        button("BM").on_press(crate::Message::AddBookmark(app.active_tab)),
+        button("BM").on_press(crate::Message::AddBookmark),
         Space::new().width(Length::Fixed(10.0)),
         text_input("Search...", &app.search_query)
             .on_input(crate::Message::Search)
             .width(Length::Fixed(200.0)),
         Space::new().width(Length::Fixed(10.0)),
-        button("Text").on_press(crate::Message::ExtractText(app.active_tab)),
-        button("Export").on_press(crate::Message::ExportImage(app.active_tab)),
+        button("Text").on_press(crate::Message::ExtractText),
+        button("Export").on_press(crate::Message::ExportImage),
         Space::new().width(Length::Fill),
-        button("Batch").on_press(crate::Message::OpenBatchMode),
         button("?").on_press(crate::Message::ToggleKeyboardHelp),
         button("⛶").on_press(crate::Message::ToggleFullscreen),
         button("⚙").on_press(crate::Message::OpenSettings),
@@ -63,23 +61,22 @@ fn render_toolbar(app: &PdfBullApp) -> Element<crate::Message> {
 
 fn render_page_nav(app: &PdfBullApp) -> Element<crate::Message> {
     let tab = &app.tabs[app.active_tab];
-    let active_tab = app.active_tab;
 
     row![
-        button("Prev").on_press(crate::Message::PrevPage(app.active_tab)),
+        button("Prev").on_press(crate::Message::PrevPage),
         text(format!(
             "Page {} of {}",
             tab.current_page + 1,
             tab.total_pages.max(1)
         )),
-        button("Next").on_press(crate::Message::NextPage(app.active_tab)),
+        button("Next").on_press(crate::Message::NextPage),
         Space::new().width(Length::Fixed(20.0)),
         text_input("Go to page", &(tab.current_page + 1).to_string())
             .on_input(move |v: String| {
                 if let Ok(page) = v.parse::<usize>() {
-                    crate::Message::JumpToPage(active_tab, page.saturating_sub(1))
+                    crate::Message::JumpToPage(page.saturating_sub(1))
                 } else {
-                    crate::Message::JumpToPage(active_tab, 0)
+                    crate::Message::JumpToPage(0)
                 }
             })
             .width(Length::Fixed(80.0)),
@@ -93,46 +90,39 @@ fn render_sidebar(app: &PdfBullApp) -> Element<crate::Message> {
 
     let mut sidebar_col = column![].spacing(10).padding(5).width(Length::Fixed(150.0));
 
-    // Outline section
     if !tab.outline.is_empty() {
         sidebar_col = sidebar_col.push(text("Outline").size(14));
         for bookmark in &tab.outline {
             sidebar_col = sidebar_col.push(
                 button(text(&bookmark.title))
-                    .on_press(crate::Message::JumpToPage(
-                        app.active_tab,
-                        bookmark.page_index as usize,
-                    ))
+                    .on_press(crate::Message::JumpToPage(bookmark.page_index as usize))
                     .width(Length::Fill),
             );
         }
     }
 
-    // Bookmarks section
     if !tab.bookmarks.is_empty() {
         sidebar_col = sidebar_col.push(text("Bookmarks").size(14));
         for (idx, bookmark) in tab.bookmarks.iter().enumerate() {
             sidebar_col = sidebar_col.push(row![
                 button(text(&bookmark.label))
-                    .on_press(crate::Message::JumpToBookmark(app.active_tab, idx))
+                    .on_press(crate::Message::JumpToBookmark(idx))
                     .width(Length::Fill),
-                button("×").on_press(crate::Message::RemoveBookmark(app.active_tab, idx))
+                button("×").on_press(crate::Message::RemoveBookmark(idx))
             ]);
         }
     }
 
-    // Thumbnails section
     sidebar_col = sidebar_col.push(text("Pages").size(14));
     for page_idx in 0..tab.total_pages {
         if let Some(handle) = tab.thumbnails.get(&page_idx) {
             let img = iced::widget::Image::new(handle.clone()).width(Length::Fixed(100.0));
-            sidebar_col = sidebar_col
-                .push(button(img).on_press(crate::Message::JumpToPage(app.active_tab, page_idx)));
+            sidebar_col =
+                sidebar_col.push(button(img).on_press(crate::Message::JumpToPage(page_idx)));
         } else {
             sidebar_col = sidebar_col.push(
                 button(text(format!("P{}", page_idx + 1)))
-                    .on_press(crate::Message::JumpToPage(app.active_tab, page_idx))
-                    .on_press(crate::Message::RequestThumbnail(app.active_tab, page_idx))
+                    .on_press(crate::Message::JumpToPage(page_idx))
                     .width(Length::Fixed(100.0)),
             );
         }
@@ -194,7 +184,6 @@ pub fn document_view(app: &PdfBullApp) -> Element<crate::Message> {
         render_pdf_content(app)
     };
 
-    // In fullscreen mode, show minimal UI with exit hint
     if app.is_fullscreen {
         column![
             content,
@@ -206,9 +195,9 @@ pub fn document_view(app: &PdfBullApp) -> Element<crate::Message> {
                     tab.total_pages
                 )))
                 .padding(10),
-                button("-").on_press(crate::Message::ZoomOut(app.active_tab)),
+                button("-").on_press(crate::Message::ZoomOut),
                 text(format!("{}%", (tab.zoom * 100.0) as u32)),
-                button("+").on_press(crate::Message::ZoomIn(app.active_tab)),
+                button("+").on_press(crate::Message::ZoomIn),
             ]
             .padding(5)
         ]

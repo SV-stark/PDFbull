@@ -193,17 +193,14 @@ impl<'a> PdfEngine<'a> {
         }
     }
 
-    fn apply_filter(data: Vec<u8>, width: u32, height: u32, filter: RenderFilter) -> Vec<u8> {
+    fn apply_filter(mut data: Vec<u8>, _width: u32, _height: u32, filter: RenderFilter) -> Vec<u8> {
         if filter == RenderFilter::None {
             return data;
         }
 
-        let mut result = data.clone();
-        let total_pixels = (width * height) as usize;
-
         match filter {
             RenderFilter::Grayscale => {
-                result.par_chunks_exact_mut(4).for_each(|pixel| {
+                data.par_chunks_exact_mut(4).for_each(|pixel| {
                     let gray =
                         (pixel[0] as u32 * 299 + pixel[1] as u32 * 587 + pixel[2] as u32 * 114)
                             / 1000;
@@ -213,14 +210,14 @@ impl<'a> PdfEngine<'a> {
                 });
             }
             RenderFilter::Inverted => {
-                result.par_chunks_exact_mut(4).for_each(|pixel| {
+                data.par_chunks_exact_mut(4).for_each(|pixel| {
                     pixel[0] = 255 - pixel[0];
                     pixel[1] = 255 - pixel[1];
                     pixel[2] = 255 - pixel[2];
                 });
             }
             RenderFilter::Eco => {
-                result.par_chunks_exact_mut(4).for_each(|pixel| {
+                data.par_chunks_exact_mut(4).for_each(|pixel| {
                     let avg = ((pixel[0] as u32 + pixel[1] as u32 + pixel[2] as u32) / 3) as u8;
                     let eco = (avg as u32 * 8 / 10) as u8;
                     pixel[0] = eco;
@@ -229,7 +226,7 @@ impl<'a> PdfEngine<'a> {
                 });
             }
             RenderFilter::BlackWhite => {
-                result.par_chunks_exact_mut(4).for_each(|pixel| {
+                data.par_chunks_exact_mut(4).for_each(|pixel| {
                     let gray =
                         (pixel[0] as u32 * 299 + pixel[1] as u32 * 587 + pixel[2] as u32 * 114)
                             / 1000;
@@ -240,7 +237,7 @@ impl<'a> PdfEngine<'a> {
                 });
             }
             RenderFilter::Lighten => {
-                result.par_chunks_exact_mut(4).for_each(|pixel| {
+                data.par_chunks_exact_mut(4).for_each(|pixel| {
                     let lighten = |c: u8| (c as u32 * 3 / 2).min(255) as u8;
                     pixel[0] = lighten(pixel[0]);
                     pixel[1] = lighten(pixel[1]);
@@ -248,7 +245,7 @@ impl<'a> PdfEngine<'a> {
                 });
             }
             RenderFilter::NoShadow => {
-                result.par_chunks_exact_mut(4).for_each(|pixel| {
+                data.par_chunks_exact_mut(4).for_each(|pixel| {
                     let avg = ((pixel[0] as u32 + pixel[1] as u32 + pixel[2] as u32) / 3) as u8;
                     if avg < 64 {
                         pixel[0] = (pixel[0] + 64).min(255);
@@ -260,7 +257,7 @@ impl<'a> PdfEngine<'a> {
             RenderFilter::None => {}
         }
 
-        result
+        data
     }
 
     pub fn extract_text(&self, page_num: i32) -> Result<String, String> {

@@ -3,6 +3,15 @@ use iced::widget::image as iced_image;
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub struct DocumentId(pub u64);
+
+impl Default for DocumentId {
+    fn default() -> Self {
+        Self(0)
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub enum AppTheme {
     System,
@@ -67,6 +76,7 @@ pub struct SearchResult {
 }
 
 pub struct DocumentTab {
+    pub id: DocumentId,
     pub path: PathBuf,
     pub name: String,
     pub total_pages: usize,
@@ -90,9 +100,20 @@ pub struct DocumentTab {
 
 const VIEWPORT_BUFFER: usize = 3;
 
+static mut NEXT_DOC_ID: u64 = 1;
+
+fn next_doc_id() -> DocumentId {
+    unsafe {
+        let id = NEXT_DOC_ID;
+        NEXT_DOC_ID += 1;
+        DocumentId(id)
+    }
+}
+
 impl DocumentTab {
     pub fn new(path: PathBuf) -> Self {
         Self {
+            id: next_doc_id(),
             name: path
                 .file_name()
                 .map(|n| n.to_string_lossy().to_string())
@@ -114,7 +135,7 @@ impl DocumentTab {
             outline: Vec::new(),
             bookmarks: Vec::new(),
             viewport_y: 0.0,
-            viewport_height: 600.0,
+            viewport_height: 800.0,
         }
     }
 

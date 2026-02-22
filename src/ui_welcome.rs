@@ -16,9 +16,8 @@ pub fn welcome_view(app: &crate::PdfBullApp) -> Element<crate::Message> {
             Space::new().height(Length::Fixed(10.0)),
             files,
             Space::new().height(Length::Fixed(10.0)),
-            button("Clear Recent").on_press(crate::Message::ClearRecentFiles),
         ]
-        .padding(20)
+        .width(Length::Fill)
     } else {
         column![]
     };
