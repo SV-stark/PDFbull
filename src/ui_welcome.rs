@@ -1,13 +1,13 @@
 use iced::widget::{button, column, row, text, Space};
 use iced::{Alignment, Element, Length};
 
-pub fn welcome_view(app: &crate::PdfBullApp) -> Element<crate::Message> {
+pub fn welcome_view(app: &crate::app::PdfBullApp) -> Element<crate::message::Message> {
     let recent_section = if !app.recent_files.is_empty() {
         let mut files = column![];
         for file in &app.recent_files {
             files = files.push(
                 button(text(file.name.clone()))
-                    .on_press(crate::Message::OpenRecentFile(file.clone()))
+                    .on_press(crate::message::Message::OpenRecentFile(file.clone()))
                     .width(Length::Fill),
             );
         }
@@ -25,14 +25,14 @@ pub fn welcome_view(app: &crate::PdfBullApp) -> Element<crate::Message> {
     column![
         row![
             text("PDFbull").size(32).width(Length::Fill),
-            button("Settings").on_press(crate::Message::OpenSettings),
+            button("Settings").on_press(crate::message::Message::OpenSettings),
         ]
         .padding(20),
         column![
             text("Welcome to PDFbull").size(24),
             Space::new().height(Length::Fixed(20.0)),
             button("Open PDF")
-                .on_press(crate::Message::OpenDocument)
+                .on_press(crate::message::Message::OpenDocument)
                 .padding(10),
             Space::new().height(Length::Fixed(20.0)),
             recent_section,

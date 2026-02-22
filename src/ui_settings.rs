@@ -3,7 +3,7 @@ use crate::pdf_engine::RenderFilter;
 use iced::widget::{button, column, row, text, Space};
 use iced::{Alignment, Element, Length};
 
-pub fn settings_view(app: &crate::PdfBullApp) -> Element<crate::Message> {
+pub fn settings_view(app: &crate::app::PdfBullApp) -> Element<crate::message::Message> {
     let theme_buttons = row![
         button(if app.settings.theme == AppTheme::System {
             "System ✓"
@@ -13,7 +13,7 @@ pub fn settings_view(app: &crate::PdfBullApp) -> Element<crate::Message> {
         .on_press({
             let mut s = app.settings.clone();
             s.theme = AppTheme::System;
-            crate::Message::SaveSettings(s)
+            crate::message::Message::SaveSettings(s)
         }),
         button(if app.settings.theme == AppTheme::Light {
             "Light ✓"
@@ -23,7 +23,7 @@ pub fn settings_view(app: &crate::PdfBullApp) -> Element<crate::Message> {
         .on_press({
             let mut s = app.settings.clone();
             s.theme = AppTheme::Light;
-            crate::Message::SaveSettings(s)
+            crate::message::Message::SaveSettings(s)
         }),
         button(if app.settings.theme == AppTheme::Dark {
             "Dark ✓"
@@ -33,7 +33,7 @@ pub fn settings_view(app: &crate::PdfBullApp) -> Element<crate::Message> {
         .on_press({
             let mut s = app.settings.clone();
             s.theme = AppTheme::Dark;
-            crate::Message::SaveSettings(s)
+            crate::message::Message::SaveSettings(s)
         }),
     ]
     .spacing(10);
@@ -47,7 +47,7 @@ pub fn settings_view(app: &crate::PdfBullApp) -> Element<crate::Message> {
         .on_press({
             let mut s = app.settings.clone();
             s.remember_last_file = !s.remember_last_file;
-            crate::Message::SaveSettings(s)
+            crate::message::Message::SaveSettings(s)
         }),
         button(if app.settings.auto_save {
             "Auto-save ✓"
@@ -57,7 +57,7 @@ pub fn settings_view(app: &crate::PdfBullApp) -> Element<crate::Message> {
         .on_press({
             let mut s = app.settings.clone();
             s.auto_save = !s.auto_save;
-            crate::Message::SaveSettings(s)
+            crate::message::Message::SaveSettings(s)
         }),
     ]
     .spacing(10);
@@ -71,7 +71,7 @@ pub fn settings_view(app: &crate::PdfBullApp) -> Element<crate::Message> {
         .on_press({
             let mut s = app.settings.clone();
             s.render_quality = RenderQuality::Low;
-            crate::Message::SaveSettings(s)
+            crate::message::Message::SaveSettings(s)
         }),
         button(if app.settings.render_quality == RenderQuality::Medium {
             "Medium ✓"
@@ -81,7 +81,7 @@ pub fn settings_view(app: &crate::PdfBullApp) -> Element<crate::Message> {
         .on_press({
             let mut s = app.settings.clone();
             s.render_quality = RenderQuality::Medium;
-            crate::Message::SaveSettings(s)
+            crate::message::Message::SaveSettings(s)
         }),
         button(if app.settings.render_quality == RenderQuality::High {
             "High ✓"
@@ -91,7 +91,7 @@ pub fn settings_view(app: &crate::PdfBullApp) -> Element<crate::Message> {
         .on_press({
             let mut s = app.settings.clone();
             s.render_quality = RenderQuality::High;
-            crate::Message::SaveSettings(s)
+            crate::message::Message::SaveSettings(s)
         }),
     ]
     .spacing(10);
@@ -105,7 +105,7 @@ pub fn settings_view(app: &crate::PdfBullApp) -> Element<crate::Message> {
         .on_press({
             let mut s = app.settings.clone();
             s.default_filter = RenderFilter::None;
-            crate::Message::SaveSettings(s)
+            crate::message::Message::SaveSettings(s)
         }),
         button(if app.settings.default_filter == RenderFilter::Grayscale {
             "Gray ✓"
@@ -115,7 +115,7 @@ pub fn settings_view(app: &crate::PdfBullApp) -> Element<crate::Message> {
         .on_press({
             let mut s = app.settings.clone();
             s.default_filter = RenderFilter::Grayscale;
-            crate::Message::SaveSettings(s)
+            crate::message::Message::SaveSettings(s)
         }),
         button(if app.settings.default_filter == RenderFilter::Inverted {
             "Invert ✓"
@@ -125,7 +125,7 @@ pub fn settings_view(app: &crate::PdfBullApp) -> Element<crate::Message> {
         .on_press({
             let mut s = app.settings.clone();
             s.default_filter = RenderFilter::Inverted;
-            crate::Message::SaveSettings(s)
+            crate::message::Message::SaveSettings(s)
         }),
         button(if app.settings.default_filter == RenderFilter::Eco {
             "Eco ✓"
@@ -135,7 +135,7 @@ pub fn settings_view(app: &crate::PdfBullApp) -> Element<crate::Message> {
         .on_press({
             let mut s = app.settings.clone();
             s.default_filter = RenderFilter::Eco;
-            crate::Message::SaveSettings(s)
+            crate::message::Message::SaveSettings(s)
         }),
     ]
     .spacing(10);
@@ -146,12 +146,12 @@ pub fn settings_view(app: &crate::PdfBullApp) -> Element<crate::Message> {
         button("-").on_press({
             let mut s = app.settings.clone();
             s.default_zoom = (s.default_zoom - 0.25).max(0.25);
-            crate::Message::SaveSettings(s)
+            crate::message::Message::SaveSettings(s)
         }),
         button("+").on_press({
             let mut s = app.settings.clone();
             s.default_zoom = (s.default_zoom + 0.25).min(5.0);
-            crate::Message::SaveSettings(s)
+            crate::message::Message::SaveSettings(s)
         }),
     ]
     .spacing(10);
@@ -161,12 +161,12 @@ pub fn settings_view(app: &crate::PdfBullApp) -> Element<crate::Message> {
         button("-").on_press({
             let mut s = app.settings.clone();
             s.cache_size = s.cache_size.saturating_sub(10).max(10);
-            crate::Message::SaveSettings(s)
+            crate::message::Message::SaveSettings(s)
         }),
         button("+").on_press({
             let mut s = app.settings.clone();
             s.cache_size = (s.cache_size + 10).min(200);
-            crate::Message::SaveSettings(s)
+            crate::message::Message::SaveSettings(s)
         }),
     ]
     .spacing(10);
@@ -175,7 +175,7 @@ pub fn settings_view(app: &crate::PdfBullApp) -> Element<crate::Message> {
         row![
             text("Settings").size(24),
             Space::new().width(Length::Fill),
-            button("Close").on_press(crate::Message::CloseSettings),
+            button("Close").on_press(crate::message::Message::CloseSettings),
         ]
         .padding(20),
         column![

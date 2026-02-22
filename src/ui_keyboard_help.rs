@@ -1,7 +1,7 @@
 use iced::widget::{button, column, container, text, Space};
 use iced::{Element, Length};
 
-pub fn keyboard_help_view(_app: &crate::PdfBullApp) -> Element<crate::Message> {
+pub fn keyboard_help_view(_app: &crate::app::PdfBullApp) -> Element<crate::message::Message> {
     use iced::Alignment;
 
     let shortcuts = column![
@@ -31,7 +31,7 @@ pub fn keyboard_help_view(_app: &crate::PdfBullApp) -> Element<crate::Message> {
 
     container(column![
         button("Close")
-            .on_press(crate::Message::ToggleKeyboardHelp)
+            .on_press(crate::message::Message::ToggleKeyboardHelp)
             .padding(10),
         shortcuts,
     ])
