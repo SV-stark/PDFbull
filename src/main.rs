@@ -712,9 +712,9 @@ impl PdfBullApp {
                                         let (resp_tx, mut resp_rx) = mpsc::channel(1);
                                         let _ = cmd_tx.send(PdfCommand::LoadAnnotations(doc_id, path_str, resp_tx)).await;
                                         match resp_rx.recv().await {
-                                            Some(Ok(annotations)) => Ok((doc_id, annotations)),
-                                            Some(Err(_)) => Ok((doc_id, Vec::new())),
-                                            None => Ok((doc_id, Vec::new())),
+                                            Some(Ok(annotations)) => (doc_id, annotations),
+                                            Some(Err(_)) => (doc_id, Vec::new()),
+                                            None => (doc_id, Vec::new()),
                                         }
                                     },
                                     |(doc_id, annotations)| Message::AnnotationsLoaded(doc_id, annotations),

@@ -140,6 +140,7 @@ pub struct DocumentTab {
     pub annotations: Vec<Annotation>,
     pub viewport_y: f32,
     pub viewport_height: f32,
+    pub sidebar_viewport_y: f32,
 }
 
 const VIEWPORT_BUFFER: usize = 3;
@@ -179,6 +180,7 @@ impl DocumentTab {
             annotations: Vec::new(),
             viewport_y: 0.0,
             viewport_height: 800.0,
+            sidebar_viewport_y: 0.0,
         }
     }
 
@@ -228,3 +230,5 @@ impl DocumentTab {
         }
     }
 }
+
+
