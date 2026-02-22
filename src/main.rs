@@ -476,15 +476,10 @@ impl PdfBullApp {
                             Arc::new(tokio::sync::Mutex::new(std::collections::HashMap::new()));
                         let mut doc_paths: std::collections::HashMap<DocumentId, String> = 
                             std::collections::HashMap::new();
-                        static mut NEXT_ID: u64 = 1;
+                        use std::sync::atomic::{AtomicU64, Ordering};
+                        static NEXT_ID: AtomicU64 = AtomicU64::new(1);
                         
-                        fn next_id() -> DocumentId {
-                            unsafe {
-                                let id = NEXT_ID;
-                                NEXT_ID += 1;
-                                DocumentId(id)
-                            }
-                        }
+                        let next_id = || DocumentId(NEXT_ID.fetch_add(1, Ordering::Relaxed));
 
                         // Create a multi-thread Tokio runtime for blocking tasks
                         let rt = match tokio::runtime::Builder::new_multi_thread()
