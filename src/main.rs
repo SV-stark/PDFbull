@@ -298,17 +298,14 @@ impl PdfBullApp {
             }
             if self.settings.restore_session {
                 if let Some(mut session_data) = session {
+                    let target_tab = session_data.active_tab;
                     let mut tasks = Vec::new();
                     for path in session_data.open_tabs.drain(..) {
                         tasks.push(self.update(Message::OpenFile(path)));
                     }
                     if !tasks.is_empty() {
-                        let target_tab = session_data.active_tab;
-                        return Task::batch(tasks).and_then(move |_| {
-                            Task::perform(async move {
-                                Message::SwitchTab(target_tab)
-                            }, |m| m)
-                        });
+                        self.active_tab = target_tab;
+                        return Task::batch(tasks);
                     }
                 }
             }
@@ -490,7 +487,7 @@ impl PdfBullApp {
                             Ok(rt) => rt,
                             Err(e) => {
                                 eprintln!("Failed to create Tokio runtime: {}", e);
-                                return Task::none();
+                                return;
                             }
                         };
                         
@@ -708,7 +705,7 @@ impl PdfBullApp {
                                 let cmd_tx = engine.cmd_tx.clone();
                                 let doc_id = doc_id;
                                 return Task::perform(
-                                    async move {
+                                    async move -> Result<(DocumentId, Vec<models::Annotation>), String> {
                                         let (resp_tx, mut resp_rx) = mpsc::channel(1);
                                         let _ = cmd_tx.send(PdfCommand::LoadAnnotations(doc_id, path_str, resp_tx)).await;
                                         match resp_rx.recv().await {

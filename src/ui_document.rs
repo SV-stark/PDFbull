@@ -1,7 +1,8 @@
 use crate::pdf_engine::RenderFilter;
 use crate::PdfBullApp;
 use iced::widget::{
-    button, column, container, image as iced_image, row, scrollable, text, text_input, Space,
+    button, column, container, row, scrollable, text, text_input, Space,
+    Id,
 };
 use iced::{Element, Length};
 
@@ -216,7 +217,7 @@ fn render_pdf_content(app: &PdfBullApp) -> Element<crate::Message> {
     }
 
     scrollable(container(pdf_column).width(Length::Fill))
-        .id(iced::widget::scrollable::Id::new("pdf_scroll"))
+        .id(Id::new("pdf_scroll"))
         .on_scroll(|viewport| {
             crate::Message::ViewportChanged(
                 viewport.absolute_offset().y,

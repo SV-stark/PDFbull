@@ -440,7 +440,7 @@ impl<'a> PdfEngine<'a> {
                 .unwrap_or("document");
 
             for (idx, &page_num) in page_nums.iter().enumerate() {
-                if page_num < 0 || page_num as usize >= doc.pages().len() {
+                if page_num < 0 || page_num as usize >= doc.pages().len() as usize {
                     continue;
                 }
 
