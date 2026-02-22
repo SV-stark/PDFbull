@@ -1,5 +1,6 @@
 use moka::sync::Cache;
 use pdfium_render::prelude::*;
+use rayon::prelude::*;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -202,63 +203,59 @@ impl<'a> PdfEngine<'a> {
 
         match filter {
             RenderFilter::Grayscale => {
-                for i in (0..total_pixels * 4).step_by(4) {
-                    let gray = (result[i] as u32 * 299
-                        + result[i + 1] as u32 * 587
-                        + result[i + 2] as u32 * 114)
-                        / 1000;
-                    result[i] = gray as u8;
-                    result[i + 1] = gray as u8;
-                    result[i + 2] = gray as u8;
-                }
+                result.par_chunks_exact_mut(4).for_each(|pixel| {
+                    let gray =
+                        (pixel[0] as u32 * 299 + pixel[1] as u32 * 587 + pixel[2] as u32 * 114)
+                            / 1000;
+                    pixel[0] = gray as u8;
+                    pixel[1] = gray as u8;
+                    pixel[2] = gray as u8;
+                });
             }
             RenderFilter::Inverted => {
-                for i in (0..total_pixels * 4).step_by(4) {
-                    result[i] = 255 - result[i];
-                    result[i + 1] = 255 - result[i + 1];
-                    result[i + 2] = 255 - result[i + 2];
-                }
+                result.par_chunks_exact_mut(4).for_each(|pixel| {
+                    pixel[0] = 255 - pixel[0];
+                    pixel[1] = 255 - pixel[1];
+                    pixel[2] = 255 - pixel[2];
+                });
             }
             RenderFilter::Eco => {
-                for i in (0..total_pixels * 4).step_by(4) {
-                    let avg = ((result[i] as u32 + result[i + 1] as u32 + result[i + 2] as u32) / 3)
-                        as u8;
+                result.par_chunks_exact_mut(4).for_each(|pixel| {
+                    let avg = ((pixel[0] as u32 + pixel[1] as u32 + pixel[2] as u32) / 3) as u8;
                     let eco = (avg as u32 * 8 / 10) as u8;
-                    result[i] = eco;
-                    result[i + 1] = eco;
-                    result[i + 2] = eco;
-                }
+                    pixel[0] = eco;
+                    pixel[1] = eco;
+                    pixel[2] = eco;
+                });
             }
             RenderFilter::BlackWhite => {
-                for i in (0..total_pixels * 4).step_by(4) {
-                    let gray = (result[i] as u32 * 299
-                        + result[i + 1] as u32 * 587
-                        + result[i + 2] as u32 * 114)
-                        / 1000;
+                result.par_chunks_exact_mut(4).for_each(|pixel| {
+                    let gray =
+                        (pixel[0] as u32 * 299 + pixel[1] as u32 * 587 + pixel[2] as u32 * 114)
+                            / 1000;
                     let bw = if gray > 128 { 255 } else { 0 };
-                    result[i] = bw;
-                    result[i + 1] = bw;
-                    result[i + 2] = bw;
-                }
+                    pixel[0] = bw;
+                    pixel[1] = bw;
+                    pixel[2] = bw;
+                });
             }
             RenderFilter::Lighten => {
-                for i in (0..total_pixels * 4).step_by(4) {
+                result.par_chunks_exact_mut(4).for_each(|pixel| {
                     let lighten = |c: u8| (c as u32 * 3 / 2).min(255) as u8;
-                    result[i] = lighten(result[i]);
-                    result[i + 1] = lighten(result[i + 1]);
-                    result[i + 2] = lighten(result[i + 2]);
-                }
+                    pixel[0] = lighten(pixel[0]);
+                    pixel[1] = lighten(pixel[1]);
+                    pixel[2] = lighten(pixel[2]);
+                });
             }
             RenderFilter::NoShadow => {
-                for i in (0..total_pixels * 4).step_by(4) {
-                    let avg = ((result[i] as u32 + result[i + 1] as u32 + result[i + 2] as u32) / 3)
-                        as u8;
+                result.par_chunks_exact_mut(4).for_each(|pixel| {
+                    let avg = ((pixel[0] as u32 + pixel[1] as u32 + pixel[2] as u32) / 3) as u8;
                     if avg < 64 {
-                        result[i] = (result[i] + 64).min(255);
-                        result[i + 1] = (result[i + 1] + 64).min(255);
-                        result[i + 2] = (result[i + 2] + 64).min(255);
+                        pixel[0] = (pixel[0] + 64).min(255);
+                        pixel[1] = (pixel[1] + 64).min(255);
+                        pixel[2] = (pixel[2] + 64).min(255);
                     }
-                }
+                });
             }
             RenderFilter::None => {}
         }

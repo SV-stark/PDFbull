@@ -10,7 +10,7 @@ mod ui_settings;
 mod ui_welcome;
 mod ui_document;
 
-use models::{AppSettings, RecentFile, DocumentTab, PageBookmark, SearchResult};
+use models::{AppSettings, AppTheme, RecentFile, DocumentTab, PageBookmark, SearchResult};
 use commands::PdfCommand;
 use pdf_engine::RenderFilter;
 
@@ -218,6 +218,13 @@ impl PdfBullApp {
             self.loaded = true;
             self.load_settings();
             self.load_recent_files();
+            // Detect system theme
+            if self.settings.theme == AppTheme::System {
+                match dark_light::detect() {
+                    dark_light::Mode::Dark => self.settings.theme = AppTheme::Dark,
+                    _ => self.settings.theme = AppTheme::Light,
+                }
+            }
         }
         
         match message {
