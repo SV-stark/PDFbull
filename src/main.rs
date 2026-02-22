@@ -397,6 +397,7 @@ impl PdfBullApp {
                 Task::none()
             }
             Message::AddHighlight => {
+                let accent_color = self.settings.accent_color.clone();
                 if let Some(tab) = self.current_tab_mut() {
                     let page = tab.current_page;
                     let annotation = models::Annotation {
@@ -404,7 +405,7 @@ impl PdfBullApp {
                             .map(|d| d.as_millis() as u64)
                             .unwrap_or(0),
                         page,
-                        style: models::AnnotationStyle::Highlight { color: self.settings.accent_color.clone() },
+                        style: models::AnnotationStyle::Highlight { color: accent_color },
                         x: 100.0,
                         y: 100.0,
                         width: 200.0,
@@ -464,24 +465,15 @@ impl PdfBullApp {
                     let (cmd_tx, mut cmd_rx) = mpsc::channel(32);
                     
                     std::thread::spawn(move || {
-                        let pdfium = match pdf_engine::PdfEngine::init_pdfium() {
-                            Ok(p) => p,
-                            Err(e) => {
-                                eprintln!("Failed to init pdfium: {}", e);
-                                return;
-                            }
-                        };
+                        use std::collections::HashMap;
                         
-                        let engines: Arc<tokio::sync::Mutex<std::collections::HashMap<DocumentId, Arc<tokio::sync::Mutex<pdf_engine::PdfEngine>>>>> = 
-                            Arc::new(tokio::sync::Mutex::new(std::collections::HashMap::new()));
-                        let mut doc_paths: std::collections::HashMap<DocumentId, String> = 
-                            std::collections::HashMap::new();
+                        let doc_paths: Arc<tokio::sync::Mutex<HashMap<DocumentId, String>>> = 
+                            Arc::new(tokio::sync::Mutex::new(HashMap::new()));
                         use std::sync::atomic::{AtomicU64, Ordering};
                         static NEXT_ID: AtomicU64 = AtomicU64::new(1);
                         
                         let next_id = || DocumentId(NEXT_ID.fetch_add(1, Ordering::Relaxed));
 
-                        // Create a multi-thread Tokio runtime for blocking tasks
                         let rt = match tokio::runtime::Builder::new_multi_thread()
                             .worker_threads(4)
                             .enable_all()
@@ -496,28 +488,22 @@ impl PdfBullApp {
                         
                         rt.block_on(async move {
                             while let Some(cmd) = cmd_rx.recv().await {
-                                let engines = engines.clone();
+                                let doc_paths = doc_paths.clone();
                                 match cmd {
                                     PdfCommand::Open(path, resp) => {
                                         let id = next_id();
-                                        // Need to create the engine synchronously due to Pdfium bindings
-                                        // Then wrap it carefully
+                                        let pdfium = match pdf_engine::PdfEngine::init_pdfium() {
+                                            Ok(p) => p,
+                                            Err(e) => {
+                                                let _ = resp.blocking_send(Err(e));
+                                                continue;
+                                            }
+                                        };
                                         let mut engine = pdf_engine::PdfEngine::new(&pdfium);
                                         match engine.open_document(&path) {
                                             Ok((count, heights, width)) => {
                                                 let outline = engine.get_outline();
-                                                /*
-                                                 * We cannot pass the `pdfium` reference into `tokio::task::spawn_blocking` safely because `pdfium` is bounded to `'a`. 
-                                                 * Refactoring `PdfEngine` to take an `Arc<Pdfium>` is an ideal fix, but since `pdfium-render` might not play well with `Send`,
-                                                 * we might need to do operations on the created engine from the main thread instead of using `tokio::spawn`.
-                                                 * Wait, to use `tokio::task::spawn_blocking`, the closure must be `'static` and `Send`.
-                                                 * `PdfEngine<'a>` has a lifetime bound to `Pdfium`.
-                                                 * For now, because we are still within the `rt.block_on` and `engines` is still referencing engines with lifetime of `pdfium`,
-                                                 * we can use `rt.spawn` if it doesn't need `'static` (which it does).
-                                                 * Okay, we MUST process it on the single thread if it's tied to lifetimes.
-                                                 * Since we want to parallelize, we have an issue: `PdfEngine` has `&'a Pdfium`.
-                                                 */
-                                                engines.lock().await.insert(id, Arc::new(tokio::sync::Mutex::new(engine)));
+                                                doc_paths.lock().await.insert(id, path);
                                                 
                                                 let _ = resp.blocking_send(Ok((id, count, heights, width, outline)));
                                             }
@@ -527,24 +513,27 @@ impl PdfBullApp {
                                         }
                                     }
                                     PdfCommand::Render(doc_id, page, zoom, rotation, filter, auto_crop, resp) => {
-                                        let engines_clone = engines.clone();
-                                        // Since we can't spawn `'static`, we might just have to block the Tokio block_on loop, BUT wait.
-                                        // The original goal is to not block the Iced UI thread, which we achieve if we are in another thread.
-                                        // The current code ALREADY has a single thread handling all this. We want parallel rendering!
-                                        // But PdfEngine has a lifetime. We'll deal with making PdfEngine `'static` in `pdf_engine.rs` later if we want real async.
-                                        // For now, let's just make it not block the other things by executing it here.
-                                        // We will NOT spawn blocking here yet because of the lifetime. 
-                                        if let Some(engine_arc) = engines.lock().await.get(&doc_id).cloned() {
-                                            let res = {
-                                                let engine = engine_arc.lock().await;
-                                                engine.render_page(page, zoom, rotation, filter, auto_crop)
-                                            };
-                                            match res {
-                                                Ok((w, h, data)) => {
-                                                    let _ = resp.blocking_send(Ok((page as usize, w, h, data)));
-                                                }
+                                        let path = doc_paths.lock().await.get(&doc_id).cloned();
+                                        if let Some(path) = path {
+                                            let pdfium = match pdf_engine::PdfEngine::init_pdfium() {
+                                                Ok(p) => p,
                                                 Err(e) => {
                                                     let _ = resp.blocking_send(Err(e));
+                                                    continue;
+                                                }
+                                            };
+                                            let mut engine = pdf_engine::PdfEngine::new(&pdfium);
+                                            if let Err(e) = engine.open_document(&path) {
+                                                let _ = resp.blocking_send(Err(e));
+                                            } else {
+                                                let res = engine.render_page(page, zoom, rotation, filter, auto_crop);
+                                                match res {
+                                                    Ok((w, h, data)) => {
+                                                        let _ = resp.blocking_send(Ok((page as usize, w, h, data)));
+                                                    }
+                                                    Err(e) => {
+                                                        let _ = resp.blocking_send(Err(e));
+                                                    }
                                                 }
                                             }
                                         } else {
@@ -552,10 +541,20 @@ impl PdfBullApp {
                                         }
                                     }
                                     PdfCommand::ExtractText(doc_id, page, resp) => {
-                                        if let Some(engine_arc) = engines.lock().await.get(&doc_id).cloned() {
-                                            let res = {
-                                                let engine = engine_arc.lock().await;
+                                        let path = doc_paths.lock().await.get(&doc_id).cloned();
+                                        if let Some(path) = path {
+                                            let pdfium = match pdf_engine::PdfEngine::init_pdfium() {
+                                                Ok(p) => p,
+                                                Err(e) => {
+                                                    let _ = resp.blocking_send(Err(e));
+                                                    continue;
+                                                }
+                                            };
+                                            let mut engine = pdf_engine::PdfEngine::new(&pdfium);
+                                            let res = if engine.open_document(&path).is_ok() {
                                                 engine.extract_text(page)
+                                            } else {
+                                                Err("Failed to open document".into())
                                             };
                                             let _ = resp.blocking_send(res);
                                         } else {
@@ -563,10 +562,20 @@ impl PdfBullApp {
                                         }
                                     }
                                     PdfCommand::ExportImage(doc_id, page, zoom, path, resp) => {
-                                        if let Some(engine_arc) = engines.lock().await.get(&doc_id).cloned() {
-                                            let res = {
-                                                let engine = engine_arc.lock().await;
+                                        let doc_path = doc_paths.lock().await.get(&doc_id).cloned();
+                                        if let Some(doc_path) = doc_path {
+                                            let pdfium = match pdf_engine::PdfEngine::init_pdfium() {
+                                                Ok(p) => p,
+                                                Err(e) => {
+                                                    let _ = resp.blocking_send(Err(e));
+                                                    continue;
+                                                }
+                                            };
+                                            let mut engine = pdf_engine::PdfEngine::new(&pdfium);
+                                            let res = if engine.open_document(&doc_path).is_ok() {
                                                 engine.export_page_as_image(page, zoom, &path)
+                                            } else {
+                                                Err("Failed to open document".into())
                                             };
                                             let _ = resp.blocking_send(res);
                                         } else {
@@ -574,10 +583,20 @@ impl PdfBullApp {
                                         }
                                     }
                                     PdfCommand::ExportImages(doc_id, pages, zoom, output_dir, resp) => {
-                                        if let Some(engine_arc) = engines.lock().await.get(&doc_id).cloned() {
-                                            let res = {
-                                                let engine = engine_arc.lock().await;
+                                        let path = doc_paths.lock().await.get(&doc_id).cloned();
+                                        if let Some(path) = path {
+                                            let pdfium = match pdf_engine::PdfEngine::init_pdfium() {
+                                                Ok(p) => p,
+                                                Err(e) => {
+                                                    let _ = resp.blocking_send(Err(e));
+                                                    continue;
+                                                }
+                                            };
+                                            let mut engine = pdf_engine::PdfEngine::new(&pdfium);
+                                            let res = if engine.open_document(&path).is_ok() {
                                                 engine.export_pages_as_images(&pages, zoom, &output_dir)
+                                            } else {
+                                                Err("Failed to open document".into())
                                             };
                                             let _ = resp.blocking_send(res);
                                         } else {
@@ -585,10 +604,20 @@ impl PdfBullApp {
                                         }
                                     }
                                     PdfCommand::ExportPdf(doc_id, pdf_path, annotations, resp) => {
-                                        if let Some(engine_arc) = engines.lock().await.get(&doc_id).cloned() {
-                                            let res = {
-                                                let engine = engine_arc.lock().await;
+                                        let path = doc_paths.lock().await.get(&doc_id).cloned();
+                                        if let Some(path) = path {
+                                            let pdfium = match pdf_engine::PdfEngine::init_pdfium() {
+                                                Ok(p) => p,
+                                                Err(e) => {
+                                                    let _ = resp.blocking_send(Err(e));
+                                                    continue;
+                                                }
+                                            };
+                                            let mut engine = pdf_engine::PdfEngine::new(&pdfium);
+                                            let res = if engine.open_document(&path).is_ok() {
                                                 engine.save_annotations(&annotations, &pdf_path)
+                                            } else {
+                                                Err("Failed to open document".into())
                                             };
                                             let _ = resp.blocking_send(res);
                                         } else {
@@ -596,10 +625,20 @@ impl PdfBullApp {
                                         }
                                     }
                                     PdfCommand::Search(doc_id, query, resp) => {
-                                        if let Some(engine_arc) = engines.lock().await.get(&doc_id).cloned() {
-                                            let res = {
-                                                let engine = engine_arc.lock().await;
+                                        let path = doc_paths.lock().await.get(&doc_id).cloned();
+                                        if let Some(path) = path {
+                                            let pdfium = match pdf_engine::PdfEngine::init_pdfium() {
+                                                Ok(p) => p,
+                                                Err(e) => {
+                                                    let _ = resp.blocking_send(Err(e));
+                                                    continue;
+                                                }
+                                            };
+                                            let mut engine = pdf_engine::PdfEngine::new(&pdfium);
+                                            let res = if engine.open_document(&path).is_ok() {
                                                 engine.search(&query, None)
+                                            } else {
+                                                Err("Failed to open document".into())
                                             };
                                             let _ = resp.blocking_send(res);
                                         } else {
@@ -607,18 +646,28 @@ impl PdfBullApp {
                                         }
                                     }
                                     PdfCommand::LoadAnnotations(_doc_id, pdf_path, resp) => {
-                                        if let Some(engine_arc) = engines.lock().await.values().next().cloned() {
-                                            let res = {
-                                                let engine = engine_arc.lock().await;
+                                        let path = doc_paths.lock().await.values().next().cloned();
+                                        if let Some(path) = path {
+                                            let pdfium = match pdf_engine::PdfEngine::init_pdfium() {
+                                                Ok(p) => p,
+                                                Err(e) => {
+                                                    let _ = resp.blocking_send(Err(e));
+                                                    continue;
+                                                }
+                                            };
+                                            let mut engine = pdf_engine::PdfEngine::new(&pdfium);
+                                            let res = if engine.open_document(&path).is_ok() {
                                                 engine.load_annotations(&pdf_path)
+                                            } else {
+                                                Err("Failed to open document".into())
                                             };
                                             let _ = resp.blocking_send(res);
                                         } else {
-                                            let _ = resp.blocking_send(Err("No engine".into()));
+                                            let _ = resp.blocking_send(Err("No document found".into()));
                                         }
                                     }
                                     PdfCommand::Close(doc_id) => {
-                                        engines.lock().await.remove(&doc_id);
+                                        doc_paths.lock().await.remove(&doc_id);
                                     }
                                 }
                             }
@@ -857,21 +906,20 @@ impl PdfBullApp {
                 Task::none()
             }
             Message::RequestRender(page_idx) => {
-                let tab = match self.current_tab() {
-                    Some(t) => t,
-                    None => return Task::none(),
+                let (doc_id, zoom, rotation, filter, auto_crop) = {
+                    let tab = match self.current_tab() {
+                        Some(t) => t,
+                        None => return Task::none(),
+                    };
+                    
+                    if tab.rendered_pages.contains_key(&page_idx) {
+                        return Task::none();
+                    }
+                    
+                    (tab.id, tab.zoom, tab.rotation, tab.render_filter, tab.auto_crop)
                 };
                 
-                if tab.rendered_pages.contains_key(&page_idx) {
-                    return Task::none();
-                }
-                
                 self.rendering_count += 1;
-                let doc_id = tab.id;
-                let zoom = tab.zoom;
-                let rotation = tab.rotation;
-                let filter = tab.render_filter;
-                let auto_crop = tab.auto_crop;
                 
                 let engine = match &self.engine {
                     Some(e) => e,

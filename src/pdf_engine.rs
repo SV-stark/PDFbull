@@ -433,7 +433,8 @@ impl<'a> PdfEngine<'a> {
     ) -> Result<Vec<String>, String> {
         if let Some(doc) = &self.active_doc {
             let mut exported_paths = Vec::new();
-            let doc_name = self.active_path
+            let doc_name = self
+                .active_path
                 .as_ref()
                 .and_then(|p| std::path::Path::new(p).file_stem())
                 .and_then(|s| s.to_str())
@@ -467,12 +468,12 @@ impl<'a> PdfEngine<'a> {
 
                 let filename = format!("{}_page{}_{}.png", doc_name, page_num, idx);
                 let path = std::path::Path::new(output_dir).join(&filename);
-                
+
                 if let Err(e) = rgba.save(&path) {
                     eprintln!("Failed to save page {}: {}", page_num, e);
                     continue;
                 }
-                
+
                 exported_paths.push(path.to_string_lossy().to_string());
             }
 
@@ -489,32 +490,38 @@ impl<'a> PdfEngine<'a> {
     ) -> Result<String, String> {
         let pdf_path_obj = std::path::Path::new(pdf_path);
         let annotation_path = pdf_path_obj.with_extension("annotations.json");
-        
+
         let json = serde_json::to_string_pretty(annotations)
             .map_err(|e| format!("Failed to serialize annotations: {}", e))?;
-        
+
         std::fs::write(&annotation_path, json)
             .map_err(|e| format!("Failed to write annotations file: {}", e))?;
-        
+
         Ok(annotation_path.to_string_lossy().to_string())
     }
 
-    pub fn load_annotations(&self, pdf_path: &str) -> Result<Vec<crate::models::Annotation>, String> {
+    pub fn load_annotations(
+        &self,
+        pdf_path: &str,
+    ) -> Result<Vec<crate::models::Annotation>, String> {
         let pdf_path_obj = std::path::Path::new(pdf_path);
         let annotation_path = pdf_path_obj.with_extension("annotations.json");
-        
+
         if !annotation_path.exists() {
             return Ok(Vec::new());
         }
-        
+
         let json = std::fs::read_to_string(&annotation_path)
             .map_err(|e| format!("Failed to read annotations file: {}", e))?;
-        
-        serde_json::from_str(&json)
-            .map_err(|e| format!("Failed to parse annotations: {}", e))
+
+        serde_json::from_str(&json).map_err(|e| format!("Failed to parse annotations: {}", e))
     }
 
-    pub fn search(&self, query: &str, sender: Option<tokio::sync::mpsc::Sender<Result<Vec<(usize, String, f32)>, String>>>) -> Result<Vec<(usize, String, f32)>, String> {
+    pub fn search(
+        &self,
+        query: &str,
+        sender: Option<tokio::sync::mpsc::Sender<Result<Vec<(usize, String, f32)>, String>>>,
+    ) -> Result<Vec<(usize, String, f32)>, String> {
         if let Some(doc) = &self.active_doc {
             let mut results = Vec::new();
             let query_lower = query.to_lowercase();
