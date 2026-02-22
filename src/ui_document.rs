@@ -5,19 +5,14 @@ use iced::widget::{
 };
 use iced::{Element, Length};
 
-fn hex_to_rgb(hex: &str) -> (u8, u8, u8) {
-    let hex = hex.trim_start_matches('#');
-    if hex.len() != 6 {
-        return (0, 0, 0);
-    }
-    let r = u8::from_str_radix(&hex[0..2], 16).unwrap_or(0);
-    let g = u8::from_str_radix(&hex[2..4], 16).unwrap_or(0);
-    let b = u8::from_str_radix(&hex[4..6], 16).unwrap_or(0);
-    (r, g, b)
-}
-
 fn render_toolbar(app: &PdfBullApp) -> Element<crate::Message> {
     let tab = &app.tabs[app.active_tab];
+
+    let loading_indicator = if app.rendering_count > 0 {
+        row![text("⟳").size(18)]
+    } else {
+        row![]
+    };
 
     row![
         button("Open").on_press(crate::Message::OpenDocument),
@@ -56,6 +51,7 @@ fn render_toolbar(app: &PdfBullApp) -> Element<crate::Message> {
         button("BM").on_press(crate::Message::AddBookmark),
         button("HiLite").on_press(crate::Message::AddHighlight),
         button("Rect").on_press(crate::Message::AddRectangle),
+        button("SaveAnn").on_press(crate::Message::SaveAnnotations),
         Space::new().width(Length::Fixed(10.0)),
         text_input("Search...", &app.search_query)
             .on_input(crate::Message::Search)
@@ -63,6 +59,9 @@ fn render_toolbar(app: &PdfBullApp) -> Element<crate::Message> {
         Space::new().width(Length::Fixed(10.0)),
         button("Text").on_press(crate::Message::ExtractText),
         button("Export").on_press(crate::Message::ExportImage),
+        button("ExpAll").on_press(crate::Message::ExportImages),
+        Space::new().width(Length::Fixed(10.0)),
+        loading_indicator,
         Space::new().width(Length::Fill),
         button("?").on_press(crate::Message::ToggleKeyboardHelp),
         button("⛶").on_press(crate::Message::ToggleFullscreen),
@@ -126,6 +125,23 @@ fn render_sidebar(app: &PdfBullApp) -> Element<crate::Message> {
         }
     }
 
+    if !tab.annotations.is_empty() {
+        sidebar_col = sidebar_col.push(text("Annotations").size(14));
+        for (idx, ann) in tab.annotations.iter().enumerate() {
+            let label = match &ann.style {
+                crate::models::AnnotationStyle::Highlight { .. } => format!("Highlight P{}", ann.page + 1),
+                crate::models::AnnotationStyle::Rectangle { .. } => format!("Rect P{}", ann.page + 1),
+                crate::models::AnnotationStyle::Text { text, .. } => format!("Text: {}", &text[..text.len().min(20)]),
+            };
+            sidebar_col = sidebar_col.push(row![
+                button(text(label))
+                    .on_press(crate::Message::JumpToPage(ann.page))
+                    .width(Length::Fill),
+                button("×").on_press(crate::Message::DeleteAnnotation(idx))
+            ]);
+        }
+    }
+
     sidebar_col = sidebar_col.push(text("Pages").size(14));
     for page_idx in 0..tab.total_pages {
         if let Some(handle) = tab.thumbnails.get(&page_idx) {
@@ -173,62 +189,7 @@ fn render_pdf_content(app: &PdfBullApp) -> Element<crate::Message> {
         if visible_pages.contains(&page_idx) {
             if let Some(handle) = tab.rendered_pages.get(&page_idx) {
                 let img = iced::widget::Image::new(handle.clone()).width(Length::Fill);
-                
-                // Draw annotations
-                let mut page_content = iced::widget::Stack::new().push(img);
-                
-                let scale = if let Some(h) = tab.page_heights.get(page_idx) {
-                    *h / 800.0 // Approximate scale ratio based on default rendering 
-                } else {
-                    1.0
-                };
-
-                for ann in tab.annotations.iter().filter(|a| a.page == page_idx) {
-                    let ann_widget: Element<_> = match &ann.style {
-                        crate::models::AnnotationStyle::Highlight { color } => {
-                            let (r, g, b) = hex_to_rgb(color);
-                            container(Space::new(Length::Fixed(ann.width * scale), Length::Fixed(ann.height * scale)))
-                                .style(move |_| container::Appearance {
-                                    background: Some(iced::Color::from_rgba8(r, g, b, 0.4).into()),
-                                    ..Default::default()
-                                })
-                                .into()
-                        },
-                        crate::models::AnnotationStyle::Rectangle { color, thickness, fill } => {
-                            let (r, g, b) = hex_to_rgb(color);
-                            container(Space::new(Length::Fixed(ann.width * scale), Length::Fixed(ann.height * scale)))
-                                .style(move |_| container::Appearance {
-                                    background: if *fill { Some(iced::Color::from_rgba8(r, g, b, 0.2).into()) } else { None },
-                                    border: iced::border::Border {
-                                        color: iced::Color::from_rgb8(r, g, b),
-                                        width: *thickness,
-                                        radius: 0.0.into(),
-                                    },
-                                    ..Default::default()
-                                })
-                                .into()
-                        },
-                        crate::models::AnnotationStyle::Text { text, color, font_size } => {
-                            let (r, g, b) = hex_to_rgb(color);
-                            iced::widget::text(text.clone())
-                                .color(iced::Color::from_rgb8(r, g, b))
-                                .size(*font_size as u16)
-                                .into()
-                        }
-                    };
-                    // Instead of full absolute positioning with stack, iced doesn't have a default AbsPos widget.
-                    // But Stack supports absolute children if padded.
-                    let positioned = container(ann_widget)
-                        .padding(iced::Padding {
-                            top: ann.y * scale,
-                            right: 0.0,
-                            bottom: 0.0,
-                            left: ann.x * scale,
-                        });
-                    page_content = page_content.push(positioned);
-                }
-
-                pdf_column = pdf_column.push(container(page_content).padding(5));
+                pdf_column = pdf_column.push(container(img).padding(5));
             } else {
                 pdf_column = pdf_column.push(placeholder);
             }

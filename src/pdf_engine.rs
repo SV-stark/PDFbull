@@ -5,6 +5,17 @@ use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 use std::time::Duration;
 
+fn parse_hex_color(hex: &str) -> (f32, f32, f32) {
+    let hex = hex.trim_start_matches('#');
+    if hex.len() != 6 {
+        return (0.0, 0.0, 0.0);
+    }
+    let r = u8::from_str_radix(&hex[0..2], 16).unwrap_or(0) as f32 / 255.0;
+    let g = u8::from_str_radix(&hex[2..4], 16).unwrap_or(0) as f32 / 255.0;
+    let b = u8::from_str_radix(&hex[4..6], 16).unwrap_or(0) as f32 / 255.0;
+    (r, g, b)
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum RenderFilter {
     None,
@@ -420,6 +431,95 @@ impl<'a> PdfEngine<'a> {
         } else {
             Err("No active document".to_string())
         }
+    }
+
+    pub fn export_pages_as_images(
+        &self,
+        page_nums: &[i32],
+        scale: f32,
+        output_dir: &str,
+    ) -> Result<Vec<String>, String> {
+        if let Some(doc) = &self.active_doc {
+            let mut exported_paths = Vec::new();
+            let doc_name = self.active_path
+                .as_ref()
+                .and_then(|p| std::path::Path::new(p).file_stem())
+                .and_then(|s| s.to_str())
+                .unwrap_or("document");
+
+            for (idx, &page_num) in page_nums.iter().enumerate() {
+                if page_num < 0 || page_num as usize >= doc.pages().len() {
+                    continue;
+                }
+
+                let page = match doc.pages().get(page_num as u16) {
+                    Ok(p) => p,
+                    Err(_) => continue,
+                };
+
+                let render_config = PdfRenderConfig::new()
+                    .set_target_width((page.width().value * scale) as i32)
+                    .set_maximum_height((page.height().value * scale) as i32)
+                    .rotate(PdfPageRenderRotation::None, false);
+
+                let bitmap = match page.render_with_config(&render_config) {
+                    Ok(b) => b,
+                    Err(_) => continue,
+                };
+
+                let img = bitmap.as_image();
+                let rgba = match img.as_rgba8() {
+                    Some(i) => i,
+                    None => continue,
+                };
+
+                let filename = format!("{}_page{}_{}.png", doc_name, page_num, idx);
+                let path = std::path::Path::new(output_dir).join(&filename);
+                
+                if let Err(e) = rgba.save(&path) {
+                    eprintln!("Failed to save page {}: {}", page_num, e);
+                    continue;
+                }
+                
+                exported_paths.push(path.to_string_lossy().to_string());
+            }
+
+            Ok(exported_paths)
+        } else {
+            Err("No active document".to_string())
+        }
+    }
+
+    pub fn save_annotations(
+        &self,
+        annotations: &[crate::models::Annotation],
+        pdf_path: &str,
+    ) -> Result<String, String> {
+        let pdf_path_obj = std::path::Path::new(pdf_path);
+        let annotation_path = pdf_path_obj.with_extension("annotations.json");
+        
+        let json = serde_json::to_string_pretty(annotations)
+            .map_err(|e| format!("Failed to serialize annotations: {}", e))?;
+        
+        std::fs::write(&annotation_path, json)
+            .map_err(|e| format!("Failed to write annotations file: {}", e))?;
+        
+        Ok(annotation_path.to_string_lossy().to_string())
+    }
+
+    pub fn load_annotations(&self, pdf_path: &str) -> Result<Vec<crate::models::Annotation>, String> {
+        let pdf_path_obj = std::path::Path::new(pdf_path);
+        let annotation_path = pdf_path_obj.with_extension("annotations.json");
+        
+        if !annotation_path.exists() {
+            return Ok(Vec::new());
+        }
+        
+        let json = std::fs::read_to_string(&annotation_path)
+            .map_err(|e| format!("Failed to read annotations file: {}", e))?;
+        
+        serde_json::from_str(&json)
+            .map_err(|e| format!("Failed to parse annotations: {}", e))
     }
 
     pub fn search(&self, query: &str, sender: Option<tokio::sync::mpsc::Sender<Result<Vec<(usize, String, f32)>, String>>>) -> Result<Vec<(usize, String, f32)>, String> {

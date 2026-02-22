@@ -20,6 +20,38 @@ use tokio::sync::mpsc;
 use std::path::PathBuf;
 use std::fs;
 
+std::panic::set_hook(Box::new(|panic_info| {
+    let msg = if let Some(s) = panic_info.payload().downcast_ref::<&str>() {
+        s.to_string()
+    } else if let Some(s) = panic_info.payload().downcast_ref::<String>() {
+        s.clone()
+    } else {
+        "Unknown panic".to_string()
+    };
+    
+    let location = panic_info.location()
+        .map(|l| format!("{}:{}:{}", l.file(), l.line(), l.column()))
+        .unwrap_or_else(|| "unknown location".to_string());
+    
+    eprintln!("PANIC at {}: {}", location, msg);
+    
+    let config_dir = dirs::config_dir()
+        .unwrap_or_else(|| std::path::PathBuf::from("."))
+        .join("pdfbull");
+    let _ = std::fs::create_dir_all(&config_dir);
+    let crash_log = config_dir.join("crash.log");
+    let timestamp = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0);
+    let log_entry = format!("[{}] PANIC at {}: {}\n", timestamp, location, msg);
+    let _ = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(&crash_log)
+        .and_then(|mut f| std::io::Write::write_all(&mut f, log_entry.as_bytes()));
+}));
+
 #[derive(Debug, Clone)]
 struct EngineState {
     cmd_tx: mpsc::Sender<PdfCommand>,
@@ -42,6 +74,7 @@ enum Message {
     JumpToBookmark(usize),
     AddHighlight,
     AddRectangle,
+    DeleteAnnotation(usize),
     SetFilter(RenderFilter),
     ToggleAutoCrop,
     DocumentOpenedWithPath((PathBuf, (DocumentId, usize, Vec<f32>, f32, Vec<pdf_engine::Bookmark>))),
@@ -68,6 +101,10 @@ enum Message {
     ExtractText,
     TextExtracted(Result<String, String>),
     ExportImage,
+    ExportImages,
+    SaveAnnotations,
+    AnnotationsSaved(Result<String, String>),
+    AnnotationsLoaded(DocumentId, Vec<models::Annotation>),
     ImageExported(Result<String, String>),
     OpenRecentFile(RecentFile),
     Error(String),
@@ -85,6 +122,7 @@ pub struct PdfBullApp {
     pub search_query: String,
     pub engine: Option<EngineState>,
     pub loaded: bool,
+    pub rendering_count: usize,
 }
 
 impl Default for PdfBullApp {
@@ -101,6 +139,7 @@ impl Default for PdfBullApp {
             search_query: String::new(),
             engine: None,
             loaded: false,
+            rendering_count: 0,
         }
     }
 }
@@ -118,6 +157,7 @@ impl PdfBullApp {
             if let Ok(settings) = serde_json::from_str::<AppSettings>(&data) {
                 self.settings = settings;
             } else {
+                eprintln!("Warning: Corrupted settings.json, using defaults");
                 // Try to parse old format with fewer fields
                 if let Ok(value) = serde_json::from_str::<serde_json::Value>(&data) {
                     let mut settings = AppSettings::default();
@@ -155,6 +195,8 @@ impl PdfBullApp {
         if let Ok(data) = fs::read_to_string(&path) {
             if let Ok(files) = serde_json::from_str(&data) {
                 self.recent_files = files;
+            } else {
+                eprintln!("Warning: Corrupted recent_files.json, using empty list");
             }
         }
     }
@@ -180,8 +222,8 @@ impl PdfBullApp {
             name,
             last_opened: std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
-                .unwrap_or_default()
-                .as_secs(),
+                .map(|d| d.as_secs())
+                .unwrap_or(0),
         };
         
         self.recent_files.insert(0, new_file);
@@ -194,8 +236,9 @@ impl PdfBullApp {
     pub fn load_session(&mut self) -> Option<SessionData> {
         let path = get_config_dir().join("session.json");
         if let Ok(data) = fs::read_to_string(&path) {
-            if let Ok(session) = serde_json::from_str(&data) {
-                return Some(session);
+            match serde_json::from_str::<SessionData>(&data) {
+                Ok(session) => return Some(session),
+                Err(e) => eprintln!("Warning: Corrupted session.json: {}", e),
             }
         }
         None
@@ -374,7 +417,9 @@ impl PdfBullApp {
                 if let Some(tab) = self.current_tab_mut() {
                     let page = tab.current_page;
                     let annotation = models::Annotation {
-                        id: std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_millis() as u64,
+                        id: std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH)
+                            .map(|d| d.as_millis() as u64)
+                            .unwrap_or(0),
                         page,
                         style: models::AnnotationStyle::Highlight { color: self.settings.accent_color.clone() },
                         x: 100.0,
@@ -391,7 +436,9 @@ impl PdfBullApp {
                 if let Some(tab) = self.current_tab_mut() {
                     let page = tab.current_page;
                     let annotation = models::Annotation {
-                        id: std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_millis() as u64,
+                        id: std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH)
+                            .map(|d| d.as_millis() as u64)
+                            .unwrap_or(0),
                         page,
                         style: models::AnnotationStyle::Rectangle { color: "#ff0000".to_string(), thickness: 2.0, fill: false },
                         x: 150.0,
@@ -400,6 +447,15 @@ impl PdfBullApp {
                         height: 100.0,
                     };
                     tab.annotations.push(annotation);
+                }
+                self.save_session();
+                Task::none()
+            }
+            Message::DeleteAnnotation(idx) => {
+                if let Some(tab) = self.current_tab_mut() {
+                    if idx < tab.annotations.len() {
+                        tab.annotations.remove(idx);
+                    }
                 }
                 self.save_session();
                 Task::none()
@@ -448,11 +504,17 @@ impl PdfBullApp {
                         }
 
                         // Create a multi-thread Tokio runtime for blocking tasks
-                        let rt = tokio::runtime::Builder::new_multi_thread()
+                        let rt = match tokio::runtime::Builder::new_multi_thread()
                             .worker_threads(4)
                             .enable_all()
                             .build()
-                            .unwrap();
+                        {
+                            Ok(rt) => rt,
+                            Err(e) => {
+                                eprintln!("Failed to create Tokio runtime: {}", e);
+                                return Task::none();
+                            }
+                        };
                         
                         rt.block_on(async move {
                             while let Some(cmd) = cmd_rx.recv().await {
@@ -533,6 +595,28 @@ impl PdfBullApp {
                                             let _ = resp.blocking_send(Err("Document not found".into()));
                                         }
                                     }
+                                    PdfCommand::ExportImages(doc_id, pages, zoom, output_dir, resp) => {
+                                        if let Some(engine_arc) = engines.lock().await.get(&doc_id).cloned() {
+                                            let res = {
+                                                let engine = engine_arc.lock().await;
+                                                engine.export_pages_as_images(&pages, zoom, &output_dir)
+                                            };
+                                            let _ = resp.blocking_send(res);
+                                        } else {
+                                            let _ = resp.blocking_send(Err("Document not found".into()));
+                                        }
+                                    }
+                                    PdfCommand::ExportPdf(doc_id, pdf_path, annotations, resp) => {
+                                        if let Some(engine_arc) = engines.lock().await.get(&doc_id).cloned() {
+                                            let res = {
+                                                let engine = engine_arc.lock().await;
+                                                engine.save_annotations(&annotations, &pdf_path)
+                                            };
+                                            let _ = resp.blocking_send(res);
+                                        } else {
+                                            let _ = resp.blocking_send(Err("Document not found".into()));
+                                        }
+                                    }
                                     PdfCommand::Search(doc_id, query, resp) => {
                                         if let Some(engine_arc) = engines.lock().await.get(&doc_id).cloned() {
                                             let res = {
@@ -542,6 +626,17 @@ impl PdfBullApp {
                                             let _ = resp.blocking_send(res);
                                         } else {
                                             let _ = resp.blocking_send(Err("Document not found".into()));
+                                        }
+                                    }
+                                    PdfCommand::LoadAnnotations(_doc_id, pdf_path, resp) => {
+                                        if let Some(engine_arc) = engines.lock().await.values().next().cloned() {
+                                            let res = {
+                                                let engine = engine_arc.lock().await;
+                                                engine.load_annotations(&pdf_path)
+                                            };
+                                            let _ = resp.blocking_send(res);
+                                        } else {
+                                            let _ = resp.blocking_send(Err("No engine".into()));
                                         }
                                     }
                                     PdfCommand::Close(doc_id) => {
@@ -613,6 +708,12 @@ impl PdfBullApp {
                     Ok((doc_id, count, heights, width, outline)) => {
                         let default_zoom = self.settings.default_zoom;
                         let default_filter = self.settings.default_filter;
+                        let pdf_path = if let Some(tab) = self.tabs.get(self.active_tab) {
+                            Some(tab.path.to_string_lossy().to_string())
+                        } else {
+                            None
+                        };
+                        
                         if let Some(tab) = self.tabs.get_mut(self.active_tab) {
                             tab.id = doc_id;
                             tab.total_pages = count;
@@ -622,6 +723,25 @@ impl PdfBullApp {
                             tab.is_loading = false;
                             tab.zoom = default_zoom;
                             tab.render_filter = default_filter;
+                        }
+                        
+                        if let Some(path_str) = pdf_path {
+                            if let Some(engine) = &self.engine {
+                                let cmd_tx = engine.cmd_tx.clone();
+                                let doc_id = doc_id;
+                                return Task::perform(
+                                    async move {
+                                        let (resp_tx, mut resp_rx) = mpsc::channel(1);
+                                        let _ = cmd_tx.send(PdfCommand::LoadAnnotations(doc_id, path_str, resp_tx)).await;
+                                        match resp_rx.recv().await {
+                                            Some(Ok(annotations)) => Ok((doc_id, annotations)),
+                                            Some(Err(_)) => Ok((doc_id, Vec::new())),
+                                            None => Ok((doc_id, Vec::new())),
+                                        }
+                                    },
+                                    |(doc_id, annotations)| Message::AnnotationsLoaded(doc_id, annotations),
+                                );
+                            }
                         }
                         self.save_session();
                         self.render_visible_pages()
@@ -634,6 +754,12 @@ impl PdfBullApp {
                         Task::none()
                     }
                 }
+            }
+            Message::AnnotationsLoaded(doc_id, annotations) => {
+                if let Some(tab) = self.tabs.iter_mut().find(|t| t.id == doc_id) {
+                    tab.annotations = annotations;
+                }
+                Task::none()
             }
             Message::OpenFile(path) => {
                 if self.engine.is_none() {
@@ -969,6 +1095,92 @@ impl PdfBullApp {
                 match result {
                     Ok(path) => eprintln!("Image exported to: {}", path),
                     Err(e) => eprintln!("Export error: {}", e),
+                }
+                Task::none()
+            }
+            Message::ExportImages => {
+                let tab = match self.current_tab() {
+                    Some(t) => t,
+                    None => return Task::none(),
+                };
+                
+                let total_pages = tab.total_pages;
+                let zoom = tab.zoom;
+                let doc_id = tab.id;
+                
+                let engine = match &self.engine {
+                    Some(e) => e,
+                    None => return Task::none(),
+                };
+                
+                let cmd_tx = engine.cmd_tx.clone();
+                Task::perform(
+                    async move {
+                        let folder = rfd::AsyncFileDialog::new()
+                            .pick_folder()
+                            .await;
+                        
+                        match folder {
+                            Some(f) => {
+                                let path = f.path().to_string_lossy().to_string();
+                                let pages: Vec<i32> = (0..total_pages as i32).collect();
+                                let (resp_tx, mut resp_rx) = mpsc::channel(1);
+                                let _ = cmd_tx.send(PdfCommand::ExportImages(doc_id, pages, zoom, path.clone(), resp_tx)).await;
+                                match resp_rx.recv().await {
+                                    Some(Ok(paths)) => Ok(paths.join(", ")),
+                                    Some(Err(e)) => Err(e),
+                                    None => Err("Engine died".into()),
+                                }
+                            }
+                            None => Err("Cancelled".into()),
+                        }
+                    },
+                    Message::ImageExported,
+                )
+            }
+            Message::SaveAnnotations => {
+                let tab = match self.current_tab() {
+                    Some(t) => t,
+                    None => return Task::none(),
+                };
+                
+                if tab.annotations.is_empty() {
+                    eprintln!("No annotations to save");
+                    return Task::none();
+                }
+                
+                let annotations = tab.annotations.clone();
+                let pdf_path = tab.path.to_string_lossy().to_string();
+                
+                let engine = match &self.engine {
+                    Some(e) => e,
+                    None => return Task::none(),
+                };
+                
+                let cmd_tx = engine.cmd_tx.clone();
+                Task::perform(
+                    async move {
+                        let (resp_tx, mut resp_rx) = mpsc::channel(1);
+                        let _ = cmd_tx.send(PdfCommand::ExportPdf(doc_id, pdf_path.clone(), annotations, resp_tx)).await;
+                        match resp_rx.recv().await {
+                            Some(Ok(path)) => Ok(format!("Annotations saved to {}", path)),
+                            Some(Err(e)) => Err(e),
+                            None => Err("Engine died".into()),
+                        }
+                    },
+                    Message::AnnotationsSaved,
+                )
+            }
+            Message::AnnotationsSaved(result) => {
+                match result {
+                    Ok(msg) => eprintln!("{}", msg),
+                    Err(e) => eprintln!("Save annotations error: {}", e),
+                }
+                Task::none()
+            }
+            Message::AnnotationsLoaded(_doc_id, annotations) => {
+                if let Some(tab) = self.current_tab_mut() {
+                    tab.annotations = annotations;
                 }
                 Task::none()
             }

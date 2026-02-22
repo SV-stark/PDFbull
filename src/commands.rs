@@ -1,4 +1,4 @@
-use crate::models::DocumentId;
+use crate::models::{Annotation, DocumentId};
 use crate::pdf_engine::RenderFilter;
 use std::sync::Arc;
 use tokio::sync::mpsc;
@@ -36,6 +36,24 @@ pub enum PdfCommand {
         f32,
         String,
         mpsc::Sender<Result<(), String>>,
+    ),
+    ExportImages(
+        DocumentId,
+        Vec<i32>,
+        f32,
+        String,
+        mpsc::Sender<Result<Vec<String>, String>>,
+    ),
+    ExportPdf(
+        DocumentId,
+        String,
+        Vec<Annotation>,
+        mpsc::Sender<Result<String, String>>,
+    ),
+    LoadAnnotations(
+        DocumentId,
+        String,
+        mpsc::Sender<Result<Vec<Annotation>, String>>,
     ),
     Search(
         DocumentId,

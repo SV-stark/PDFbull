@@ -77,6 +77,7 @@ impl Default for AppSettings {
 pub struct SessionData {
     pub open_tabs: Vec<PathBuf>,
     pub active_tab: usize,
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RecentFile {
