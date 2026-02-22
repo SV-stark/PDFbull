@@ -5,10 +5,10 @@
 </p>
 
 <p align="center">
-  [![Nightly Release](https://github.com/SV-stark/PDFbull/actions/workflows/release.yml/badge.svg)](https://github.com/SV-stark/PDFbull/releases/tag/nightly)
-  [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
-  [![Built with Iced](https://img.shields.io/badge/Built%20with-Iced-blue)](https://iced.rs/)
-  [![Rust](https://img.shields.io/badge/Backend-Rust-black?logo=rust)](https://www.rust-lang.org/)
+  <a href="https://github.com/SV-stark/PDFbull/releases/tag/nightly"><img src="https://github.com/SV-stark/PDFbull/actions/workflows/release.yml/badge.svg" alt="Nightly Release"></a>
+  <a href="LICENSE"><img src="https://img.shields.io/badge/License-MIT-blue.svg" alt="License: MIT"></a>
+  <a href="https://iced.rs/"><img src="https://img.shields.io/badge/Built%20with-Iced-blue" alt="Built with Iced"></a>
+  <a href="https://www.rust-lang.org/"><img src="https://img.shields.io/badge/Backend-Rust-black?logo=rust" alt="Rust"></a>
 </p>
 
 **PDFbull** is a professional, high-performance PDF reader and editor engineered for efficiency. By combining the power of **Google's PDFium engine** with the safety of **Rust** and the declarative, native UI toolkit **Iced**, PDFbull delivers a desktop experience that is significantly faster and more resource-efficient than traditional Electron or WebView-based alternatives.
