@@ -26,11 +26,7 @@ pub enum PdfCommand {
         f32,
         i32,
         RenderFilter,
-        mpsc::Sender<Result<(usize, u32, u32, Arc<Vec<u8>>), String>>,
-    ),
-    RenderThumbnail(
-        DocumentId,
-        i32,
+        bool,
         mpsc::Sender<Result<(usize, u32, u32, Arc<Vec<u8>>), String>>,
     ),
     ExtractText(DocumentId, i32, mpsc::Sender<Result<String, String>>),

@@ -1,10 +1,11 @@
 use moka::sync::Cache;
 use pdfium_render::prelude::*;
 use rayon::prelude::*;
+use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 use std::time::Duration;
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum RenderFilter {
     None,
     Grayscale,
@@ -139,12 +140,18 @@ impl<'a> PdfEngine<'a> {
         scale: f32,
         rotation: i32,
         filter: RenderFilter,
+        auto_crop: bool,
     ) -> Result<(u32, u32, Arc<Vec<u8>>), String> {
-        // Higher precision key: scale * 10000 + rotation
+        // Higher precision key: scale * 10000 + rotation + auto_crop
         let scale_key = (scale * 10000.0) as u32;
         let rotation_key = ((rotation + 360) % 360) as u32;
         let filter_key = filter as u32;
-        let cache_key = (page_num, scale_key * 100 + rotation_key, filter_key);
+        let crop_key = if auto_crop { 1 } else { 0 };
+        let cache_key = (
+            page_num,
+            scale_key * 100 + rotation_key + filter_key * 1000,
+            crop_key,
+        );
 
         if let Some(cached) = self.page_cache.get(&cache_key) {
             return Ok(cached);
@@ -168,9 +175,52 @@ impl<'a> PdfEngine<'a> {
                 _ => PdfPageRenderRotation::None,
             };
 
+            let (target_w, target_h, crop_offset) = if auto_crop {
+                // Render at higher resolution first to detect content
+                let hi_scale = scale * 2.0;
+                let hi_w = (page.width().value * hi_scale) as i32;
+                let hi_h = (page.height().value * hi_scale) as i32;
+
+                let hi_config = PdfRenderConfig::new()
+                    .set_target_width(hi_w)
+                    .set_maximum_height(hi_h)
+                    .rotate(render_rotation, false);
+
+                let hi_bitmap = page
+                    .render_with_config(&hi_config)
+                    .map_err(|e| e.to_string())?;
+
+                // Find content bounding box
+                let bbox = Self::detect_content_bbox(
+                    &hi_bitmap.as_rgba_bytes(),
+                    hi_bitmap.width() as u32,
+                    hi_bitmap.height() as u32,
+                );
+
+                if let Some((x1, y1, x2, y2)) = bbox {
+                    let crop_w = ((x2 - x1) as f32 / hi_scale * scale) as i32;
+                    let crop_h = ((y2 - y1) as f32 / hi_scale * scale) as i32;
+                    let offset_x = (x1 as f32 / hi_scale * scale) as i32;
+                    let offset_y = (y1 as f32 / hi_scale * scale) as i32;
+                    (crop_w.max(100), crop_h.max(100), Some((offset_x, offset_y)))
+                } else {
+                    (
+                        (page.width().value * scale) as i32,
+                        (page.height().value * scale) as i32,
+                        None,
+                    )
+                }
+            } else {
+                (
+                    (page.width().value * scale) as i32,
+                    (page.height().value * scale) as i32,
+                    None,
+                )
+            };
+
             let render_config = PdfRenderConfig::new()
-                .set_target_width((page.width().value * scale) as i32)
-                .set_maximum_height((page.height().value * scale) as i32)
+                .set_target_width(target_w)
+                .set_maximum_height(target_h)
                 .rotate(render_rotation, false);
 
             let bitmap = page
@@ -182,7 +232,32 @@ impl<'a> PdfEngine<'a> {
 
             let rgba_data = bitmap.as_rgba_bytes().to_vec();
             let filtered_data = Self::apply_filter(rgba_data, w, h, filter);
-            let result_data = Arc::new(filtered_data);
+
+            // Apply crop offset if auto_crop was used
+            let result_data = if let Some((ox, oy)) = crop_offset {
+                if ox > 0 || oy > 0 {
+                    let mut cropped = vec![255u8; (w * h * 4) as usize];
+                    for y in 0..h.min(oy as u32) {
+                        for x in 0..w {
+                            let src_idx = ((y as usize) * w as usize + x as usize) * 4;
+                            let dst_idx = ((y as usize) * w as usize + x as usize) * 4;
+                            if dst_idx < cropped.len() {
+                                cropped[dst_idx] = 255;
+                                cropped[dst_idx + 1] = 255;
+                                cropped[dst_idx + 2] = 255;
+                                cropped[dst_idx + 3] = 255;
+                            }
+                        }
+                    }
+                    cropped
+                } else {
+                    filtered_data
+                }
+            } else {
+                filtered_data
+            };
+
+            let result_data = Arc::new(result_data);
             let result = (w, h, result_data);
 
             self.page_cache.insert(cache_key, result.clone());
@@ -190,6 +265,49 @@ impl<'a> PdfEngine<'a> {
             Ok(result)
         } else {
             Err("No active document".to_string())
+        }
+    }
+
+    fn detect_content_bbox(data: &[u8], width: u32, height: u32) -> Option<(u32, u32, u32, u32)> {
+        let w = width as usize;
+        let h = height as usize;
+        let threshold: u8 = 250;
+
+        let mut min_x = w;
+        let mut min_y = h;
+        let mut max_x = 0usize;
+        let mut max_y = 0usize;
+
+        // Scan for non-white pixels (content)
+        for y in 0..h {
+            for x in 0..w {
+                let idx = (y * w + x) * 4;
+                if idx + 2 < data.len() {
+                    let r = data[idx];
+                    let g = data[idx + 1];
+                    let b = data[idx + 2];
+                    // Check if pixel is not white-ish
+                    if r < threshold || g < threshold || b < threshold {
+                        min_x = min_x.min(x);
+                        min_y = min_y.min(y);
+                        max_x = max_x.max(x);
+                        max_y = max_y.max(y);
+                    }
+                }
+            }
+        }
+
+        if max_x > min_x && max_y > min_y {
+            // Add small margin
+            let margin = 10;
+            Some((
+                min_x.saturating_sub(margin) as u32,
+                min_y.saturating_sub(margin) as u32,
+                (max_x + margin).min(w - 1) as u32,
+                (max_y + margin).min(h - 1) as u32,
+            ))
+        } else {
+            None
         }
     }
 

@@ -113,8 +113,28 @@ impl PdfBullApp {
     pub fn load_settings(&mut self) {
         let path = get_config_dir().join("settings.json");
         if let Ok(data) = fs::read_to_string(&path) {
-            if let Ok(settings) = serde_json::from_str(&data) {
+            if let Ok(settings) = serde_json::from_str::<AppSettings>(&data) {
                 self.settings = settings;
+            } else {
+                // Try to parse old format with fewer fields
+                if let Ok(value) = serde_json::from_str::<serde_json::Value>(&data) {
+                    let mut settings = AppSettings::default();
+                    if let Some(obj) = value.as_object() {
+                        if let Some(theme) = obj.get("theme").and_then(|v| v.as_str()) {
+                            settings.theme = AppTheme::from(theme);
+                        }
+                        if let Some(v) = obj.get("auto_save").and_then(|v| v.as_bool()) {
+                            settings.auto_save = v;
+                        }
+                        if let Some(v) = obj.get("remember_last_file").and_then(|v| v.as_bool()) {
+                            settings.remember_last_file = v;
+                        }
+                        if let Some(v) = obj.get("default_zoom").and_then(|v| v.as_f64()) {
+                            settings.default_zoom = v as f32;
+                        }
+                    }
+                    self.settings = settings;
+                }
             }
         }
     }
@@ -187,6 +207,7 @@ impl PdfBullApp {
         let zoom = tab.zoom;
         let rotation = tab.rotation;
         let filter = tab.render_filter;
+        let auto_crop = tab.auto_crop;
         let total = tab.total_pages;
         
         let engine = match &self.engine {
@@ -200,7 +221,7 @@ impl PdfBullApp {
             tasks.push(Task::perform(
                 async move {
                     let (resp_tx, mut resp_rx) = mpsc::channel(1);
-                    let _ = cmd_tx.send(PdfCommand::Render(doc_id, page_idx as i32, zoom, rotation, filter, resp_tx)).await;
+                    let _ = cmd_tx.send(PdfCommand::Render(doc_id, page_idx as i32, zoom, rotation, filter, auto_crop, resp_tx)).await;
                     resp_rx.recv().await.unwrap_or(Err("Channel closed".into()))
                 },
                 Message::PageRendered,
@@ -364,23 +385,9 @@ impl PdfBullApp {
                                         }
                                     }
                                 }
-                                PdfCommand::Render(doc_id, page, zoom, rotation, filter, resp) => {
+                                PdfCommand::Render(doc_id, page, zoom, rotation, filter, auto_crop, resp) => {
                                     if let Some(engine) = engines.get(&doc_id) {
-                                        match engine.render_page(page, zoom, rotation, filter) {
-                                            Ok((w, h, data)) => {
-                                                let _ = resp.blocking_send(Ok((page as usize, w, h, data)));
-                                            }
-                                            Err(e) => {
-                                                let _ = resp.blocking_send(Err(e));
-                                            }
-                                        }
-                                    } else {
-                                        let _ = resp.blocking_send(Err("Document not found".into()));
-                                    }
-                                }
-                                PdfCommand::RenderThumbnail(doc_id, page, resp) => {
-                                    if let Some(engine) = engines.get(&doc_id) {
-                                        match engine.render_page(page, 0.2, 0, RenderFilter::None) {
+                                        match engine.render_page(page, zoom, rotation, filter, auto_crop) {
                                             Ok((w, h, data)) => {
                                                 let _ = resp.blocking_send(Ok((page as usize, w, h, data)));
                                             }
@@ -621,6 +628,7 @@ impl PdfBullApp {
                 let zoom = tab.zoom;
                 let rotation = tab.rotation;
                 let filter = tab.render_filter;
+                let auto_crop = tab.auto_crop;
                 
                 let engine = match &self.engine {
                     Some(e) => e,
@@ -631,7 +639,7 @@ impl PdfBullApp {
                 Task::perform(
                     async move {
                         let (resp_tx, mut resp_rx) = mpsc::channel(1);
-                        let _ = cmd_tx.send(PdfCommand::Render(doc_id, page_idx as i32, zoom, rotation, filter, resp_tx)).await;
+                    let _ = cmd_tx.send(PdfCommand::Render(doc_id, page_idx as i32, zoom, rotation, filter, auto_crop, resp_tx)).await;
                         resp_rx.recv().await.unwrap_or(Err("Channel closed".into()))
                     },
                     Message::PageRendered,

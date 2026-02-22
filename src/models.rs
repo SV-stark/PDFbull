@@ -39,8 +39,20 @@ impl From<&str> for AppTheme {
 pub struct AppSettings {
     pub theme: AppTheme,
     pub auto_save: bool,
+    pub auto_save_interval: u32,
     pub remember_last_file: bool,
     pub default_zoom: f32,
+    pub cache_size: usize,
+    pub render_quality: RenderQuality,
+    pub default_filter: RenderFilter,
+    pub accent_color: String,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+pub enum RenderQuality {
+    Low,
+    Medium,
+    High,
 }
 
 impl Default for AppSettings {
@@ -48,8 +60,13 @@ impl Default for AppSettings {
         Self {
             theme: AppTheme::default(),
             auto_save: false,
+            auto_save_interval: 300,
             remember_last_file: true,
             default_zoom: 1.0,
+            cache_size: 50,
+            render_quality: RenderQuality::Medium,
+            default_filter: RenderFilter::None,
+            accent_color: "#3b82f6".to_string(),
         }
     }
 }
