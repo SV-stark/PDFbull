@@ -1,6 +1,6 @@
 use crate::models::{AppTheme, RenderQuality};
 use crate::pdf_engine::RenderFilter;
-use iced::widget::{button, column, row, slider, text, Space};
+use iced::widget::{button, column, row, text, Space};
 use iced::{Alignment, Element, Length};
 
 pub fn settings_view(app: &crate::PdfBullApp) -> Element<crate::Message> {

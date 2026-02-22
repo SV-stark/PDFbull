@@ -58,6 +58,7 @@ enum Message {
     JumpToPage(usize),
     ViewportChanged(f32, f32),
     RequestRender(usize),
+    SidebarViewportChanged(f32),
     PageRendered(Result<(usize, u32, u32, Arc<Vec<u8>>), String>),
     DocumentOpened(Result<(DocumentId, usize, Vec<f32>, f32, Vec<pdf_engine::Bookmark>), String>),
     EngineInitialized(EngineState),
@@ -304,11 +305,10 @@ impl PdfBullApp {
                         tasks.push(self.update(Message::OpenFile(path)));
                     }
                     if !tasks.is_empty() {
-                        return Task::batch(tasks).and_then(move |_| {
-                            Task::perform(async move {
-                                Message::SwitchTab(target_tab)
-                            }, |m| m)
-                        });
+                        tasks.push(Task::perform(async move {
+                            Message::SwitchTab(target_tab)
+                        }, |m| m));
+                        return Task::batch(tasks);
                     }
                 }
             }
@@ -708,7 +708,7 @@ impl PdfBullApp {
                                 let cmd_tx = engine.cmd_tx.clone();
                                 let doc_id = doc_id;
                                 return Task::perform(
-                                    async move -> Result<(DocumentId, Vec<models::Annotation>), String> {
+                                    async move {
                                         let (resp_tx, mut resp_rx) = mpsc::channel(1);
                                         let _ = cmd_tx.send(PdfCommand::LoadAnnotations(doc_id, path_str, resp_tx)).await;
                                         match resp_rx.recv().await {

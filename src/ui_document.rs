@@ -65,7 +65,7 @@ fn render_toolbar(app: &PdfBullApp) -> Element<crate::Message> {
         button("?").on_press(crate::Message::ToggleKeyboardHelp),
         button("⛶").on_press(crate::Message::ToggleFullscreen),
         button("⚙").on_press(crate::Message::OpenSettings),
-    ].spacing(5).align_items(iced::Alignment::Center);
+    ].spacing(5).align_y(iced::Alignment::Center);
 
     let row2 = row![
         button("BM").on_press(crate::Message::AddBookmark),
@@ -80,7 +80,7 @@ fn render_toolbar(app: &PdfBullApp) -> Element<crate::Message> {
         button("Text").on_press(crate::Message::ExtractText),
         button("Export").on_press(crate::Message::ExportImage),
         button("ExpAll").on_press(crate::Message::ExportImages),
-    ].spacing(5).align_items(iced::Alignment::Center);
+    ].spacing(5).align_y(iced::Alignment::Center);
 
     column![row1, row2].spacing(10).padding(10).into()
 }
@@ -175,7 +175,7 @@ fn render_sidebar(app: &PdfBullApp) -> Element<crate::Message> {
     let end_idx = (start_idx + 30).min(tab.total_pages);
     
     if start_idx > 0 {
-        sidebar_col = sidebar_col.push(Space::new(Length::Fill, Length::Fixed(start_idx as f32 * thumbnail_height)));
+        sidebar_col = sidebar_col.push(Space::new().width(Length::Fill).height(Length::Fixed(start_idx as f32 * thumbnail_height)));
     }
     
     for page_idx in start_idx..end_idx {
@@ -194,7 +194,7 @@ fn render_sidebar(app: &PdfBullApp) -> Element<crate::Message> {
     
     let remaining = tab.total_pages.saturating_sub(end_idx);
     if remaining > 0 {
-        sidebar_col = sidebar_col.push(Space::new(Length::Fill, Length::Fixed(remaining as f32 * thumbnail_height)));
+        sidebar_col = sidebar_col.push(Space::new().width(Length::Fill).height(Length::Fixed(remaining as f32 * thumbnail_height)));
     }
 
     scrollable(sidebar_col)
@@ -247,16 +247,16 @@ fn render_pdf_content(app: &PdfBullApp) -> Element<crate::Message> {
                         let ann_overlay = match &ann.style {
                             crate::models::AnnotationStyle::Highlight { color } => {
                                 let (r, g, b) = hex_to_rgb(color);
-                                container(Space::new(Length::Fixed(ann.width), Length::Fixed(ann.height)))
-                                    .style(move |_| iced::widget::container::Appearance {
+                                container(Space::new().width(Length::Fixed(ann.width)).height(Length::Fixed(ann.height)))
+                                    .style(move |_| iced::widget::container::Style {
                                         background: Some(iced::Background::Color(iced::Color::from_rgba(r, g, b, 0.4))),
                                         ..Default::default()
                                     })
                             }
                             crate::models::AnnotationStyle::Rectangle { color, thickness, fill } => {
                                 let (r, g, b) = hex_to_rgb(color);
-                                container(Space::new(Length::Fixed(ann.width), Length::Fixed(ann.height)))
-                                    .style(move |_| iced::widget::container::Appearance {
+                                container(Space::new().width(Length::Fixed(ann.width)).height(Length::Fixed(ann.height)))
+                                    .style(move |_| iced::widget::container::Style {
                                         background: if *fill {
                                             Some(iced::Background::Color(iced::Color::from_rgba(r, g, b, 0.2)))
                                         } else {
@@ -270,9 +270,9 @@ fn render_pdf_content(app: &PdfBullApp) -> Element<crate::Message> {
                                         ..Default::default()
                                     })
                             }
-                            crate::models::AnnotationStyle::Text { text, color, size } => {
+                            crate::models::AnnotationStyle::Text { text, color, font_size } => {
                                 let (r, g, b) = hex_to_rgb(color);
-                                container(iced::widget::text(text.clone()).size(*size).color(iced::Color::from_rgb(r, g, b)))
+                                container(iced::widget::text(text.clone()).size(*font_size).color(iced::Color::from_rgb(r, g, b)))
                             }
                         };
                         
