@@ -1286,7 +1286,8 @@ pub fn main() -> iced::Result {
         Err(_) => None,
     };
 
-    iced::application("PDFbull", PdfBullApp::update, PdfBullApp::view)
+    iced::application(PdfBullApp::default, PdfBullApp::update, PdfBullApp::view)
+        .title("PDFbull")
         .window(iced::window::Settings {
             icon,
             ..Default::default()
