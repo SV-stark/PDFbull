@@ -6,7 +6,7 @@
 
 <p align="center">
   <a href="https://github.com/SV-stark/PDFbull/releases/tag/nightly"><img src="https://github.com/SV-stark/PDFbull/actions/workflows/release.yml/badge.svg" alt="Nightly Release"></a>
-  <a href="LICENSE"><img src="https://img.shields.io/badge/License-MIT-blue.svg" alt="License: MIT"></a>
+  <a href="LICENSE"><img src="https://img.shields.io/badge/License-MIT-green.svg" alt="License: MIT"></a>
   <a href="https://iced.rs/"><img src="https://img.shields.io/badge/Built%20with-Iced-blue" alt="Built with Iced"></a>
   <a href="https://www.rust-lang.org/"><img src="https://img.shields.io/badge/Backend-Rust-black?logo=rust" alt="Rust"></a>
 </p>
