@@ -21,10 +21,6 @@ Section "Install"
     
     File "release_dist\pdfbull.exe"
     File "release_dist\pdfium.dll"
-    File "release_dist\onnxruntime.dll"
-    
-    SetOutPath "$INSTDIR\resources"
-    File /r "release_dist\resources"
     
     WriteUninstaller "$INSTDIR\Uninstall.exe"
     
@@ -44,10 +40,7 @@ SectionEnd
 Section "Uninstall"
     Delete "$INSTDIR\pdfbull.exe"
     Delete "$INSTDIR\pdfium.dll"
-    Delete "$INSTDIR\onnxruntime.dll"
     Delete "$INSTDIR\Uninstall.exe"
-    
-    RMDir /r "$INSTDIR\resources"
     RMDir "$INSTDIR"
     
     Delete "$SMPROGRAMS\PDFbull\PDFbull.lnk"
