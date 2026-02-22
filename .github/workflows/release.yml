@@ -66,9 +66,9 @@ jobs:
           Copy-Item -Path "resources" -Destination "release_dist/resources" -Recurse
 
       - name: Build NSIS Installer
-        uses: katahiromz/nsis-action@master
+        uses: joncloud/makensis-action@v4
         with:
-          script: installer.nsi
+          script-file: installer.nsi
 
       - name: Create Nightly Release
         uses: softprops/action-gh-release@v2
