@@ -20,6 +20,7 @@ pdfium-render = "0.8"
 image = "0.25"
 moka = { version = "0.12", features = ["sync"] }
 iced = { version = "0.14", features = ["image", "canvas", "tokio"] }
+iced_aw = { version = "0.6", features = ["tabs", "badge", "card", "modal"] }
 tokio = { version = "1.43.0", features = ["full"] }
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"

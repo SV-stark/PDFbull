@@ -1,7 +1,8 @@
 use crate::models::{AppTheme, RenderQuality};
 use crate::pdf_engine::RenderFilter;
 use iced::widget::{button, column, row, text, Space};
-use iced::{Alignment, Element, Length};
+use iced::{Alignment, Element, Length, Color};
+use iced_aw::widget::Card;
 
 pub fn settings_view(app: &crate::app::PdfBullApp) -> Element<crate::message::Message> {
     let theme_buttons = row![
@@ -57,6 +58,16 @@ pub fn settings_view(app: &crate::app::PdfBullApp) -> Element<crate::message::Me
         .on_press({
             let mut s = app.settings.clone();
             s.auto_save = !s.auto_save;
+            crate::message::Message::SaveSettings(s)
+        }),
+        button(if app.settings.restore_session {
+            "Restore Session ✓"
+        } else {
+            "Restore Session"
+        })
+        .on_press({
+            let mut s = app.settings.clone();
+            s.restore_session = !s.restore_session;
             crate::message::Message::SaveSettings(s)
         }),
     ]
@@ -171,6 +182,40 @@ pub fn settings_view(app: &crate::app::PdfBullApp) -> Element<crate::message::Me
     ]
     .spacing(10);
 
+    let appearance_card = Card::new(
+        text("Appearance").size(18),
+        column![
+            theme_buttons.padding(10),
+            filter_buttons.padding(10),
+        ]
+    )
+    .padding(15)
+    .style(iced_aw::widget::card::Style::Secondary);
+
+    let performance_card = Card::new(
+        text("Performance").size(18),
+        column![
+            quality_buttons.padding(10),
+            cache_row.padding(10),
+        ]
+    )
+    .padding(15)
+    .style(iced_aw::widget::card::Style::Secondary);
+
+    let defaults_card = Card::new(
+        text("Defaults").size(18),
+        default_zoom_row.padding(10)
+    )
+    .padding(15)
+    .style(iced_aw::widget::card::Style::Secondary);
+
+    let behavior_card = Card::new(
+        text("Behavior").size(18),
+        behavior_buttons.padding(10)
+    )
+    .padding(15)
+    .style(iced_aw::widget::card::Style::Secondary);
+
     column![
         row![
             text("Settings").size(24),
@@ -178,25 +223,16 @@ pub fn settings_view(app: &crate::app::PdfBullApp) -> Element<crate::message::Me
             button("Close").on_press(crate::message::Message::CloseSettings),
         ]
         .padding(20),
-        column![
-            text("Appearance").size(18),
-            theme_buttons.padding(10),
-            Space::new().height(Length::Fixed(10.0)),
-            filter_buttons.padding(10),
-            Space::new().height(Length::Fixed(20.0)),
-            text("Performance").size(18),
-            quality_buttons.padding(10),
-            cache_row.padding(10),
-            Space::new().height(Length::Fixed(20.0)),
-            text("Defaults").size(18),
-            default_zoom_row.padding(10),
-            Space::new().height(Length::Fixed(10.0)),
-            text("Behavior").size(18),
-            behavior_buttons.padding(10),
-        ]
-        .padding(20)
-        .width(Length::Fixed(450.0))
+        appearance_card,
+        Space::new().height(Length::Fixed(10.0)),
+        performance_card,
+        Space::new().height(Length::Fixed(10.0)),
+        defaults_card,
+        Space::new().height(Length::Fixed(10.0)),
+        behavior_card,
     ]
+    .padding(20)
+    .width(Length::Fixed(500.0))
     .align_x(Alignment::Center)
     .into()
 }
