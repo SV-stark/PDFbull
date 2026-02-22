@@ -487,13 +487,17 @@ impl PdfBullApp {
             Message::DocumentOpened(result) => {
                 match result {
                     Ok((doc_id, count, heights, width, outline)) => {
-                        if let Some(tab) = self.current_tab_mut() {
+                        let default_zoom = self.settings.default_zoom;
+                        let default_filter = self.settings.default_filter;
+                        if let Some(tab) = self.tabs.get_mut(self.active_tab) {
                             tab.id = doc_id;
                             tab.total_pages = count;
                             tab.page_heights = heights;
                             tab.page_width = width;
                             tab.outline = outline;
                             tab.is_loading = false;
+                            tab.zoom = default_zoom;
+                            tab.render_filter = default_filter;
                         }
                         self.render_visible_pages()
                     }

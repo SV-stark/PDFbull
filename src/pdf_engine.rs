@@ -61,11 +61,6 @@ impl<'a> PdfEngine<'a> {
         }
     }
 
-    pub fn close_document(&mut self) {
-        self.active_doc = None;
-        self.page_cache.invalidate_all();
-    }
-
     pub fn open_document(&mut self, path: &str) -> Result<(usize, Vec<f32>, f32), String> {
         self.page_cache.invalidate_all();
 
