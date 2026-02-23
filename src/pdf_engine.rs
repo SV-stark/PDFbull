@@ -2,6 +2,7 @@ use moka::sync::Cache;
 use pdfium_render::prelude::*;
 use rayon::prelude::*;
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -22,14 +23,14 @@ impl Default for RenderFilter {
     }
 }
 
-pub struct DocumentStore {
+pub struct DocumentStore<'a> {
     pdfium: Pdfium,
-    documents: Cache<String, DocumentState>,
+    documents: HashMap<String, DocumentState<'a>>,
     render_cache: Cache<RenderCacheKey, (u32, u32, Arc<Vec<u8>>)>,
 }
 
-struct DocumentState {
-    doc: PdfDocument<'static>,
+struct DocumentState<'a> {
+    doc: PdfDocument<'a>,
     path: String,
 }
 
@@ -50,7 +51,7 @@ pub struct Bookmark {
     pub children: Vec<Bookmark>,
 }
 
-impl DocumentStore {
+impl<'a> DocumentStore<'a> {
     pub fn new() -> Result<Self, String> {
         let bindings = Pdfium::bind_to_library(Pdfium::pdfium_platform_library_name_at_path("./"))
             .or_else(|_| Pdfium::bind_to_library(Pdfium::pdfium_platform_library_name()))
@@ -60,10 +61,7 @@ impl DocumentStore {
 
         Ok(Self {
             pdfium,
-            documents: Cache::builder()
-                .max_capacity(10)
-                .time_to_idle(Duration::from_secs(300))
-                .build(),
+            documents: HashMap::new(),
             render_cache: Cache::builder()
                 .max_capacity(100)
                 .time_to_idle(Duration::from_secs(300))
@@ -73,7 +71,7 @@ impl DocumentStore {
 
     pub fn open_document(&mut self, path: &str) -> Result<(String, usize, Vec<f32>, f32), String> {
         let doc_id = path.to_string();
-        
+
         let doc = self
             .pdfium
             .load_pdf_from_file(path, None)
@@ -142,18 +140,12 @@ impl DocumentStore {
         result
     }
 
-    fn invalidate_render_cache(&self, doc_id: &str) {
-        let keys_to_remove: Vec<_> = self.render_cache
-            .keys()
-            .filter(|k| k.doc_id == doc_id)
-            .collect();
-        for key in keys_to_remove {
-            self.render_cache.invalidate(&key);
-        }
+    fn invalidate_render_cache(&mut self, doc_id: &str) {
+        self.render_cache.invalidate_all();
     }
 
-    pub fn close_document(&self, doc_id: &str) {
-        self.documents.invalidate(doc_id);
+    pub fn close_document(&mut self, doc_id: &str) {
+        self.documents.remove(doc_id);
         self.invalidate_render_cache(doc_id);
     }
 
@@ -170,7 +162,7 @@ impl DocumentStore {
         let rotation_key = ((rotation + 360) % 360) as u32;
         let filter_key = filter as u32;
         let crop_key = auto_crop;
-        
+
         let cache_key = RenderCacheKey {
             doc_id: doc_id.to_string(),
             page: page_num,
@@ -184,12 +176,14 @@ impl DocumentStore {
             return Ok(cached);
         }
 
-        let state = self.documents.get(doc_id)
+        let state = self
+            .documents
+            .get(doc_id)
             .ok_or_else(|| "Document not found or closed".to_string())?;
 
         let doc = &state.doc;
-        
-        if page_num < 0 || page_num as usize >= doc.pages().len() {
+
+        if page_num < 0 || page_num as usize >= doc.pages().len() as usize {
             return Err("Page number out of bounds".to_string());
         }
 
@@ -390,12 +384,14 @@ impl DocumentStore {
     }
 
     pub fn extract_text(&self, doc_id: &str, page_num: i32) -> Result<String, String> {
-        let state = self.documents.get(doc_id)
+        let state = self
+            .documents
+            .get(doc_id)
             .ok_or_else(|| "Document not found or closed".to_string())?;
 
         let doc = &state.doc;
 
-        if page_num < 0 || page_num as usize >= doc.pages().len() {
+        if page_num < 0 || page_num as usize >= doc.pages().len() as usize {
             return Err("Page number out of bounds".to_string());
         }
 
@@ -416,12 +412,14 @@ impl DocumentStore {
         scale: f32,
         path: &str,
     ) -> Result<(), String> {
-        let state = self.documents.get(doc_id)
+        let state = self
+            .documents
+            .get(doc_id)
             .ok_or_else(|| "Document not found or closed".to_string())?;
 
         let doc = &state.doc;
 
-        if page_num < 0 || page_num as usize >= doc.pages().len() {
+        if page_num < 0 || page_num as usize >= doc.pages().len() as usize {
             return Err("Page number out of bounds".to_string());
         }
 
@@ -458,12 +456,15 @@ impl DocumentStore {
         scale: f32,
         output_dir: &str,
     ) -> Result<Vec<String>, String> {
-        let state = self.documents.get(doc_id)
+        let state = self
+            .documents
+            .get(doc_id)
             .ok_or_else(|| "Document not found or closed".to_string())?;
 
         let doc = &state.doc;
-        
-        let doc_name = state.path
+
+        let doc_name = state
+            .path
             .rsplit(['/', '\\'])
             .next()
             .and_then(|s| s.strip_suffix(".pdf").or(Some(s)))
@@ -472,7 +473,7 @@ impl DocumentStore {
         let mut exported_paths = Vec::new();
 
         for (idx, &page_num) in page_nums.iter().enumerate() {
-            if page_num < 0 || page_num as usize >= doc.pages().len() {
+            if page_num < 0 || page_num as usize >= doc.pages().len() as usize {
                 continue;
             }
 
@@ -522,14 +523,13 @@ impl DocumentStore {
         let json = serde_json::to_string_pretty(annotations)
             .map_err(|e| format!("Failed to serialize annotations: {}", e))?;
 
-        std::fs::write(&annotation_path, json)
-            .map_err(|e| {
-                if e.kind() == std::io::ErrorKind::PermissionDenied {
-                    format!("Cannot save annotations: directory is read-only. Annotations not saved.")
-                } else {
-                    format!("Failed to write annotations file: {}", e)
-                }
-            })?;
+        std::fs::write(&annotation_path, json).map_err(|e| {
+            if e.kind() == std::io::ErrorKind::PermissionDenied {
+                format!("Cannot save annotations: directory is read-only. Annotations not saved.")
+            } else {
+                format!("Failed to write annotations file: {}", e)
+            }
+        })?;
 
         Ok(annotation_path.to_string_lossy().to_string())
     }
@@ -551,12 +551,10 @@ impl DocumentStore {
         serde_json::from_str(&json).map_err(|e| format!("Failed to parse annotations: {}", e))
     }
 
-    pub fn search(
-        &self,
-        doc_id: &str,
-        query: &str,
-    ) -> Result<Vec<(usize, String, f32)>, String> {
-        let state = self.documents.get(doc_id)
+    pub fn search(&self, doc_id: &str, query: &str) -> Result<Vec<(usize, String, f32)>, String> {
+        let state = self
+            .documents
+            .get(doc_id)
             .ok_or_else(|| "Document not found or closed".to_string())?;
 
         let doc = &state.doc;

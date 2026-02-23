@@ -1,7 +1,7 @@
 use crate::models::{Annotation, DocumentId};
 use crate::pdf_engine::RenderFilter;
 use std::sync::Arc;
-use tokio::sync::mpsc;
+use std::sync::mpsc;
 
 #[derive(Debug, Clone)]
 pub enum PdfCommand {

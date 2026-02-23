@@ -5,7 +5,7 @@ use crate::models::{AppTheme, DocumentTab, SearchResult};
 use crate::storage;
 use iced::{widget::image as iced_image, Task};
 use std::sync::Arc;
-use tokio::sync::mpsc;
+use std::sync::mpsc;
 use std::path::PathBuf;
 use std::fs;
 
@@ -201,10 +201,10 @@ pub fn handle_message(app: &mut PdfBullApp, message: Message) -> Task<Message> {
                         if let Some(file) = file {
                             let path = file.path().to_path_buf();
                             let path_s = path.to_string_lossy().to_string();
-                            let (resp_tx, mut resp_rx) = mpsc::channel(1);
-                            let _ = cmd_tx.send(PdfCommand::Open(path_s, resp_tx)).await;
-                            match resp_rx.recv().await {
-                                Some(Ok(data)) => Some((path, data)),
+                            let (resp_tx, resp_rx) = mpsc::channel();
+                            let _ = cmd_tx.send(PdfCommand::Open(path_s, resp_tx));
+                            match resp_rx.recv() {
+                                Ok(Ok(data)) => Some((path, data)),
                                 _ => None,
                             }
                         } else {
@@ -267,12 +267,12 @@ pub fn handle_message(app: &mut PdfBullApp, message: Message) -> Task<Message> {
                             let doc_id = doc_id;
                             return Task::perform(
                                 async move {
-                                    let (resp_tx, mut resp_rx) = mpsc::channel(1);
-                                    let _ = cmd_tx.send(PdfCommand::LoadAnnotations(doc_id, path_str, resp_tx)).await;
-                                    match resp_rx.recv().await {
-                                        Some(Ok(annotations)) => (doc_id, annotations),
-                                        Some(Err(_)) => (doc_id, Vec::new()),
-                                        None => (doc_id, Vec::new()),
+                                    let (resp_tx, resp_rx) = mpsc::channel();
+                                    let _ = cmd_tx.send(PdfCommand::LoadAnnotations(doc_id, path_str, resp_tx));
+                                    match resp_rx.recv() {
+                                        Ok(Ok(annotations)) => (doc_id, annotations),
+                                        Ok(Err(_)) => (doc_id, Vec::new()),
+                                        Err(_) => (doc_id, Vec::new()),
                                     }
                                 },
                                 |(doc_id, annotations)| Message::AnnotationsLoaded(doc_id, annotations),
@@ -312,9 +312,9 @@ pub fn handle_message(app: &mut PdfBullApp, message: Message) -> Task<Message> {
                 let path_s = path.to_string_lossy().to_string();
                 return Task::perform(
                     async move {
-                        let (resp_tx, mut resp_rx) = mpsc::channel(1);
-                        let _ = cmd_tx.send(PdfCommand::Open(path_s, resp_tx)).await;
-                        resp_rx.recv().await.unwrap_or(Err("Engine died".into()))
+                        let (resp_tx, resp_rx) = mpsc::channel();
+                        let _ = cmd_tx.send(PdfCommand::Open(path_s, resp_tx));
+                        resp_rx.recv().unwrap_or(Err("Engine died".into()))
                     },
                     Message::DocumentOpened,
                 );
@@ -339,7 +339,7 @@ pub fn handle_message(app: &mut PdfBullApp, message: Message) -> Task<Message> {
             if let Some(engine) = &app.engine {
                 let cmd_tx = engine.cmd_tx.clone();
                 let doc_id = tab.id;
-                let _ = cmd_tx.try_send(PdfCommand::Close(doc_id));
+                let _ = cmd_tx.send(PdfCommand::Close(doc_id));
             }
             
             if app.active_tab >= app.tabs.len() && !app.tabs.is_empty() {
@@ -438,9 +438,9 @@ pub fn handle_message(app: &mut PdfBullApp, message: Message) -> Task<Message> {
             let cmd_tx = engine.cmd_tx.clone();
             Task::perform(
                 async move {
-                    let (resp_tx, mut resp_rx) = mpsc::channel(1);
-                let _ = cmd_tx.send(PdfCommand::Render(doc_id, page_idx as i32, zoom, rotation, filter, auto_crop, resp_tx)).await;
-                    resp_rx.recv().await.unwrap_or(Err("Channel closed".into()))
+                    let (resp_tx, resp_rx) = mpsc::channel();
+                let _ = cmd_tx.send(PdfCommand::Render(doc_id, page_idx as i32, zoom, rotation, filter, auto_crop, resp_tx));
+                    resp_rx.recv().unwrap_or(Err("Channel closed".into()))
                 },
                 Message::PageRendered,
             )
@@ -472,7 +472,7 @@ pub fn handle_message(app: &mut PdfBullApp, message: Message) -> Task<Message> {
             app.search_pending = Some(query.clone());
             Task::perform(
                 async move {
-                    tokio::time::sleep(std::time::Duration::from_millis(300)).await;
+                    std::thread::sleep(std::time::Duration::from_millis(300));
                     Message::PerformSearch
                 },
                 |m| m,
@@ -506,11 +506,11 @@ pub fn handle_message(app: &mut PdfBullApp, message: Message) -> Task<Message> {
             let cmd_tx = engine.cmd_tx.clone();
             Task::perform(
                 async move {
-                    tokio::time::sleep(std::time::Duration::from_millis(300)).await;
-                    let (resp_tx, mut resp_rx) = mpsc::channel(1);
-                    let _ = cmd_tx.send(PdfCommand::Search(doc_id, query, resp_tx)).await;
+                    std::thread::sleep(std::time::Duration::from_millis(300));
+                    let (resp_tx, resp_rx) = mpsc::channel();
+                    let _ = cmd_tx.send(PdfCommand::Search(doc_id, query, resp_tx));
                     let mut all_results = Vec::new();
-                    while let Some(res) = resp_rx.recv().await {
+                    while let Ok(res) = resp_rx.recv() {
                         match res {
                             Ok(mut batch) => all_results.append(&mut batch),
                             Err(e) => return Err(e),
@@ -588,9 +588,9 @@ pub fn handle_message(app: &mut PdfBullApp, message: Message) -> Task<Message> {
             let cmd_tx = engine.cmd_tx.clone();
             Task::perform(
                 async move {
-                    let (resp_tx, mut resp_rx) = mpsc::channel(1);
-                    let _ = cmd_tx.send(PdfCommand::ExtractText(doc_id, page, resp_tx)).await;
-                    let result = resp_rx.recv().await.unwrap_or(Err("Extract failed".into()));
+                    let (resp_tx, resp_rx) = mpsc::channel();
+                    let _ = cmd_tx.send(PdfCommand::ExtractText(doc_id, page, resp_tx));
+                    let result = resp_rx.recv().unwrap_or(Err("Extract failed".into()));
                     (path, result)
                 },
                 |(path, result)| {
@@ -637,12 +637,12 @@ pub fn handle_message(app: &mut PdfBullApp, message: Message) -> Task<Message> {
                     match file {
                         Some(f) => {
                             let path = f.path().to_string_lossy().to_string();
-                            let (resp_tx, mut resp_rx) = mpsc::channel(1);
-                            let _ = cmd_tx.send(PdfCommand::ExportImage(doc_id, page, zoom, path.clone(), resp_tx)).await;
-                            match resp_rx.recv().await {
-                                Some(Ok(())) => Ok(path),
-                                Some(Err(e)) => Err(e),
-                                None => Err("Engine died".into()),
+                            let (resp_tx, resp_rx) = mpsc::channel();
+                            let _ = cmd_tx.send(PdfCommand::ExportImage(doc_id, page, zoom, path.clone(), resp_tx));
+                            match resp_rx.recv() {
+                                Ok(Ok(())) => Ok(path),
+                                Ok(Err(e)) => Err(e),
+                                Err(_) => Err("Engine died".into()),
                             }
                         }
                         None => Err("Cancelled".into()),
@@ -684,12 +684,12 @@ pub fn handle_message(app: &mut PdfBullApp, message: Message) -> Task<Message> {
                         Some(f) => {
                             let path = f.path().to_string_lossy().to_string();
                             let pages: Vec<i32> = (0..total_pages as i32).collect();
-                            let (resp_tx, mut resp_rx) = mpsc::channel(1);
-                            let _ = cmd_tx.send(PdfCommand::ExportImages(doc_id, pages, zoom, path.clone(), resp_tx)).await;
-                            match resp_rx.recv().await {
-                                Some(Ok(paths)) => Ok(paths.join(", ")),
-                                Some(Err(e)) => Err(e),
-                                None => Err("Engine died".into()),
+                            let (resp_tx, resp_rx) = mpsc::channel();
+                            let _ = cmd_tx.send(PdfCommand::ExportImages(doc_id, pages, zoom, path.clone(), resp_tx));
+                            match resp_rx.recv() {
+                                Ok(Ok(paths)) => Ok(paths.join(", ")),
+                                Ok(Err(e)) => Err(e),
+                                Err(_) => Err("Engine died".into()),
                             }
                         }
                         None => Err("Cancelled".into()),
@@ -715,12 +715,12 @@ pub fn handle_message(app: &mut PdfBullApp, message: Message) -> Task<Message> {
             let cmd_tx = engine.cmd_tx.clone();
             Task::perform(
                 async move {
-                    let (resp_tx, mut resp_rx) = mpsc::channel(1);
-                    let _ = cmd_tx.send(PdfCommand::ExportPdf(doc_id, pdf_path.clone(), annotations, resp_tx)).await;
-                    match resp_rx.recv().await {
-                        Some(Ok(path)) => Ok(format!("Annotations saved to {}", path)),
-                        Some(Err(e)) => Err(e),
-                        None => Err("Engine died".into()),
+                    let (resp_tx, resp_rx) = mpsc::channel();
+                    let _ = cmd_tx.send(PdfCommand::ExportPdf(doc_id, pdf_path.clone(), annotations, resp_tx));
+                    match resp_rx.recv() {
+                        Ok(Ok(path)) => Ok(format!("Annotations saved to {}", path)),
+                        Ok(Err(e)) => Err(e),
+                        Err(_) => Err("Engine died".into()),
                     }
                 },
                 Message::AnnotationsSaved,

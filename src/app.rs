@@ -97,9 +97,9 @@ impl PdfBullApp {
             let cmd_tx = engine.cmd_tx.clone();
             tasks.push(Task::perform(
                 async move {
-                    let (resp_tx, mut resp_rx) = tokio::sync::mpsc::channel(1);
-                    let _ = cmd_tx.send(crate::commands::PdfCommand::Render(doc_id, page_idx as i32, zoom, rotation, filter, auto_crop, resp_tx)).await;
-                    resp_rx.recv().await.unwrap_or(Err("Channel closed".into()))
+                    let (resp_tx, resp_rx) = std::sync::mpsc::channel();
+                    let _ = cmd_tx.send(crate::commands::PdfCommand::Render(doc_id, page_idx as i32, zoom, rotation, filter, auto_crop, resp_tx));
+                    resp_rx.recv().unwrap_or(Err("Channel closed".into()))
                 },
                 Message::PageRendered,
             ));
