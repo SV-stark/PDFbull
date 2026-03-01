@@ -37,7 +37,8 @@ pub enum Message {
     ViewportChanged(f32, f32),
     RequestRender(usize),
     SidebarViewportChanged(f32),
-    PageRendered(Result<(usize, u32, u32, Arc<Vec<u8>>), String>),
+    PageRendered(usize, Result<(u32, u32, Arc<Vec<u8>>), String>),
+    ThumbnailRendered(usize, Result<(u32, u32, Arc<Vec<u8>>), String>),
     DocumentOpened(Result<(DocumentId, usize, Vec<f32>, f32, Vec<pdf_engine::Bookmark>), String>),
     EngineInitialized(EngineState),
     Search(String),
@@ -57,4 +58,6 @@ pub enum Message {
     OpenRecentFile(RecentFile),
     Error(String),
     ClearStatus,
+    IcedEvent(iced::Event),
+    ForceQuit,
 }

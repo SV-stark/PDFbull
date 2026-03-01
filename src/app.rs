@@ -20,6 +20,7 @@ pub struct PdfBullApp {
     pub engine: Option<EngineState>,
     pub loaded: bool,
     pub rendering_count: usize,
+    pub rendering_set: std::collections::HashSet<usize>,
 }
 
 impl Default for PdfBullApp {
@@ -39,6 +40,7 @@ impl Default for PdfBullApp {
             engine: None,
             loaded: false,
             rendering_count: 0,
+            rendering_set: std::collections::HashSet::new(),
         }
     }
 }
@@ -91,27 +93,102 @@ impl PdfBullApp {
         
         let mut tasks = Vec::new();
         for page_idx in visible_pages {
-            if tab.rendered_pages.contains_key(&page_idx) {
+            if tab.rendered_pages.contains_key(&page_idx) || self.rendering_set.contains(&page_idx) {
                 continue;
             }
+            self.rendering_set.insert(page_idx);
             let cmd_tx = engine.cmd_tx.clone();
             tasks.push(Task::perform(
                 async move {
                     let (resp_tx, resp_rx) = std::sync::mpsc::channel();
                     let _ = cmd_tx.send(crate::commands::PdfCommand::Render(doc_id, page_idx as i32, zoom, rotation, filter, auto_crop, resp_tx));
-                    resp_rx.recv().unwrap_or(Err("Channel closed".into()))
+                    let res = resp_rx.recv().unwrap_or(Err("Channel closed".into()));
+                    (page_idx, res)
                 },
-                Message::PageRendered,
+                |(page_idx, res)| {
+                    let formatted_res = match res {
+                        Ok((_, w, h, data)) => Ok((w, h, data)),
+                        Err(e) => Err(e),
+                    };
+                    Message::PageRendered(page_idx, formatted_res)
+                }
             ));
         }
+
+        if self.show_sidebar {
+            let visible_thumbnails = tab.get_visible_thumbnails();
+            for page_idx in visible_thumbnails {
+                if tab.thumbnails.contains_key(&page_idx) || self.rendering_set.contains(&(page_idx + 100000)) {
+                    continue;
+                }
+                self.rendering_count += 1;
+                let thumb_zoom = 120.0 / tab.page_width.max(1.0);
+                self.rendering_set.insert(page_idx + 100000);
+                let cmd_tx = engine.cmd_tx.clone();
+                tasks.push(Task::perform(
+                    async move {
+                        let (resp_tx, resp_rx) = std::sync::mpsc::channel();
+                        let _ = cmd_tx.send(crate::commands::PdfCommand::RenderThumbnail(doc_id, page_idx as i32, thumb_zoom, resp_tx));
+                        let res = resp_rx.recv().unwrap_or(Err("Channel closed".into()));
+                        (page_idx, res)
+                    },
+                    |(page_idx, res)| {
+                        let formatted_res = match res {
+                            Ok((_, w, h, data)) => Ok((w, h, data)),
+                            Err(e) => Err(e),
+                        };
+                        Message::ThumbnailRendered(page_idx, formatted_res)
+                    }
+                ));
+            }
+        }
+
         Task::batch(tasks)
     }
 
     pub fn update(&mut self, message: Message) -> Task<Message> {
-        handle_message(self, message)
+        let old_status = self.status_message.clone();
+        let task = handle_message(self, message);
+        if self.status_message.is_some() && self.status_message != old_status {
+            let msg = self.status_message.clone().unwrap();
+            let is_critical = msg.contains("crashed") || msg.contains("missing");
+            
+            let mut tasks = vec![task];
+            
+            if is_critical {
+                tasks.push(Task::perform(
+                    async move {
+                        rfd::AsyncMessageDialog::new()
+                            .set_level(rfd::MessageLevel::Error)
+                            .set_title("PDFbull Error")
+                            .set_description(&msg)
+                            .show()
+                            .await;
+                    },
+                    |_| Message::ClearStatus,
+                ));
+            }
+            
+            tasks.push(Task::perform(
+                async move {
+                    std::thread::sleep(std::time::Duration::from_secs(4));
+                },
+                |_| Message::ClearStatus,
+            ));
+            
+            Task::batch(tasks)
+        } else {
+            task
+        }
     }
 
     pub fn view(&self) -> Element<Message> {
         ui::view(self)
+    }
+
+    pub fn subscription(&self) -> iced::Subscription<Message> {
+        iced::event::listen_with(|event, _status, _id| {
+            Some(Message::IcedEvent(event))
+        })
     }
 }

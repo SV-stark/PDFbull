@@ -50,4 +50,8 @@ Section "Uninstall"
     Delete "$DESKTOP\PDFbull.lnk"
     
     DeleteRegKey HKLM "Software\Microsoft\Windows\CurrentVersion\Uninstall\PDFbull"
+    
+    RMDir /r "$APPDATA\pdfbull"
+    RMDir /r "$LOCALAPPDATA\pdfbull"
+    
 SectionEnd

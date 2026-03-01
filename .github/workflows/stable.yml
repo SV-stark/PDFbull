@@ -55,6 +55,7 @@ jobs:
           mkdir release_dist
           Copy-Item -Path "target/release/pdfbull.exe" -Destination "release_dist/"
           Copy-Item -Path "pdfium.dll" -Destination "release_dist/"
+          Compress-Archive -Path release_dist/* -DestinationPath "PDFbull-Portable.zip"
 
       - name: Install NSIS
         run: choco install nsis -y
@@ -73,6 +74,7 @@ jobs:
             release_dist/pdfbull.exe
             release_dist/pdfium.dll
             PDFbull-Setup.exe
+            PDFbull-Portable.zip
           draft: false
           prerelease: false
         env:

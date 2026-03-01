@@ -52,7 +52,7 @@ pub struct Bookmark {
 }
 
 impl<'a> DocumentStore<'a> {
-    pub fn new() -> Result<Self, String> {
+    pub fn new(cache_size: u64) -> Result<Self, String> {
         let bindings = Pdfium::bind_to_library(Pdfium::pdfium_platform_library_name_at_path("./"))
             .or_else(|_| Pdfium::bind_to_library(Pdfium::pdfium_platform_library_name()))
             .map_err(|e| format!("Failed to bind to Pdfium library: {}", e))?;
@@ -63,7 +63,7 @@ impl<'a> DocumentStore<'a> {
             pdfium,
             documents: HashMap::new(),
             render_cache: Cache::builder()
-                .max_capacity(100)
+                .max_capacity(cache_size)
                 .time_to_idle(Duration::from_secs(300))
                 .build(),
         })

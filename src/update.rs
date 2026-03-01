@@ -182,7 +182,8 @@ pub fn handle_message(app: &mut PdfBullApp, message: Message) -> Task<Message> {
         }
         Message::OpenDocument => {
             if app.engine.is_none() {
-                app.engine = Some(crate::engine::spawn_engine_thread());
+                let cache_size = app.settings.cache_size as u64;
+                app.engine = Some(crate::engine::spawn_engine_thread(cache_size));
             }
 
             if let Some(engine) = &app.engine {
@@ -304,7 +305,8 @@ pub fn handle_message(app: &mut PdfBullApp, message: Message) -> Task<Message> {
         }
         Message::OpenFile(path) => {
             if app.engine.is_none() {
-                app.engine = Some(crate::engine::spawn_engine_thread());
+                let cache_size = app.settings.cache_size as u64;
+                app.engine = Some(crate::engine::spawn_engine_thread(cache_size));
             }
 
             let tab = DocumentTab::new(path.clone());
@@ -453,13 +455,14 @@ pub fn handle_message(app: &mut PdfBullApp, message: Message) -> Task<Message> {
                 Message::PageRendered,
             )
         }
-        Message::PageRendered(result) => {
+        Message::PageRendered(page_idx, result) => {
             app.rendering_count = app.rendering_count.saturating_sub(1);
+            app.rendering_set.remove(&page_idx);
             match result {
-                Ok((page, width, height, data)) => {
+                Ok((width, height, data)) => {
                     if let Some(tab) = app.current_tab_mut() {
                         let rgba_data = Arc::try_unwrap(data).unwrap_or_else(|arc| (*arc).clone());
-                        tab.rendered_pages.insert(page, iced_image::Handle::from_rgba(width, height, rgba_data));
+                        tab.rendered_pages.insert(page_idx, iced_image::Handle::from_rgba(width, height, rgba_data));
                     }
                 }
                 Err(e) => {
@@ -471,6 +474,22 @@ pub fn handle_message(app: &mut PdfBullApp, message: Message) -> Task<Message> {
                         app.engine = None;
                         app.status_message = Some("Failed to load PDF engine (pdfium.dll missing).".into());
                     }
+                }
+            }
+            Task::none()
+        }
+        Message::ThumbnailRendered(page_idx, result) => {
+            app.rendering_count = app.rendering_count.saturating_sub(1);
+            app.rendering_set.remove(&(page_idx + 100000));
+            match result {
+                Ok((width, height, data)) => {
+                    if let Some(tab) = app.current_tab_mut() {
+                        let rgba_data = Arc::try_unwrap(data).unwrap_or_else(|arc| (*arc).clone());
+                        tab.thumbnails.insert(page_idx, iced_image::Handle::from_rgba(width, height, rgba_data));
+                    }
+                }
+                Err(e) => {
+                    log::error!("Thumbnail render error: {}", e);
                 }
             }
             Task::none()
@@ -805,6 +824,43 @@ pub fn handle_message(app: &mut PdfBullApp, message: Message) -> Task<Message> {
         Message::ClearStatus => {
             app.status_message = None;
             Task::none()
+        }
+        Message::IcedEvent(event) => {
+            match event {
+                iced::Event::Window(iced::window::Event::CloseRequested) => {
+                    let has_dirty = app.tabs.iter().any(|t| !t.annotations.is_empty());
+                    if has_dirty {
+                        return Task::perform(
+                            async move {
+                                let answer = rfd::AsyncMessageDialog::new()
+                                    .set_level(rfd::MessageLevel::Warning)
+                                    .set_title("Unsaved Annotations")
+                                    .set_description("You have annotations that haven't been saved to a PDF. Quitting will lose them. Are you sure you want to quit?")
+                                    .set_buttons(rfd::MessageButtons::YesNo)
+                                    .show()
+                                    .await;
+                                
+                                if answer == rfd::MessageDialogResult::Yes {
+                                    Message::ForceQuit
+                                } else {
+                                    Message::ClearStatus
+                                }
+                            },
+                            |m| m,
+                        );
+                    } else {
+                        return iced::window::get_latest().and_then(iced::window::close);
+                    }
+                }
+                iced::Event::Window(iced::window::Event::FileDropped(path)) => {
+                    return app.update(Message::OpenFile(path));
+                }
+                _ => {}
+            }
+            Task::none()
+        }
+        Message::ForceQuit => {
+            iced::window::get_latest().and_then(iced::window::close)
         }
     }
 }

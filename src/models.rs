@@ -210,6 +210,17 @@ impl DocumentTab {
         visible
     }
 
+    pub fn get_visible_thumbnails(&self) -> std::collections::HashSet<usize> {
+        let mut visible = std::collections::HashSet::new();
+        let thumbnail_height = 40.0;
+        let start_idx = (self.sidebar_viewport_y / thumbnail_height).max(0.0) as usize;
+        let end_idx = (start_idx + 30).min(self.total_pages);
+        for i in start_idx..end_idx {
+            visible.insert(i);
+        }
+        visible
+    }
+
     pub fn cleanup_distant_pages(&mut self) {
         let visible = self.get_visible_pages();
         let pages_to_keep: std::collections::HashSet<usize> = visible

@@ -414,11 +414,17 @@ pub fn document_view(app: &PdfBullApp) -> Element<crate::message::Message> {
         let main_content = render_pdf_content(app);
         row![sidebar, main_content].into()
     } else if tab.total_pages == 0 {
-        container(text(if tab.is_loading {
-            "Loading..."
+        container(if tab.is_loading {
+            column![
+                text("⏳").size(50),
+                text("Loading Document...").size(24)
+            ]
+            .align_x(iced::Alignment::Center)
+            .spacing(20)
+            .into()
         } else {
-            "No pages"
-        }))
+            text("No pages").into()
+        })
         .width(Length::Fill)
         .height(Length::Fill)
         .center_x(Length::Fill)

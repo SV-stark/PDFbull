@@ -58,8 +58,10 @@ pub fn main() -> iced::Result {
 
     iced::application(app::PdfBullApp::default, app::PdfBullApp::update, app::PdfBullApp::view)
         .title("PDFbull")
+        .subscription(app::PdfBullApp::subscription)
         .window(iced::window::Settings {
             icon,
+            exit_on_close_request: false,
             ..Default::default()
         })
         .run()
