@@ -1,6 +1,26 @@
 use crate::pdf_engine::RenderFilter;
 use iced::widget::image as iced_image;
 use serde::{Deserialize, Serialize};
+
+#[derive(Debug, Clone)]
+pub enum UndoableAction {
+    AddAnnotation(Annotation),
+    DeleteAnnotation(usize, Annotation),
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum PendingAnnotationKind {
+    Highlight,
+    Rectangle,
+}
+
+#[derive(Debug, Clone)]
+pub struct AnnotationDrag {
+    pub page: usize,
+    pub start: (f32, f32),
+    pub current: (f32, f32),
+    pub kind: PendingAnnotationKind,
+}
 use std::path::PathBuf;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -91,6 +111,9 @@ pub struct SearchResult {
     pub page: usize,
     pub text: String,
     pub y_position: f32,
+    pub x: f32,
+    pub width: f32,
+    pub height: f32,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -127,6 +150,8 @@ pub struct DocumentTab {
     pub page_width: f32,
     pub search_results: Vec<SearchResult>,
     pub current_search_index: usize,
+    pub undo_stack: Vec<UndoableAction>,
+    pub redo_stack: Vec<UndoableAction>,
     pub is_loading: bool,
     pub outline: Vec<crate::pdf_engine::Bookmark>,
     pub bookmarks: Vec<PageBookmark>,
@@ -172,6 +197,8 @@ impl DocumentTab {
             page_width: 0.0,
             search_results: Vec::new(),
             current_search_index: 0,
+            undo_stack: Vec::new(),
+            redo_stack: Vec::new(),
             is_loading: false,
             outline: Vec::new(),
             bookmarks: Vec::new(),

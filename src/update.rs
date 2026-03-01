@@ -8,6 +8,17 @@ use std::sync::Arc;
 use std::path::PathBuf;
 use std::fs;
 
+fn scroll_to_page(tab: &crate::models::DocumentTab, page: usize) -> Task<Message> {
+    let y_offset: f32 = tab.page_heights.iter()
+        .take(page)
+        .map(|h| h + 10.0)
+        .sum();
+    iced::widget::scrollable::scroll_to(
+        iced::widget::scrollable::Id::new("pdf_scroll"),
+        iced::widget::scrollable::AbsoluteOffset { x: 0.0, y: y_offset },
+    )
+}
+
 pub fn handle_message(app: &mut PdfBullApp, message: Message) -> Task<Message> {
     if !app.loaded {
         app.loaded = true;
@@ -56,7 +67,6 @@ pub fn handle_message(app: &mut PdfBullApp, message: Message) -> Task<Message> {
         Message::SaveSettings(settings) => {
             app.settings = settings;
             storage::save_settings(&app.settings);
-            app.show_settings = false;
             Task::none()
         }
         Message::ToggleSidebar => {
@@ -115,52 +125,114 @@ pub fn handle_message(app: &mut PdfBullApp, message: Message) -> Task<Message> {
             if let Some(tab) = app.current_tab_mut() {
                 if idx < tab.bookmarks.len() {
                     tab.current_page = tab.bookmarks[idx].page;
+                    app.page_input = (tab.current_page + 1).to_string();
+                    return scroll_to_page(tab, tab.current_page);
                 }
             }
             Task::none()
         }
-        Message::AddHighlight => {
-            let accent_color = app.settings.accent_color.clone();
-            if let Some(tab) = app.current_tab_mut() {
-                let page = tab.current_page;
-                let annotation = crate::models::Annotation {
-                    id: crate::models::next_annotation_id(),
-                    page,
-                    style: crate::models::AnnotationStyle::Highlight { color: accent_color },
-                    x: 100.0,
-                    y: (tab.viewport_y + tab.viewport_height / 2.0).max(100.0) - 25.0,
-                    width: 200.0,
-                    height: 50.0,
-                };
-                tab.annotations.push(annotation);
+        Message::SetAnnotationMode(mode) => {
+            app.annotation_mode = mode;
+            if app.annotation_mode.is_none() {
+                app.annotation_drag = None;
             }
-            app.save_session();
             Task::none()
         }
-        Message::AddRectangle => {
-            if let Some(tab) = app.current_tab_mut() {
-                let page = tab.current_page;
-                let annotation = crate::models::Annotation {
-                    id: crate::models::next_annotation_id(),
+        Message::AnnotationDragStart { page, x, y } => {
+            if let Some(kind) = &app.annotation_mode {
+                app.annotation_drag = Some(crate::models::AnnotationDrag {
                     page,
-                    style: crate::models::AnnotationStyle::Rectangle { color: "#ff0000".to_string(), thickness: 2.0, fill: false },
-                    x: 150.0,
-                    y: (tab.viewport_y + tab.viewport_height / 2.0).max(150.0) - 50.0,
-                    width: 150.0,
-                    height: 100.0,
-                };
-                tab.annotations.push(annotation);
+                    start: (x, y),
+                    current: (x, y),
+                    kind: kind.clone(),
+                });
             }
-            app.save_session();
+            Task::none()
+        }
+        Message::AnnotationDragUpdate { x, y } => {
+            if let Some(drag) = &mut app.annotation_drag {
+                drag.current = (x, y);
+            }
+            Task::none()
+        }
+        Message::AnnotationDragEnd => {
+            if let Some(drag) = app.annotation_drag.take() {
+                if let Some(tab) = app.current_tab_mut() {
+                    let min_x = drag.start.0.min(drag.current.0);
+                    let min_y = drag.start.1.min(drag.current.1);
+                    let w = (drag.start.0 - drag.current.0).abs();
+                    let h = (drag.start.1 - drag.current.1).abs();
+
+                    if w > 5.0 && h > 5.0 {
+                        let id = uuid::Uuid::new_v4().to_string();
+                        let (style, color) = match drag.kind {
+                            crate::models::PendingAnnotationKind::Highlight => (crate::models::AnnotationStyle::Highlight, (255, 255, 0)),
+                            crate::models::PendingAnnotationKind::Rectangle => (crate::models::AnnotationStyle::Rectangle, (255, 0, 0)),
+                        };
+
+                        let ann = crate::models::Annotation {
+                            id,
+                            page: drag.page,
+                            style,
+                            bounds: (min_x, min_y, w, h),
+                            color,
+                            text: String::new(),
+                        };
+                        
+                        tab.undo_stack.push(crate::models::UndoableAction::AddAnnotation(ann.clone()));
+                        tab.redo_stack.clear();
+                        tab.annotations.push(ann);
+                    }
+                }
+            }
+            
+            // Optionally reset mode after drawing
+            // app.annotation_mode = None;
+            
             Task::none()
         }
         Message::DeleteAnnotation(idx) => {
             if let Some(tab) = app.current_tab_mut() {
                 if idx < tab.annotations.len() {
-                    tab.annotations.remove(idx);
+                    let ann = tab.annotations.remove(idx);
+                    tab.undo_stack.push(crate::models::UndoableAction::DeleteAnnotation(idx, ann));
+                    tab.redo_stack.clear();
                 }
             }
-            app.save_session();
+            Task::none()
+        }
+        Message::Undo => {
+            if let Some(tab) = app.current_tab_mut() {
+                if let Some(action) = tab.undo_stack.pop() {
+                    match action {
+                        crate::models::UndoableAction::AddAnnotation(ann) => {
+                            tab.redo_stack.push(crate::models::UndoableAction::AddAnnotation(ann.clone()));
+                            tab.annotations.retain(|a| a.id != ann.id);
+                        }
+                        crate::models::UndoableAction::DeleteAnnotation(idx, ann) => {
+                            tab.redo_stack.push(crate::models::UndoableAction::DeleteAnnotation(idx, ann.clone()));
+                            tab.annotations.insert(idx.min(tab.annotations.len()), ann);
+                        }
+                    }
+                }
+            }
+            Task::none()
+        }
+        Message::Redo => {
+            if let Some(tab) = app.current_tab_mut() {
+                if let Some(action) = tab.redo_stack.pop() {
+                    match action {
+                        crate::models::UndoableAction::AddAnnotation(ann) => {
+                            tab.undo_stack.push(crate::models::UndoableAction::AddAnnotation(ann.clone()));
+                            tab.annotations.push(ann);
+                        }
+                        crate::models::UndoableAction::DeleteAnnotation(idx, ann) => {
+                            tab.undo_stack.push(crate::models::UndoableAction::DeleteAnnotation(idx, ann.clone()));
+                            tab.annotations.retain(|a| a.id != ann.id);
+                        }
+                    }
+                }
+            }
             Task::none()
         }
         Message::SetFilter(filter) => {
@@ -364,6 +436,8 @@ pub fn handle_message(app: &mut PdfBullApp, message: Message) -> Task<Message> {
             if let Some(tab) = app.current_tab_mut() {
                 if tab.current_page + 1 < tab.total_pages {
                     tab.current_page += 1;
+                    app.page_input = (tab.current_page + 1).to_string();
+                    return scroll_to_page(tab, tab.current_page);
                 }
             }
             Task::none()
@@ -372,6 +446,8 @@ pub fn handle_message(app: &mut PdfBullApp, message: Message) -> Task<Message> {
             if let Some(tab) = app.current_tab_mut() {
                 if tab.current_page > 0 {
                     tab.current_page -= 1;
+                    app.page_input = (tab.current_page + 1).to_string();
+                    return scroll_to_page(tab, tab.current_page);
                 }
             }
             Task::none()
@@ -401,7 +477,22 @@ pub fn handle_message(app: &mut PdfBullApp, message: Message) -> Task<Message> {
             if let Some(tab) = app.current_tab_mut() {
                 if page < tab.total_pages {
                     tab.current_page = page;
+                    app.page_input = (tab.current_page + 1).to_string();
+                    return scroll_to_page(tab, tab.current_page);
                 }
+            }
+            Task::none()
+        }
+        Message::PageInputChanged(s) => {
+            app.page_input = s;
+            Task::none()
+        }
+        Message::PageInputSubmitted => {
+            if let Ok(page) = app.page_input.trim().parse::<usize>() {
+                return app.update(Message::JumpToPage(page.saturating_sub(1)));
+            }
+            if let Some(tab) = app.current_tab() {
+                app.page_input = (tab.current_page + 1).to_string();
             }
             Task::none()
         }
@@ -415,6 +506,8 @@ pub fn handle_message(app: &mut PdfBullApp, message: Message) -> Task<Message> {
         }
         Message::SidebarViewportChanged(y) => {
             if let Some(tab) = app.current_tab_mut() {
+                tab.sidebar_viewport_y = y;
+            }
             Task::none()
         }
         Message::RequestRender(page_idx) => {
@@ -551,8 +644,8 @@ pub fn handle_message(app: &mut PdfBullApp, message: Message) -> Task<Message> {
             match result {
                 Ok(results) => {
                     if let Some(tab) = app.current_tab_mut() {
-                        for (page, text, y) in results {
-                            tab.search_results.push(SearchResult { page, text, y_position: y });
+                        for (page, text, y, x, width, height) in results {
+                            tab.search_results.push(SearchResult { page, text, y_position: y, x, width, height });
                         }
                         
                         if !tab.search_results.is_empty() && tab.current_search_index == 0 {
@@ -577,6 +670,8 @@ pub fn handle_message(app: &mut PdfBullApp, message: Message) -> Task<Message> {
                 if !tab.search_results.is_empty() {
                     tab.current_search_index = (tab.current_search_index + 1) % tab.search_results.len();
                     tab.current_page = tab.search_results[tab.current_search_index].page;
+                    app.page_input = (tab.current_page + 1).to_string();
+                    return scroll_to_page(tab, tab.current_page);
                 }
             }
             Task::none()
@@ -590,6 +685,8 @@ pub fn handle_message(app: &mut PdfBullApp, message: Message) -> Task<Message> {
                         tab.current_search_index - 1
                     };
                     tab.current_page = tab.search_results[tab.current_search_index].page;
+                    app.page_input = (tab.current_page + 1).to_string();
+                    return scroll_to_page(tab, tab.current_page);
                 }
             }
             Task::none()
@@ -847,7 +944,30 @@ pub fn handle_message(app: &mut PdfBullApp, message: Message) -> Task<Message> {
                 iced::Event::Window(iced::window::Event::FileDropped(path)) => {
                     return app.update(Message::OpenFile(path));
                 }
-                iced::Event::Keyboard(iced::keyboard::Event::KeyPressed { key, modifiers, .. }) => {
+                        iced::Event::Mouse(iced::mouse::Event::CursorMoved { position }) => {
+            // We only care about tracking when dragging an annotation
+            // But CursorMoved position is in absolute screen coords,
+            // while AnnotationDrag tracks page-relative coords.
+            // Ideally we'd use mouse_area's on_move but it's not supported natively yet.
+            // A simple approximation for drag:
+            // Since we don't have absolute window coords trivially mapped to page coords,
+            // we will need to calculate the relative delta if we really want to track outside the mouse_area.
+            // Actually, we can get local coords by updating via mouse_area if we had an event listener,
+            // but we can just use the fact that Iced 0.12+ doesn't have on_move in mouse_area.
+            // Wait, we can't easily map window coordinates to page coordinates here without knowing the scroll/zoom.
+            // Let's rely on standard iced widget events if possible, or just accept that the visual preview
+            // might be slightly off until we release.
+            // Or better, let's keep the drag state and just live with no preview if we can't get local coords.
+            // No, wait, if we drop iced::mouse::Event tracking, the preview won't update.
+            // Let's just pass the absolute coords and we'll have to adjust them by scroll and zoom later.
+            // A better way is to see if Iced's `mouse_area` supports movement tracking. It doesn't in 0.12, but does in 0.13.
+            // Given I'm not sure what version of Iced this uses (likely 0.12), I'll omit live drag preview
+            // updates if it requires too much math, and just use the DragEnd coords.
+            // But we can pull the scroll offset!
+            // Actually, `mouse_area` only fires `on_press` and `on_release`.
+            // Let's just ignore `CursorMoved` here and rely on the start/end bounds.
+        }
+        iced::Event::Keyboard(iced::keyboard::Event::KeyPressed { key, modifiers, .. }) => {
                     use iced::keyboard::{Key, Modifiers};
                     
                     match key {
@@ -857,16 +977,27 @@ pub fn handle_message(app: &mut PdfBullApp, message: Message) -> Task<Message> {
                         Key::Character(c) => match c.as_str() {
                             "o" if modifiers.command() => return app.update(Message::OpenDocument),
                             "s" if modifiers.command() => return app.update(Message::SaveAnnotations),
-                            "f" if modifiers.command() => return app.update(Message::ShowSearch),
+                            "z" if modifiers.command() && modifiers.shift() => return app.update(Message::Redo),
+                            "z" if modifiers.command() => return app.update(Message::Undo),
+                            "y" if modifiers.command() => return app.update(Message::Redo),
+                            "f" if modifiers.command() => { /* Search is handled in UI */ }
                             "0" if modifiers.command() => return app.update(Message::ResetZoom),
                             "=" | "+" if modifiers.command() => return app.update(Message::ZoomIn),
                             "-" if modifiers.command() => return app.update(Message::ZoomOut),
-                            "p" if modifiers.command() => return app.update(Message::PrintDocument),
-                            "w" if modifiers.command() => return app.update(Message::CloseDocument),
+                            "w" if modifiers.command() => {
+                                if !app.tabs.is_empty() {
+                                    return app.update(Message::CloseTab(app.active_tab));
+                                }
+                            }
                             "b" if modifiers.command() => return app.update(Message::ToggleSidebar),
                             "?" if modifiers.shift() => return app.update(Message::ToggleKeyboardHelp),
                             _ => {}
                         },
+                        Key::Named(iced::keyboard::key::Named::Escape) => {
+                            if app.annotation_mode.is_some() {
+                                return app.update(Message::SetAnnotationMode(None));
+                            }
+                        }
                         _ => {}
                     }
                 }

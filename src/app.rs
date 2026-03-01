@@ -22,7 +22,10 @@ pub struct PdfBullApp {
     pub is_fullscreen: bool,
     pub search_query: String,
     pub search_pending: Option<String>,
+    pub page_input: String,
     pub status_message: Option<String>,
+    pub annotation_mode: Option<crate::models::PendingAnnotationKind>,
+    pub annotation_drag: Option<crate::models::AnnotationDrag>,
     pub engine: Option<EngineState>,
     pub loaded: bool,
     pub rendering_count: usize,
@@ -42,7 +45,10 @@ impl Default for PdfBullApp {
             is_fullscreen: false,
             search_query: String::new(),
             search_pending: None,
+            page_input: "1".to_string(),
             status_message: None,
+            annotation_mode: None,
+            annotation_drag: None,
             engine: None,
             loaded: false,
             rendering_count: 0,
@@ -180,7 +186,8 @@ impl PdfBullApp {
             
             tasks.push(Task::perform(
                 async move {
-                    tokio::time::sleep(tokio::time::Duration::from_secs(4)).await;
+                    let duration = if msg.len() > 60 { 8 } else { 5 };
+                    tokio::time::sleep(tokio::time::Duration::from_secs(duration)).await;
                 },
                 |_| Message::ClearStatus,
             ));

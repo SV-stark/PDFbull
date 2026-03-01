@@ -613,7 +613,7 @@ impl<'a> DocumentStore<'a> {
         serde_json::from_str(&json).map_err(|e| format!("Failed to parse annotations: {}", e))
     }
 
-    pub fn search(&self, doc_id: &str, query: &str) -> Result<Vec<(usize, String, f32)>, String> {
+    pub fn search(&self, doc_id: &str, query: &str) -> Result<Vec<(usize, String, f32, f32, f32, f32)>, String> {
         let state = self
             .documents
             .get(doc_id)
@@ -621,14 +621,25 @@ impl<'a> DocumentStore<'a> {
 
         let doc = &state.doc;
         let mut results = Vec::new();
-        let query_lower = query.to_lowercase();
 
         for (idx, page) in doc.pages().iter().enumerate() {
             if let Ok(text) = page.text() {
-                let text_str = text.to_string();
-                if text_str.to_lowercase().contains(&query_lower) {
-                    let result = (idx, text_str.chars().take(200).collect(), 0.0);
-                    results.push(result);
+                if let Ok(search) = text.search(query, true, false) {
+                    for result in search.iter() {
+                        let text_str = result.text().to_string();
+                        // Get bounds for the first char in the match (approximation, but good enough for now)
+                        if let Some(bounds) = result.chars().first().map(|c| c.bounds()) {
+                            let (y, x) = (bounds.bottom.value as f32, bounds.left.value as f32);
+                            let width = (bounds.right.value - bounds.left.value) as f32;
+                            // Width approximation using length
+                            let approx_width = width.max(text_str.len() as f32 * 6.0);
+                            let height = (bounds.top.value - bounds.bottom.value) as f32;
+                            
+                            results.push((idx, text_str, y, x, approx_width, height.max(12.0)));
+                        } else {
+                            results.push((idx, text_str, 0.0, 0.0, 50.0, 20.0));
+                        }
+                    }
                 }
             }
         }
