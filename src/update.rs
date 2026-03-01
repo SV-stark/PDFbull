@@ -229,10 +229,6 @@ pub fn handle_message(app: &mut PdfBullApp, message: Message) -> Task<Message> {
             app.add_recent_file(&path);
             
             let doc_id = data.0;
-            if let Some(engine) = &mut app.engine {
-                engine.documents.insert(doc_id, path.to_string_lossy().to_string());
-            }
-            
             app.update(Message::DocumentOpened(Ok(data)))
         }
         Message::DocumentOpened(result) => {
@@ -419,12 +415,10 @@ pub fn handle_message(app: &mut PdfBullApp, message: Message) -> Task<Message> {
         }
         Message::SidebarViewportChanged(y) => {
             if let Some(tab) = app.current_tab_mut() {
-                tab.sidebar_viewport_y = y;
-            }
             Task::none()
         }
         Message::RequestRender(page_idx) => {
-            let (doc_id, zoom, rotation, filter, auto_crop) = {
+            let (doc_id, zoom, rotation, filter, auto_crop, quality) = {
                 let tab = match app.current_tab() {
                     Some(t) => t,
                     None => return Task::none(),
@@ -852,6 +846,29 @@ pub fn handle_message(app: &mut PdfBullApp, message: Message) -> Task<Message> {
                 }
                 iced::Event::Window(iced::window::Event::FileDropped(path)) => {
                     return app.update(Message::OpenFile(path));
+                }
+                iced::Event::Keyboard(iced::keyboard::Event::KeyPressed { key, modifiers, .. }) => {
+                    use iced::keyboard::{Key, Modifiers};
+                    
+                    match key {
+                        Key::Named(iced::keyboard::key::Named::F11) => {
+                            return app.update(Message::ToggleFullscreen);
+                        }
+                        Key::Character(c) => match c.as_str() {
+                            "o" if modifiers.command() => return app.update(Message::OpenDocument),
+                            "s" if modifiers.command() => return app.update(Message::SaveAnnotations),
+                            "f" if modifiers.command() => return app.update(Message::ShowSearch),
+                            "0" if modifiers.command() => return app.update(Message::ResetZoom),
+                            "=" | "+" if modifiers.command() => return app.update(Message::ZoomIn),
+                            "-" if modifiers.command() => return app.update(Message::ZoomOut),
+                            "p" if modifiers.command() => return app.update(Message::PrintDocument),
+                            "w" if modifiers.command() => return app.update(Message::CloseDocument),
+                            "b" if modifiers.command() => return app.update(Message::ToggleSidebar),
+                            "?" if modifiers.shift() => return app.update(Message::ToggleKeyboardHelp),
+                            _ => {}
+                        },
+                        _ => {}
+                    }
                 }
                 _ => {}
             }

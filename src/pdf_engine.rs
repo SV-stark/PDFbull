@@ -50,14 +50,14 @@ struct DocumentState<'a> {
 }
 
 #[derive(Clone, Hash, Eq, PartialEq)]
-pub struct RenderCacheKey {
-    pub doc_id: String,
-    pub page: i32,
-    pub scale_key: u32,
-    pub rotation: u32,
-    pub filter: u32,
-    pub auto_crop: bool,
-    pub quality: u32,
+struct RenderCacheKey {
+    doc_id: String,
+    page: i32,
+    scale_key: u32,
+    rotation: u32,
+    filter: u32,
+    auto_crop: bool,
+    quality: crate::models::RenderQuality,
 }
 
 pub fn create_render_cache(cache_size: u64) -> SharedRenderCache {
@@ -194,17 +194,12 @@ impl<'a> DocumentStore<'a> {
         rotation: i32,
         filter: RenderFilter,
         auto_crop: bool,
-        quality: RenderQuality,
+        quality: crate::models::RenderQuality,
     ) -> Result<(u32, u32, Arc<Vec<u8>>), String> {
         let scale_key = (scale * 10000.0) as u32;
         let rotation_key = ((rotation + 360) % 360) as u32;
         let filter_key = filter as u32;
         let crop_key = auto_crop;
-        let quality_key = match quality {
-            RenderQuality::Low => 0,
-            RenderQuality::Medium => 1,
-            RenderQuality::High => 2,
-        };
 
         let cache_key = RenderCacheKey {
             doc_id: doc_id.to_string(),
@@ -213,7 +208,7 @@ impl<'a> DocumentStore<'a> {
             rotation: rotation_key,
             filter: filter_key,
             auto_crop: crop_key,
-            quality: quality_key,
+            quality,
         };
 
         if let Some(cached) = self.render_cache.get(&cache_key) {
@@ -253,13 +248,23 @@ impl<'a> DocumentStore<'a> {
             .rotate(render_rotation, false);
 
         match quality {
-            RenderQuality::Low => {
-                render_config = render_config.set_render_flags(PdfBitmapRenderFlags::NO_SMOOTH_TEXT | PdfBitmapRenderFlags::NO_SMOOTH_IMAGE | PdfBitmapRenderFlags::NO_SMOOTH_PATH);
+            crate::models::RenderQuality::Low => {
+                render_config = render_config
+                    .clear_render_text_with_anti_aliasing()
+                    .clear_render_graphics_with_anti_aliasing();
             }
-            RenderQuality::High => {
-                render_config = render_config.set_render_flags(PdfBitmapRenderFlags::LCD_TEXT);
+            crate::models::RenderQuality::High => {
+                render_config = render_config
+                    .render_text_with_lcd_optimization()
+                    .use_halftone_for_image_stretching()
+                    .render_text_with_anti_aliasing()
+                    .render_graphics_with_anti_aliasing();
             }
-            RenderQuality::Medium => {}
+            crate::models::RenderQuality::Medium => {
+                render_config = render_config
+                    .render_text_with_anti_aliasing()
+                    .render_graphics_with_anti_aliasing();
+            }
         }
 
         let bitmap = page

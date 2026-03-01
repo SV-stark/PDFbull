@@ -17,7 +17,7 @@ path = "src/main.rs"
 [dependencies]
 rfd = "0.14"
 pdfium-render = "0.8"
-image = "0.25"
+image = { version = "0.24", default-features = false, features = ["png"] }
 moka = { version = "0.12", features = ["sync"] }
 iced = { version = "0.14", features = ["image", "canvas", "tokio"] }
 iced_aw = { version = "0.13", features = ["tabs", "badge", "card"] }

@@ -46,6 +46,7 @@ pub struct AppSettings {
     pub default_filter: RenderFilter,
     pub accent_color: String,
     pub restore_session: bool,
+    pub remember_last_file: bool,
 }
 
 impl Default for AppSettings {
@@ -60,6 +61,7 @@ impl Default for AppSettings {
             default_filter: RenderFilter::None,
             accent_color: "#3b82f6".to_string(),
             restore_session: true,
+            remember_last_file: true,
         }
     }
 }
