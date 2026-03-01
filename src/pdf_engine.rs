@@ -17,16 +17,31 @@ pub enum RenderFilter {
     NoShadow,
 }
 
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+pub enum RenderQuality {
+    Low,
+    Medium,
+    High,
+}
+
+impl Default for RenderQuality {
+    fn default() -> Self {
+        RenderQuality::Medium
+    }
+}
+
 impl Default for RenderFilter {
     fn default() -> Self {
         RenderFilter::None
     }
 }
 
+pub type SharedRenderCache = Cache<RenderCacheKey, (u32, u32, Arc<Vec<u8>>)>;
+
 pub struct DocumentStore<'a> {
     pdfium: Pdfium,
     documents: HashMap<String, DocumentState<'a>>,
-    render_cache: Cache<RenderCacheKey, (u32, u32, Arc<Vec<u8>>)>,
+    render_cache: SharedRenderCache,
 }
 
 struct DocumentState<'a> {
@@ -35,13 +50,21 @@ struct DocumentState<'a> {
 }
 
 #[derive(Clone, Hash, Eq, PartialEq)]
-struct RenderCacheKey {
-    doc_id: String,
-    page: i32,
-    scale_key: u32,
-    rotation: u32,
-    filter: u32,
-    auto_crop: bool,
+pub struct RenderCacheKey {
+    pub doc_id: String,
+    pub page: i32,
+    pub scale_key: u32,
+    pub rotation: u32,
+    pub filter: u32,
+    pub auto_crop: bool,
+    pub quality: u32,
+}
+
+pub fn create_render_cache(cache_size: u64) -> SharedRenderCache {
+    Cache::builder()
+        .max_capacity(cache_size)
+        .weigher(|_key, val: &(u32, u32, Arc<Vec<u8>>)| val.2.len() as u32)
+        .build()
 }
 
 #[derive(Clone, Debug)]
@@ -52,7 +75,7 @@ pub struct Bookmark {
 }
 
 impl<'a> DocumentStore<'a> {
-    pub fn new(cache_size: u64) -> Result<Self, String> {
+    pub fn new(cache: SharedRenderCache) -> Result<Self, String> {
         let bindings = Pdfium::bind_to_library(Pdfium::pdfium_platform_library_name_at_path("./"))
             .or_else(|_| Pdfium::bind_to_library(Pdfium::pdfium_platform_library_name()))
             .map_err(|e| format!("Failed to bind to Pdfium library: {}", e))?;
@@ -62,10 +85,7 @@ impl<'a> DocumentStore<'a> {
         Ok(Self {
             pdfium,
             documents: HashMap::new(),
-            render_cache: Cache::builder()
-                .max_capacity(cache_size)
-                .time_to_idle(Duration::from_secs(300))
-                .build(),
+            render_cache: cache,
         })
     }
 
@@ -107,6 +127,22 @@ impl<'a> DocumentStore<'a> {
         Ok((path.to_string(), page_count as usize, heights, max_width))
     }
 
+    pub fn ensure_opened(&mut self, path: &str) -> Result<(), String> {
+        if !self.documents.contains_key(path) {
+            let doc = self
+                .pdfium
+                .load_pdf_from_file(path, None)
+                .map_err(|e| e.to_string())?;
+
+            let state = DocumentState {
+                doc,
+                path: path.to_string(),
+            };
+            self.documents.insert(path.to_string(), state);
+        }
+        Ok(())
+    }
+
     pub fn get_outline(&self, doc_id: &str) -> Vec<Bookmark> {
         if let Some(state) = self.documents.get(doc_id) {
             Self::extract_bookmarks_internal(state.doc.bookmarks().root().as_ref())
@@ -140,8 +176,9 @@ impl<'a> DocumentStore<'a> {
         result
     }
 
-    fn invalidate_render_cache(&mut self, doc_id: &str) {
-        self.render_cache.invalidate_all();
+    pub fn invalidate_render_cache(&mut self, doc_id: &str) {
+        let target_id = doc_id.to_string();
+        self.render_cache.invalidate_entries_if(move |k: &RenderCacheKey, _v| k.doc_id == target_id);
     }
 
     pub fn close_document(&mut self, doc_id: &str) {
@@ -157,11 +194,17 @@ impl<'a> DocumentStore<'a> {
         rotation: i32,
         filter: RenderFilter,
         auto_crop: bool,
+        quality: RenderQuality,
     ) -> Result<(u32, u32, Arc<Vec<u8>>), String> {
         let scale_key = (scale * 10000.0) as u32;
         let rotation_key = ((rotation + 360) % 360) as u32;
         let filter_key = filter as u32;
         let crop_key = auto_crop;
+        let quality_key = match quality {
+            RenderQuality::Low => 0,
+            RenderQuality::Medium => 1,
+            RenderQuality::High => 2,
+        };
 
         let cache_key = RenderCacheKey {
             doc_id: doc_id.to_string(),
@@ -170,6 +213,7 @@ impl<'a> DocumentStore<'a> {
             rotation: rotation_key,
             filter: filter_key,
             auto_crop: crop_key,
+            quality: quality_key,
         };
 
         if let Some(cached) = self.render_cache.get(&cache_key) {
@@ -200,51 +244,23 @@ impl<'a> DocumentStore<'a> {
             _ => PdfPageRenderRotation::None,
         };
 
-        let (target_w, target_h, crop_offset) = if auto_crop {
-            let hi_scale = scale * 2.0;
-            let hi_w = (page.width().value * hi_scale) as i32;
-            let hi_h = (page.height().value * hi_scale) as i32;
+        let target_w = (page.width().value * scale) as i32;
+        let target_h = (page.height().value * scale) as i32;
 
-            let hi_config = PdfRenderConfig::new()
-                .set_target_width(hi_w)
-                .set_maximum_height(hi_h)
-                .rotate(render_rotation, false);
-
-            let hi_bitmap = page
-                .render_with_config(&hi_config)
-                .map_err(|e| e.to_string())?;
-
-            let bbox = Self::detect_content_bbox(
-                &hi_bitmap.as_rgba_bytes(),
-                hi_bitmap.width() as u32,
-                hi_bitmap.height() as u32,
-            );
-
-            if let Some((x1, y1, x2, y2)) = bbox {
-                let crop_w = ((x2 - x1) as f32 / hi_scale * scale) as i32;
-                let crop_h = ((y2 - y1) as f32 / hi_scale * scale) as i32;
-                let offset_x = (x1 as f32 / hi_scale * scale) as i32;
-                let offset_y = (y1 as f32 / hi_scale * scale) as i32;
-                (crop_w.max(100), crop_h.max(100), Some((offset_x, offset_y)))
-            } else {
-                (
-                    (page.width().value * scale) as i32,
-                    (page.height().value * scale) as i32,
-                    None,
-                )
-            }
-        } else {
-            (
-                (page.width().value * scale) as i32,
-                (page.height().value * scale) as i32,
-                None,
-            )
-        };
-
-        let render_config = PdfRenderConfig::new()
+        let mut render_config = PdfRenderConfig::new()
             .set_target_width(target_w)
             .set_maximum_height(target_h)
             .rotate(render_rotation, false);
+
+        match quality {
+            RenderQuality::Low => {
+                render_config = render_config.set_render_flags(PdfBitmapRenderFlags::NO_SMOOTH_TEXT | PdfBitmapRenderFlags::NO_SMOOTH_IMAGE | PdfBitmapRenderFlags::NO_SMOOTH_PATH);
+            }
+            RenderQuality::High => {
+                render_config = render_config.set_render_flags(PdfBitmapRenderFlags::LCD_TEXT);
+            }
+            RenderQuality::Medium => {}
+        }
 
         let bitmap = page
             .render_with_config(&render_config)
@@ -253,23 +269,28 @@ impl<'a> DocumentStore<'a> {
         let w = bitmap.width() as u32;
         let h = bitmap.height() as u32;
 
-        let mut result_data = Self::apply_filter(bitmap.as_rgba_bytes().to_vec(), w, h, filter);
+        let result_data = Self::apply_filter(bitmap.as_rgba_bytes().to_vec(), w, h, filter);
 
-        if let Some((ox, oy)) = crop_offset {
-            if ox > 0 || oy > 0 {
-                let crop_y = oy.min(h as i32) as u32;
-                for y in 0..crop_y {
-                    let row_start = (y * w) as usize * 4;
-                    let row_end = row_start + (w as usize * 4);
-                    if row_end <= result_data.len() {
-                        result_data[row_start..row_end].fill(255);
-                    }
+        let (final_w, final_h, final_data) = if auto_crop {
+            if let Some((x1, y1, x2, y2)) = Self::detect_content_bbox(&result_data, w, h) {
+                let crop_w = (x2 - x1) + 1;
+                let crop_h = (y2 - y1) + 1;
+                let mut cropped = Vec::with_capacity((crop_w * crop_h * 4) as usize);
+                for y in y1..=y2 {
+                    let start = ((y * w + x1) * 4) as usize;
+                    let end = ((y * w + x2 + 1) * 4) as usize;
+                    cropped.extend_from_slice(&result_data[start..end]);
                 }
+                (crop_w.max(100), crop_h.max(100), cropped)
+            } else {
+                (w, h, result_data)
             }
-        }
+        } else {
+            (w, h, result_data)
+        };
 
-        let result_data = Arc::new(result_data);
-        let result = (w, h, result_data.clone());
+        let result_data = Arc::new(final_data);
+        let result = (final_w, final_h, result_data.clone());
 
         self.render_cache.insert(cache_key, result.clone());
 
@@ -281,35 +302,71 @@ impl<'a> DocumentStore<'a> {
         let h = height as usize;
         let threshold: u8 = 250;
 
-        let mut min_x = w;
-        let mut min_y = h;
-        let mut max_x = 0usize;
-        let mut max_y = 0usize;
+        let is_bg = |c: &[u8]| c[0] >= threshold && c[1] >= threshold && c[2] >= threshold;
 
+        let mut min_y = h;
         for y in 0..h {
-            for x in 0..w {
-                let idx = (y * w + x) * 4;
-                if idx + 2 < data.len() {
-                    let r = data[idx];
-                    let g = data[idx + 1];
-                    let b = data[idx + 2];
-                    if r < threshold || g < threshold || b < threshold {
-                        min_x = min_x.min(x);
-                        min_y = min_y.min(y);
-                        max_x = max_x.max(x);
-                        max_y = max_y.max(y);
-                    }
-                }
+            let row_start = y * w * 4;
+            let row = &data[row_start..row_start + w * 4];
+            if !row.chunks_exact(4).all(is_bg) {
+                min_y = y;
+                break;
             }
         }
 
-        if max_x > min_x && max_y > min_y {
+        if min_y == h {
+            return None;
+        }
+
+        let mut max_y = 0;
+        for y in (min_y..h).rev() {
+            let row_start = y * w * 4;
+            let row = &data[row_start..row_start + w * 4];
+            if !row.chunks_exact(4).all(is_bg) {
+                max_y = y;
+                break;
+            }
+        }
+
+        let mut min_x = w;
+        for x in 0..w {
+            let mut empty = true;
+            for y in min_y..=max_y {
+                let idx = (y * w + x) * 4;
+                if !is_bg(&data[idx..idx + 4]) {
+                    empty = false;
+                    break;
+                }
+            }
+            if !empty {
+                min_x = x;
+                break;
+            }
+        }
+
+        let mut max_x = 0;
+        for x in (min_x..w).rev() {
+            let mut empty = true;
+            for y in min_y..=max_y {
+                let idx = (y * w + x) * 4;
+                if !is_bg(&data[idx..idx + 4]) {
+                    empty = false;
+                    break;
+                }
+            }
+            if !empty {
+                max_x = x;
+                break;
+            }
+        }
+
+        if max_x >= min_x && max_y >= min_y {
             let margin = 10;
             Some((
-                min_x.saturating_sub(margin) as u32,
-                min_y.saturating_sub(margin) as u32,
-                (max_x + margin).min(w - 1) as u32,
-                (max_y + margin).min(h - 1) as u32,
+                (min_x as u32).saturating_sub(margin),
+                (min_y as u32).saturating_sub(margin),
+                (max_x as u32 + margin).min(width.saturating_sub(1)),
+                (max_y as u32 + margin).min(height.saturating_sub(1)),
             ))
         } else {
             None

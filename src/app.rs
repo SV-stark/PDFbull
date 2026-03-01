@@ -5,6 +5,12 @@ use crate::ui;
 use crate::update::handle_message;
 use iced::{Element, Task};
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum RenderTarget {
+    Page(usize),
+    Thumbnail(usize),
+}
+
 pub struct PdfBullApp {
     pub tabs: Vec<DocumentTab>,
     pub active_tab: usize,
@@ -20,7 +26,7 @@ pub struct PdfBullApp {
     pub engine: Option<EngineState>,
     pub loaded: bool,
     pub rendering_count: usize,
-    pub rendering_set: std::collections::HashSet<usize>,
+    pub rendering_set: std::collections::HashSet<RenderTarget>,
 }
 
 impl Default for PdfBullApp {
@@ -91,18 +97,20 @@ impl PdfBullApp {
             None => return Task::none(),
         };
         
+        let quality = self.settings.render_quality;
         let mut tasks = Vec::new();
         for page_idx in visible_pages {
-            if tab.rendered_pages.contains_key(&page_idx) || self.rendering_set.contains(&page_idx) {
+            let target = RenderTarget::Page(page_idx);
+            if tab.rendered_pages.contains_key(&page_idx) || self.rendering_set.contains(&target) {
                 continue;
             }
-            self.rendering_set.insert(page_idx);
+            self.rendering_set.insert(target);
             let cmd_tx = engine.cmd_tx.clone();
             tasks.push(Task::perform(
                 async move {
-                    let (resp_tx, resp_rx) = std::sync::mpsc::channel();
-                    let _ = cmd_tx.send(crate::commands::PdfCommand::Render(doc_id, page_idx as i32, zoom, rotation, filter, auto_crop, resp_tx));
-                    let res = resp_rx.recv().unwrap_or(Err("Channel closed".into()));
+                    let (resp_tx, resp_rx) = tokio::sync::oneshot::channel();
+                    let _ = cmd_tx.send(crate::commands::PdfCommand::Render(doc_id, page_idx as i32, zoom, rotation, filter, auto_crop, quality, resp_tx));
+                    let res = resp_rx.await.unwrap_or(Err("Channel closed".into()));
                     (page_idx, res)
                 },
                 |(page_idx, res)| {
@@ -118,18 +126,19 @@ impl PdfBullApp {
         if self.show_sidebar {
             let visible_thumbnails = tab.get_visible_thumbnails();
             for page_idx in visible_thumbnails {
-                if tab.thumbnails.contains_key(&page_idx) || self.rendering_set.contains(&(page_idx + 100000)) {
+                let target = RenderTarget::Thumbnail(page_idx);
+                if tab.thumbnails.contains_key(&page_idx) || self.rendering_set.contains(&target) {
                     continue;
                 }
                 self.rendering_count += 1;
                 let thumb_zoom = 120.0 / tab.page_width.max(1.0);
-                self.rendering_set.insert(page_idx + 100000);
+                self.rendering_set.insert(target);
                 let cmd_tx = engine.cmd_tx.clone();
                 tasks.push(Task::perform(
                     async move {
-                        let (resp_tx, resp_rx) = std::sync::mpsc::channel();
+                        let (resp_tx, resp_rx) = tokio::sync::oneshot::channel();
                         let _ = cmd_tx.send(crate::commands::PdfCommand::RenderThumbnail(doc_id, page_idx as i32, thumb_zoom, resp_tx));
-                        let res = resp_rx.recv().unwrap_or(Err("Channel closed".into()));
+                        let res = resp_rx.await.unwrap_or(Err("Channel closed".into()));
                         (page_idx, res)
                     },
                     |(page_idx, res)| {
@@ -171,7 +180,7 @@ impl PdfBullApp {
             
             tasks.push(Task::perform(
                 async move {
-                    std::thread::sleep(std::time::Duration::from_secs(4));
+                    tokio::time::sleep(tokio::time::Duration::from_secs(4)).await;
                 },
                 |_| Message::ClearStatus,
             ));

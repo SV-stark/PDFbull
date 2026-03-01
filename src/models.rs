@@ -42,17 +42,10 @@ pub struct AppSettings {
     pub auto_save_interval: u32,
     pub default_zoom: f32,
     pub cache_size: usize,
-    pub render_quality: RenderQuality,
+    pub render_quality: crate::pdf_engine::RenderQuality,
     pub default_filter: RenderFilter,
     pub accent_color: String,
     pub restore_session: bool,
-}
-
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
-pub enum RenderQuality {
-    Low,
-    Medium,
-    High,
 }
 
 impl Default for AppSettings {
@@ -63,7 +56,7 @@ impl Default for AppSettings {
             auto_save_interval: 300,
             default_zoom: 1.0,
             cache_size: 50,
-            render_quality: RenderQuality::Medium,
+            render_quality: crate::pdf_engine::RenderQuality::Medium,
             default_filter: RenderFilter::None,
             accent_color: "#3b82f6".to_string(),
             restore_session: true,

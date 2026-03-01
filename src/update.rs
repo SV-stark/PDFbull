@@ -5,7 +5,6 @@ use crate::models::{AppTheme, DocumentTab, SearchResult};
 use crate::storage;
 use iced::{widget::image as iced_image, Task};
 use std::sync::Arc;
-use std::sync::mpsc;
 use std::path::PathBuf;
 use std::fs;
 
@@ -198,9 +197,9 @@ pub fn handle_message(app: &mut PdfBullApp, message: Message) -> Task<Message> {
                         if let Some(file) = file {
                             let path = file.path().to_path_buf();
                             let path_s = path.to_string_lossy().to_string();
-                            let (resp_tx, resp_rx) = mpsc::channel();
+                            let (resp_tx, resp_rx) = tokio::sync::oneshot::channel();
                             let _ = cmd_tx.send(PdfCommand::Open(path_s, resp_tx));
-                            match resp_rx.recv() {
+                            match resp_rx.await {
                                 Ok(Ok(data)) => Some((path, data)),
                                 _ => None,
                             }
@@ -264,9 +263,9 @@ pub fn handle_message(app: &mut PdfBullApp, message: Message) -> Task<Message> {
                             let doc_id = doc_id;
                             return Task::perform(
                                 async move {
-                                    let (resp_tx, resp_rx) = mpsc::channel();
+                                    let (resp_tx, resp_rx) = tokio::sync::oneshot::channel();
                                     let _ = cmd_tx.send(PdfCommand::LoadAnnotations(doc_id, path_str, resp_tx));
-                                    match resp_rx.recv() {
+                                    match resp_rx.await {
                                         Ok(Ok(annotations)) => (doc_id, annotations),
                                         Ok(Err(_)) => (doc_id, Vec::new()),
                                         Err(_) => (doc_id, Vec::new()),
@@ -319,9 +318,9 @@ pub fn handle_message(app: &mut PdfBullApp, message: Message) -> Task<Message> {
                 let path_s = path.to_string_lossy().to_string();
                 return Task::perform(
                     async move {
-                        let (resp_tx, resp_rx) = mpsc::channel();
+                        let (resp_tx, resp_rx) = tokio::sync::oneshot::channel();
                         let _ = cmd_tx.send(PdfCommand::Open(path_s, resp_tx));
-                        resp_rx.recv().unwrap_or(Err("Engine died".into()))
+                        resp_rx.await.unwrap_or(Err("Engine died".into()))
                     },
                     Message::DocumentOpened,
                 );
@@ -431,13 +430,14 @@ pub fn handle_message(app: &mut PdfBullApp, message: Message) -> Task<Message> {
                     None => return Task::none(),
                 };
                 
-                if tab.rendered_pages.contains_key(&page_idx) {
+                if tab.rendered_pages.contains_key(&page_idx) || app.rendering_set.contains(&crate::app::RenderTarget::Page(page_idx)) {
                     return Task::none();
                 }
                 
-                (tab.id, tab.zoom, tab.rotation, tab.render_filter, tab.auto_crop)
+                (tab.id, tab.zoom, tab.rotation, tab.render_filter, tab.auto_crop, app.settings.render_quality)
             };
             
+            app.rendering_set.insert(crate::app::RenderTarget::Page(page_idx));
             app.rendering_count += 1;
             
             let engine = match &app.engine {
@@ -448,21 +448,20 @@ pub fn handle_message(app: &mut PdfBullApp, message: Message) -> Task<Message> {
             let cmd_tx = engine.cmd_tx.clone();
             Task::perform(
                 async move {
-                    let (resp_tx, resp_rx) = mpsc::channel();
-                let _ = cmd_tx.send(PdfCommand::Render(doc_id, page_idx as i32, zoom, rotation, filter, auto_crop, resp_tx));
-                    resp_rx.recv().unwrap_or(Err("Channel closed".into()))
+                    let (resp_tx, resp_rx) = tokio::sync::oneshot::channel();
+                let _ = cmd_tx.send(PdfCommand::Render(doc_id, page_idx as i32, zoom, rotation, filter, auto_crop, quality, resp_tx));
+                    resp_rx.await.unwrap_or(Err("Channel closed".into()))
                 },
                 Message::PageRendered,
             )
         }
         Message::PageRendered(page_idx, result) => {
             app.rendering_count = app.rendering_count.saturating_sub(1);
-            app.rendering_set.remove(&page_idx);
+            app.rendering_set.remove(&crate::app::RenderTarget::Page(page_idx));
             match result {
                 Ok((width, height, data)) => {
                     if let Some(tab) = app.current_tab_mut() {
-                        let rgba_data = Arc::try_unwrap(data).unwrap_or_else(|arc| (*arc).clone());
-                        tab.rendered_pages.insert(page_idx, iced_image::Handle::from_rgba(width, height, rgba_data));
+                        tab.rendered_pages.insert(page_idx, iced_image::Handle::from_rgba(width, height, (*data).clone()));
                     }
                 }
                 Err(e) => {
@@ -480,12 +479,11 @@ pub fn handle_message(app: &mut PdfBullApp, message: Message) -> Task<Message> {
         }
         Message::ThumbnailRendered(page_idx, result) => {
             app.rendering_count = app.rendering_count.saturating_sub(1);
-            app.rendering_set.remove(&(page_idx + 100000));
+            app.rendering_set.remove(&crate::app::RenderTarget::Thumbnail(page_idx));
             match result {
                 Ok((width, height, data)) => {
                     if let Some(tab) = app.current_tab_mut() {
-                        let rgba_data = Arc::try_unwrap(data).unwrap_or_else(|arc| (*arc).clone());
-                        tab.thumbnails.insert(page_idx, iced_image::Handle::from_rgba(width, height, rgba_data));
+                        tab.thumbnails.insert(page_idx, iced_image::Handle::from_rgba(width, height, (*data).clone()));
                     }
                 }
                 Err(e) => {
@@ -506,7 +504,7 @@ pub fn handle_message(app: &mut PdfBullApp, message: Message) -> Task<Message> {
             app.search_pending = Some(query.clone());
             Task::perform(
                 async move {
-                    std::thread::sleep(std::time::Duration::from_millis(300));
+                    tokio::time::sleep(tokio::time::Duration::from_millis(300)).await;
                     Message::PerformSearch
                 },
                 |m| m,
@@ -540,8 +538,8 @@ pub fn handle_message(app: &mut PdfBullApp, message: Message) -> Task<Message> {
             let cmd_tx = engine.cmd_tx.clone();
             Task::perform(
                 async move {
-                    std::thread::sleep(std::time::Duration::from_millis(300));
-                    let (resp_tx, resp_rx) = mpsc::channel();
+                    tokio::time::sleep(tokio::time::Duration::from_millis(300)).await;
+                    let (resp_tx, resp_rx) = std::sync::mpsc::channel();
                     let _ = cmd_tx.send(PdfCommand::Search(doc_id, query, resp_tx));
                     let mut all_results = Vec::new();
                     while let Ok(res) = resp_rx.recv() {
@@ -636,9 +634,9 @@ pub fn handle_message(app: &mut PdfBullApp, message: Message) -> Task<Message> {
                     match file {
                         Some(f) => {
                             let path = f.path().to_path_buf();
-                            let (resp_tx, resp_rx) = mpsc::channel();
+                            let (resp_tx, resp_rx) = tokio::sync::oneshot::channel();
                             let _ = cmd_tx.send(PdfCommand::ExtractText(doc_id, page, resp_tx));
-                            match resp_rx.recv() {
+                            match resp_rx.await {
                                 Ok(Ok(text)) => {
                                     if let Err(e) = std::fs::write(&path, &text) {
                                         Err(format!("Failed to write file: {}", e))
@@ -700,9 +698,9 @@ pub fn handle_message(app: &mut PdfBullApp, message: Message) -> Task<Message> {
                     match file {
                         Some(f) => {
                             let path = f.path().to_string_lossy().to_string();
-                            let (resp_tx, resp_rx) = mpsc::channel();
+                            let (resp_tx, resp_rx) = tokio::sync::oneshot::channel();
                             let _ = cmd_tx.send(PdfCommand::ExportImage(doc_id, page, zoom, path.clone(), resp_tx));
-                            match resp_rx.recv() {
+                            match resp_rx.await {
                                 Ok(Ok(())) => Ok(path),
                                 Ok(Err(e)) => Err(e),
                                 Err(_) => Err("Engine died".into()),
@@ -755,9 +753,9 @@ pub fn handle_message(app: &mut PdfBullApp, message: Message) -> Task<Message> {
                         Some(f) => {
                             let path = f.path().to_string_lossy().to_string();
                             let pages: Vec<i32> = (0..total_pages as i32).collect();
-                            let (resp_tx, resp_rx) = mpsc::channel();
+                            let (resp_tx, resp_rx) = tokio::sync::oneshot::channel();
                             let _ = cmd_tx.send(PdfCommand::ExportImages(doc_id, pages, zoom, path.clone(), resp_tx));
-                            match resp_rx.recv() {
+                            match resp_rx.await {
                                 Ok(Ok(paths)) => Ok(paths.join(", ")),
                                 Ok(Err(e)) => Err(e),
                                 Err(_) => Err("Engine died".into()),
@@ -786,9 +784,9 @@ pub fn handle_message(app: &mut PdfBullApp, message: Message) -> Task<Message> {
             let cmd_tx = engine.cmd_tx.clone();
             Task::perform(
                 async move {
-                    let (resp_tx, resp_rx) = mpsc::channel();
+                    let (resp_tx, resp_rx) = tokio::sync::oneshot::channel();
                     let _ = cmd_tx.send(PdfCommand::ExportPdf(doc_id, pdf_path.clone(), annotations, resp_tx));
-                    match resp_rx.recv() {
+                    match resp_rx.await {
                         Ok(Ok(path)) => Ok(format!("Annotations saved to {}", path)),
                         Ok(Err(e)) => Err(e),
                         Err(_) => Err("Engine died".into()),
