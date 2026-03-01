@@ -1,6 +1,6 @@
 use crate::commands::PdfCommand;
 use crate::models::{next_doc_id, DocumentId};
-use crate::pdf_engine::{DocumentStore, create_render_cache};
+use crate::pdf_engine::{create_render_cache, DocumentStore};
 use std::collections::HashMap;
 use std::sync::{Arc, RwLock};
 
@@ -35,24 +35,33 @@ pub fn spawn_engine_thread(cache_size: u64) -> EngineState {
 
             while let Ok(cmd) = rx.recv() {
                 match cmd {
-                    PdfCommand::Open(path, resp) => {
-                        match store.open_document(&path) {
-                            Ok((path_str, count, heights, width)) => {
-                                let doc_id = next_doc_id();
-                                doc_paths.write().unwrap().insert(doc_id, path.clone());
-                                let outline = store.get_outline(&path_str);
-                                let _ = resp.send(Ok((doc_id, count, heights, width, outline)));
-                            }
-                            Err(e) => {
-                                let _ = resp.send(Err(e));
-                            }
+                    PdfCommand::Open(path, resp) => match store.open_document(&path) {
+                        Ok((path_str, count, heights, width)) => {
+                            let doc_id = next_doc_id();
+                            doc_paths.write().unwrap().insert(doc_id, path.clone());
+                            let outline = store.get_outline(&path_str);
+                            let _ = resp.send(Ok((doc_id, count, heights, width, outline)));
                         }
-                    }
-                    PdfCommand::Render(doc_id, page, zoom, rotation, filter, auto_crop, quality, resp) => {
+                        Err(e) => {
+                            let _ = resp.send(Err(e));
+                        }
+                    },
+                    PdfCommand::Render(
+                        doc_id,
+                        page,
+                        zoom,
+                        rotation,
+                        filter,
+                        auto_crop,
+                        quality,
+                        resp,
+                    ) => {
                         let path = doc_paths.read().unwrap().get(&doc_id).cloned();
                         if let Some(path) = path {
                             let _ = store.ensure_opened(&path);
-                            match store.render_page(&path, page, zoom, rotation, filter, auto_crop, quality) {
+                            match store.render_page(
+                                &path, page, zoom, rotation, filter, auto_crop, quality,
+                            ) {
                                 Ok((w, h, data)) => {
                                     let _ = resp.send(Ok((page as usize, w, h, data)));
                                 }
@@ -68,7 +77,15 @@ pub fn spawn_engine_thread(cache_size: u64) -> EngineState {
                         let path = doc_paths.read().unwrap().get(&doc_id).cloned();
                         if let Some(path) = path {
                             let _ = store.ensure_opened(&path);
-                            match store.render_page(&path, page, zoom, 0, RenderFilter::None, false, RenderQuality::Low) {
+                            match store.render_page(
+                                &path,
+                                page,
+                                zoom,
+                                0,
+                                RenderFilter::None,
+                                false,
+                                RenderQuality::Low,
+                            ) {
                                 Ok((w, h, data)) => {
                                     let _ = resp.send(Ok((page as usize, w, h, data)));
                                 }

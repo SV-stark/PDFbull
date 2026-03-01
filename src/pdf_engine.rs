@@ -178,7 +178,8 @@ impl<'a> DocumentStore<'a> {
 
     pub fn invalidate_render_cache(&mut self, doc_id: &str) {
         let target_id = doc_id.to_string();
-        self.render_cache.invalidate_entries_if(move |k: &RenderCacheKey, _v| k.doc_id == target_id);
+        self.render_cache
+            .invalidate_entries_if(move |k: &RenderCacheKey, _v| k.doc_id == target_id);
     }
 
     pub fn close_document(&mut self, doc_id: &str) {
@@ -613,7 +614,11 @@ impl<'a> DocumentStore<'a> {
         serde_json::from_str(&json).map_err(|e| format!("Failed to parse annotations: {}", e))
     }
 
-    pub fn search(&self, doc_id: &str, query: &str) -> Result<Vec<(usize, String, f32, f32, f32, f32)>, String> {
+    pub fn search(
+        &self,
+        doc_id: &str,
+        query: &str,
+    ) -> Result<Vec<(usize, String, f32, f32, f32, f32)>, String> {
         let state = self
             .documents
             .get(doc_id)
@@ -634,7 +639,7 @@ impl<'a> DocumentStore<'a> {
                             // Width approximation using length
                             let approx_width = width.max(text_str.len() as f32 * 6.0);
                             let height = (bounds.top.value - bounds.bottom.value) as f32;
-                            
+
                             results.push((idx, text_str, y, x, approx_width, height.max(12.0)));
                         } else {
                             results.push((idx, text_str, 0.0, 0.0, 50.0, 20.0));

@@ -118,9 +118,19 @@ pub struct SearchResult {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum AnnotationStyle {
-    Text { text: String, color: String, font_size: u32 },
-    Rectangle { color: String, thickness: f32, fill: bool },
-    Highlight { color: String },
+    Text {
+        text: String,
+        color: String,
+        font_size: u32,
+    },
+    Rectangle {
+        color: String,
+        thickness: f32,
+        fill: bool,
+    },
+    Highlight {
+        color: String,
+    },
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -266,5 +276,3 @@ impl DocumentTab {
         }
     }
 }
-
-

@@ -24,13 +24,14 @@ pub fn main() -> iced::Result {
         } else {
             "Unknown panic".to_string()
         };
-        
-        let location = panic_info.location()
+
+        let location = panic_info
+            .location()
             .map(|l| format!("{}:{}:{}", l.file(), l.line(), l.column()))
             .unwrap_or_else(|| "unknown location".to_string());
-        
+
         eprintln!("PANIC at {}: {}", location, msg);
-        
+
         let config_dir = dirs::config_dir()
             .unwrap_or_else(|| std::path::PathBuf::from("."))
             .join("pdfbull");
@@ -47,22 +48,23 @@ pub fn main() -> iced::Result {
             .open(&crash_log)
             .and_then(|mut f| std::io::Write::write_all(&mut f, log_entry.as_bytes()));
     }));
-    
-    let icon = match iced::window::icon::from_file_data(
-        include_bytes!("../PDFbull.png"),
-        None,
-    ) {
+
+    let icon = match iced::window::icon::from_file_data(include_bytes!("../PDFbull.png"), None) {
         Ok(icon) => Some(icon),
         Err(_) => None,
     };
 
-    iced::application(app::PdfBullApp::default, app::PdfBullApp::update, app::PdfBullApp::view)
-        .title("PDFbull")
-        .subscription(app::PdfBullApp::subscription)
-        .window(iced::window::Settings {
-            icon,
-            exit_on_close_request: false,
-            ..Default::default()
-        })
-        .run()
+    iced::application(
+        app::PdfBullApp::default,
+        app::PdfBullApp::update,
+        app::PdfBullApp::view,
+    )
+    .title("PDFbull")
+    .subscription(app::PdfBullApp::subscription)
+    .window(iced::window::Settings {
+        icon,
+        exit_on_close_request: false,
+        ..Default::default()
+    })
+    .run()
 }

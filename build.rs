@@ -5,10 +5,10 @@ fn main() {
         res.set("ProductName", "PDFbull");
         res.set("OriginalFilename", "pdfbull.exe");
         res.set("LegalCopyright", "Copyright (c)");
-        
+
         // Ensure you generate a PDFbull.ico file before uncommenting the below line:
         // res.set_icon("PDFbull.ico");
-        
+
         if let Err(e) = res.compile() {
             println!("cargo:warning=Failed to compile Windows resources: {}", e);
         }

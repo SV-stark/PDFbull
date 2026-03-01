@@ -1,5 +1,5 @@
 use iced::widget::{button, column, container, row, text, Space};
-use iced::{Alignment, Element, Length, Color, Border};
+use iced::{Alignment, Border, Color, Element, Length};
 use iced_aw::widget::Card;
 
 pub fn welcome_view(app: &crate::app::PdfBullApp) -> Element<crate::message::Message> {
@@ -16,7 +16,7 @@ pub fn welcome_view(app: &crate::app::PdfBullApp) -> Element<crate::message::Mes
             ]
             .spacing(10)
             .align_y(iced::Alignment::Center);
-            
+
             files = files.push(
                 button(file_row)
                     .on_press(crate::message::Message::OpenRecentFile(file.clone()))
@@ -25,7 +25,7 @@ pub fn welcome_view(app: &crate::app::PdfBullApp) -> Element<crate::message::Mes
                     .style(iced::theme::Button::Text),
             );
         }
-        
+
         Card::new(
             row![
                 text("Recent Files").size(16),
@@ -33,11 +33,9 @@ pub fn welcome_view(app: &crate::app::PdfBullApp) -> Element<crate::message::Mes
                 button(text("Clear All").size(12))
                     .on_press(crate::message::Message::ClearRecentFiles)
                     .padding(5)
-            ].align_y(Alignment::Center),
-            column![
-                Space::new().height(Length::Fixed(10.0)),
-                files,
             ]
+            .align_y(Alignment::Center),
+            column![Space::new().height(Length::Fixed(10.0)), files,],
         )
         .padding(15)
         .style(iced_aw::widget::card::Style::Secondary)
@@ -56,7 +54,7 @@ pub fn welcome_view(app: &crate::app::PdfBullApp) -> Element<crate::message::Mes
                 .padding(12),
         ]
         .align_x(Alignment::Center)
-        .spacing(8)
+        .spacing(8),
     )
     .width(Length::Fill)
     .padding(40)
@@ -66,7 +64,9 @@ pub fn welcome_view(app: &crate::app::PdfBullApp) -> Element<crate::message::Mes
             width: 2.0,
             radius: 8.0.into(),
         },
-        background: Some(iced::Background::Color(Color::from_rgba(0.5, 0.5, 0.5, 0.05))),
+        background: Some(iced::Background::Color(Color::from_rgba(
+            0.5, 0.5, 0.5, 0.05,
+        ))),
         ..Default::default()
     });
 
@@ -76,7 +76,7 @@ pub fn welcome_view(app: &crate::app::PdfBullApp) -> Element<crate::message::Mes
             Space::new().height(Length::Fixed(20.0)),
             drop_zone,
             Space::new().height(Length::Fixed(20.0)),
-        ]
+        ],
     )
     .padding(30)
     .style(iced_aw::widget::card::Style::Default);

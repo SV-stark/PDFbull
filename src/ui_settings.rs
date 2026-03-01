@@ -1,7 +1,7 @@
 use crate::models::{AppTheme, RenderQuality};
 use crate::pdf_engine::RenderFilter;
 use iced::widget::{button, column, row, text, Space};
-use iced::{Alignment, Element, Length, Color};
+use iced::{Alignment, Color, Element, Length};
 use iced_aw::widget::Card;
 
 pub fn settings_view(app: &crate::app::PdfBullApp) -> Element<crate::message::Message> {
@@ -184,37 +184,25 @@ pub fn settings_view(app: &crate::app::PdfBullApp) -> Element<crate::message::Me
 
     let appearance_card = Card::new(
         text("Appearance").size(18),
-        column![
-            theme_buttons.padding(10),
-            filter_buttons.padding(10),
-        ]
+        column![theme_buttons.padding(10), filter_buttons.padding(10),],
     )
     .padding(15)
     .style(iced_aw::widget::card::Style::Secondary);
 
     let performance_card = Card::new(
         text("Performance").size(18),
-        column![
-            quality_buttons.padding(10),
-            cache_row.padding(10),
-        ]
+        column![quality_buttons.padding(10), cache_row.padding(10),],
     )
     .padding(15)
     .style(iced_aw::widget::card::Style::Secondary);
 
-    let defaults_card = Card::new(
-        text("Defaults").size(18),
-        default_zoom_row.padding(10)
-    )
-    .padding(15)
-    .style(iced_aw::widget::card::Style::Secondary);
+    let defaults_card = Card::new(text("Defaults").size(18), default_zoom_row.padding(10))
+        .padding(15)
+        .style(iced_aw::widget::card::Style::Secondary);
 
-    let behavior_card = Card::new(
-        text("Behavior").size(18),
-        behavior_buttons.padding(10)
-    )
-    .padding(15)
-    .style(iced_aw::widget::card::Style::Secondary);
+    let behavior_card = Card::new(text("Behavior").size(18), behavior_buttons.padding(10))
+        .padding(15)
+        .style(iced_aw::widget::card::Style::Secondary);
 
     column![
         row![

@@ -11,15 +11,15 @@ pub fn get_config_dir() -> PathBuf {
 
 fn atomic_write(path: &PathBuf, data: &str) -> io::Result<()> {
     let tmp_path = path.with_extension("tmp");
-    
+
     {
         let mut file = fs::File::create(&tmp_path)?;
         file.write_all(data.as_bytes())?;
         file.sync_all()?;
     }
-    
+
     fs::rename(&tmp_path, path)?;
-    
+
     Ok(())
 }
 

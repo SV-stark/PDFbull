@@ -1,8 +1,8 @@
+use crate::app::PdfBullApp;
 use crate::ui_document::document_view;
 use crate::ui_keyboard_help::keyboard_help_view;
 use crate::ui_settings::settings_view;
 use crate::ui_welcome::welcome_view;
-use crate::app::PdfBullApp;
 use iced::Element;
 
 pub fn view(app: &PdfBullApp) -> Element<crate::message::Message> {

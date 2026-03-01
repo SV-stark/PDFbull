@@ -28,17 +28,24 @@ fn rgb_to_iced(rgb: (u8, u8, u8)) -> Color {
     Color::from_rgb8(r, g, b)
 }
 
-fn filter_btn(label: &str, f: RenderFilter, active: RenderFilter) -> iced::widget::Button<'static, crate::message::Message> {
+fn filter_btn(
+    label: &str,
+    f: RenderFilter,
+    active: RenderFilter,
+) -> iced::widget::Button<'static, crate::message::Message> {
     let btn = button(text(label).size(11));
     if f == active {
         btn.style(|theme: &iced::Theme, _| iced::widget::button::Appearance {
-            background: Some(iced::Background::Color(theme.extended_palette().primary.strong.color)),
+            background: Some(iced::Background::Color(
+                theme.extended_palette().primary.strong.color,
+            )),
             text_color: theme.extended_palette().primary.strong.text,
             ..Default::default()
         })
     } else {
         btn
-    }.on_press(crate::message::Message::SetFilter(f))
+    }
+    .on_press(crate::message::Message::SetFilter(f))
 }
 
 use iced::widget::tooltip;
@@ -57,16 +64,36 @@ fn render_toolbar(app: &PdfBullApp) -> Element<crate::message::Message> {
     };
 
     let row1 = row![
-        tooltip(button("📂 Open").on_press(crate::message::Message::OpenDocument), "Open another PDF", tooltip::Position::Bottom),
-        tooltip(button("✕ Close").on_press(crate::message::Message::CloseTab(app.active_tab)), "Close current tab (Ctrl+W)", tooltip::Position::Bottom),
-        tooltip(button("☰ Sidebar").on_press(crate::message::Message::ToggleSidebar), "Toggle Sidebar (Ctrl+B)", tooltip::Position::Bottom),
+        tooltip(
+            button("📂 Open").on_press(crate::message::Message::OpenDocument),
+            "Open another PDF",
+            tooltip::Position::Bottom
+        ),
+        tooltip(
+            button("✕ Close").on_press(crate::message::Message::CloseTab(app.active_tab)),
+            "Close current tab (Ctrl+W)",
+            tooltip::Position::Bottom
+        ),
+        tooltip(
+            button("☰ Sidebar").on_press(crate::message::Message::ToggleSidebar),
+            "Toggle Sidebar (Ctrl+B)",
+            tooltip::Position::Bottom
+        ),
         Space::new().width(Length::Fixed(10.0)),
         button("-").on_press(crate::message::Message::ZoomOut),
         text(format!("{}%", (tab.zoom * 100.0) as u32)),
         button("+").on_press(crate::message::Message::ZoomIn),
         Space::new().width(Length::Fixed(10.0)),
-        tooltip(button("↻").on_press(crate::message::Message::RotateClockwise), "Rotate 90° clockwise", tooltip::Position::Bottom),
-        tooltip(button("↺").on_press(crate::message::Message::RotateCounterClockwise), "Rotate 90° counter-clockwise", tooltip::Position::Bottom),
+        tooltip(
+            button("↻").on_press(crate::message::Message::RotateClockwise),
+            "Rotate 90° clockwise",
+            tooltip::Position::Bottom
+        ),
+        tooltip(
+            button("↺").on_press(crate::message::Message::RotateCounterClockwise),
+            "Rotate 90° counter-clockwise",
+            tooltip::Position::Bottom
+        ),
         text(format!("{}°", tab.rotation)),
         Space::new().width(Length::Fixed(10.0)),
         row![
@@ -78,23 +105,84 @@ fn render_toolbar(app: &PdfBullApp) -> Element<crate::message::Message> {
             filter_btn("B&W", RenderFilter::BlackWhite, tab.render_filter),
             filter_btn("Lighten", RenderFilter::Lighten, tab.render_filter),
             filter_btn("NoShad", RenderFilter::NoShadow, tab.render_filter),
-        ].spacing(3).align_y(iced::Alignment::Center),
-        tooltip(button(if tab.auto_crop { "Crop✓" } else { "Crop" }).on_press(crate::message::Message::ToggleAutoCrop), "Auto-crop whitespace margins", tooltip::Position::Bottom),
+        ]
+        .spacing(3)
+        .align_y(iced::Alignment::Center),
+        tooltip(
+            button(if tab.auto_crop { "Crop✓" } else { "Crop" })
+                .on_press(crate::message::Message::ToggleAutoCrop),
+            "Auto-crop whitespace margins",
+            tooltip::Position::Bottom
+        ),
         Space::new().width(Length::Fill),
         loading_indicator,
         Space::new().width(Length::Fixed(10.0)),
-        tooltip(button("?").on_press(crate::message::Message::ToggleKeyboardHelp), "Keyboard Shortcuts", tooltip::Position::Bottom),
-        tooltip(button("⛶").on_press(crate::message::Message::ToggleFullscreen), "Toggle Fullscreen (F11)", tooltip::Position::Bottom),
-        tooltip(button("⚙").on_press(crate::message::Message::OpenSettings), "Settings", tooltip::Position::Bottom),
+        tooltip(
+            button("?").on_press(crate::message::Message::ToggleKeyboardHelp),
+            "Keyboard Shortcuts",
+            tooltip::Position::Bottom
+        ),
+        tooltip(
+            button("⛶").on_press(crate::message::Message::ToggleFullscreen),
+            "Toggle Fullscreen (F11)",
+            tooltip::Position::Bottom
+        ),
+        tooltip(
+            button("⚙").on_press(crate::message::Message::OpenSettings),
+            "Settings",
+            tooltip::Position::Bottom
+        ),
     ]
     .spacing(5)
     .align_y(iced::Alignment::Center);
 
     let row2 = row![
-        tooltip(button("🔖 Bookmark").on_press(crate::message::Message::AddBookmark), "Add bookmark for current page (Ctrl+D)", tooltip::Position::Bottom),
-        tooltip(button(if app.annotation_mode == Some(crate::models::PendingAnnotationKind::Highlight) { "🖊 Highlight*" } else { "🖊 Highlight" }).on_press(crate::message::Message::SetAnnotationMode(if app.annotation_mode == Some(crate::models::PendingAnnotationKind::Highlight) { None } else { Some(crate::models::PendingAnnotationKind::Highlight) })), "Draw highlight annotation", tooltip::Position::Bottom),
-        tooltip(button(if app.annotation_mode == Some(crate::models::PendingAnnotationKind::Rectangle) { "□ Rectangle*" } else { "□ Rectangle" }).on_press(crate::message::Message::SetAnnotationMode(if app.annotation_mode == Some(crate::models::PendingAnnotationKind::Rectangle) { None } else { Some(crate::models::PendingAnnotationKind::Rectangle) })), "Draw rectangle annotation", tooltip::Position::Bottom),
-        tooltip(button("💾 Save Anns").on_press(crate::message::Message::SaveAnnotations), "Save annotations to JSON sidecar (Ctrl+S)", tooltip::Position::Bottom),
+        tooltip(
+            button("🔖 Bookmark").on_press(crate::message::Message::AddBookmark),
+            "Add bookmark for current page (Ctrl+D)",
+            tooltip::Position::Bottom
+        ),
+        tooltip(
+            button(
+                if app.annotation_mode == Some(crate::models::PendingAnnotationKind::Highlight) {
+                    "🖊 Highlight*"
+                } else {
+                    "🖊 Highlight"
+                }
+            )
+            .on_press(crate::message::Message::SetAnnotationMode(
+                if app.annotation_mode == Some(crate::models::PendingAnnotationKind::Highlight) {
+                    None
+                } else {
+                    Some(crate::models::PendingAnnotationKind::Highlight)
+                }
+            )),
+            "Draw highlight annotation",
+            tooltip::Position::Bottom
+        ),
+        tooltip(
+            button(
+                if app.annotation_mode == Some(crate::models::PendingAnnotationKind::Rectangle) {
+                    "□ Rectangle*"
+                } else {
+                    "□ Rectangle"
+                }
+            )
+            .on_press(crate::message::Message::SetAnnotationMode(
+                if app.annotation_mode == Some(crate::models::PendingAnnotationKind::Rectangle) {
+                    None
+                } else {
+                    Some(crate::models::PendingAnnotationKind::Rectangle)
+                }
+            )),
+            "Draw rectangle annotation",
+            tooltip::Position::Bottom
+        ),
+        tooltip(
+            button("💾 Save Anns").on_press(crate::message::Message::SaveAnnotations),
+            "Save annotations to JSON sidecar (Ctrl+S)",
+            tooltip::Position::Bottom
+        ),
         Space::new().width(Length::Fixed(10.0)),
         text_input("Search...", &app.search_query)
             .on_input(crate::message::Message::Search)
@@ -102,7 +190,12 @@ fn render_toolbar(app: &PdfBullApp) -> Element<crate::message::Message> {
             .width(Length::Fixed(180.0)),
         if let Some(t) = app.current_tab() {
             if !t.search_results.is_empty() {
-                text(format!("{}/{}", t.current_search_index + 1, t.search_results.len())).size(12)
+                text(format!(
+                    "{}/{}",
+                    t.current_search_index + 1,
+                    t.search_results.len()
+                ))
+                .size(12)
             } else if !app.search_query.is_empty() {
                 text("No results").size(12)
             } else {
@@ -111,13 +204,31 @@ fn render_toolbar(app: &PdfBullApp) -> Element<crate::message::Message> {
         } else {
             text("").size(12)
         },
-        button("▲").on_press(crate::message::Message::PrevSearchResult).padding(3),
-        button("▼").on_press(crate::message::Message::NextSearchResult).padding(3),
-        button("✕").on_press(crate::message::Message::ClearSearch).padding(3),
+        button("▲")
+            .on_press(crate::message::Message::PrevSearchResult)
+            .padding(3),
+        button("▼")
+            .on_press(crate::message::Message::NextSearchResult)
+            .padding(3),
+        button("✕")
+            .on_press(crate::message::Message::ClearSearch)
+            .padding(3),
         Space::new().width(Length::Fixed(10.0)),
-        tooltip(button("📋 Extract Text").on_press(crate::message::Message::ExtractText), "Extract text from current page to .txt file", tooltip::Position::Bottom),
-        tooltip(button("🖼 Export Page").on_press(crate::message::Message::ExportImage), "Export current page as PNG image (Ctrl+E)", tooltip::Position::Bottom),
-        tooltip(button("🗂 Export All").on_press(crate::message::Message::ExportImages), "Export all pages as PNG files", tooltip::Position::Bottom),
+        tooltip(
+            button("📋 Extract Text").on_press(crate::message::Message::ExtractText),
+            "Extract text from current page to .txt file",
+            tooltip::Position::Bottom
+        ),
+        tooltip(
+            button("🖼 Export Page").on_press(crate::message::Message::ExportImage),
+            "Export current page as PNG image (Ctrl+E)",
+            tooltip::Position::Bottom
+        ),
+        tooltip(
+            button("🗂 Export All").on_press(crate::message::Message::ExportImages),
+            "Export all pages as PNG files",
+            tooltip::Position::Bottom
+        ),
     ]
     .spacing(5)
     .align_y(iced::Alignment::Center);
@@ -282,7 +393,7 @@ fn render_tabs(app: &PdfBullApp) -> Element<crate::message::Message> {
     let mut tabs = row![];
     for (i, t) in app.tabs.iter().enumerate() {
         let is_active = i == app.active_tab;
-        
+
         let display_name = if t.name.len() > 20 {
             format!("{}…", &t.name[..18])
         } else {
@@ -311,15 +422,16 @@ fn render_tabs(app: &PdfBullApp) -> Element<crate::message::Message> {
             tooltip(
                 tab_content,
                 t.name.clone(),
-                iced::widget::tooltip::Position::Bottom
-            ).into()
+                iced::widget::tooltip::Position::Bottom,
+            )
+            .into()
         } else {
             Element::from(tab_content)
         };
 
         tabs = tabs.push(wrapped);
     }
-    
+
     // Fill the rest of the tab bar
     let tab_bar_bg = container(tabs)
         .width(Length::Fill)
@@ -485,16 +597,20 @@ fn render_pdf_content(app: &PdfBullApp) -> Element<crate::message::Message> {
                             let ph = result.height * scale;
 
                             page_stack = page_stack.push(
-                                container(Space::new().width(Length::Fixed(pw)).height(Length::Fixed(ph)))
-                                    .style(move |_| iced::widget::container::Style {
-                                        background: Some(iced::Background::Color(highlight_color)),
-                                        ..Default::default()
-                                    })
-                                    .padding(iced::Padding {
-                                        top: py,
-                                        left: px,
-                                        ..Default::default()
-                                    })
+                                container(
+                                    Space::new()
+                                        .width(Length::Fixed(pw))
+                                        .height(Length::Fixed(ph)),
+                                )
+                                .style(move |_| iced::widget::container::Style {
+                                    background: Some(iced::Background::Color(highlight_color)),
+                                    ..Default::default()
+                                })
+                                .padding(iced::Padding {
+                                    top: py,
+                                    left: px,
+                                    ..Default::default()
+                                }),
                             );
                         }
                     }
@@ -509,12 +625,18 @@ fn render_pdf_content(app: &PdfBullApp) -> Element<crate::message::Message> {
                         let h = (drag.start.1 - drag.current.1).abs();
 
                         let preview_bg = match drag.kind {
-                            crate::models::PendingAnnotationKind::Highlight => iced::Color::from_rgba(1.0, 1.0, 0.0, 0.4),
-                            crate::models::PendingAnnotationKind::Rectangle => iced::Color::from_rgba(1.0, 0.0, 0.0, 0.2),
+                            crate::models::PendingAnnotationKind::Highlight => {
+                                iced::Color::from_rgba(1.0, 1.0, 0.0, 0.4)
+                            }
+                            crate::models::PendingAnnotationKind::Rectangle => {
+                                iced::Color::from_rgba(1.0, 0.0, 0.0, 0.2)
+                            }
                         };
 
                         let preview_border = match drag.kind {
-                            crate::models::PendingAnnotationKind::Highlight => iced::Border::default(),
+                            crate::models::PendingAnnotationKind::Highlight => {
+                                iced::Border::default()
+                            }
                             crate::models::PendingAnnotationKind::Rectangle => iced::Border {
                                 color: iced::Color::from_rgb(1.0, 0.0, 0.0),
                                 width: 2.0,
@@ -523,17 +645,21 @@ fn render_pdf_content(app: &PdfBullApp) -> Element<crate::message::Message> {
                         };
 
                         page_stack = page_stack.push(
-                            container(Space::new().width(Length::Fixed(w)).height(Length::Fixed(h)))
-                                .style(move |_| iced::widget::container::Style {
-                                    background: Some(iced::Background::Color(preview_bg)),
-                                    border: preview_border,
-                                    ..Default::default()
-                                })
-                                .padding(iced::Padding {
-                                    top: min_y,
-                                    left: min_x,
-                                    ..Default::default()
-                                })
+                            container(
+                                Space::new()
+                                    .width(Length::Fixed(w))
+                                    .height(Length::Fixed(h)),
+                            )
+                            .style(move |_| iced::widget::container::Style {
+                                background: Some(iced::Background::Color(preview_bg)),
+                                border: preview_border,
+                                ..Default::default()
+                            })
+                            .padding(iced::Padding {
+                                top: min_y,
+                                left: min_x,
+                                ..Default::default()
+                            }),
                         );
                     }
                 }
@@ -575,13 +701,10 @@ pub fn document_view(app: &PdfBullApp) -> Element<crate::message::Message> {
         row![sidebar, main_content].into()
     } else if tab.total_pages == 0 {
         container(if tab.is_loading {
-            column![
-                text("⏳").size(50),
-                text("Loading Document...").size(24)
-            ]
-            .align_x(iced::Alignment::Center)
-            .spacing(20)
-            .into()
+            column![text("⏳").size(50), text("Loading Document...").size(24)]
+                .align_x(iced::Alignment::Center)
+                .spacing(20)
+                .into()
         } else {
             text("No pages").into()
         })

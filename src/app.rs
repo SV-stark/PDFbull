@@ -86,23 +86,23 @@ impl PdfBullApp {
             Some(t) => t,
             None => return Task::none(),
         };
-        
+
         let visible_pages: Vec<usize> = tab.get_visible_pages().iter().cloned().collect();
         if visible_pages.is_empty() {
             return Task::none();
         }
-        
+
         let doc_id = tab.id;
         let zoom = tab.zoom;
         let rotation = tab.rotation;
         let filter = tab.render_filter;
         let auto_crop = tab.auto_crop;
-        
+
         let engine = match &self.engine {
             Some(e) => e,
             None => return Task::none(),
         };
-        
+
         let quality = self.settings.render_quality;
         let mut tasks = Vec::new();
         for page_idx in visible_pages {
@@ -115,7 +115,16 @@ impl PdfBullApp {
             tasks.push(Task::perform(
                 async move {
                     let (resp_tx, resp_rx) = tokio::sync::oneshot::channel();
-                    let _ = cmd_tx.send(crate::commands::PdfCommand::Render(doc_id, page_idx as i32, zoom, rotation, filter, auto_crop, quality, resp_tx));
+                    let _ = cmd_tx.send(crate::commands::PdfCommand::Render(
+                        doc_id,
+                        page_idx as i32,
+                        zoom,
+                        rotation,
+                        filter,
+                        auto_crop,
+                        quality,
+                        resp_tx,
+                    ));
                     let res = resp_rx.await.unwrap_or(Err("Channel closed".into()));
                     (page_idx, res)
                 },
@@ -125,7 +134,7 @@ impl PdfBullApp {
                         Err(e) => Err(e),
                     };
                     Message::PageRendered(page_idx, formatted_res)
-                }
+                },
             ));
         }
 
@@ -143,7 +152,12 @@ impl PdfBullApp {
                 tasks.push(Task::perform(
                     async move {
                         let (resp_tx, resp_rx) = tokio::sync::oneshot::channel();
-                        let _ = cmd_tx.send(crate::commands::PdfCommand::RenderThumbnail(doc_id, page_idx as i32, thumb_zoom, resp_tx));
+                        let _ = cmd_tx.send(crate::commands::PdfCommand::RenderThumbnail(
+                            doc_id,
+                            page_idx as i32,
+                            thumb_zoom,
+                            resp_tx,
+                        ));
                         let res = resp_rx.await.unwrap_or(Err("Channel closed".into()));
                         (page_idx, res)
                     },
@@ -153,7 +167,7 @@ impl PdfBullApp {
                             Err(e) => Err(e),
                         };
                         Message::ThumbnailRendered(page_idx, formatted_res)
-                    }
+                    },
                 ));
             }
         }
@@ -167,9 +181,9 @@ impl PdfBullApp {
         if self.status_message.is_some() && self.status_message != old_status {
             let msg = self.status_message.clone().unwrap();
             let is_critical = msg.contains("crashed") || msg.contains("missing");
-            
+
             let mut tasks = vec![task];
-            
+
             if is_critical {
                 tasks.push(Task::perform(
                     async move {
@@ -183,7 +197,7 @@ impl PdfBullApp {
                     |_| Message::ClearStatus,
                 ));
             }
-            
+
             tasks.push(Task::perform(
                 async move {
                     let duration = if msg.len() > 60 { 8 } else { 5 };
@@ -191,7 +205,7 @@ impl PdfBullApp {
                 },
                 |_| Message::ClearStatus,
             ));
-            
+
             Task::batch(tasks)
         } else {
             task
@@ -203,8 +217,6 @@ impl PdfBullApp {
     }
 
     pub fn subscription(&self) -> iced::Subscription<Message> {
-        iced::event::listen_with(|event, _status, _id| {
-            Some(Message::IcedEvent(event))
-        })
+        iced::event::listen_with(|event, _status, _id| Some(Message::IcedEvent(event)))
     }
 }
