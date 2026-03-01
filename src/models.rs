@@ -40,7 +40,6 @@ pub struct AppSettings {
     pub theme: AppTheme,
     pub auto_save: bool,
     pub auto_save_interval: u32,
-    pub remember_last_file: bool,
     pub default_zoom: f32,
     pub cache_size: usize,
     pub render_quality: RenderQuality,
@@ -62,7 +61,6 @@ impl Default for AppSettings {
             theme: AppTheme::default(),
             auto_save: false,
             auto_save_interval: 300,
-            remember_last_file: true,
             default_zoom: 1.0,
             cache_size: 50,
             render_quality: RenderQuality::Medium,
@@ -147,10 +145,15 @@ const VIEWPORT_BUFFER: usize = 3;
 
 use std::sync::atomic::{AtomicU64, Ordering};
 
-static NEXT_DOC_ID_MODELS: AtomicU64 = AtomicU64::new(1);
+pub static NEXT_DOC_ID: AtomicU64 = AtomicU64::new(1);
+pub static NEXT_ANNOTATION_ID: AtomicU64 = AtomicU64::new(1);
 
-fn next_doc_id() -> DocumentId {
-    DocumentId(NEXT_DOC_ID_MODELS.fetch_add(1, Ordering::Relaxed))
+pub fn next_doc_id() -> DocumentId {
+    DocumentId(NEXT_DOC_ID.fetch_add(1, Ordering::Relaxed))
+}
+
+pub fn next_annotation_id() -> u64 {
+    NEXT_ANNOTATION_ID.fetch_add(1, Ordering::Relaxed)
 }
 
 impl DocumentTab {

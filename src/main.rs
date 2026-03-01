@@ -15,6 +15,7 @@ pub mod ui_welcome;
 pub mod update;
 
 pub fn main() -> iced::Result {
+    env_logger::init();
     std::panic::set_hook(Box::new(|panic_info| {
         let msg = if let Some(s) = panic_info.payload().downcast_ref::<&str>() {
             s.to_string()

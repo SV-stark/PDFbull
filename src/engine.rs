@@ -11,11 +11,7 @@ pub struct EngineState {
     pub documents: HashMap<DocumentId, String>,
 }
 
-static NEXT_DOC_ID: AtomicU64 = AtomicU64::new(1);
-
-fn next_doc_id() -> DocumentId {
-    DocumentId(NEXT_DOC_ID.fetch_add(1, Ordering::Relaxed))
-}
+use crate::models::{DocumentId, next_doc_id};
 
 pub fn spawn_engine_thread() -> EngineState {
     let (cmd_tx, cmd_rx) = mpsc::channel();
@@ -243,11 +239,11 @@ pub fn spawn_engine_thread() -> EngineState {
                         let _ = resp.send(Err("Document not found".into()));
                     }
                 }
-                PdfCommand::LoadAnnotations(_doc_id, pdf_path, resp) => {
+                PdfCommand::LoadAnnotations(doc_id, pdf_path, resp) => {
                     let path = doc_paths
                         .lock()
                         .ok()
-                        .and_then(|lock| lock.values().next().cloned());
+                        .and_then(|lock| lock.get(&doc_id).cloned());
                     if let Some(_path) = path {
                         rayon::spawn(move || {
                             let store = match DocumentStore::new() {

@@ -1,0 +1,53 @@
+name: CI
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+    branches:
+      - main
+  workflow_dispatch:
+
+jobs:
+  check:
+    runs-on: windows-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-pc-windows-msvc
+
+      - name: Rust cache
+        uses: swatinem/rust-cache@v2
+
+      - name: Cache PDFium
+        id: cache-pdfium
+        uses: actions/cache@v3
+        with:
+          path: pdfium.dll
+          key: ${{ runner.os }}-pdfium-6899
+
+      - name: Download Build Resources (PDFium)
+        if: steps.cache-pdfium.outputs.cache-hit != 'true'
+        shell: pwsh
+        run: |
+          # Download PDFium (Required for pdfium-render)
+          $pdfium_ver = "6899"
+          $pdfium_url = "https://github.com/bblanchon/pdfium-binaries/releases/download/chromium%2F$pdfium_ver/pdfium-win-x64.tgz"
+          Invoke-WebRequest -Uri $pdfium_url -OutFile pdfium.tgz
+          tar -xzf pdfium.tgz
+          Move-Item -Path "bin/pdfium.dll" -Destination "./pdfium.dll" -Force
+          Remove-Item -Recurse -Force pdfium.tgz, bin, include, lib
+
+      - name: Run Format Check
+        run: cargo fmt --check
+
+      - name: Run Clippy
+        run: cargo clippy -- -D warnings
+
+      - name: Run Tests
+        run: cargo test

@@ -134,6 +134,7 @@ PDFbull is built from the ground up for speed, leveraging modern Rust ecosystem 
 - [ ] **Digital Signatures**: Professional cryptographic signing and verification.
 - [ ] **PDF Optimization**: Advanced structural compression and metadata sanitization.
 - [ ] **Mobile Layout**: Responsive UI for small-screen Windows tablets.
+- [ ] **Cross-Platform Support**: Native binaries for Linux (`x86_64-unknown-linux-gnu`) and macOS (`aarch64-apple-darwin`).
 
 ---
 

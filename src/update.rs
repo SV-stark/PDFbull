@@ -125,13 +125,11 @@ pub fn handle_message(app: &mut PdfBullApp, message: Message) -> Task<Message> {
             if let Some(tab) = app.current_tab_mut() {
                 let page = tab.current_page;
                 let annotation = crate::models::Annotation {
-                    id: std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH)
-                        .map(|d| d.as_millis() as u64)
-                        .unwrap_or(0),
+                    id: crate::models::next_annotation_id(),
                     page,
                     style: crate::models::AnnotationStyle::Highlight { color: accent_color },
                     x: 100.0,
-                    y: 100.0,
+                    y: (tab.viewport_y + tab.viewport_height / 2.0).max(100.0) - 25.0,
                     width: 200.0,
                     height: 50.0,
                 };
@@ -144,13 +142,11 @@ pub fn handle_message(app: &mut PdfBullApp, message: Message) -> Task<Message> {
             if let Some(tab) = app.current_tab_mut() {
                 let page = tab.current_page;
                 let annotation = crate::models::Annotation {
-                    id: std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH)
-                        .map(|d| d.as_millis() as u64)
-                        .unwrap_or(0),
+                    id: crate::models::next_annotation_id(),
                     page,
                     style: crate::models::AnnotationStyle::Rectangle { color: "#ff0000".to_string(), thickness: 2.0, fill: false },
                     x: 150.0,
-                    y: 150.0,
+                    y: (tab.viewport_y + tab.viewport_height / 2.0).max(150.0) - 50.0,
                     width: 150.0,
                     height: 100.0,
                 };
@@ -283,7 +279,16 @@ pub fn handle_message(app: &mut PdfBullApp, message: Message) -> Task<Message> {
                     app.render_visible_pages()
                 }
                 Err(e) => {
-                    eprintln!("Error opening document: {}", e);
+                    log::error!("Error opening document: {}", e);
+                    if e == "Engine died" || e == "Channel closed" {
+                        app.engine = None;
+                        app.status_message = Some("PDF engine crashed. Please try your action again to restart it.".into());
+                    } else if e.to_lowercase().contains("pdfium") {
+                        app.engine = None;
+                        app.status_message = Some("PDF engine missing (pdfium.dll). Please download it and place it next to the executable.".into());
+                    } else if e != "Cancelled" {
+                        app.status_message = Some(format!("Error opening document: {}", e));
+                    }
                     if !app.tabs.is_empty() {
                         app.tabs.pop();
                     }
@@ -299,7 +304,7 @@ pub fn handle_message(app: &mut PdfBullApp, message: Message) -> Task<Message> {
         }
         Message::OpenFile(path) => {
             if app.engine.is_none() {
-                return app.update(Message::OpenDocument);
+                app.engine = Some(crate::engine::spawn_engine_thread());
             }
 
             let tab = DocumentTab::new(path.clone());
@@ -349,9 +354,12 @@ pub fn handle_message(app: &mut PdfBullApp, message: Message) -> Task<Message> {
             Task::none()
         }
         Message::SwitchTab(idx) => {
-            if idx < app.tabs.len() && idx != app.active_tab {
-                app.active_tab = idx;
-                app.save_session();
+            if !app.tabs.is_empty() {
+                let safe_idx = idx.min(app.tabs.len() - 1);
+                if safe_idx != app.active_tab {
+                    app.active_tab = safe_idx;
+                    app.save_session();
+                }
             }
             Task::none()
         }
@@ -455,7 +463,14 @@ pub fn handle_message(app: &mut PdfBullApp, message: Message) -> Task<Message> {
                     }
                 }
                 Err(e) => {
-                    eprintln!("Render error: {}", e);
+                    log::error!("Render error: {}", e);
+                    if e == "Engine died" || e == "Channel closed" {
+                        app.engine = None;
+                        app.status_message = Some("PDF engine crashed. Please try your action again to restart it.".into());
+                    } else if e.to_lowercase().contains("pdfium") {
+                        app.engine = None;
+                        app.status_message = Some("Failed to load PDF engine (pdfium.dll missing).".into());
+                    }
                 }
             }
             Task::none()
@@ -535,7 +550,13 @@ pub fn handle_message(app: &mut PdfBullApp, message: Message) -> Task<Message> {
                     }
                 }
                 Err(e) => {
-                    eprintln!("Search error: {}", e);
+                    log::error!("Search error: {}", e);
+                    if e == "Engine died" || e == "Channel closed" {
+                        app.engine = None;
+                        app.status_message = Some("PDF engine crashed. Please try your action again to restart it.".into());
+                    } else {
+                        app.status_message = Some(format!("Search error: {}", e));
+                    }
                 }
             }
             Task::none()
@@ -578,7 +599,6 @@ pub fn handle_message(app: &mut PdfBullApp, message: Message) -> Task<Message> {
             
             let page = tab.current_page as i32;
             let doc_id = tab.id;
-            let path = tab.path.clone();
             
             let engine = match &app.engine {
                 Some(e) => e,
@@ -588,25 +608,49 @@ pub fn handle_message(app: &mut PdfBullApp, message: Message) -> Task<Message> {
             let cmd_tx = engine.cmd_tx.clone();
             Task::perform(
                 async move {
-                    let (resp_tx, resp_rx) = mpsc::channel();
-                    let _ = cmd_tx.send(PdfCommand::ExtractText(doc_id, page, resp_tx));
-                    let result = resp_rx.recv().unwrap_or(Err("Extract failed".into()));
-                    (path, result)
-                },
-                |(path, result)| {
-                    let result_clone = result.clone();
-                    if let Ok(text) = result {
-                        let txt_path = path.with_extension("txt");
-                        let _ = fs::write(&txt_path, &text);
-                        eprintln!("Text extracted to: {}", txt_path.display());
+                    let file = rfd::AsyncFileDialog::new()
+                        .add_filter("Text", &["txt"])
+                        .set_file_name("extracted_text.txt")
+                        .save_file()
+                        .await;
+                        
+                    match file {
+                        Some(f) => {
+                            let path = f.path().to_path_buf();
+                            let (resp_tx, resp_rx) = mpsc::channel();
+                            let _ = cmd_tx.send(PdfCommand::ExtractText(doc_id, page, resp_tx));
+                            match resp_rx.recv() {
+                                Ok(Ok(text)) => {
+                                    if let Err(e) = std::fs::write(&path, &text) {
+                                        Err(format!("Failed to write file: {}", e))
+                                    } else {
+                                        Ok(path.to_string_lossy().to_string())
+                                    }
+                                }
+                                Ok(Err(e)) => Err(e),
+                                Err(_) => Err("Engine died".into()),
+                            }
+                        }
+                        None => Err("Cancelled".into()),
                     }
-                    Message::TextExtracted(result_clone)
                 },
+                Message::TextExtracted,
             )
         }
         Message::TextExtracted(result) => {
-            if let Err(e) = result {
-                eprintln!("Text extraction error: {}", e);
+            match result {
+                Ok(path) => app.status_message = Some(format!("Text extracted to: {}", path)),
+                Err(e) => {
+                    if e != "Cancelled" {
+                        log::error!("Text extraction error: {}", e);
+                        if e == "Engine died" || e == "Channel closed" {
+                            app.engine = None;
+                            app.status_message = Some("PDF engine crashed. Please try your action again to restart it.".into());
+                        } else {
+                            app.status_message = Some(format!("Text extraction error: {}", e));
+                        }
+                    }
+                }
             }
             Task::none()
         }
@@ -654,7 +698,15 @@ pub fn handle_message(app: &mut PdfBullApp, message: Message) -> Task<Message> {
         Message::ImageExported(result) => {
             match result {
                 Ok(path) => app.status_message = Some(format!("Exported to: {}", path)),
-                Err(e) => app.status_message = Some(format!("Export error: {}", e)),
+                Err(e) => {
+                    log::error!("Export error: {}", e);
+                    if e == "Engine died" || e == "Channel closed" {
+                        app.engine = None;
+                        app.status_message = Some("PDF engine crashed. Please try your action again.".into());
+                    } else if e != "Cancelled" {
+                        app.status_message = Some(format!("Export error: {}", e));
+                    }
+                }
             }
             Task::none()
         }
@@ -702,7 +754,7 @@ pub fn handle_message(app: &mut PdfBullApp, message: Message) -> Task<Message> {
             let (doc_id, annotations, pdf_path) = match app.current_tab() {
                 Some(t) if !t.annotations.is_empty() => (t.id, t.annotations.clone(), t.path.to_string_lossy().to_string()),
                 _ => {
-                    eprintln!("No annotations to save");
+                    log::warn!("No annotations to save");
                     return Task::none();
                 }
             };
@@ -729,7 +781,15 @@ pub fn handle_message(app: &mut PdfBullApp, message: Message) -> Task<Message> {
         Message::AnnotationsSaved(result) => {
             match result {
                 Ok(msg) => app.status_message = Some(msg),
-                Err(e) => app.status_message = Some(format!("Save error: {}", e)),
+                Err(e) => {
+                    log::error!("Save error: {}", e);
+                    if e == "Engine died" || e == "Channel closed" {
+                        app.engine = None;
+                        app.status_message = Some("PDF engine crashed. Please try saving again.".into());
+                    } else if e != "Cancelled" {
+                        app.status_message = Some(format!("Save error: {}", e));
+                    }
+                }
             }
             Task::none()
         }
@@ -738,8 +798,8 @@ pub fn handle_message(app: &mut PdfBullApp, message: Message) -> Task<Message> {
             Task::none()
         }
         Message::Error(e) => {
+            log::error!("Error: {}", e);
             app.status_message = Some(format!("Error: {}", e));
-            eprintln!("Error: {}", e);
             Task::none()
         }
         Message::ClearStatus => {

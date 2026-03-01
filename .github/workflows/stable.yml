@@ -1,9 +1,9 @@
-name: Nightly Release
+name: Stable Release
 
 on:
   push:
-    branches:
-      - main
+    tags:
+      - 'v*'
   workflow_dispatch:
 
 permissions:
@@ -64,17 +64,16 @@ jobs:
         with:
           script-file: installer.nsi
 
-      - name: Create Nightly Release
+      - name: Create Stable Release
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: nightly
-          name: 'PDFbull Nightly Build'
-          body: 'This is an automated nightly build. It is significantly faster and lighter than the previous Tauri version.'
+          name: Release ${{ github.ref_name }}
+          body: 'Stable release of PDFbull.'
           files: |
             release_dist/pdfbull.exe
             release_dist/pdfium.dll
             PDFbull-Setup.exe
           draft: false
-          prerelease: true
+          prerelease: false
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
