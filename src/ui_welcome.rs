@@ -2,7 +2,7 @@ use iced::widget::{button, column, container, row, text, Space};
 use iced::{Alignment, Border, Color, Element, Length};
 use iced_aw::widget::Card;
 
-pub fn welcome_view(app: &crate::app::PdfBullApp) -> Element<crate::message::Message> {
+pub fn welcome_view(app: &crate::app::PdfBullApp) -> Element<'_, crate::message::Message> {
     let recent_section: Element<'_, crate::message::Message> = if !app.recent_files.is_empty() {
         let mut files: iced::widget::Column<'_, crate::message::Message> =
             iced::widget::Column::new();

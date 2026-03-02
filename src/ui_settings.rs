@@ -1,10 +1,10 @@
 use crate::models::AppTheme;
 use crate::pdf_engine::{RenderFilter, RenderQuality};
 use iced::widget::{button, column, row, text, Space};
-use iced::{Alignment, Color, Element, Length};
+use iced::{Alignment, Element, Length};
 use iced_aw::widget::Card;
 
-pub fn settings_view(app: &crate::app::PdfBullApp) -> Element<crate::message::Message> {
+pub fn settings_view(app: &crate::app::PdfBullApp) -> Element<'_, crate::message::Message> {
     let theme_buttons = row![
         button(if app.settings.theme == AppTheme::System {
             "System ✓"

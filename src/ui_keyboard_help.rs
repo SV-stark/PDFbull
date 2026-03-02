@@ -1,7 +1,7 @@
 use iced::widget::{button, column, container, text, Space};
 use iced::{Element, Length};
 
-pub fn keyboard_help_view(_app: &crate::app::PdfBullApp) -> Element<crate::message::Message> {
+pub fn keyboard_help_view(_app: &crate::app::PdfBullApp) -> Element<'_, crate::message::Message> {
     use iced::Alignment;
 
     let shortcuts = column![

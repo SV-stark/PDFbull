@@ -1,5 +1,5 @@
 use crate::commands::PdfCommand;
-use crate::models::{next_doc_id, DocumentId};
+use crate::models::next_doc_id;
 use crate::pdf_engine::{create_render_cache, DocumentStore, RenderFilter, RenderQuality};
 use std::collections::HashMap;
 use std::sync::{Arc, RwLock};

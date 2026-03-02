@@ -5,7 +5,7 @@ use crate::ui_settings::settings_view;
 use crate::ui_welcome::welcome_view;
 use iced::Element;
 
-pub fn view(app: &PdfBullApp) -> Element<crate::message::Message> {
+pub fn view(app: &PdfBullApp) -> Element<'_, crate::message::Message> {
     if app.show_keyboard_help {
         return keyboard_help_view(app);
     }

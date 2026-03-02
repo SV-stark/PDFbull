@@ -224,7 +224,7 @@ impl PdfBullApp {
         }
     }
 
-    pub fn view(&self) -> Element<Message> {
+    pub fn view(&self) -> Element<'_, Message> {
         ui::view(self)
     }
 

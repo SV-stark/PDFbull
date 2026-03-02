@@ -1,8 +1,7 @@
 use crate::app::PdfBullApp;
 use crate::pdf_engine::RenderFilter;
 use iced::widget::{button, column, container, row, scrollable, text, text_input, Id, Space};
-use iced::{Color, Element, Length, Padding};
-use iced_aw::widget::Badge;
+use iced::{Color, Element, Length};
 use iced_aw::widget::Card;
 
 fn hex_to_rgb(hex: &str) -> (f32, f32, f32) {
@@ -14,18 +13,6 @@ fn hex_to_rgb(hex: &str) -> (f32, f32, f32) {
     let g = u8::from_str_radix(&hex[2..4], 16).unwrap_or(0) as f32 / 255.0;
     let b = u8::from_str_radix(&hex[4..6], 16).unwrap_or(0) as f32 / 255.0;
     (r, g, b)
-}
-
-use std::path::PathBuf;
-
-fn rgba_to_iced(rgba: (u8, u8, u8, u8)) -> Color {
-    let (r, g, b, a) = rgba;
-    Color::from_rgba8(r, g, b, a as f32 / 255.0)
-}
-
-fn rgb_to_iced(rgb: (u8, u8, u8)) -> Color {
-    let (r, g, b) = rgb;
-    Color::from_rgb8(r, g, b)
 }
 
 fn filter_btn(
@@ -51,7 +38,7 @@ fn filter_btn(
 
 use iced::widget::tooltip;
 
-fn render_toolbar(app: &PdfBullApp) -> Element<crate::message::Message> {
+fn render_toolbar(app: &PdfBullApp) -> Element<'_, crate::message::Message> {
     let tab = &app.tabs[app.active_tab];
 
     let loading_indicator = if app.rendering_count > 0 {
@@ -237,7 +224,7 @@ fn render_toolbar(app: &PdfBullApp) -> Element<crate::message::Message> {
     column![row1, row2].spacing(10).padding(10).into()
 }
 
-fn render_page_nav(app: &PdfBullApp) -> Element<crate::message::Message> {
+fn render_page_nav(app: &PdfBullApp) -> Element<'_, crate::message::Message> {
     let tab = &app.tabs[app.active_tab];
 
     let status = if let Some(ref msg) = app.status_message {
@@ -271,7 +258,7 @@ fn render_page_nav(app: &PdfBullApp) -> Element<crate::message::Message> {
     .into()
 }
 
-fn render_sidebar(app: &PdfBullApp) -> Element<crate::message::Message> {
+fn render_sidebar(app: &PdfBullApp) -> Element<'_, crate::message::Message> {
     let tab = &app.tabs[app.active_tab];
 
     let mut sidebar_col = column![].spacing(10).padding(5).width(Length::Fixed(180.0));
@@ -395,7 +382,7 @@ fn render_sidebar(app: &PdfBullApp) -> Element<crate::message::Message> {
         .into()
 }
 
-fn render_tabs(app: &PdfBullApp) -> Element<crate::message::Message> {
+fn render_tabs(app: &PdfBullApp) -> Element<'_, crate::message::Message> {
     let mut tabs = row![];
     for (i, t) in app.tabs.iter().enumerate() {
         let is_active = i == app.active_tab;
@@ -486,7 +473,7 @@ fn render_tabs(app: &PdfBullApp) -> Element<crate::message::Message> {
     row![tab_bar_bg, add_button].padding(5).into()
 }
 
-fn render_pdf_content(app: &PdfBullApp) -> Element<crate::message::Message> {
+fn render_pdf_content(app: &PdfBullApp) -> Element<'_, crate::message::Message> {
     let tab = &app.tabs[app.active_tab];
 
     let mut pdf_column = column![].spacing(10.0).padding(10.0);
@@ -696,7 +683,7 @@ fn render_pdf_content(app: &PdfBullApp) -> Element<crate::message::Message> {
         .into()
 }
 
-pub fn document_view(app: &PdfBullApp) -> Element<crate::message::Message> {
+pub fn document_view(app: &PdfBullApp) -> Element<'_, crate::message::Message> {
     let tab = &app.tabs[app.active_tab];
 
     let content: Element<crate::message::Message> = if app.show_sidebar && !app.is_fullscreen {
