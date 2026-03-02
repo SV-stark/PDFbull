@@ -5,8 +5,9 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::sync::Arc;
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Default, Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum RenderFilter {
+    #[default]
     None,
     Grayscale,
     Inverted,
@@ -16,23 +17,21 @@ pub enum RenderFilter {
     NoShadow,
 }
 
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Hash)]
+#[derive(Default, Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Hash)]
 pub enum RenderQuality {
     Low,
+    #[default]
     Medium,
     High,
 }
 
-impl Default for RenderQuality {
-    fn default() -> Self {
-        RenderQuality::Medium
-    }
-}
-
-impl Default for RenderFilter {
-    fn default() -> Self {
-        RenderFilter::None
-    }
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct RenderOptions {
+    pub scale: f32,
+    pub rotation: i32,
+    pub filter: RenderFilter,
+    pub auto_crop: bool,
+    pub quality: RenderQuality,
 }
 
 pub type SharedRenderCache = Cache<RenderCacheKey, (u32, u32, Arc<Vec<u8>>)>;
@@ -183,16 +182,12 @@ impl<'a> DocumentStore<'a> {
         &self,
         doc_id: &str,
         page_num: i32,
-        scale: f32,
-        rotation: i32,
-        filter: RenderFilter,
-        auto_crop: bool,
-        quality: RenderQuality,
+        options: RenderOptions,
     ) -> Result<(u32, u32, Arc<Vec<u8>>), String> {
-        let scale_key = (scale * 10000.0) as u32;
-        let rotation_key = ((rotation + 360) % 360) as u32;
-        let filter_key = filter as u32;
-        let crop_key = auto_crop;
+        let scale_key = (options.scale * 10000.0) as u32;
+        let rotation_key = ((options.rotation + 360) % 360) as u32;
+        let filter_key = options.filter as u32;
+        let crop_key = options.auto_crop;
 
         let cache_key = RenderCacheKey {
             doc_id: doc_id.to_string(),
@@ -201,7 +196,7 @@ impl<'a> DocumentStore<'a> {
             rotation: rotation_key,
             filter: filter_key,
             auto_crop: crop_key,
-            quality,
+            quality: options.quality,
         };
 
         if let Some(cached) = self.render_cache.get(&cache_key) {
@@ -224,7 +219,7 @@ impl<'a> DocumentStore<'a> {
             .get(page_num as u16)
             .map_err(|e| e.to_string())?;
 
-        let render_rotation = match ((rotation + 360) % 360) / 90 {
+        let render_rotation = match ((options.rotation + 360) % 360) / 90 {
             0 => PdfPageRenderRotation::None,
             1 => PdfPageRenderRotation::Degrees90,
             2 => PdfPageRenderRotation::Degrees180,
@@ -232,8 +227,8 @@ impl<'a> DocumentStore<'a> {
             _ => PdfPageRenderRotation::None,
         };
 
-        let target_w = (page.width().value * scale) as i32;
-        let target_h = (page.height().value * scale) as i32;
+        let target_w = (page.width().value * options.scale) as i32;
+        let target_h = (page.height().value * options.scale) as i32;
 
         let render_config = PdfRenderConfig::new()
             .set_target_width(target_w)
@@ -247,9 +242,9 @@ impl<'a> DocumentStore<'a> {
         let w = bitmap.width() as u32;
         let h = bitmap.height() as u32;
 
-        let result_data = Self::apply_filter(bitmap.as_rgba_bytes().to_vec(), w, h, filter);
+        let result_data = Self::apply_filter(bitmap.as_rgba_bytes().to_vec(), w, h, options.filter);
 
-        let (final_w, final_h, final_data) = if auto_crop {
+        let (final_w, final_h, final_data) = if options.auto_crop {
             if let Some((x1, y1, x2, y2)) = Self::detect_content_bbox(&result_data, w, h) {
                 let crop_w = (x2 - x1) + 1;
                 let crop_h = (y2 - y1) + 1;
@@ -267,7 +262,7 @@ impl<'a> DocumentStore<'a> {
             (w, h, result_data)
         };
 
-        let result_data = Arc::new(final_data);
+        let result_data: Arc<Vec<u8>> = Arc::new(final_data);
         let result = (final_w, final_h, result_data.clone());
 
         self.render_cache.insert(cache_key, result.clone());
@@ -406,9 +401,9 @@ impl<'a> DocumentStore<'a> {
                 data.par_chunks_exact_mut(4).for_each(|pixel| {
                     let avg = ((pixel[0] as u32 + pixel[1] as u32 + pixel[2] as u32) / 3) as u8;
                     if avg < 64 {
-                        pixel[0] = (pixel[0] + 64).min(255);
-                        pixel[1] = (pixel[1] + 64).min(255);
-                        pixel[2] = (pixel[2] + 64).min(255);
+                        pixel[0] = pixel[0].saturating_add(64);
+                        pixel[1] = pixel[1].saturating_add(64);
+                        pixel[2] = pixel[2].saturating_add(64);
                     }
                 });
             }
@@ -560,7 +555,8 @@ impl<'a> DocumentStore<'a> {
 
         std::fs::write(&annotation_path, json).map_err(|e| {
             if e.kind() == std::io::ErrorKind::PermissionDenied {
-                format!("Cannot save annotations: directory is read-only. Annotations not saved.")
+                "Cannot save annotations: directory is read-only. Annotations not saved."
+                    .to_string()
             } else {
                 format!("Failed to write annotations file: {}", e)
             }
@@ -590,7 +586,7 @@ impl<'a> DocumentStore<'a> {
         &self,
         doc_id: &str,
         query: &str,
-    ) -> Result<Vec<(usize, String, f32, f32, f32, f32)>, String> {
+    ) -> Result<Vec<crate::models::SearchResultItem>, String> {
         let state = self
             .documents
             .get(doc_id)
@@ -625,11 +621,13 @@ impl<'a> DocumentStore<'a> {
         self.render_page(
             doc_id,
             page_num,
-            scale,
-            0,
-            RenderFilter::None,
-            false,
-            RenderQuality::Low,
+            RenderOptions {
+                scale,
+                rotation: 0,
+                filter: RenderFilter::None,
+                auto_crop: false,
+                quality: RenderQuality::Low,
+            },
         )
     }
 }

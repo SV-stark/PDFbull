@@ -133,7 +133,7 @@ pub fn handle_message(app: &mut PdfBullApp, message: Message) -> Task<Message> {
             } else {
                 None
             };
-            
+
             if let Some(p) = jump_page {
                 app.page_input = (p + 1).to_string();
                 if let Some(tab) = app.current_tab_mut() {
@@ -178,10 +178,16 @@ pub fn handle_message(app: &mut PdfBullApp, message: Message) -> Task<Message> {
                         let id = crate::models::next_annotation_id();
                         let style = match drag.kind {
                             crate::models::PendingAnnotationKind::Highlight => {
-                                crate::models::AnnotationStyle::Highlight { color: "#FFFF00".to_string() }
+                                crate::models::AnnotationStyle::Highlight {
+                                    color: "#FFFF00".to_string(),
+                                }
                             }
                             crate::models::PendingAnnotationKind::Rectangle => {
-                                crate::models::AnnotationStyle::Rectangle { color: "#FF0000".to_string(), thickness: 2.0, fill: false }
+                                crate::models::AnnotationStyle::Rectangle {
+                                    color: "#FF0000".to_string(),
+                                    thickness: 2.0,
+                                    fill: false,
+                                }
                             }
                         };
 
@@ -334,11 +340,10 @@ pub fn handle_message(app: &mut PdfBullApp, message: Message) -> Task<Message> {
             Ok((doc_id, count, heights, width, outline)) => {
                 let default_zoom = app.settings.default_zoom;
                 let default_filter = app.settings.default_filter;
-                let pdf_path = if let Some(tab) = app.tabs.get(app.active_tab) {
-                    Some(tab.path.to_string_lossy().to_string())
-                } else {
-                    None
-                };
+                let pdf_path = app
+                    .tabs
+                    .get(app.active_tab)
+                    .map(|tab| tab.path.to_string_lossy().to_string());
 
                 if let Some(tab) = app.tabs.get_mut(app.active_tab) {
                     tab.id = doc_id;
@@ -354,7 +359,6 @@ pub fn handle_message(app: &mut PdfBullApp, message: Message) -> Task<Message> {
                 if let Some(path_str) = pdf_path {
                     if let Some(engine) = &app.engine {
                         let cmd_tx = engine.cmd_tx.clone();
-                        let doc_id = doc_id;
                         return Task::perform(
                             async move {
                                 let (resp_tx, resp_rx) = tokio::sync::oneshot::channel();
@@ -471,7 +475,7 @@ pub fn handle_message(app: &mut PdfBullApp, message: Message) -> Task<Message> {
             } else {
                 None
             };
-            
+
             if let Some(page) = next_page {
                 app.page_input = (page + 1).to_string();
                 if let Some(tab) = app.current_tab_mut() {
@@ -491,7 +495,7 @@ pub fn handle_message(app: &mut PdfBullApp, message: Message) -> Task<Message> {
             } else {
                 None
             };
-            
+
             if let Some(page) = prev_page {
                 app.page_input = (page + 1).to_string();
                 if let Some(tab) = app.current_tab_mut() {
@@ -532,7 +536,7 @@ pub fn handle_message(app: &mut PdfBullApp, message: Message) -> Task<Message> {
             } else {
                 None
             };
-            
+
             if let Some(p) = jump_page {
                 app.page_input = (p + 1).to_string();
                 if let Some(tab) = app.current_tab_mut() {
@@ -606,25 +610,22 @@ pub fn handle_message(app: &mut PdfBullApp, message: Message) -> Task<Message> {
             Task::perform(
                 async move {
                     let (resp_tx, resp_rx) = tokio::sync::oneshot::channel();
-                    let _ = cmd_tx.send(PdfCommand::Render(
-                        doc_id,
-                        page_idx as i32,
-                        zoom,
+                    let options = crate::pdf_engine::RenderOptions {
+                        scale: zoom,
                         rotation,
                         filter,
                         auto_crop,
                         quality,
+                    };
+                    let _ = cmd_tx.send(PdfCommand::Render(
+                        doc_id,
+                        page_idx as i32,
+                        options,
                         resp_tx,
                     ));
                     resp_rx.await.unwrap_or(Err("Channel closed".into()))
                 },
-                move |res| {
-                    let formatted_res = match res {
-                        Ok((_, w, h, data)) => Ok((w, h, data)),
-                        Err(e) => Err(e),
-                    };
-                    Message::PageRendered(page_idx, formatted_res)
-                },
+                move |res| Message::PageRendered(page_idx, res),
             )
         }
         Message::PageRendered(page_idx, result) => {
@@ -785,7 +786,7 @@ pub fn handle_message(app: &mut PdfBullApp, message: Message) -> Task<Message> {
             } else {
                 None
             };
-            
+
             if let Some(page) = next_page {
                 app.page_input = (page + 1).to_string();
                 if let Some(tab) = app.current_tab_mut() {
@@ -810,7 +811,7 @@ pub fn handle_message(app: &mut PdfBullApp, message: Message) -> Task<Message> {
             } else {
                 None
             };
-            
+
             if let Some(page) = prev_page {
                 app.page_input = (page + 1).to_string();
                 if let Some(tab) = app.current_tab_mut() {

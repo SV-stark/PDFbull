@@ -1,6 +1,6 @@
 use crate::commands::PdfCommand;
 use crate::models::next_doc_id;
-use crate::pdf_engine::{create_render_cache, DocumentStore, RenderFilter, RenderQuality};
+use crate::pdf_engine::{create_render_cache, DocumentStore};
 use std::collections::HashMap;
 use std::sync::{Arc, RwLock};
 
@@ -57,24 +57,13 @@ pub fn spawn_engine_thread(cache_size: u64) -> EngineState {
                             let _ = resp.send(Err(e));
                         }
                     },
-                    PdfCommand::Render(
-                        doc_id,
-                        page,
-                        zoom,
-                        rotation,
-                        filter,
-                        auto_crop,
-                        quality,
-                        resp,
-                    ) => {
+                    PdfCommand::Render(doc_id, page, options, resp) => {
                         let path = doc_paths.read().unwrap().get(&doc_id).cloned();
                         if let Some(path) = path {
                             let _ = store.ensure_opened(&path);
-                            match store.render_page(
-                                &path, page, zoom, rotation, filter, auto_crop, quality,
-                            ) {
+                            match store.render_page(&path, page, options) {
                                 Ok((w, h, data)) => {
-                                    let _ = resp.send(Ok((page as usize, w, h, data)));
+                                    let _ = resp.send(Ok((w, h, data)));
                                 }
                                 Err(e) => {
                                     let _ = resp.send(Err(e));
@@ -91,14 +80,16 @@ pub fn spawn_engine_thread(cache_size: u64) -> EngineState {
                             match store.render_page(
                                 &path,
                                 page,
-                                zoom,
-                                0,
-                                RenderFilter::None,
-                                false,
-                                RenderQuality::Low,
+                                crate::pdf_engine::RenderOptions {
+                                    scale: zoom,
+                                    rotation: 0,
+                                    filter: crate::pdf_engine::RenderFilter::None,
+                                    auto_crop: false,
+                                    quality: crate::pdf_engine::RenderQuality::Low,
+                                },
                             ) {
                                 Ok((w, h, data)) => {
-                                    let _ = resp.send(Ok((page as usize, w, h, data)));
+                                    let _ = resp.send(Ok((w, h, data)));
                                 }
                                 Err(e) => {
                                     let _ = resp.send(Err(e));

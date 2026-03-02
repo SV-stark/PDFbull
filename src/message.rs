@@ -1,8 +1,9 @@
 use crate::engine::EngineState;
-use crate::models::{AppSettings, DocumentId, RecentFile};
-use crate::pdf_engine::{self, RenderFilter};
+use crate::models::{
+    AppSettings, DocumentId, OpenResult, RecentFile, RenderResult, SearchResultItem,
+};
+use crate::pdf_engine::RenderFilter;
 use std::path::PathBuf;
-use std::sync::Arc;
 
 #[derive(Debug, Clone)]
 pub enum Message {
@@ -19,27 +20,15 @@ pub enum Message {
     RemoveBookmark(usize),
     JumpToBookmark(usize),
     SetAnnotationMode(Option<crate::models::PendingAnnotationKind>),
-    AnnotationDragStart {
-        page: usize,
-        x: f32,
-        y: f32,
-    },
-    AnnotationDragUpdate {
-        x: f32,
-        y: f32,
-    },
+    AnnotationDragStart { page: usize, x: f32, y: f32 },
+    AnnotationDragUpdate { x: f32, y: f32 },
     AnnotationDragEnd,
     DeleteAnnotation(usize),
     Undo,
     Redo,
     SetFilter(RenderFilter),
     ToggleAutoCrop,
-    DocumentOpenedWithPath(
-        (
-            PathBuf,
-            (DocumentId, usize, Vec<f32>, f32, Vec<pdf_engine::Bookmark>),
-        ),
-    ),
+    DocumentOpenedWithPath((PathBuf, OpenResult)),
     OpenDocument,
     OpenFile(PathBuf),
     CloseTab(usize),
@@ -55,13 +44,13 @@ pub enum Message {
     ViewportChanged(f32, f32),
     RequestRender(usize),
     SidebarViewportChanged(f32),
-    PageRendered(usize, Result<(u32, u32, Arc<Vec<u8>>), String>),
-    ThumbnailRendered(usize, Result<(u32, u32, Arc<Vec<u8>>), String>),
-    DocumentOpened(Result<(DocumentId, usize, Vec<f32>, f32, Vec<pdf_engine::Bookmark>), String>),
+    PageRendered(usize, Result<RenderResult, String>),
+    ThumbnailRendered(usize, Result<RenderResult, String>),
+    DocumentOpened(Result<OpenResult, String>),
     EngineInitialized(EngineState),
     Search(String),
     PerformSearch,
-    SearchResult(Result<Vec<(usize, String, f32, f32, f32, f32)>, String>),
+    SearchResult(Result<Vec<SearchResultItem>, String>),
     NextSearchResult,
     PrevSearchResult,
     ClearSearch,

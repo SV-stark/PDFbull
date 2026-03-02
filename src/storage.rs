@@ -89,7 +89,7 @@ pub fn save_recent_files(recent_files: &Vec<RecentFile>) {
     }
 }
 
-pub fn add_recent_file(recent_files: &mut Vec<RecentFile>, path: &PathBuf) {
+pub fn add_recent_file(recent_files: &mut Vec<RecentFile>, path: &std::path::Path) {
     let name = path
         .file_name()
         .map(|n| n.to_string_lossy().to_string())

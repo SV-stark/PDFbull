@@ -1,6 +1,8 @@
 use crate::pdf_engine::RenderFilter;
 use iced::widget::image as iced_image;
 use serde::{Deserialize, Serialize};
+use std::path::PathBuf;
+use std::sync::Arc;
 
 #[derive(Debug, Clone)]
 pub enum UndoableAction {
@@ -21,28 +23,26 @@ pub struct AnnotationDrag {
     pub current: (f32, f32),
     pub kind: PendingAnnotationKind,
 }
-use std::path::PathBuf;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub type OpenResult = (
+    DocumentId,
+    usize,
+    Vec<f32>,
+    f32,
+    Vec<crate::pdf_engine::Bookmark>,
+);
+pub type RenderResult = (u32, u32, Arc<Vec<u8>>);
+pub type SearchResultItem = (usize, String, f32, f32, f32, f32);
+
+#[derive(Default, Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct DocumentId(pub u64);
 
-impl Default for DocumentId {
-    fn default() -> Self {
-        Self(0)
-    }
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[derive(Default, Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub enum AppTheme {
+    #[default]
     System,
     Light,
     Dark,
-}
-
-impl Default for AppTheme {
-    fn default() -> Self {
-        AppTheme::System
-    }
 }
 
 impl From<&str> for AppTheme {

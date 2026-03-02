@@ -77,12 +77,21 @@ impl PdfBullApp {
         crate::storage::save_session(&session);
     }
 
-    pub fn add_recent_file(&mut self, path: &std::path::PathBuf) {
+    pub fn add_recent_file(&mut self, path: &std::path::Path) {
         crate::storage::add_recent_file(&mut self.recent_files, path);
     }
 
     pub fn render_visible_pages(&mut self) -> Task<Message> {
-        let (visible_pages, visible_thumbnails, doc_id, zoom, rotation, filter, auto_crop, page_width) = {
+        let (
+            visible_pages,
+            visible_thumbnails,
+            doc_id,
+            zoom,
+            rotation,
+            filter,
+            auto_crop,
+            page_width,
+        ) = {
             let tab = match self.current_tab() {
                 Some(t) => t,
                 None => return Task::none(),
@@ -90,7 +99,7 @@ impl PdfBullApp {
             (
                 tab.get_visible_pages().iter().cloned().collect::<Vec<_>>(),
                 tab.get_visible_thumbnails(),
-                tab.id.clone(),
+                tab.id,
                 tab.zoom,
                 tab.rotation,
                 tab.render_filter,
@@ -112,46 +121,48 @@ impl PdfBullApp {
         let mut tasks = Vec::new();
         for page_idx in visible_pages {
             let target = RenderTarget::Page(page_idx);
-            
-            let is_rendered = self.current_tab().map_or(false, |t| t.rendered_pages.contains_key(&page_idx));
+
+            let is_rendered = self
+                .current_tab()
+                .is_some_and(|t| t.rendered_pages.contains_key(&page_idx));
             if is_rendered || self.rendering_set.contains(&target) {
                 continue;
             }
-            
+
+            let options = crate::pdf_engine::RenderOptions {
+                scale: zoom,
+                rotation,
+                filter,
+                auto_crop,
+                quality,
+            };
+
             self.rendering_set.insert(target);
             let tx = cmd_tx.clone();
-            let doc_id_cloned = doc_id.clone();
+            let doc_id_cloned = doc_id;
             tasks.push(Task::perform(
                 async move {
                     let (resp_tx, resp_rx) = tokio::sync::oneshot::channel();
                     let _ = tx.send(crate::commands::PdfCommand::Render(
                         doc_id_cloned,
                         page_idx as i32,
-                        zoom,
-                        rotation,
-                        filter,
-                        auto_crop,
-                        quality,
+                        options,
                         resp_tx,
                     ));
                     let res = resp_rx.await.unwrap_or(Err("Channel closed".into()));
                     (page_idx, res)
                 },
-                |(page_idx, res)| {
-                    let formatted_res = match res {
-                        Ok((_, w, h, data)) => Ok((w, h, data)),
-                        Err(e) => Err(e),
-                    };
-                    Message::PageRendered(page_idx, formatted_res)
-                },
+                |(page_idx, res)| Message::PageRendered(page_idx, res),
             ));
         }
 
         if self.show_sidebar {
             for page_idx in visible_thumbnails {
                 let target = RenderTarget::Thumbnail(page_idx);
-                let is_thumb_rendered = self.current_tab().map_or(false, |t| t.thumbnails.contains_key(&page_idx));
-                
+                let is_thumb_rendered = self
+                    .current_tab()
+                    .is_some_and(|t| t.thumbnails.contains_key(&page_idx));
+
                 if is_thumb_rendered || self.rendering_set.contains(&target) {
                     continue;
                 }
@@ -159,7 +170,7 @@ impl PdfBullApp {
                 let thumb_zoom = 120.0 / page_width.max(1.0);
                 self.rendering_set.insert(target);
                 let tx = cmd_tx.clone();
-                let doc_id_cloned = doc_id.clone();
+                let doc_id_cloned = doc_id;
                 tasks.push(Task::perform(
                     async move {
                         let (resp_tx, resp_rx) = tokio::sync::oneshot::channel();
@@ -172,13 +183,7 @@ impl PdfBullApp {
                         let res = resp_rx.await.unwrap_or(Err("Channel closed".into()));
                         (page_idx, res)
                     },
-                    |(page_idx, res)| {
-                        let formatted_res = match res {
-                            Ok((_, w, h, data)) => Ok((w, h, data)),
-                            Err(e) => Err(e),
-                        };
-                        Message::ThumbnailRendered(page_idx, formatted_res)
-                    },
+                    |(page_idx, res)| Message::ThumbnailRendered(page_idx, res),
                 ));
             }
         }
