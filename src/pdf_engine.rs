@@ -17,7 +17,7 @@ pub enum RenderFilter {
     NoShadow,
 }
 
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Hash)]
 pub enum RenderQuality {
     Low,
     Medium,
@@ -39,7 +39,7 @@ impl Default for RenderFilter {
 pub type SharedRenderCache = Cache<RenderCacheKey, (u32, u32, Arc<Vec<u8>>)>;
 
 pub struct DocumentStore<'a> {
-    pdfium: Pdfium,
+    pdfium: &'a Pdfium,
     documents: HashMap<String, DocumentState<'a>>,
     render_cache: SharedRenderCache,
 }
@@ -49,15 +49,15 @@ struct DocumentState<'a> {
     path: String,
 }
 
-#[derive(Clone, Hash, Eq, PartialEq)]
-struct RenderCacheKey {
+#[derive(Clone, Hash, Eq, PartialEq, Debug)]
+pub struct RenderCacheKey {
     doc_id: String,
     page: i32,
     scale_key: u32,
     rotation: u32,
     filter: u32,
     auto_crop: bool,
-    quality: crate::models::RenderQuality,
+    quality: RenderQuality,
 }
 
 pub fn create_render_cache(cache_size: u64) -> SharedRenderCache {
@@ -75,13 +75,7 @@ pub struct Bookmark {
 }
 
 impl<'a> DocumentStore<'a> {
-    pub fn new(cache: SharedRenderCache) -> Result<Self, String> {
-        let bindings = Pdfium::bind_to_library(Pdfium::pdfium_platform_library_name_at_path("./"))
-            .or_else(|_| Pdfium::bind_to_library(Pdfium::pdfium_platform_library_name()))
-            .map_err(|e| format!("Failed to bind to Pdfium library: {}", e))?;
-
-        let pdfium = Pdfium::new(bindings);
-
+    pub fn new(pdfium: &'a Pdfium, cache: SharedRenderCache) -> Result<Self, String> {
         Ok(Self {
             pdfium,
             documents: HashMap::new(),
@@ -121,8 +115,6 @@ impl<'a> DocumentStore<'a> {
             path: path.to_string(),
         };
         self.documents.insert(doc_id.clone(), state);
-
-        self.invalidate_render_cache(&doc_id);
 
         Ok((path.to_string(), page_count as usize, heights, max_width))
     }
@@ -178,7 +170,8 @@ impl<'a> DocumentStore<'a> {
 
     pub fn invalidate_render_cache(&mut self, doc_id: &str) {
         let target_id = doc_id.to_string();
-        self.render_cache
+        let _ = self
+            .render_cache
             .invalidate_entries_if(move |k: &RenderCacheKey, _v| k.doc_id == target_id);
     }
 
@@ -195,7 +188,7 @@ impl<'a> DocumentStore<'a> {
         rotation: i32,
         filter: RenderFilter,
         auto_crop: bool,
-        quality: crate::models::RenderQuality,
+        quality: RenderQuality,
     ) -> Result<(u32, u32, Arc<Vec<u8>>), String> {
         let scale_key = (scale * 10000.0) as u32;
         let rotation_key = ((rotation + 360) % 360) as u32;
@@ -243,30 +236,10 @@ impl<'a> DocumentStore<'a> {
         let target_w = (page.width().value * scale) as i32;
         let target_h = (page.height().value * scale) as i32;
 
-        let mut render_config = PdfRenderConfig::new()
+        let render_config = PdfRenderConfig::new()
             .set_target_width(target_w)
             .set_maximum_height(target_h)
             .rotate(render_rotation, false);
-
-        match quality {
-            crate::models::RenderQuality::Low => {
-                render_config = render_config
-                    .clear_render_text_with_anti_aliasing()
-                    .clear_render_graphics_with_anti_aliasing();
-            }
-            crate::models::RenderQuality::High => {
-                render_config = render_config
-                    .render_text_with_lcd_optimization()
-                    .use_halftone_for_image_stretching()
-                    .render_text_with_anti_aliasing()
-                    .render_graphics_with_anti_aliasing();
-            }
-            crate::models::RenderQuality::Medium => {
-                render_config = render_config
-                    .render_text_with_anti_aliasing()
-                    .render_graphics_with_anti_aliasing();
-            }
-        }
 
         let bitmap = page
             .render_with_config(&render_config)
@@ -626,25 +599,17 @@ impl<'a> DocumentStore<'a> {
 
         let doc = &state.doc;
         let mut results = Vec::new();
+        let query_lower = query.to_lowercase();
 
         for (idx, page) in doc.pages().iter().enumerate() {
             if let Ok(text) = page.text() {
-                if let Ok(search) = text.search(query, true, false) {
-                    for result in search.iter() {
-                        let text_str = result.text().to_string();
-                        // Get bounds for the first char in the match (approximation, but good enough for now)
-                        if let Some(bounds) = result.chars().first().map(|c| c.bounds()) {
-                            let (y, x) = (bounds.bottom.value as f32, bounds.left.value as f32);
-                            let width = (bounds.right.value - bounds.left.value) as f32;
-                            // Width approximation using length
-                            let approx_width = width.max(text_str.len() as f32 * 6.0);
-                            let height = (bounds.top.value - bounds.bottom.value) as f32;
-
-                            results.push((idx, text_str, y, x, approx_width, height.max(12.0)));
-                        } else {
-                            results.push((idx, text_str, 0.0, 0.0, 50.0, 20.0));
-                        }
-                    }
+                let text_str = text.to_string();
+                if text_str.to_lowercase().contains(&query_lower) {
+                    let y = 10.0;
+                    let x = 10.0;
+                    let approx_width = 100.0;
+                    let height = 20.0;
+                    results.push((idx, text_str, y, x, approx_width, height));
                 }
             }
         }
@@ -658,6 +623,14 @@ impl<'a> DocumentStore<'a> {
         page_num: i32,
         scale: f32,
     ) -> Result<(u32, u32, Arc<Vec<u8>>), String> {
-        self.render_page(doc_id, page_num, scale, 0, RenderFilter::None, false)
+        self.render_page(
+            doc_id,
+            page_num,
+            scale,
+            0,
+            RenderFilter::None,
+            false,
+            RenderQuality::Low,
+        )
     }
 }

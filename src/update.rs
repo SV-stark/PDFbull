@@ -3,15 +3,15 @@ use crate::commands::PdfCommand;
 use crate::message::Message;
 use crate::models::{AppTheme, DocumentTab, SearchResult};
 use crate::storage;
-use iced::{widget::image as iced_image, Task};
-use std::fs;
+use iced::widget::image as iced_image;
+use iced::widget::{operation, Id};
+use iced::Task;
 use std::path::PathBuf;
-use std::sync::Arc;
 
 fn scroll_to_page(tab: &crate::models::DocumentTab, page: usize) -> Task<Message> {
     let y_offset: f32 = tab.page_heights.iter().take(page).map(|h| h + 10.0).sum();
-    iced::widget::scrollable::scroll_to(
-        iced::widget::scrollable::Id::new("pdf_scroll"),
+    operation::scroll_to(
+        Id::new("pdf_scroll"),
         iced::widget::scrollable::AbsoluteOffset {
             x: 0.0,
             y: y_offset,
@@ -123,11 +123,21 @@ pub fn handle_message(app: &mut PdfBullApp, message: Message) -> Task<Message> {
             Task::none()
         }
         Message::JumpToBookmark(idx) => {
-            if let Some(tab) = app.current_tab_mut() {
+            let jump_page = if let Some(tab) = app.current_tab_mut() {
                 if idx < tab.bookmarks.len() {
                     tab.current_page = tab.bookmarks[idx].page;
-                    app.page_input = (tab.current_page + 1).to_string();
-                    return scroll_to_page(tab, tab.current_page);
+                    Some(tab.current_page)
+                } else {
+                    None
+                }
+            } else {
+                None
+            };
+            
+            if let Some(p) = jump_page {
+                app.page_input = (p + 1).to_string();
+                if let Some(tab) = app.current_tab_mut() {
+                    return scroll_to_page(tab, p);
                 }
             }
             Task::none()
@@ -165,13 +175,13 @@ pub fn handle_message(app: &mut PdfBullApp, message: Message) -> Task<Message> {
                     let h = (drag.start.1 - drag.current.1).abs();
 
                     if w > 5.0 && h > 5.0 {
-                        let id = uuid::Uuid::new_v4().to_string();
-                        let (style, color) = match drag.kind {
+                        let id = crate::models::next_annotation_id();
+                        let style = match drag.kind {
                             crate::models::PendingAnnotationKind::Highlight => {
-                                (crate::models::AnnotationStyle::Highlight, (255, 255, 0))
+                                crate::models::AnnotationStyle::Highlight { color: "#FFFF00".to_string() }
                             }
                             crate::models::PendingAnnotationKind::Rectangle => {
-                                (crate::models::AnnotationStyle::Rectangle, (255, 0, 0))
+                                crate::models::AnnotationStyle::Rectangle { color: "#FF0000".to_string(), thickness: 2.0, fill: false }
                             }
                         };
 
@@ -179,9 +189,10 @@ pub fn handle_message(app: &mut PdfBullApp, message: Message) -> Task<Message> {
                             id,
                             page: drag.page,
                             style,
-                            bounds: (min_x, min_y, w, h),
-                            color,
-                            text: String::new(),
+                            x: min_x,
+                            y: min_y,
+                            width: w,
+                            height: h,
                         };
 
                         tab.undo_stack
@@ -315,7 +326,8 @@ pub fn handle_message(app: &mut PdfBullApp, message: Message) -> Task<Message> {
             app.active_tab = tab_idx;
             app.add_recent_file(&path);
 
-            let doc_id = data.0;
+            let _doc_id = data.0;
+            let _total_pages = data.1;
             app.update(Message::DocumentOpened(Ok(data)))
         }
         Message::DocumentOpened(result) => match result {
@@ -449,21 +461,41 @@ pub fn handle_message(app: &mut PdfBullApp, message: Message) -> Task<Message> {
             Task::none()
         }
         Message::NextPage => {
-            if let Some(tab) = app.current_tab_mut() {
+            let next_page = if let Some(tab) = app.current_tab_mut() {
                 if tab.current_page + 1 < tab.total_pages {
                     tab.current_page += 1;
-                    app.page_input = (tab.current_page + 1).to_string();
-                    return scroll_to_page(tab, tab.current_page);
+                    Some(tab.current_page)
+                } else {
+                    None
+                }
+            } else {
+                None
+            };
+            
+            if let Some(page) = next_page {
+                app.page_input = (page + 1).to_string();
+                if let Some(tab) = app.current_tab_mut() {
+                    return scroll_to_page(tab, page);
                 }
             }
             Task::none()
         }
         Message::PrevPage => {
-            if let Some(tab) = app.current_tab_mut() {
+            let prev_page = if let Some(tab) = app.current_tab_mut() {
                 if tab.current_page > 0 {
                     tab.current_page -= 1;
-                    app.page_input = (tab.current_page + 1).to_string();
-                    return scroll_to_page(tab, tab.current_page);
+                    Some(tab.current_page)
+                } else {
+                    None
+                }
+            } else {
+                None
+            };
+            
+            if let Some(page) = prev_page {
+                app.page_input = (page + 1).to_string();
+                if let Some(tab) = app.current_tab_mut() {
+                    return scroll_to_page(tab, page);
                 }
             }
             Task::none()
@@ -490,11 +522,21 @@ pub fn handle_message(app: &mut PdfBullApp, message: Message) -> Task<Message> {
             app.render_visible_pages()
         }
         Message::JumpToPage(page) => {
-            if let Some(tab) = app.current_tab_mut() {
+            let jump_page = if let Some(tab) = app.current_tab_mut() {
                 if page < tab.total_pages {
                     tab.current_page = page;
-                    app.page_input = (tab.current_page + 1).to_string();
-                    return scroll_to_page(tab, tab.current_page);
+                    Some(tab.current_page)
+                } else {
+                    None
+                }
+            } else {
+                None
+            };
+            
+            if let Some(p) = jump_page {
+                app.page_input = (p + 1).to_string();
+                if let Some(tab) = app.current_tab_mut() {
+                    return scroll_to_page(tab, p);
                 }
             }
             Task::none()
@@ -576,7 +618,13 @@ pub fn handle_message(app: &mut PdfBullApp, message: Message) -> Task<Message> {
                     ));
                     resp_rx.await.unwrap_or(Err("Channel closed".into()))
                 },
-                Message::PageRendered,
+                move |res| {
+                    let formatted_res = match res {
+                        Ok((_, w, h, data)) => Ok((w, h, data)),
+                        Err(e) => Err(e),
+                    };
+                    Message::PageRendered(page_idx, formatted_res)
+                },
             )
         }
         Message::PageRendered(page_idx, result) => {
@@ -725,19 +773,29 @@ pub fn handle_message(app: &mut PdfBullApp, message: Message) -> Task<Message> {
             Task::none()
         }
         Message::NextSearchResult => {
-            if let Some(tab) = app.current_tab_mut() {
+            let next_page = if let Some(tab) = app.current_tab_mut() {
                 if !tab.search_results.is_empty() {
                     tab.current_search_index =
                         (tab.current_search_index + 1) % tab.search_results.len();
                     tab.current_page = tab.search_results[tab.current_search_index].page;
-                    app.page_input = (tab.current_page + 1).to_string();
-                    return scroll_to_page(tab, tab.current_page);
+                    Some(tab.current_page)
+                } else {
+                    None
+                }
+            } else {
+                None
+            };
+            
+            if let Some(page) = next_page {
+                app.page_input = (page + 1).to_string();
+                if let Some(tab) = app.current_tab_mut() {
+                    return scroll_to_page(tab, page);
                 }
             }
             Task::none()
         }
         Message::PrevSearchResult => {
-            if let Some(tab) = app.current_tab_mut() {
+            let prev_page = if let Some(tab) = app.current_tab_mut() {
                 if !tab.search_results.is_empty() {
                     tab.current_search_index = if tab.current_search_index == 0 {
                         tab.search_results.len() - 1
@@ -745,8 +803,18 @@ pub fn handle_message(app: &mut PdfBullApp, message: Message) -> Task<Message> {
                         tab.current_search_index - 1
                     };
                     tab.current_page = tab.search_results[tab.current_search_index].page;
-                    app.page_input = (tab.current_page + 1).to_string();
-                    return scroll_to_page(tab, tab.current_page);
+                    Some(tab.current_page)
+                } else {
+                    None
+                }
+            } else {
+                None
+            };
+            
+            if let Some(page) = prev_page {
+                app.page_input = (page + 1).to_string();
+                if let Some(tab) = app.current_tab_mut() {
+                    return scroll_to_page(tab, page);
                 }
             }
             Task::none()
@@ -757,6 +825,11 @@ pub fn handle_message(app: &mut PdfBullApp, message: Message) -> Task<Message> {
                 tab.current_search_index = 0;
             }
             app.search_query.clear();
+            Task::none()
+        }
+        Message::ClearRecentFiles => {
+            app.recent_files.clear();
+            crate::storage::save_recent_files(&app.recent_files);
             Task::none()
         }
         Message::ExtractText => {
@@ -1022,13 +1095,13 @@ pub fn handle_message(app: &mut PdfBullApp, message: Message) -> Task<Message> {
                             |m| m,
                         );
                     } else {
-                        return iced::window::get_latest().and_then(iced::window::close);
+                        return iced::exit();
                     }
                 }
                 iced::Event::Window(iced::window::Event::FileDropped(path)) => {
                     return app.update(Message::OpenFile(path));
                 }
-                iced::Event::Mouse(iced::mouse::Event::CursorMoved { position }) => {
+                iced::Event::Mouse(iced::mouse::Event::CursorMoved { position: _ }) => {
                     // We only care about tracking when dragging an annotation
                     // But CursorMoved position is in absolute screen coords,
                     // while AnnotationDrag tracks page-relative coords.
@@ -1054,7 +1127,7 @@ pub fn handle_message(app: &mut PdfBullApp, message: Message) -> Task<Message> {
                 iced::Event::Keyboard(iced::keyboard::Event::KeyPressed {
                     key, modifiers, ..
                 }) => {
-                    use iced::keyboard::{Key, Modifiers};
+                    use iced::keyboard::Key;
 
                     match key {
                         Key::Named(iced::keyboard::key::Named::F11) => {
@@ -1099,6 +1172,6 @@ pub fn handle_message(app: &mut PdfBullApp, message: Message) -> Task<Message> {
             }
             Task::none()
         }
-        Message::ForceQuit => iced::window::get_latest().and_then(iced::window::close),
+        Message::ForceQuit => iced::exit(),
     }
 }

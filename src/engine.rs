@@ -1,6 +1,6 @@
 use crate::commands::PdfCommand;
 use crate::models::{next_doc_id, DocumentId};
-use crate::pdf_engine::{create_render_cache, DocumentStore};
+use crate::pdf_engine::{create_render_cache, DocumentStore, RenderFilter, RenderQuality};
 use std::collections::HashMap;
 use std::sync::{Arc, RwLock};
 
@@ -25,7 +25,18 @@ pub fn spawn_engine_thread(cache_size: u64) -> EngineState {
         let doc_paths = doc_paths.clone();
 
         std::thread::spawn(move || {
-            let mut store = match DocumentStore::new(cache) {
+            let bindings = pdfium_render::prelude::Pdfium::bind_to_library(
+                pdfium_render::prelude::Pdfium::pdfium_platform_library_name_at_path("./"),
+            )
+            .or_else(|_| {
+                pdfium_render::prelude::Pdfium::bind_to_library(
+                    pdfium_render::prelude::Pdfium::pdfium_platform_library_name(),
+                )
+            })
+            .expect("Failed to bind to Pdfium library");
+            let pdfium = pdfium_render::prelude::Pdfium::new(bindings);
+
+            let mut store = match DocumentStore::new(&pdfium, cache) {
                 Ok(s) => s,
                 Err(e) => {
                     log::error!("Failed to initialize DocumentStore: {}", e);

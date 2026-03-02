@@ -1,5 +1,5 @@
 use crate::models::{Annotation, DocumentId};
-use crate::pdf_engine::RenderFilter;
+use crate::pdf_engine::{RenderFilter, RenderQuality};
 use std::sync::Arc;
 use tokio::sync::oneshot;
 
@@ -27,7 +27,7 @@ pub enum PdfCommand {
         i32,
         RenderFilter,
         bool,
-        crate::models::RenderQuality,
+        RenderQuality,
         oneshot::Sender<Result<(usize, u32, u32, Arc<Vec<u8>>), String>>,
     ),
     RenderThumbnail(
@@ -65,7 +65,7 @@ pub enum PdfCommand {
     Search(
         DocumentId,
         String,
-        std::sync::mpsc::Sender<Result<Vec<(usize, String, f32)>, String>>,
+        std::sync::mpsc::Sender<Result<Vec<(usize, String, f32, f32, f32, f32)>, String>>,
     ),
     Close(DocumentId),
 }

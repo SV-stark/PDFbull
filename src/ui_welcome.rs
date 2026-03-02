@@ -3,14 +3,15 @@ use iced::{Alignment, Border, Color, Element, Length};
 use iced_aw::widget::Card;
 
 pub fn welcome_view(app: &crate::app::PdfBullApp) -> Element<crate::message::Message> {
-    let recent_section = if !app.recent_files.is_empty() {
-        let mut files = column![];
+    let recent_section: Element<'_, crate::message::Message> = if !app.recent_files.is_empty() {
+        let mut files: iced::widget::Column<'_, crate::message::Message> =
+            iced::widget::Column::new();
         for file in &app.recent_files {
             let file_row = row![
                 text("📄").size(20),
                 iced::widget::tooltip(
                     text(&file.name).size(14),
-                    file.path.clone(),
+                    text(file.path.clone()),
                     iced::widget::tooltip::Position::Bottom
                 ),
             ]
@@ -22,7 +23,7 @@ pub fn welcome_view(app: &crate::app::PdfBullApp) -> Element<crate::message::Mes
                     .on_press(crate::message::Message::OpenRecentFile(file.clone()))
                     .width(Length::Fill)
                     .padding(10)
-                    .style(iced::theme::Button::Text),
+                    .style(|_theme: &iced::Theme, _status| iced::widget::button::Style::default()),
             );
         }
 
@@ -37,10 +38,10 @@ pub fn welcome_view(app: &crate::app::PdfBullApp) -> Element<crate::message::Mes
             .align_y(Alignment::Center),
             column![Space::new().height(Length::Fixed(10.0)), files,],
         )
-        .padding(15)
-        .style(iced_aw::widget::card::Style::Secondary)
+        .padding(15.0.into())
+        .into()
     } else {
-        column![]
+        column![].into()
     };
 
     let drop_zone = container(
@@ -78,8 +79,7 @@ pub fn welcome_view(app: &crate::app::PdfBullApp) -> Element<crate::message::Mes
             Space::new().height(Length::Fixed(20.0)),
         ],
     )
-    .padding(30)
-    .style(iced_aw::widget::card::Style::Default);
+    .padding(30.0.into());
 
     column![
         row![

@@ -29,18 +29,19 @@ fn rgb_to_iced(rgb: (u8, u8, u8)) -> Color {
 }
 
 fn filter_btn(
-    label: &str,
+    label: &'static str,
     f: RenderFilter,
     active: RenderFilter,
 ) -> iced::widget::Button<'static, crate::message::Message> {
     let btn = button(text(label).size(11));
     if f == active {
-        btn.style(|theme: &iced::Theme, _| iced::widget::button::Appearance {
-            background: Some(iced::Background::Color(
-                theme.extended_palette().primary.strong.color,
-            )),
-            text_color: theme.extended_palette().primary.strong.text,
-            ..Default::default()
+        btn.style(|theme: &iced::Theme, _| {
+            let palette = theme.extended_palette();
+            iced::widget::button::Style {
+                background: Some(palette.primary.strong.color.into()),
+                text_color: palette.primary.strong.text,
+                ..Default::default()
+            }
         })
     } else {
         btn
@@ -242,7 +243,7 @@ fn render_page_nav(app: &PdfBullApp) -> Element<crate::message::Message> {
     let status = if let Some(ref msg) = app.status_message {
         row![
             Space::new().width(Length::Fill),
-            Card::new(text(msg).size(12), Space::new()).padding(Padding::from(5)),
+            Card::new(text(msg).size(12), Space::new()).padding(5.0.into()),
             button("×")
                 .on_press(crate::message::Message::ClearStatus)
                 .padding(2),
@@ -283,42 +284,47 @@ fn render_sidebar(app: &PdfBullApp) -> Element<crate::message::Message> {
                     .style(|_theme| iced::widget::text::Style {
                         color: Some(Color::from_rgb(0.2, 0.4, 0.6)),
                     }),
-                column![for bookmark in &tab.outline {
-                    button(text(&bookmark.title))
-                        .on_press(crate::message::Message::JumpToPage(
-                            bookmark.page_index as usize,
-                        ))
-                        .width(Length::Fill)
-                }]
-                .spacing(5),
+                {
+                    let mut outline_col = column![];
+                    for bookmark in &tab.outline {
+                        outline_col = outline_col.push(
+                            button(text(&bookmark.title))
+                                .on_press(crate::message::Message::JumpToPage(
+                                    bookmark.page_index as usize,
+                                ))
+                                .width(Length::Fill),
+                        );
+                    }
+                    outline_col.spacing(5)
+                },
             )
-            .padding(Padding::from(10)),
+            .padding(10.0.into()),
         );
     }
 
     if !tab.bookmarks.is_empty() {
         sidebar_col = sidebar_col.push(
-            Card::new(
-                text("Bookmarks").size(14),
-                column![for (idx, bookmark) in tab.bookmarks.iter().enumerate() {
-                    row![
+            Card::new(text("Bookmarks").size(14), {
+                let mut bookmarks_col = column![];
+                for (idx, bookmark) in tab.bookmarks.iter().enumerate() {
+                    bookmarks_col = bookmarks_col.push(row![
                         button(text(&bookmark.label))
                             .on_press(crate::message::Message::JumpToBookmark(idx))
                             .width(Length::Fill),
                         button("×").on_press(crate::message::Message::RemoveBookmark(idx))
-                    ]
-                }]
-                .spacing(5),
-            )
-            .padding(Padding::from(10)),
+                    ]);
+                }
+                bookmarks_col.spacing(5)
+            })
+            .padding(10.0.into()),
         );
     }
 
     if !tab.annotations.is_empty() {
         sidebar_col = sidebar_col.push(
-            Card::new(
-                text("Annotations").size(14),
-                column![for (idx, ann) in tab.annotations.iter().enumerate() {
+            Card::new(text("Annotations").size(14), {
+                let mut annotations_col = column![];
+                for (idx, ann) in tab.annotations.iter().enumerate() {
                     let label = match &ann.style {
                         crate::models::AnnotationStyle::Highlight { .. } => {
                             format!("Highlight P{}", ann.page + 1)
@@ -330,16 +336,16 @@ fn render_sidebar(app: &PdfBullApp) -> Element<crate::message::Message> {
                             format!("Text: {}", &text[..text.len().min(20)])
                         }
                     };
-                    row![
+                    annotations_col = annotations_col.push(row![
                         button(text(label))
                             .on_press(crate::message::Message::JumpToPage(ann.page))
                             .width(Length::Fill),
                         button("×").on_press(crate::message::Message::DeleteAnnotation(idx))
-                    ]
-                }]
-                .spacing(5),
-            )
-            .padding(Padding::from(10)),
+                    ]);
+                }
+                annotations_col.spacing(5)
+            })
+            .padding(10.0.into()),
         );
     }
 
@@ -348,7 +354,7 @@ fn render_sidebar(app: &PdfBullApp) -> Element<crate::message::Message> {
             text(format!("Pages ({})", tab.total_pages)).size(14),
             Space::new(),
         )
-        .padding(Padding::from(10)),
+        .padding(10.0.into()),
     );
 
     let thumbnail_height = 40.0;
@@ -400,20 +406,44 @@ fn render_tabs(app: &PdfBullApp) -> Element<crate::message::Message> {
             t.name.clone()
         };
 
-        let style = if is_active {
-            iced::theme::Button::Custom(Box::new(ActiveTabStyle))
-        } else {
-            iced::theme::Button::Custom(Box::new(InactiveTabStyle))
-        };
-
         let tab_content = row![
             button(text(display_name).size(14))
                 .on_press(crate::message::Message::SwitchTab(i))
-                .style(style.clone())
+                .style(move |theme: &iced::Theme, _status| {
+                    let palette = theme.extended_palette();
+                    if is_active {
+                        iced::widget::button::Style {
+                            background: Some(palette.background.base.color.into()),
+                            text_color: palette.background.base.text,
+                            ..Default::default()
+                        }
+                    } else {
+                        iced::widget::button::Style {
+                            background: Some(palette.background.weak.color.into()),
+                            text_color: palette.background.weak.text,
+                            ..Default::default()
+                        }
+                    }
+                })
                 .padding([5, 10]),
             button(text("✕").size(12))
                 .on_press(crate::message::Message::CloseTab(i))
-                .style(style.clone())
+                .style(move |theme: &iced::Theme, _status| {
+                    let palette = theme.extended_palette();
+                    if is_active {
+                        iced::widget::button::Style {
+                            background: Some(palette.background.base.color.into()),
+                            text_color: palette.background.base.text,
+                            ..Default::default()
+                        }
+                    } else {
+                        iced::widget::button::Style {
+                            background: Some(palette.background.weak.color.into()),
+                            text_color: palette.background.weak.text,
+                            ..Default::default()
+                        }
+                    }
+                })
                 .padding([5, 8])
         ]
         .spacing(0);
@@ -421,7 +451,7 @@ fn render_tabs(app: &PdfBullApp) -> Element<crate::message::Message> {
         let wrapped = if t.name.len() > 20 {
             tooltip(
                 tab_content,
-                t.name.clone(),
+                text(t.name.clone()),
                 iced::widget::tooltip::Position::Bottom,
             )
             .into()
@@ -435,7 +465,12 @@ fn render_tabs(app: &PdfBullApp) -> Element<crate::message::Message> {
     // Fill the rest of the tab bar
     let tab_bar_bg = container(tabs)
         .width(Length::Fill)
-        .padding([5, 5, 0, 5])
+        .padding(iced::Padding {
+            top: 5.0,
+            right: 5.0,
+            bottom: 0.0,
+            left: 5.0,
+        })
         .style(|theme: &iced::Theme| {
             let palette = theme.extended_palette();
             container::Style {
@@ -449,40 +484,6 @@ fn render_tabs(app: &PdfBullApp) -> Element<crate::message::Message> {
         .on_press(crate::message::Message::OpenDocument);
 
     row![tab_bar_bg, add_button].padding(5).into()
-}
-
-struct ActiveTabStyle;
-impl iced::widget::button::StyleSheet for ActiveTabStyle {
-    type Style = iced::Theme;
-    fn active(&self, theme: &Self::Style) -> iced::widget::button::Appearance {
-        let palette = theme.extended_palette();
-        iced::widget::button::Appearance {
-            background: Some(iced::Background::Color(palette.background.base.color)),
-            text_color: palette.background.base.text,
-            border: iced::Border {
-                radius: [4.0, 4.0, 0.0, 0.0].into(),
-                ..Default::default()
-            },
-            ..Default::default()
-        }
-    }
-}
-
-struct InactiveTabStyle;
-impl iced::widget::button::StyleSheet for InactiveTabStyle {
-    type Style = iced::Theme;
-    fn active(&self, theme: &Self::Style) -> iced::widget::button::Appearance {
-        let palette = theme.extended_palette();
-        iced::widget::button::Appearance {
-            background: Some(iced::Background::Color(palette.background.weak.color)),
-            text_color: palette.background.weak.text,
-            border: iced::Border {
-                radius: [4.0, 4.0, 0.0, 0.0].into(),
-                ..Default::default()
-            },
-            ..Default::default()
-        }
-    }
 }
 
 fn render_pdf_content(app: &PdfBullApp) -> Element<crate::message::Message> {
@@ -664,6 +665,9 @@ fn render_pdf_content(app: &PdfBullApp) -> Element<crate::message::Message> {
                     }
                 }
 
+                let page_width = tab.page_width * tab.zoom;
+                let page_height = height;
+
                 let page_container = container(page_stack)
                     .width(Length::Fixed(page_width))
                     .height(Length::Fixed(page_height))
@@ -700,19 +704,20 @@ pub fn document_view(app: &PdfBullApp) -> Element<crate::message::Message> {
         let main_content = render_pdf_content(app);
         row![sidebar, main_content].into()
     } else if tab.total_pages == 0 {
-        container(if tab.is_loading {
+        let empty_content: Element<_> = if tab.is_loading {
             column![text("⏳").size(50), text("Loading Document...").size(24)]
                 .align_x(iced::Alignment::Center)
                 .spacing(20)
                 .into()
         } else {
             text("No pages").into()
-        })
-        .width(Length::Fill)
-        .height(Length::Fill)
-        .center_x(Length::Fill)
-        .center_y(Length::Fill)
-        .into()
+        };
+        container(empty_content)
+            .width(Length::Fill)
+            .height(Length::Fill)
+            .center_x(Length::Fill)
+            .center_y(Length::Fill)
+            .into()
     } else {
         render_pdf_content(app)
     };
