@@ -169,6 +169,7 @@ pub struct DocumentTab {
     pub viewport_y: f32,
     pub viewport_height: f32,
     pub sidebar_viewport_y: f32,
+    pub last_cleanup_time: std::time::Instant,
 }
 
 const VIEWPORT_BUFFER: usize = 3;
@@ -216,6 +217,7 @@ impl DocumentTab {
             viewport_y: 0.0,
             viewport_height: 800.0,
             sidebar_viewport_y: 0.0,
+            last_cleanup_time: std::time::Instant::now(),
         }
     }
 
@@ -264,15 +266,36 @@ impl DocumentTab {
             })
             .collect();
 
-        let to_remove: Vec<usize> = self
+        let to_remove_pages: Vec<usize> = self
             .rendered_pages
             .keys()
             .copied()
             .filter(|p| !pages_to_keep.contains(p))
             .collect();
 
-        for p in to_remove {
+        for p in to_remove_pages {
             self.rendered_pages.remove(&p);
         }
+
+        let thumb_start = visible.iter().min().copied().unwrap_or(0).saturating_sub(5);
+        let thumb_end = visible.iter().max().copied().unwrap_or(0).saturating_add(5);
+        let thumbs_to_keep: std::collections::HashSet<usize> = (thumb_start..=thumb_end.min(self.total_pages.saturating_sub(1))).collect();
+
+        let to_remove_thumbs: Vec<usize> = self
+            .thumbnails
+            .keys()
+            .copied()
+            .filter(|p| !thumbs_to_keep.contains(p))
+            .collect();
+
+        for p in to_remove_thumbs {
+            self.thumbnails.remove(&p);
+        }
+
+        self.last_cleanup_time = std::time::Instant::now();
+    }
+
+    pub fn needs_periodic_cleanup(&self) -> bool {
+        self.last_cleanup_time.elapsed().as_secs() >= 5
     }
 }

@@ -564,6 +564,11 @@ pub fn handle_message(app: &mut PdfBullApp, message: Message) -> Task<Message> {
                 tab.viewport_height = height;
                 tab.cleanup_distant_pages();
             }
+            for tab in &mut app.tabs {
+                if tab.needs_periodic_cleanup() {
+                    tab.cleanup_distant_pages();
+                }
+            }
             app.render_visible_pages()
         }
         Message::SidebarViewportChanged(y) => {

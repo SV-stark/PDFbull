@@ -2,51 +2,60 @@ use crate::commands::PdfCommand;
 use crate::models::next_doc_id;
 use crate::pdf_engine::{create_render_cache, DocumentStore};
 use std::collections::HashMap;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, RwLock};
+use std::thread;
+use std::time::Duration;
 
 #[derive(Debug, Clone)]
 pub struct EngineState {
     pub cmd_tx: crossbeam_channel::Sender<PdfCommand>,
+    active_workers: Arc<AtomicUsize>,
 }
 
-pub fn spawn_engine_thread(cache_size: u64) -> EngineState {
-    let (cmd_tx, cmd_rx) = crossbeam_channel::unbounded();
+impl EngineState {
+    pub fn worker_count(&self) -> usize {
+        self.active_workers.load(Ordering::SeqCst)
+    }
+}
 
-    let cache = create_render_cache(cache_size);
-    let doc_paths = Arc::new(RwLock::new(HashMap::new()));
-
-    let num_threads = std::thread::available_parallelism()
-        .map(|n| n.get())
-        .unwrap_or(4);
-
-    for _ in 0..num_threads {
-        let rx = cmd_rx.clone();
-        let cache = cache.clone();
-        let doc_paths = doc_paths.clone();
-
-        std::thread::spawn(move || {
-            let bindings = pdfium_render::prelude::Pdfium::bind_to_library(
-                pdfium_render::prelude::Pdfium::pdfium_platform_library_name_at_path("./"),
+fn spawn_worker(
+    cmd_rx: crossbeam_channel::Receiver<PdfCommand>,
+    cache: crate::pdf_engine::SharedRenderCache,
+    doc_paths: Arc<RwLock<HashMap<u64, String>>>,
+    active_workers: Arc<AtomicUsize>,
+) {
+    active_workers.fetch_add(1, Ordering::SeqCst);
+    
+    thread::spawn(move || {
+        let pdfium = match pdfium_render::prelude::Pdfium::bind_to_library(
+            pdfium_render::prelude::Pdfium::pdfium_platform_library_name_at_path("./"),
+        )
+        .or_else(|_| {
+            pdfium_render::prelude::Pdfium::bind_to_library(
+                pdfium_render::prelude::Pdfium::pdfium_platform_library_name(),
             )
-            .or_else(|_| {
-                pdfium_render::prelude::Pdfium::bind_to_library(
-                    pdfium_render::prelude::Pdfium::pdfium_platform_library_name(),
-                )
-            })
-            .expect("Failed to bind to Pdfium library");
-            let pdfium = pdfium_render::prelude::Pdfium::new(bindings);
+        }) {
+            Ok(bindings) => pdfium_render::prelude::Pdfium::new(bindings),
+            Err(e) => {
+                log::error!("Worker thread failed to bind to Pdfium library: {}. This worker will not process commands.", e);
+                active_workers.fetch_sub(1, Ordering::SeqCst);
+                return;
+            }
+        };
 
-            let mut store = match DocumentStore::new(&pdfium, cache) {
-                Ok(s) => s,
-                Err(e) => {
-                    log::error!("Failed to initialize DocumentStore: {}", e);
-                    return;
-                }
-            };
+        let mut store = match DocumentStore::new(&pdfium, cache) {
+            Ok(s) => s,
+            Err(e) => {
+                log::error!("Failed to initialize DocumentStore: {}", e);
+                active_workers.fetch_sub(1, Ordering::SeqCst);
+                return;
+            }
+        };
 
-            while let Ok(cmd) = rx.recv() {
-                match cmd {
-                    PdfCommand::Open(path, resp) => match store.open_document(&path) {
+        while let Ok(cmd) = cmd_rx.recv() {
+            match cmd {
+                PdfCommand::Open(path, resp) => match store.open_document(&path) {
                         Ok((path_str, count, heights, width)) => {
                             let doc_id = next_doc_id();
                             doc_paths.write().unwrap().insert(doc_id, path.clone());
@@ -201,8 +210,52 @@ pub fn spawn_engine_thread(cache_size: u64) -> EngineState {
                     }
                 }
             }
+            active_workers.fetch_sub(1, Ordering::SeqCst);
         });
     }
+}
 
-    EngineState { cmd_tx }
+pub fn spawn_engine_thread(cache_size: u64) -> EngineState {
+    let (cmd_tx, cmd_rx) = crossbeam_channel::unbounded();
+
+    let cache = create_render_cache(cache_size);
+    let doc_paths = Arc::new(RwLock::new(HashMap::new()));
+
+    let num_threads = std::thread::available_parallelism()
+        .map(|n| n.get())
+        .unwrap_or(4);
+
+    let active_workers = Arc::new(AtomicUsize::new(0));
+    let target_workers = num_threads;
+
+    for _ in 0..num_threads {
+        let rx = cmd_rx.clone();
+        let cache = cache.clone();
+        let doc_paths = doc_paths.clone();
+        let workers = active_workers.clone();
+        spawn_worker(rx, cache, doc_paths, workers);
+    }
+
+    let monitor_active_workers = active_workers.clone();
+    let monitor_cmd_tx = cmd_tx.clone();
+    let monitor_cache = cache.clone();
+    let monitor_doc_paths = doc_paths.clone();
+
+    thread::spawn(move || {
+        loop {
+            thread::sleep(Duration::from_secs(2));
+            let current = monitor_active_workers.load(Ordering::SeqCst);
+            if current < target_workers {
+                log::warn!("Worker thread died ({} active, {} target). Spawning replacement.", current, target_workers);
+                let rx = monitor_cmd_tx.clone();
+                let cache = monitor_cache.clone();
+                let doc_paths = monitor_doc_paths.clone();
+                let workers = monitor_active_workers.clone();
+                spawn_worker(rx, cache, doc_paths, workers);
+            }
+        }
+    });
+
+    EngineState { cmd_tx, active_workers }
+}
 }

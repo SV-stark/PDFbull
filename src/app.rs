@@ -149,7 +149,10 @@ impl PdfBullApp {
                         options,
                         resp_tx,
                     ));
-                    let res = resp_rx.await.unwrap_or(Err("Channel closed".into()));
+                    let res = match resp_rx.await {
+                        Ok(result) => result,
+                        Err(_) => Err("Engine died".into()),
+                    };
                     (page_idx, res)
                 },
                 |(page_idx, res)| Message::PageRendered(page_idx, res),
@@ -180,7 +183,10 @@ impl PdfBullApp {
                             thumb_zoom,
                             resp_tx,
                         ));
-                        let res = resp_rx.await.unwrap_or(Err("Channel closed".into()));
+                        let res = match resp_rx.await {
+                            Ok(result) => result,
+                            Err(_) => Err("Engine died".into()),
+                        };
                         (page_idx, res)
                     },
                     |(page_idx, res)| Message::ThumbnailRendered(page_idx, res),
