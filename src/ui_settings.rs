@@ -1,6 +1,6 @@
 use crate::models::AppTheme;
 use crate::pdf_engine::{RenderFilter, RenderQuality};
-use iced::widget::{button, column, row, text, Space};
+use iced::widget::{button, column, row, text, Space, image};
 use iced::{Alignment, Element, Length};
 use iced_aw::widget::Card;
 
@@ -202,10 +202,19 @@ pub fn settings_view(app: &crate::app::PdfBullApp) -> Element<'_, crate::message
 
     column![
         row![
-            text("Settings").size(24),
+            image(iced::widget::image::Handle::from_bytes(
+                include_bytes!("../PDFbull.png").to_vec(),
+            ))
+            .width(Length::Fixed(48.0)),
+            column![
+                text("Settings").size(24),
+                text(format!("v{}", env!("CARGO_PKG_VERSION"))).size(12),
+            ],
             Space::new().width(Length::Fill),
             button("Close").on_press(crate::message::Message::CloseSettings),
         ]
+        .spacing(15)
+        .align_y(Alignment::Center)
         .padding(20),
         appearance_card,
         Space::new().height(Length::Fixed(10.0)),

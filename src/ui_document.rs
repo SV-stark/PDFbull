@@ -1,6 +1,6 @@
 use crate::app::PdfBullApp;
 use crate::pdf_engine::RenderFilter;
-use iced::widget::{button, column, container, row, scrollable, text, text_input, Id, Space};
+use iced::widget::{button, column, container, row, scrollable, text, text_input, Id, Space, image};
 use iced::{Color, Element, Length};
 use iced_aw::widget::Card;
 
@@ -52,6 +52,11 @@ fn render_toolbar(app: &PdfBullApp) -> Element<'_, crate::message::Message> {
     };
 
     let row1 = row![
+        image(iced::widget::image::Handle::from_bytes(
+            include_bytes!("../PDFbull.png").to_vec(),
+        ))
+        .width(Length::Fixed(24.0)),
+        Space::new().width(Length::Fixed(5.0)),
         tooltip(
             button("📂 Open").on_press(crate::message::Message::OpenDocument),
             "Open another PDF",

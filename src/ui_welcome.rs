@@ -1,4 +1,4 @@
-use iced::widget::{button, column, container, row, text, Space};
+use iced::widget::{button, column, container, row, text, Space, image};
 use iced::{Alignment, Border, Color, Element, Length};
 use iced_aw::widget::Card;
 
@@ -71,8 +71,14 @@ pub fn welcome_view(app: &crate::app::PdfBullApp) -> Element<'_, crate::message:
         ..Default::default()
     });
 
+    let logo = image(iced::widget::image::Handle::from_bytes(
+        include_bytes!("../PDFbull.png").to_vec(),
+    ))
+    .width(Length::Fixed(100.0));
+
     let open_card = Card::new(
-        text("Welcome to PDFbull").size(24),
+        row![logo, Space::new().width(Length::Fixed(20.0)), text("Welcome to PDFbull").size(24)]
+            .align_y(Alignment::Center),
         column![
             Space::new().height(Length::Fixed(20.0)),
             drop_zone,
@@ -83,7 +89,11 @@ pub fn welcome_view(app: &crate::app::PdfBullApp) -> Element<'_, crate::message:
 
     column![
         row![
-            text("📚 PDFbull").size(28),
+            image(iced::widget::image::Handle::from_bytes(
+                include_bytes!("../PDFbull.png").to_vec(),
+            ))
+            .width(Length::Fixed(32.0)),
+            text("PDFbull").size(28),
             text(format!("v{}", env!("CARGO_PKG_VERSION"))).size(12),
             Space::new().width(Length::Fill),
             button("⚙ Settings").on_press(crate::message::Message::OpenSettings),
