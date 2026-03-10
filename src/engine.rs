@@ -213,7 +213,6 @@ fn spawn_worker(
             active_workers.fetch_sub(1, Ordering::SeqCst);
         });
     }
-}
 
 pub fn spawn_engine_thread(cache_size: u64) -> EngineState {
     let (cmd_tx, cmd_rx) = crossbeam_channel::unbounded();
@@ -257,5 +256,4 @@ pub fn spawn_engine_thread(cache_size: u64) -> EngineState {
     });
 
     EngineState { cmd_tx, active_workers }
-}
 }
