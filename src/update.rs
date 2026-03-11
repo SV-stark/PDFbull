@@ -630,54 +630,67 @@ pub fn handle_message(app: &mut PdfBullApp, message: Message) -> Task<Message> {
                     ));
                     resp_rx.await.unwrap_or(Err("Channel closed".into()))
                 },
-                move |res| Message::PageRendered(page_idx, res),
+                move |res| Message::PageRendered(page_idx, zoom, res),
             )
         }
-        Message::PageRendered(page_idx, result) => {
+        Message::PageRendered(page_idx, scale, result) => {
             app.rendering_count = app.rendering_count.saturating_sub(1);
             app.rendering_set
                 .remove(&crate::app::RenderTarget::Page(page_idx));
-            match result {
-                Ok((width, height, data)) => {
-                    if let Some(tab) = app.current_tab_mut() {
+
+            if let Some(tab) = app.current_tab_mut() {
+                // Only insert if the zoom level still matches
+                if (tab.zoom - scale).abs() > 0.001 {
+                    return Task::none();
+                }
+
+                match result {
+                    Ok((width, height, data)) => {
                         tab.rendered_pages.insert(
                             page_idx,
                             iced_image::Handle::from_rgba(width, height, (*data).clone()),
                         );
                     }
-                }
-                Err(e) => {
-                    log::error!("Render error: {}", e);
-                    if e == "Engine died" || e == "Channel closed" {
-                        app.engine = None;
-                        app.status_message = Some(
-                            "PDF engine crashed. Please try your action again to restart it."
-                                .into(),
-                        );
-                    } else if e.to_lowercase().contains("pdfium") {
-                        app.engine = None;
-                        app.status_message =
-                            Some("Failed to load PDF engine (pdfium.dll missing).".into());
+                    Err(e) => {
+                        log::error!("Render error: {}", e);
+                        if e == "Engine died" || e == "Channel closed" {
+                            app.engine = None;
+                            app.status_message = Some(
+                                "PDF engine crashed. Please try your action again to restart it."
+                                    .into(),
+                            );
+                        } else if e.to_lowercase().contains("pdfium") {
+                            app.engine = None;
+                            app.status_message =
+                                Some("Failed to load PDF engine (pdfium.dll missing).".into());
+                        }
                     }
                 }
             }
             Task::none()
         }
-        Message::ThumbnailRendered(page_idx, result) => {
+        Message::ThumbnailRendered(page_idx, scale, result) => {
             app.rendering_count = app.rendering_count.saturating_sub(1);
             app.rendering_set
                 .remove(&crate::app::RenderTarget::Thumbnail(page_idx));
-            match result {
-                Ok((width, height, data)) => {
-                    if let Some(tab) = app.current_tab_mut() {
+
+            if let Some(tab) = app.current_tab_mut() {
+                // For thumbnails, we check against the expected thumbnail zoom
+                let expected_thumb_zoom = 120.0 / tab.page_width.max(1.0);
+                if (expected_thumb_zoom - scale).abs() > 0.001 {
+                    return Task::none();
+                }
+
+                match result {
+                    Ok((width, height, data)) => {
                         tab.thumbnails.insert(
                             page_idx,
                             iced_image::Handle::from_rgba(width, height, (*data).clone()),
                         );
                     }
-                }
-                Err(e) => {
-                    log::error!("Thumbnail render error: {}", e);
+                    Err(e) => {
+                        log::error!("Thumbnail render error: {}", e);
+                    }
                 }
             }
             Task::none()

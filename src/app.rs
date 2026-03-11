@@ -3,7 +3,31 @@ use crate::message::Message;
 use crate::models::{AppSettings, DocumentTab, RecentFile};
 use crate::ui;
 use crate::update::handle_message;
-use iced::{Element, Task};
+use iced::{Element, Task, Font};
+
+pub const INTER_REGULAR: Font = Font::with_name("Inter Regular");
+pub const INTER_BOLD: Font = Font::with_name("Inter Bold");
+pub const LUCIDE: Font = Font::with_name("lucide");
+
+pub mod icons {
+    pub const OPEN: &str = "\u{e247}";
+    pub const SIDEBAR: &str = "\u{e115}";
+    pub const ZOOM_OUT: &str = "\u{e1b7}";
+    pub const ZOOM_IN: &str = "\u{e1b6}";
+    pub const ROTATE: &str = "\u{e149}";
+    pub const BOOKMARK: &str = "\u{e060}";
+    pub const HIGHLIGHT: &str = "\u{e0f4}";
+    pub const RECTANGLE: &str = "\u{e167}";
+    pub const SAVE: &str = "\u{e14d}";
+    pub const HELP: &str = "\u{e082}";
+    pub const SETTINGS: &str = "\u{e154}";
+    pub const SEARCH: &str = "\u{e151}";
+    pub const PREV: &str = "\u{e06e}";
+    pub const NEXT: &str = "\u{e06f}";
+    pub const CLOSE: &str = "\u{e1b2}";
+    pub const PLUS: &str = "\u{e13d}";
+    pub const EXPORT: &str = "\u{e0b9}";
+}
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum RenderTarget {
@@ -153,9 +177,9 @@ impl PdfBullApp {
                         Ok(result) => result,
                         Err(_) => Err("Engine died".into()),
                     };
-                    (page_idx, res)
+                    (page_idx, options.scale, res)
                 },
-                |(page_idx, res)| Message::PageRendered(page_idx, res),
+                |(page_idx, scale, res)| Message::PageRendered(page_idx, scale, res),
             ));
         }
 
@@ -187,9 +211,9 @@ impl PdfBullApp {
                             Ok(result) => result,
                             Err(_) => Err("Engine died".into()),
                         };
-                        (page_idx, res)
+                        (page_idx, thumb_zoom, res)
                     },
-                    |(page_idx, res)| Message::ThumbnailRendered(page_idx, res),
+                    |(page_idx, scale, res)| Message::ThumbnailRendered(page_idx, scale, res),
                 ));
             }
         }

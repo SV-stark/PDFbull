@@ -1,7 +1,8 @@
+use crate::app::{icons, INTER_BOLD, INTER_REGULAR, LUCIDE};
 use crate::app::PdfBullApp;
 use crate::pdf_engine::RenderFilter;
 use iced::widget::{button, column, container, row, scrollable, text, text_input, Id, Space};
-use iced::{Color, Element, Length};
+use iced::{Color, Element, Length, Shadow, Vector};
 use iced_aw::widget::Card;
 
 fn hex_to_rgb(hex: &str) -> (f32, f32, f32) {
@@ -15,27 +16,6 @@ fn hex_to_rgb(hex: &str) -> (f32, f32, f32) {
     (r, g, b)
 }
 
-fn filter_btn(
-    label: &'static str,
-    f: RenderFilter,
-    active: RenderFilter,
-) -> iced::widget::Button<'static, crate::message::Message> {
-    let btn = button(text(label).size(11));
-    if f == active {
-        btn.style(|theme: &iced::Theme, _| {
-            let palette = theme.extended_palette();
-            iced::widget::button::Style {
-                background: Some(palette.primary.strong.color.into()),
-                text_color: palette.primary.strong.text,
-                ..Default::default()
-            }
-        })
-    } else {
-        btn
-    }
-    .on_press(crate::message::Message::SetFilter(f))
-}
-
 use iced::widget::tooltip;
 
 fn stacked_tool<'a>(
@@ -45,9 +25,9 @@ fn stacked_tool<'a>(
     column![
         top.into(),
         text(label)
-            .size(11)
+            .font(INTER_REGULAR)
             .style(|_theme| iced::widget::text::Style {
-                color: Some(Color::from_rgb8(180, 180, 180)),
+                color: Some(Color::from_rgb8(150, 150, 160)),
             })
     ]
     .spacing(4)
@@ -63,6 +43,7 @@ fn filter_btn_custom(
     let btn = button(
         text(label)
             .size(11)
+            .font(INTER_BOLD)
             .align_x(iced::alignment::Horizontal::Center),
     );
     if f == active {
@@ -97,7 +78,7 @@ fn render_toolbar(app: &PdfBullApp) -> Element<'_, crate::message::Message> {
 
     let open_btn = stacked_tool(
         tooltip(
-            button(text("📂").size(16))
+            button(text(icons::OPEN).size(16).font(LUCIDE))
                 .on_press(crate::message::Message::OpenDocument)
                 .style(iced::widget::button::text),
             "Open another PDF",
@@ -108,7 +89,7 @@ fn render_toolbar(app: &PdfBullApp) -> Element<'_, crate::message::Message> {
 
     let sidebar_btn = stacked_tool(
         tooltip(
-            button(text("☰").size(16))
+            button(text(icons::SIDEBAR).size(16).font(LUCIDE))
                 .on_press(crate::message::Message::ToggleSidebar)
                 .style(iced::widget::button::text),
             "Toggle Sidebar (Ctrl+B)",
@@ -120,7 +101,7 @@ fn render_toolbar(app: &PdfBullApp) -> Element<'_, crate::message::Message> {
     let zoom_controls = stacked_tool(
         container(
             row![
-                button(text("-").size(14))
+                button(text(icons::ZOOM_OUT).size(14).font(LUCIDE))
                     .on_press(crate::message::Message::ZoomOut)
                     .style(|_theme, _status| iced::widget::button::Style {
                         text_color: iced::Color::WHITE,
@@ -128,17 +109,18 @@ fn render_toolbar(app: &PdfBullApp) -> Element<'_, crate::message::Message> {
                     }),
                 text(format!("{}%", (tab.zoom * 100.0) as u32))
                     .size(13)
+                    .font(INTER_BOLD)
                     .style(|_theme| iced::widget::text::Style {
                         color: Some(Color::WHITE)
                     }),
-                button(text("+").size(14))
+                button(text(icons::ZOOM_IN).size(14).font(LUCIDE))
                     .on_press(crate::message::Message::ZoomIn)
                     .style(|_theme, _status| iced::widget::button::Style {
                         text_color: iced::Color::WHITE,
                         ..Default::default()
                     }),
             ]
-            .spacing(5)
+            .spacing(12)
             .align_y(iced::Alignment::Center),
         )
         .padding([4, 10])
@@ -155,7 +137,7 @@ fn render_toolbar(app: &PdfBullApp) -> Element<'_, crate::message::Message> {
 
     let rotate_btn = stacked_tool(
         tooltip(
-            button(text("↻").size(16))
+            button(text(icons::ROTATE).size(16).font(LUCIDE))
                 .on_press(crate::message::Message::RotateClockwise)
                 .style(iced::widget::button::text),
             "Rotate 90° clockwise",
@@ -167,10 +149,12 @@ fn render_toolbar(app: &PdfBullApp) -> Element<'_, crate::message::Message> {
     let filters_dropdown = row![
         text("Filters")
             .size(12)
+            .font(INTER_REGULAR)
             .style(|_theme| iced::widget::text::Style {
-                color: Some(Color::from_rgb8(180, 180, 180)),
+                color: Some(Color::from_rgb8(150, 150, 160)),
             }),
-        button(text("None v").size(12)).style(iced::widget::button::text)
+        button(text("None v").size(12).font(INTER_REGULAR))
+            .style(iced::widget::button::text)
     ]
     .spacing(5)
     .align_y(iced::Alignment::Center);
@@ -186,14 +170,14 @@ fn render_toolbar(app: &PdfBullApp) -> Element<'_, crate::message::Message> {
     );
 
     let bookmark_btn = stacked_tool(
-        button(text("🔖").size(16))
+        button(text(icons::BOOKMARK).size(16).font(LUCIDE))
             .on_press(crate::message::Message::AddBookmark)
             .style(iced::widget::button::text),
         "Bookmark",
     );
 
     let highlight_btn = stacked_tool(
-        button(text("🖊").size(16))
+        button(text(icons::HIGHLIGHT).size(16).font(LUCIDE))
             .on_press(crate::message::Message::SetAnnotationMode(Some(
                 crate::models::PendingAnnotationKind::Highlight,
             )))
@@ -202,7 +186,7 @@ fn render_toolbar(app: &PdfBullApp) -> Element<'_, crate::message::Message> {
     );
 
     let rectangle_btn = stacked_tool(
-        button(text("□").size(16))
+        button(text(icons::RECTANGLE).size(16).font(LUCIDE))
             .on_press(crate::message::Message::SetAnnotationMode(Some(
                 crate::models::PendingAnnotationKind::Rectangle,
             )))
@@ -211,37 +195,38 @@ fn render_toolbar(app: &PdfBullApp) -> Element<'_, crate::message::Message> {
     );
 
     let save_anns_btn = stacked_tool(
-        button(text("Save Anns").color(iced::Color::BLACK).size(13))
+        button(text(icons::SAVE).font(LUCIDE).size(16).color(iced::Color::BLACK))
             .on_press(crate::message::Message::SaveAnnotations)
             .style(|_theme, _status| iced::widget::button::Style {
                 background: Some(iced::Color::from_rgb8(150, 220, 220).into()),
                 border: iced::Border {
-                    radius: 8.0.into(),
+                    radius: 12.0.into(),
                     ..Default::default()
                 },
                 ..Default::default()
             })
-            .padding([6, 12]),
+            .padding([8, 16]),
         "Save",
     );
 
     let right_tools = column![
         row![
-            button(text("?").size(14))
+            button(text(icons::HELP).size(16).font(LUCIDE))
                 .on_press(crate::message::Message::ToggleKeyboardHelp)
                 .style(iced::widget::button::text),
-            button(text("⚙").size(14))
+            button(text(icons::SETTINGS).size(16).font(LUCIDE))
                 .on_press(crate::message::Message::OpenSettings)
                 .style(iced::widget::button::text),
         ]
-        .spacing(10)
+        .spacing(12)
         .align_y(iced::Alignment::Center),
         button(
-            text("Export v")
-                .size(11)
-                .style(|_theme| iced::widget::text::Style {
-                    color: Some(Color::from_rgb8(180, 180, 180)),
-                })
+            row![
+                text(icons::EXPORT).size(12).font(LUCIDE),
+                text("Export").size(11).font(INTER_REGULAR),
+            ]
+            .spacing(4)
+            .align_y(iced::Alignment::Center)
         )
         .style(iced::widget::button::text),
     ]
@@ -284,6 +269,11 @@ fn render_toolbar(app: &PdfBullApp) -> Element<'_, crate::message::Message> {
     })
     .style(|_theme| iced::widget::container::Style {
         background: Some(iced::Color::from_rgb8(43, 45, 49).into()),
+        shadow: Shadow {
+            color: Color::from_rgba(0.0, 0.0, 0.0, 0.2),
+            offset: Vector::new(0.0, 2.0),
+            blur_radius: 8.0,
+        },
         ..Default::default()
     })
     .into()
@@ -294,14 +284,15 @@ fn render_page_nav(app: &PdfBullApp) -> Element<'_, crate::message::Message> {
 
     let loading_indicator = if app.rendering_count > 0 {
         row![
-            iced_aw::widget::Badge::new(text(format!("{}", app.rendering_count))),
+            iced_aw::widget::Badge::new(text(format!("{}", app.rendering_count)).font(INTER_BOLD)),
             text("Rendering")
                 .size(12)
+                .font(INTER_REGULAR)
                 .style(|_theme| iced::widget::text::Style {
-                    color: Some(Color::from_rgb8(180, 180, 180))
+                    color: Some(Color::from_rgb8(150, 150, 160))
                 })
         ]
-        .spacing(5)
+        .spacing(8)
     } else {
         row![]
     };
@@ -309,27 +300,29 @@ fn render_page_nav(app: &PdfBullApp) -> Element<'_, crate::message::Message> {
     container(
         row![
             Space::new().width(Length::Fill),
-            button(text("Prev").size(13))
+            button(text(icons::PREV).size(14).font(LUCIDE))
                 .on_press(crate::message::Message::PrevPage)
                 .style(|_theme, _status| iced::widget::button::Style {
                     background: Some(iced::Color::from_rgb8(60, 60, 65).into()),
                     text_color: iced::Color::WHITE,
                     border: iced::Border {
-                        radius: 4.0.into(),
+                        radius: 6.0.into(),
                         ..Default::default()
                     },
                     ..Default::default()
                 })
-                .padding([4, 12]),
+                .padding([6, 12]),
             text("Page")
                 .size(13)
+                .font(INTER_REGULAR)
                 .style(|_theme| iced::widget::text::Style {
-                    color: Some(Color::from_rgb8(180, 180, 180))
+                    color: Some(Color::from_rgb8(150, 150, 160))
                 }),
             container(
                 text_input("", &app.page_input)
                     .on_input(crate::message::Message::PageInputChanged)
                     .on_submit(crate::message::Message::PageInputSubmitted)
+                    .font(INTER_BOLD)
                     .width(Length::Fixed(40.0))
             )
             .padding(1)
@@ -337,36 +330,44 @@ fn render_page_nav(app: &PdfBullApp) -> Element<'_, crate::message::Message> {
                 border: iced::Border {
                     width: 1.0,
                     color: iced::Color::from_rgb8(80, 80, 80),
-                    radius: 4.0.into()
+                    radius: 6.0.into()
                 },
                 background: Some(iced::Color::from_rgb8(30, 31, 34).into()),
                 ..Default::default()
             }),
             text(format!("of {}", tab.total_pages.max(1)))
                 .size(13)
+                .font(INTER_REGULAR)
                 .style(|_theme| iced::widget::text::Style {
-                    color: Some(Color::from_rgb8(180, 180, 180))
+                    color: Some(Color::from_rgb8(150, 150, 160))
                 }),
-            button(text("Next").size(13))
+            button(text(icons::NEXT).size(14).font(LUCIDE))
                 .on_press(crate::message::Message::NextPage)
                 .style(|_theme, _status| iced::widget::button::Style {
                     background: Some(iced::Color::from_rgb8(60, 60, 65).into()),
                     text_color: iced::Color::WHITE,
                     border: iced::Border {
-                        radius: 4.0.into(),
+                        radius: 6.0.into(),
                         ..Default::default()
                     },
                     ..Default::default()
                 })
-                .padding([4, 12]),
+                .padding([6, 12]),
             Space::new().width(Length::Fill),
             loading_indicator,
             Space::new().width(Length::Fixed(15.0)),
             container(
-                text_input("Search...", &app.search_query)
-                    .on_input(crate::message::Message::Search)
-                    .on_submit(crate::message::Message::NextSearchResult)
-                    .width(Length::Fixed(200.0))
+                row![
+                    text(icons::SEARCH).font(LUCIDE).size(14).style(|_| iced::widget::text::Style { color: Some(Color::from_rgb8(150, 150, 150)) }),
+                    text_input("Search...", &app.search_query)
+                        .on_input(crate::message::Message::Search)
+                        .on_submit(crate::message::Message::NextSearchResult)
+                        .font(INTER_REGULAR)
+                        .width(Length::Fixed(180.0))
+                ]
+                .spacing(8)
+                .align_y(iced::Alignment::Center)
+                .padding([0, 12])
             )
             .style(|_theme| iced::widget::container::Style {
                 border: iced::Border {
@@ -410,6 +411,7 @@ fn render_sidebar(app: &PdfBullApp) -> Element<'_, crate::message::Message> {
             Card::new(
                 text("Outline")
                     .size(14)
+                    .font(INTER_BOLD)
                     .style(|_theme| iced::widget::text::Style {
                         color: Some(Color::from_rgb(0.2, 0.4, 0.6)),
                     }),
@@ -433,7 +435,7 @@ fn render_sidebar(app: &PdfBullApp) -> Element<'_, crate::message::Message> {
 
     if !tab.bookmarks.is_empty() {
         sidebar_col = sidebar_col.push(
-            Card::new(text("Bookmarks").size(14), {
+            Card::new(text("Bookmarks").size(14).font(INTER_BOLD), {
                 let mut bookmarks_col = column![];
                 for (idx, bookmark) in tab.bookmarks.iter().enumerate() {
                     bookmarks_col = bookmarks_col.push(row![
@@ -451,7 +453,7 @@ fn render_sidebar(app: &PdfBullApp) -> Element<'_, crate::message::Message> {
 
     if !tab.annotations.is_empty() {
         sidebar_col = sidebar_col.push(
-            Card::new(text("Annotations").size(14), {
+            Card::new(text("Annotations").size(14).font(INTER_BOLD), {
                 let mut annotations_col = column![];
                 for (idx, ann) in tab.annotations.iter().enumerate() {
                     let label = match &ann.style {
@@ -480,7 +482,7 @@ fn render_sidebar(app: &PdfBullApp) -> Element<'_, crate::message::Message> {
 
     sidebar_col = sidebar_col.push(
         Card::new(
-            text(format!("Pages ({})", tab.total_pages)).size(14),
+            text(format!("Pages ({})", tab.total_pages)).size(14).font(INTER_BOLD),
             Space::new(),
         )
         .padding(10.0.into()),
@@ -502,7 +504,7 @@ fn render_sidebar(app: &PdfBullApp) -> Element<'_, crate::message::Message> {
                 .push(button(img).on_press(crate::message::Message::JumpToPage(page_idx)));
         } else {
             sidebar_col = sidebar_col.push(
-                button(text(format!("Page {}", page_idx + 1)))
+                button(text(format!("Page {}", page_idx + 1)).font(INTER_REGULAR))
                     .on_press(crate::message::Message::JumpToPage(page_idx))
                     .width(Length::Fixed(120.0)),
             );
@@ -550,17 +552,19 @@ fn render_tabs(app: &PdfBullApp) -> Element<'_, crate::message::Message> {
         };
 
         let tab_content = row![
-            text("📄").size(14),
+            text(icons::OPEN).size(14).font(LUCIDE),
             Space::new().width(6.0),
             text(display_name)
                 .size(13)
+                .font(if is_active { INTER_BOLD } else { INTER_REGULAR })
                 .style(move |_theme| iced::widget::text::Style {
                     color: Some(text_color)
                 }),
             Space::new().width(10.0),
             button(
-                text("✕")
+                text(icons::CLOSE)
                     .size(12)
+                    .font(LUCIDE)
                     .style(move |_theme| iced::widget::text::Style {
                         color: Some(text_color)
                     })
@@ -598,8 +602,9 @@ fn render_tabs(app: &PdfBullApp) -> Element<'_, crate::message::Message> {
     }
 
     let add_button = button(
-        text("+")
+        text(icons::PLUS)
             .size(16)
+            .font(LUCIDE)
             .style(|_theme| iced::widget::text::Style {
                 color: Some(Color::WHITE),
             }),
@@ -633,7 +638,7 @@ fn render_pdf_content(app: &PdfBullApp) -> Element<'_, crate::message::Message> 
 
     for page_idx in 0..tab.total_pages {
         let height = tab.page_heights.get(page_idx).copied().unwrap_or(800.0);
-        let placeholder = container(text(format!("Page {}", page_idx + 1)))
+        let placeholder = container(text(format!("Page {}", page_idx + 1)).font(INTER_REGULAR))
             .width(Length::Fill)
             .height(Length::Fixed(height))
             .center_x(Length::Fill)
@@ -702,6 +707,7 @@ fn render_pdf_content(app: &PdfBullApp) -> Element<'_, crate::message::Message> 
                                 container(
                                     iced::widget::text(text.clone())
                                         .size(*font_size)
+                                        .font(INTER_REGULAR)
                                         .color(iced::Color::from_rgb(r, g, b)),
                                 )
                             }

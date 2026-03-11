@@ -1,7 +1,8 @@
+use crate::app::{INTER_BOLD, INTER_REGULAR};
 use crate::models::AppTheme;
 use crate::pdf_engine::{RenderFilter, RenderQuality};
-use iced::widget::{button, column, container, image, row, text, Space};
-use iced::{Alignment, Border, Color, Element, Length};
+use iced::widget::{button, column, container, image, row, text, Space, scrollable};
+use iced::{Alignment, Border, Color, Element, Length, Shadow, Vector};
 
 fn custom_card<'a>(
     header: impl Into<Element<'a, crate::message::Message>>,
@@ -19,8 +20,13 @@ fn custom_card<'a>(
         border: Border {
             radius: 12.0.into(),
             width: 1.0,
-            color: Color::from_rgb8(30, 31, 34),
+            color: Color::from_rgb8(50, 52, 56),
             ..Default::default()
+        },
+        shadow: Shadow {
+            color: Color::from_rgba(0.0, 0.0, 0.0, 0.2),
+            offset: Vector::new(0.0, 4.0),
+            blur_radius: 12.0,
         },
         ..Default::default()
     })
@@ -35,6 +41,7 @@ fn setting_btn<'a>(
     let btn = button(
         text(label)
             .size(13)
+            .font(if is_active { INTER_BOLD } else { INTER_REGULAR })
             .align_x(iced::alignment::Horizontal::Center),
     )
     .on_press(msg)
@@ -52,14 +59,21 @@ fn setting_btn<'a>(
             ..Default::default()
         })
     } else {
-        btn.style(|_theme, _status| iced::widget::button::Style {
-            background: Some(iced::Color::from_rgb8(60, 60, 65).into()),
-            text_color: iced::Color::WHITE,
-            border: iced::Border {
-                radius: 6.0.into(),
+        btn.style(|_theme, status| {
+            let bg = if status == iced::widget::button::Status::Hovered {
+                Color::from_rgb8(70, 70, 75)
+            } else {
+                Color::from_rgb8(60, 60, 65)
+            };
+            iced::widget::button::Style {
+                background: Some(bg.into()),
+                text_color: iced::Color::WHITE,
+                border: iced::Border {
+                    radius: 8.0.into(),
+                    ..Default::default()
+                },
                 ..Default::default()
-            },
-            ..Default::default()
+            }
         })
     }
 }
@@ -75,14 +89,21 @@ fn action_btn<'a>(
     )
     .on_press(msg)
     .padding([8, 16])
-    .style(|_theme, _status| iced::widget::button::Style {
-        background: Some(iced::Color::from_rgb8(60, 60, 65).into()),
-        text_color: iced::Color::WHITE,
-        border: iced::Border {
-            radius: 6.0.into(),
+    .style(|_theme, status| {
+        let bg = if status == iced::widget::button::Status::Hovered {
+            Color::from_rgb8(70, 70, 75)
+        } else {
+            Color::from_rgb8(60, 60, 65)
+        };
+        iced::widget::button::Style {
+            background: Some(bg.into()),
+            text_color: iced::Color::WHITE,
+            border: iced::Border {
+                radius: 8.0.into(),
+                ..Default::default()
+            },
             ..Default::default()
-        },
-        ..Default::default()
+        }
     })
 }
 
@@ -185,15 +206,17 @@ pub fn settings_view(app: &crate::app::PdfBullApp) -> Element<'_, crate::message
     .spacing(10);
 
     let default_zoom_row = row![
-        text("Default Zoom:").style(|_theme| iced::widget::text::Style {
+        text("Default Zoom:").font(INTER_REGULAR).style(|_theme| iced::widget::text::Style {
             color: Some(Color::WHITE)
         }),
         Space::new().width(Length::Fixed(10.0)),
-        text(format!("{}%", (app.settings.default_zoom * 100.0) as i32)).style(|_theme| {
-            iced::widget::text::Style {
-                color: Some(Color::from_rgb8(180, 180, 180)),
-            }
-        }),
+        text(format!("{}%", (app.settings.default_zoom * 100.0) as i32))
+            .font(INTER_BOLD)
+            .style(|_theme| {
+                iced::widget::text::Style {
+                    color: Some(Color::from_rgb8(180, 180, 180)),
+                }
+            }),
         Space::new().width(Length::Fill),
         action_btn("-", {
             let mut s = app.settings.clone();
@@ -210,11 +233,13 @@ pub fn settings_view(app: &crate::app::PdfBullApp) -> Element<'_, crate::message
     .align_y(Alignment::Center);
 
     let cache_row = row![
-        text(format!("Cache: {} pages", app.settings.cache_size)).style(|_theme| {
-            iced::widget::text::Style {
-                color: Some(Color::WHITE),
-            }
-        }),
+        text(format!("Cache: {} pages", app.settings.cache_size))
+            .font(INTER_REGULAR)
+            .style(|_theme| {
+                iced::widget::text::Style {
+                    color: Some(Color::WHITE),
+                }
+            }),
         Space::new().width(Length::Fill),
         action_btn("-", {
             let mut s = app.settings.clone();
@@ -233,24 +258,27 @@ pub fn settings_view(app: &crate::app::PdfBullApp) -> Element<'_, crate::message
     let appearance_card = custom_card(
         text("Appearance")
             .size(18)
+            .font(INTER_BOLD)
             .style(|_theme| iced::widget::text::Style {
                 color: Some(Color::WHITE),
             }),
-        column![theme_buttons, filter_buttons].spacing(10),
+        column![theme_buttons, filter_buttons].spacing(16),
     );
 
     let performance_card = custom_card(
         text("Performance")
             .size(18)
+            .font(INTER_BOLD)
             .style(|_theme| iced::widget::text::Style {
                 color: Some(Color::WHITE),
             }),
-        column![quality_buttons, cache_row].spacing(10),
+        column![quality_buttons, cache_row].spacing(16),
     );
 
     let defaults_card = custom_card(
         text("Defaults")
             .size(18)
+            .font(INTER_BOLD)
             .style(|_theme| iced::widget::text::Style {
                 color: Some(Color::WHITE),
             }),
@@ -260,6 +288,7 @@ pub fn settings_view(app: &crate::app::PdfBullApp) -> Element<'_, crate::message
     let behavior_card = custom_card(
         text("Behavior")
             .size(18)
+            .font(INTER_BOLD)
             .style(|_theme| iced::widget::text::Style {
                 color: Some(Color::WHITE),
             }),
@@ -267,49 +296,55 @@ pub fn settings_view(app: &crate::app::PdfBullApp) -> Element<'_, crate::message
     );
 
     container(
-        column![
-            row![
-                image(iced::widget::image::Handle::from_bytes(
-                    include_bytes!("../PDFbull.png").to_vec(),
-                ))
-                .width(Length::Fixed(48.0)),
-                column![
-                    text("Settings")
-                        .size(24)
-                        .style(|_theme| iced::widget::text::Style {
-                            color: Some(Color::WHITE)
-                        }),
-                    text(format!("v{}", env!("CARGO_PKG_VERSION")))
-                        .size(12)
-                        .style(|_theme| iced::widget::text::Style {
-                            color: Some(Color::from_rgb8(180, 180, 180))
-                        }),
-                ],
-                Space::new().width(Length::Fill),
-                button(
-                    text("Close")
-                        .size(16)
-                        .style(|_theme| iced::widget::text::Style {
-                            color: Some(Color::WHITE)
-                        })
-                )
-                .on_press(crate::message::Message::CloseSettings)
-                .style(iced::widget::button::text),
+        scrollable(
+            column![
+                row![
+                    image(iced::widget::image::Handle::from_bytes(
+                        include_bytes!("../PDFbull.png").to_vec(),
+                    ))
+                    .width(Length::Fixed(48.0)),
+                    column![
+                        text("Settings")
+                            .size(28)
+                            .font(INTER_BOLD)
+                            .style(|_theme| iced::widget::text::Style {
+                                color: Some(Color::WHITE)
+                            }),
+                        text(format!("v{}", env!("CARGO_PKG_VERSION")))
+                            .size(12)
+                            .font(INTER_REGULAR)
+                            .style(|_theme| iced::widget::text::Style {
+                                color: Some(Color::from_rgb8(180, 180, 180))
+                            }),
+                    ],
+                    Space::new().width(Length::Fill),
+                    button(
+                        text("Close")
+                            .size(16)
+                            .font(INTER_BOLD)
+                            .style(|_theme| iced::widget::text::Style {
+                                color: Some(Color::WHITE)
+                            })
+                    )
+                    .on_press(crate::message::Message::CloseSettings)
+                    .style(iced::widget::button::text),
+                ]
+                .spacing(15)
+                .align_y(Alignment::Center)
+                .padding(20),
+                appearance_card,
+                Space::new().height(Length::Fixed(20.0)),
+                performance_card,
+                Space::new().height(Length::Fixed(20.0)),
+                defaults_card,
+                Space::new().height(Length::Fixed(20.0)),
+                behavior_card,
+                Space::new().height(Length::Fixed(40.0)),
             ]
-            .spacing(15)
-            .align_y(Alignment::Center)
-            .padding(20),
-            appearance_card,
-            Space::new().height(Length::Fixed(15.0)),
-            performance_card,
-            Space::new().height(Length::Fixed(15.0)),
-            defaults_card,
-            Space::new().height(Length::Fixed(15.0)),
-            behavior_card,
-        ]
-        .padding(30)
-        .width(Length::Fixed(600.0))
-        .align_x(Alignment::Center),
+            .padding(30)
+            .width(Length::Fixed(640.0))
+            .align_x(Alignment::Center)
+        )
     )
     .width(Length::Fill)
     .height(Length::Fill)

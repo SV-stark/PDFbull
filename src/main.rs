@@ -57,6 +57,9 @@ pub fn main() -> iced::Result {
         app::PdfBullApp::view,
     )
     .title("PDFbull")
+    .font(include_bytes!("../src/assets/fonts/Inter-Regular.ttf"))
+    .font(include_bytes!("../src/assets/fonts/Inter-Bold.ttf"))
+    .font(include_bytes!("../src/assets/fonts/lucide.ttf"))
     .theme(|app: &app::PdfBullApp| match app.settings.theme {
         crate::models::AppTheme::Light => iced::Theme::Light,
         _ => iced::Theme::Dark,
