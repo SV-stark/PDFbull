@@ -214,10 +214,7 @@ impl<'a> DocumentStore<'a> {
             return Err("Page number out of bounds".to_string());
         }
 
-        let page = doc
-            .pages()
-            .get(page_num as u16)
-            .map_err(|e| e.to_string())?;
+        let page = doc.pages().get(page_num).map_err(|e| e.to_string())?;
 
         let render_rotation = match ((options.rotation + 360) % 360) / 90 {
             0 => PdfPageRenderRotation::None,
@@ -425,10 +422,7 @@ impl<'a> DocumentStore<'a> {
             return Err("Page number out of bounds".to_string());
         }
 
-        let page = doc
-            .pages()
-            .get(page_num as u16)
-            .map_err(|e| e.to_string())?;
+        let page = doc.pages().get(page_num).map_err(|e| e.to_string())?;
 
         let text = page.text().map_err(|e| e.to_string())?;
 
@@ -453,10 +447,7 @@ impl<'a> DocumentStore<'a> {
             return Err("Page number out of bounds".to_string());
         }
 
-        let page = doc
-            .pages()
-            .get(page_num as u16)
-            .map_err(|e| e.to_string())?;
+        let page = doc.pages().get(page_num).map_err(|e| e.to_string())?;
 
         let render_config = PdfRenderConfig::new()
             .set_target_width((page.width().value * scale) as i32)
@@ -467,7 +458,7 @@ impl<'a> DocumentStore<'a> {
             .render_with_config(&render_config)
             .map_err(|e| e.to_string())?;
 
-        let img = bitmap.as_image();
+        let img = bitmap.as_image().map_err(|e| e.to_string())?;
         let rgba = img.as_rgba8();
         let image = match rgba {
             Some(i) => i,
@@ -507,7 +498,7 @@ impl<'a> DocumentStore<'a> {
                 continue;
             }
 
-            let page = match doc.pages().get(page_num as u16) {
+            let page = match doc.pages().get(page_num) {
                 Ok(p) => p,
                 Err(_) => continue,
             };
@@ -522,7 +513,7 @@ impl<'a> DocumentStore<'a> {
                 Err(_) => continue,
             };
 
-            let img = bitmap.as_image();
+            let img = bitmap.as_image().map_err(|e| e.to_string())?;
             let rgba = match img.as_rgba8() {
                 Some(i) => i,
                 None => continue,
