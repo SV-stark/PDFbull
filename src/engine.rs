@@ -30,7 +30,7 @@ fn spawn_document_worker(
     active_workers.fetch_add(1, Ordering::SeqCst);
 
     thread::spawn(move || {
-        let mut store = match DocumentStore::new(&pdfium, cache) {
+        let mut store = match DocumentStore::new(&*pdfium, cache) {
             Ok(s) => s,
             Err(e) => {
                 log::error!("Failed to initialize DocumentStore: {}", e);
