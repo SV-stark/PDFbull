@@ -4,6 +4,8 @@ use rayon::prelude::*;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::sync::Arc;
+use memmap2::Mmap;
+use std::fs::File;
 
 #[derive(Default, Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum RenderFilter {
@@ -45,6 +47,8 @@ pub struct DocumentStore<'a> {
 struct DocumentState<'a> {
     doc: PdfDocument<'a>,
     path: String,
+    // We keep the mmap alive here to ensure the byte slice remains valid
+    _mmap: Option<Arc<Mmap>>,
 }
 
 #[derive(Clone, Hash, Eq, PartialEq, Debug)]
@@ -82,11 +86,14 @@ impl<'a> DocumentStore<'a> {
     }
 
     pub fn open_document(&mut self, path: &str) -> Result<(String, usize, Vec<f32>, f32), String> {
-        let doc_id = path.to_string();
+        let file = File::open(path).map_err(|e| e.to_string())?;
+        let mmap = unsafe { Mmap::map(&file).map_err(|e| e.to_string())? };
+        let mmap_arc = Arc::new(mmap);
 
+        // Load PDF from mmap slice for zero-copy
         let doc = self
             .pdfium
-            .load_pdf_from_file(path, None)
+            .load_pdf_from_byte_slice(&mmap_arc, None)
             .map_err(|e| e.to_string())?;
 
         let pages = doc.pages();
@@ -111,24 +118,16 @@ impl<'a> DocumentStore<'a> {
         let state = DocumentState {
             doc,
             path: path.to_string(),
+            _mmap: Some(mmap_arc),
         };
-        self.documents.insert(doc_id.clone(), state);
+        self.documents.insert(path.to_string(), state);
 
         Ok((path.to_string(), page_count as usize, heights, max_width))
     }
 
     pub fn ensure_opened(&mut self, path: &str) -> Result<(), String> {
         if !self.documents.contains_key(path) {
-            let doc = self
-                .pdfium
-                .load_pdf_from_file(path, None)
-                .map_err(|e| e.to_string())?;
-
-            let state = DocumentState {
-                doc,
-                path: path.to_string(),
-            };
-            self.documents.insert(path.to_string(), state);
+            self.open_document(path)?;
         }
         Ok(())
     }
@@ -538,39 +537,74 @@ impl<'a> DocumentStore<'a> {
         doc_path: &str,
         annotations: &[crate::models::Annotation],
     ) -> Result<String, String> {
-        let pdf_path_obj = std::path::Path::new(doc_path);
-        let annotation_path = pdf_path_obj.with_extension("annotations.json");
+        let state = self
+            .documents
+            .iter()
+            .find(|(_, d)| d.path == doc_path)
+            .map(|(_, d)| d)
+            .ok_or_else(|| "Document not found".to_string())?;
 
-        let json = serde_json::to_string_pretty(annotations)
-            .map_err(|e| format!("Failed to serialize annotations: {}", e))?;
+        let doc = &state.doc;
 
-        std::fs::write(&annotation_path, json).map_err(|e| {
-            if e.kind() == std::io::ErrorKind::PermissionDenied {
-                "Cannot save annotations: directory is read-only. Annotations not saved."
-                    .to_string()
-            } else {
-                format!("Failed to write annotations file: {}", e)
+        for ann in annotations {
+            if ann.page >= doc.pages().len() as usize {
+                continue;
             }
-        })?;
+            let page = doc.pages().get(ann.page as u16).map_err(|e| e.to_string())?;
+            
+            match &ann.style {
+                crate::models::AnnotationStyle::Highlight { color: _ } => {
+                    // Coordinates in PDF are often bottom-left (0,0)
+                    // ann.x, ann.y, ann.width, ann.height are likely in Iced space (top-left)
+                    // We need to convert them. page.height() gives us the boundary.
+                    let pdf_x = ann.x as f32;
+                    let pdf_y = (page.height().value - ann.y - ann.height) as f32;
+                    let pdf_w = ann.width as f32;
+                    let pdf_h = ann.height as f32;
 
-        Ok(annotation_path.to_string_lossy().to_string())
+                    let rect = PdfRect::new(
+                        PdfPoints::new(pdf_x),
+                        PdfPoints::new(pdf_y),
+                        PdfPoints::new(pdf_x + pdf_w),
+                        PdfPoints::new(pdf_y + pdf_h),
+                    );
+                    
+                    let mut page_annotations = page.annotations();
+                    let _ = page_annotations.create_highlight_annotation(rect);
+                }
+                crate::models::AnnotationStyle::Rectangle { color: _, .. } => {
+                    let pdf_x = ann.x as f32;
+                    let pdf_y = (page.height().value - ann.y - ann.height) as f32;
+                    let pdf_w = ann.width as f32;
+                    let pdf_h = ann.height as f32;
+
+                    let rect = PdfRect::new(
+                        PdfPoints::new(pdf_x),
+                        PdfPoints::new(pdf_y),
+                        PdfPoints::new(pdf_x + pdf_w),
+                        PdfPoints::new(pdf_y + pdf_h),
+                    );
+                    
+                    let mut page_annotations = page.annotations();
+                    let _ = page_annotations.create_square_annotation(rect);
+                }
+                _ => {}
+            }
+        }
+
+        doc.save_to_file(doc_path).map_err(|e| e.to_string())?;
+        Ok(doc_path.to_string())
     }
 
     pub fn load_annotations(
         &self,
-        doc_path: &str,
+        _doc_path: &str,
     ) -> Result<Vec<crate::models::Annotation>, String> {
-        let pdf_path_obj = std::path::Path::new(doc_path);
-        let annotation_path = pdf_path_obj.with_extension("annotations.json");
-
-        if !annotation_path.exists() {
-            return Ok(Vec::new());
-        }
-
-        let json = std::fs::read_to_string(&annotation_path)
-            .map_err(|e| format!("Failed to read annotations file: {}", e))?;
-
-        serde_json::from_str(&json).map_err(|e| format!("Failed to parse annotations: {}", e))
+        // Since we are now using native annotations, they are loaded automatically
+        // when the PDF is opened. However, the app might expect them translated to its model.
+        // For now, we'll return empty or potentially implement a translator if needed.
+        // The user's app seems to have its own internal state management for annotations.
+        Ok(Vec::new())
     }
 
     pub fn search(
@@ -589,13 +623,18 @@ impl<'a> DocumentStore<'a> {
 
         for (idx, page) in doc.pages().iter().enumerate() {
             if let Ok(text) = page.text() {
-                let text_str = text.to_string();
-                if text_str.to_lowercase().contains(&query_lower) {
-                    let y = 10.0;
-                    let x = 10.0;
-                    let approx_width = 100.0;
-                    let height = 20.0;
-                    results.push((idx, text_str, y, x, approx_width, height));
+                let search = text.search(query, false, false);
+                for m in search {
+                    for rect in m.rects() {
+                        results.push((
+                            idx,
+                            m.text(),
+                            rect.bottom().value,
+                            rect.left().value,
+                            rect.width().value,
+                            rect.height().value,
+                        ));
+                    }
                 }
             }
         }

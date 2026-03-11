@@ -279,7 +279,8 @@ impl DocumentTab {
 
         let thumb_start = visible.iter().min().copied().unwrap_or(0).saturating_sub(5);
         let thumb_end = visible.iter().max().copied().unwrap_or(0).saturating_add(5);
-        let thumbs_to_keep: std::collections::HashSet<usize> = (thumb_start..=thumb_end.min(self.total_pages.saturating_sub(1))).collect();
+        let thumbs_to_keep: std::collections::HashSet<usize> =
+            (thumb_start..=thumb_end.min(self.total_pages.saturating_sub(1))).collect();
 
         let to_remove_thumbs: Vec<usize> = self
             .thumbnails

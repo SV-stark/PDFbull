@@ -1,37 +1,104 @@
 use crate::models::AppTheme;
 use crate::pdf_engine::{RenderFilter, RenderQuality};
-use iced::widget::{button, column, row, text, Space, image};
-use iced::{Alignment, Element, Length};
-use iced_aw::widget::Card;
+use iced::widget::{button, column, container, image, row, text, Space};
+use iced::{Alignment, Border, Color, Element, Length};
+
+fn custom_card<'a>(
+    header: impl Into<Element<'a, crate::message::Message>>,
+    body: impl Into<Element<'a, crate::message::Message>>,
+) -> Element<'a, crate::message::Message> {
+    container(column![
+        header.into(),
+        Space::new().height(Length::Fixed(15.0)),
+        body.into()
+    ])
+    .padding(20)
+    .width(Length::Fill)
+    .style(|_theme| iced::widget::container::Style {
+        background: Some(Color::from_rgb8(43, 45, 49).into()),
+        border: Border {
+            radius: 12.0.into(),
+            width: 1.0,
+            color: Color::from_rgb8(30, 31, 34),
+            ..Default::default()
+        },
+        ..Default::default()
+    })
+    .into()
+}
+
+fn setting_btn<'a>(
+    label: &'a str,
+    is_active: bool,
+    msg: crate::message::Message,
+) -> iced::widget::Button<'a, crate::message::Message> {
+    let btn = button(
+        text(label)
+            .size(13)
+            .align_x(iced::alignment::Horizontal::Center),
+    )
+    .on_press(msg)
+    .width(Length::Fill)
+    .padding([8, 12]);
+
+    if is_active {
+        btn.style(|_theme: &iced::Theme, _| iced::widget::button::Style {
+            background: Some(iced::Color::from_rgb8(150, 220, 220).into()),
+            text_color: iced::Color::BLACK,
+            border: iced::Border {
+                radius: 6.0.into(),
+                ..Default::default()
+            },
+            ..Default::default()
+        })
+    } else {
+        btn.style(|_theme, _status| iced::widget::button::Style {
+            background: Some(iced::Color::from_rgb8(60, 60, 65).into()),
+            text_color: iced::Color::WHITE,
+            border: iced::Border {
+                radius: 6.0.into(),
+                ..Default::default()
+            },
+            ..Default::default()
+        })
+    }
+}
+
+fn action_btn<'a>(
+    label: &'a str,
+    msg: crate::message::Message,
+) -> iced::widget::Button<'a, crate::message::Message> {
+    button(
+        text(label)
+            .size(14)
+            .align_x(iced::alignment::Horizontal::Center),
+    )
+    .on_press(msg)
+    .padding([8, 16])
+    .style(|_theme, _status| iced::widget::button::Style {
+        background: Some(iced::Color::from_rgb8(60, 60, 65).into()),
+        text_color: iced::Color::WHITE,
+        border: iced::Border {
+            radius: 6.0.into(),
+            ..Default::default()
+        },
+        ..Default::default()
+    })
+}
 
 pub fn settings_view(app: &crate::app::PdfBullApp) -> Element<'_, crate::message::Message> {
     let theme_buttons = row![
-        button(if app.settings.theme == AppTheme::System {
-            "System ✓"
-        } else {
-            "System"
-        })
-        .on_press({
+        setting_btn("System", app.settings.theme == AppTheme::System, {
             let mut s = app.settings.clone();
             s.theme = AppTheme::System;
             crate::message::Message::SaveSettings(s)
         }),
-        button(if app.settings.theme == AppTheme::Light {
-            "Light ✓"
-        } else {
-            "Light"
-        })
-        .on_press({
+        setting_btn("Light", app.settings.theme == AppTheme::Light, {
             let mut s = app.settings.clone();
             s.theme = AppTheme::Light;
             crate::message::Message::SaveSettings(s)
         }),
-        button(if app.settings.theme == AppTheme::Dark {
-            "Dark ✓"
-        } else {
-            "Dark"
-        })
-        .on_press({
+        setting_btn("Dark", app.settings.theme == AppTheme::Dark, {
             let mut s = app.settings.clone();
             s.theme = AppTheme::Dark;
             crate::message::Message::SaveSettings(s)
@@ -40,32 +107,17 @@ pub fn settings_view(app: &crate::app::PdfBullApp) -> Element<'_, crate::message
     .spacing(10);
 
     let behavior_buttons = row![
-        button(if app.settings.remember_last_file {
-            "Remember Last ✓"
-        } else {
-            "Remember Last"
-        })
-        .on_press({
+        setting_btn("Remember Last File", app.settings.remember_last_file, {
             let mut s = app.settings.clone();
             s.remember_last_file = !s.remember_last_file;
             crate::message::Message::SaveSettings(s)
         }),
-        button(if app.settings.auto_save {
-            "Auto-save ✓"
-        } else {
-            "Auto-save"
-        })
-        .on_press({
+        setting_btn("Auto-save", app.settings.auto_save, {
             let mut s = app.settings.clone();
             s.auto_save = !s.auto_save;
             crate::message::Message::SaveSettings(s)
         }),
-        button(if app.settings.restore_session {
-            "Restore Session ✓"
-        } else {
-            "Restore Session"
-        })
-        .on_press({
+        setting_btn("Restore Session", app.settings.restore_session, {
             let mut s = app.settings.clone();
             s.restore_session = !s.restore_session;
             crate::message::Message::SaveSettings(s)
@@ -74,76 +126,57 @@ pub fn settings_view(app: &crate::app::PdfBullApp) -> Element<'_, crate::message
     .spacing(10);
 
     let quality_buttons = row![
-        button(if app.settings.render_quality == RenderQuality::Low {
-            "Low ✓"
-        } else {
-            "Low"
-        })
-        .on_press({
+        setting_btn("Low", app.settings.render_quality == RenderQuality::Low, {
             let mut s = app.settings.clone();
             s.render_quality = RenderQuality::Low;
             crate::message::Message::SaveSettings(s)
         }),
-        button(if app.settings.render_quality == RenderQuality::Medium {
-            "Medium ✓"
-        } else {
-            "Medium"
-        })
-        .on_press({
-            let mut s = app.settings.clone();
-            s.render_quality = RenderQuality::Medium;
-            crate::message::Message::SaveSettings(s)
-        }),
-        button(if app.settings.render_quality == RenderQuality::High {
-            "High ✓"
-        } else {
-            "High"
-        })
-        .on_press({
-            let mut s = app.settings.clone();
-            s.render_quality = RenderQuality::High;
-            crate::message::Message::SaveSettings(s)
-        }),
+        setting_btn(
+            "Medium",
+            app.settings.render_quality == RenderQuality::Medium,
+            {
+                let mut s = app.settings.clone();
+                s.render_quality = RenderQuality::Medium;
+                crate::message::Message::SaveSettings(s)
+            }
+        ),
+        setting_btn(
+            "High",
+            app.settings.render_quality == RenderQuality::High,
+            {
+                let mut s = app.settings.clone();
+                s.render_quality = RenderQuality::High;
+                crate::message::Message::SaveSettings(s)
+            }
+        ),
     ]
     .spacing(10);
 
     let filter_buttons = row![
-        button(if app.settings.default_filter == RenderFilter::None {
-            "None ✓"
-        } else {
-            "None"
-        })
-        .on_press({
+        setting_btn("None", app.settings.default_filter == RenderFilter::None, {
             let mut s = app.settings.clone();
             s.default_filter = RenderFilter::None;
             crate::message::Message::SaveSettings(s)
         }),
-        button(if app.settings.default_filter == RenderFilter::Grayscale {
-            "Gray ✓"
-        } else {
-            "Gray"
-        })
-        .on_press({
-            let mut s = app.settings.clone();
-            s.default_filter = RenderFilter::Grayscale;
-            crate::message::Message::SaveSettings(s)
-        }),
-        button(if app.settings.default_filter == RenderFilter::Inverted {
-            "Invert ✓"
-        } else {
-            "Invert"
-        })
-        .on_press({
-            let mut s = app.settings.clone();
-            s.default_filter = RenderFilter::Inverted;
-            crate::message::Message::SaveSettings(s)
-        }),
-        button(if app.settings.default_filter == RenderFilter::Eco {
-            "Eco ✓"
-        } else {
-            "Eco"
-        })
-        .on_press({
+        setting_btn(
+            "Grayscale",
+            app.settings.default_filter == RenderFilter::Grayscale,
+            {
+                let mut s = app.settings.clone();
+                s.default_filter = RenderFilter::Grayscale;
+                crate::message::Message::SaveSettings(s)
+            }
+        ),
+        setting_btn(
+            "Invert",
+            app.settings.default_filter == RenderFilter::Inverted,
+            {
+                let mut s = app.settings.clone();
+                s.default_filter = RenderFilter::Inverted;
+                crate::message::Message::SaveSettings(s)
+            }
+        ),
+        setting_btn("Eco", app.settings.default_filter == RenderFilter::Eco, {
             let mut s = app.settings.clone();
             s.default_filter = RenderFilter::Eco;
             crate::message::Message::SaveSettings(s)
@@ -152,80 +185,137 @@ pub fn settings_view(app: &crate::app::PdfBullApp) -> Element<'_, crate::message
     .spacing(10);
 
     let default_zoom_row = row![
-        text("Default Zoom:"),
-        text(format!("{}%", (app.settings.default_zoom * 100.0) as i32)),
-        button("-").on_press({
+        text("Default Zoom:").style(|_theme| iced::widget::text::Style {
+            color: Some(Color::WHITE)
+        }),
+        Space::new().width(Length::Fixed(10.0)),
+        text(format!("{}%", (app.settings.default_zoom * 100.0) as i32)).style(|_theme| {
+            iced::widget::text::Style {
+                color: Some(Color::from_rgb8(180, 180, 180)),
+            }
+        }),
+        Space::new().width(Length::Fill),
+        action_btn("-", {
             let mut s = app.settings.clone();
             s.default_zoom = (s.default_zoom - 0.25).max(0.25);
             crate::message::Message::SaveSettings(s)
         }),
-        button("+").on_press({
+        Space::new().width(Length::Fixed(10.0)),
+        action_btn("+", {
             let mut s = app.settings.clone();
             s.default_zoom = (s.default_zoom + 0.25).min(5.0);
             crate::message::Message::SaveSettings(s)
         }),
     ]
-    .spacing(10);
+    .align_y(Alignment::Center);
 
     let cache_row = row![
-        text(format!("Cache: {} pages", app.settings.cache_size)),
-        button("-").on_press({
+        text(format!("Cache: {} pages", app.settings.cache_size)).style(|_theme| {
+            iced::widget::text::Style {
+                color: Some(Color::WHITE),
+            }
+        }),
+        Space::new().width(Length::Fill),
+        action_btn("-", {
             let mut s = app.settings.clone();
             s.cache_size = s.cache_size.saturating_sub(10).max(10);
             crate::message::Message::SaveSettings(s)
         }),
-        button("+").on_press({
+        Space::new().width(Length::Fixed(10.0)),
+        action_btn("+", {
             let mut s = app.settings.clone();
             s.cache_size = (s.cache_size + 10).min(200);
             crate::message::Message::SaveSettings(s)
         }),
     ]
-    .spacing(10);
+    .align_y(Alignment::Center);
 
-    let appearance_card = Card::new(
-        text("Appearance").size(18),
-        column![theme_buttons.padding(10), filter_buttons.padding(10),],
-    )
-    .padding(15.0.into());
+    let appearance_card = custom_card(
+        text("Appearance")
+            .size(18)
+            .style(|_theme| iced::widget::text::Style {
+                color: Some(Color::WHITE),
+            }),
+        column![theme_buttons, filter_buttons].spacing(10),
+    );
 
-    let performance_card = Card::new(
-        text("Performance").size(18),
-        column![quality_buttons.padding(10), cache_row.padding(10),],
-    )
-    .padding(15.0.into());
+    let performance_card = custom_card(
+        text("Performance")
+            .size(18)
+            .style(|_theme| iced::widget::text::Style {
+                color: Some(Color::WHITE),
+            }),
+        column![quality_buttons, cache_row].spacing(10),
+    );
 
-    let defaults_card =
-        Card::new(text("Defaults").size(18), default_zoom_row.padding(10)).padding(15.0.into());
+    let defaults_card = custom_card(
+        text("Defaults")
+            .size(18)
+            .style(|_theme| iced::widget::text::Style {
+                color: Some(Color::WHITE),
+            }),
+        default_zoom_row,
+    );
 
-    let behavior_card =
-        Card::new(text("Behavior").size(18), behavior_buttons.padding(10)).padding(15.0.into());
+    let behavior_card = custom_card(
+        text("Behavior")
+            .size(18)
+            .style(|_theme| iced::widget::text::Style {
+                color: Some(Color::WHITE),
+            }),
+        behavior_buttons,
+    );
 
-    column![
-        row![
-            image(iced::widget::image::Handle::from_bytes(
-                include_bytes!("../PDFbull.png").to_vec(),
-            ))
-            .width(Length::Fixed(48.0)),
-            column![
-                text("Settings").size(24),
-                text(format!("v{}", env!("CARGO_PKG_VERSION"))).size(12),
-            ],
-            Space::new().width(Length::Fill),
-            button("Close").on_press(crate::message::Message::CloseSettings),
+    container(
+        column![
+            row![
+                image(iced::widget::image::Handle::from_bytes(
+                    include_bytes!("../PDFbull.png").to_vec(),
+                ))
+                .width(Length::Fixed(48.0)),
+                column![
+                    text("Settings")
+                        .size(24)
+                        .style(|_theme| iced::widget::text::Style {
+                            color: Some(Color::WHITE)
+                        }),
+                    text(format!("v{}", env!("CARGO_PKG_VERSION")))
+                        .size(12)
+                        .style(|_theme| iced::widget::text::Style {
+                            color: Some(Color::from_rgb8(180, 180, 180))
+                        }),
+                ],
+                Space::new().width(Length::Fill),
+                button(
+                    text("Close")
+                        .size(16)
+                        .style(|_theme| iced::widget::text::Style {
+                            color: Some(Color::WHITE)
+                        })
+                )
+                .on_press(crate::message::Message::CloseSettings)
+                .style(iced::widget::button::text),
+            ]
+            .spacing(15)
+            .align_y(Alignment::Center)
+            .padding(20),
+            appearance_card,
+            Space::new().height(Length::Fixed(15.0)),
+            performance_card,
+            Space::new().height(Length::Fixed(15.0)),
+            defaults_card,
+            Space::new().height(Length::Fixed(15.0)),
+            behavior_card,
         ]
-        .spacing(15)
-        .align_y(Alignment::Center)
-        .padding(20),
-        appearance_card,
-        Space::new().height(Length::Fixed(10.0)),
-        performance_card,
-        Space::new().height(Length::Fixed(10.0)),
-        defaults_card,
-        Space::new().height(Length::Fixed(10.0)),
-        behavior_card,
-    ]
-    .padding(20)
-    .width(Length::Fixed(500.0))
-    .align_x(Alignment::Center)
+        .padding(30)
+        .width(Length::Fixed(600.0))
+        .align_x(Alignment::Center),
+    )
+    .width(Length::Fill)
+    .height(Length::Fill)
+    .style(|_| iced::widget::container::Style {
+        background: Some(iced::Background::Color(Color::from_rgb8(35, 36, 40))),
+        ..Default::default()
+    })
     .into()
 }

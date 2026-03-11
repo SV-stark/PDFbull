@@ -31,6 +31,7 @@ rayon = "1.10"
 dark-light = "1.1"
 log = "0.4"
 env_logger = "0.11"
+memmap2 = "0.7.1"
 
 [build-dependencies]
 winresource = "0.1"

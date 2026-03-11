@@ -57,6 +57,10 @@ pub fn main() -> iced::Result {
         app::PdfBullApp::view,
     )
     .title("PDFbull")
+    .theme(|app: &app::PdfBullApp| match app.settings.theme {
+        crate::models::AppTheme::Light => iced::Theme::Light,
+        _ => iced::Theme::Dark,
+    })
     .subscription(app::PdfBullApp::subscription)
     .window(iced::window::Settings {
         icon,
