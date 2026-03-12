@@ -4,8 +4,6 @@ use rayon::prelude::*;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::sync::Arc;
-use memmap2::Mmap;
-use std::fs::File;
 
 #[derive(Default, Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum RenderFilter {
@@ -47,8 +45,6 @@ pub struct DocumentStore<'a> {
 struct DocumentState<'a> {
     doc: PdfDocument<'a>,
     path: String,
-    // We keep the mmap alive here to ensure the byte slice remains valid
-    _mmap: Option<Arc<Mmap>>,
 }
 
 #[derive(Clone, Hash, Eq, PartialEq, Debug)]
@@ -86,18 +82,9 @@ impl<'a> DocumentStore<'a> {
     }
 
     pub fn open_document(&mut self, path: &str) -> Result<(String, usize, Vec<f32>, f32), String> {
-        let file = File::open(path).map_err(|e| e.to_string())?;
-        let mmap = unsafe { Mmap::map(&file).map_err(|e| e.to_string())? };
-        let mmap_arc = Arc::new(mmap);
-
-        // Load PDF from mmap slice for zero-copy.
-        // SAFETY: The Arc<Mmap> is stored in DocumentState and will outlive the PdfDocument.
-        let bytes: &[u8] = mmap_arc.as_ref();
-        let static_bytes: &'static [u8] = unsafe { std::mem::transmute(bytes) };
-
         let doc = self
             .pdfium
-            .load_pdf_from_byte_slice(static_bytes, None)
+            .load_pdf_from_file(path, None)
             .map_err(|e| e.to_string())?;
 
         let pages = doc.pages();
@@ -122,7 +109,6 @@ impl<'a> DocumentStore<'a> {
         let state = DocumentState {
             doc,
             path: path.to_string(),
-            _mmap: Some(mmap_arc),
         };
         self.documents.insert(path.to_string(), state);
 
@@ -242,7 +228,11 @@ impl<'a> DocumentStore<'a> {
         let w = bitmap.width() as u32;
         let h = bitmap.height() as u32;
 
-        let result_data = Self::apply_filter(bitmap.as_rgba_bytes().to_vec(), w, h, options.filter);
+        let result_data = if options.filter == RenderFilter::None {
+            bitmap.as_rgba_bytes().to_vec()
+        } else {
+            Self::apply_filter(bitmap.as_rgba_bytes().to_vec(), w, h, options.filter)
+        };
 
         let (final_w, final_h, final_data) = if options.auto_crop {
             if let Some((x1, y1, x2, y2)) = Self::detect_content_bbox(&result_data, w, h) {
@@ -270,10 +260,45 @@ impl<'a> DocumentStore<'a> {
         Ok(result)
     }
 
+    fn calculate_corner_threshold(data: &[u8], width: usize, height: usize) -> u8 {
+        if width == 0 || height == 0 {
+            return 250;
+        }
+
+        // Sample 4 corners: top-left, top-right, bottom-left, bottom-right
+        let samples = [
+            (0, 0),                                      // top-left
+            ((width - 1) * 4, 0),                        // top-right
+            (0, (height - 1) * width * 4),               // bottom-left
+            ((width - 1) * 4, (height - 1) * width * 4), // bottom-right
+        ];
+
+        let mut sum = 0u32;
+        let mut count = 0;
+
+        for (x_offset, y_offset) in samples.iter() {
+            let idx = (*y_offset + *x_offset) as usize;
+            if idx + 3 < data.len() {
+                // Average of RGB components
+                let avg = (data[idx] as u32 + data[idx + 1] as u32 + data[idx + 2] as u32) / 3;
+                sum += avg;
+                count += 1;
+            }
+        }
+
+        if count == 0 {
+            return 250;
+        }
+
+        (sum / count) as u8
+    }
+
     fn detect_content_bbox(data: &[u8], width: u32, height: u32) -> Option<(u32, u32, u32, u32)> {
         let w = width as usize;
         let h = height as usize;
-        let threshold: u8 = 250;
+        // Calculate dynamic threshold based on corner pixels
+        let corner_threshold = Self::calculate_corner_threshold(data, w, h);
+        let threshold = corner_threshold.max(200).min(250); // Clamp between 200-250
 
         let is_bg = |c: &[u8]| c[0] >= threshold && c[1] >= threshold && c[2] >= threshold;
 
@@ -554,8 +579,11 @@ impl<'a> DocumentStore<'a> {
             if ann.page >= doc.pages().len() as usize {
                 continue;
             }
-            let mut page = doc.pages().get(ann.page as i32).map_err(|e| e.to_string())?;
-            
+            let mut page = doc
+                .pages()
+                .get(ann.page as i32)
+                .map_err(|e| e.to_string())?;
+
             match &ann.style {
                 crate::models::AnnotationStyle::Highlight { color: _ } => {
                     let pdf_x = ann.x as f32;
@@ -569,7 +597,7 @@ impl<'a> DocumentStore<'a> {
                         PdfPoints::new(pdf_x + pdf_w),
                         PdfPoints::new(pdf_y + pdf_h),
                     );
-                    
+
                     let page_annotations = page.annotations_mut();
                     if let Ok(mut pdf_ann) = page_annotations.create_highlight_annotation() {
                         let _ = pdf_ann.set_bounds(rect);
@@ -587,7 +615,7 @@ impl<'a> DocumentStore<'a> {
                         PdfPoints::new(pdf_x + pdf_w),
                         PdfPoints::new(pdf_y + pdf_h),
                     );
-                    
+
                     let page_annotations = page.annotations_mut();
                     if let Ok(mut pdf_ann) = page_annotations.create_square_annotation() {
                         let _ = pdf_ann.set_bounds(rect);
@@ -630,9 +658,8 @@ impl<'a> DocumentStore<'a> {
                 let all_text = text.all();
                 if all_text.to_lowercase().contains(&query_lower) {
                     results.push((
-                        idx,
-                        all_text,
-                        0.0, 0.0, 100.0, 100.0, // Placeholder for now to ensure compilation
+                        idx, all_text, 0.0, 0.0, 100.0,
+                        100.0, // Placeholder for now to ensure compilation
                     ));
                 }
             }

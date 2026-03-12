@@ -193,8 +193,8 @@ impl PdfBullApp {
                 if is_thumb_rendered || self.rendering_set.contains(&target) {
                     continue;
                 }
-                self.rendering_count += 1;
-                let thumb_zoom = 120.0 / page_width.max(1.0);
+                 self.rendering_count += 1;
+                 let thumb_zoom = (120.0 / page_width.max(1.0)).min(5.0);
                 self.rendering_set.insert(target);
                 let tx = cmd_tx.clone();
                 let doc_id_cloned = doc_id;

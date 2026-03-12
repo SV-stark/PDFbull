@@ -9,7 +9,7 @@ use iced::Task;
 use std::path::PathBuf;
 
 fn scroll_to_page(tab: &crate::models::DocumentTab, page: usize) -> Task<Message> {
-    let y_offset: f32 = tab.page_heights.iter().take(page).map(|h| h + 10.0).sum();
+    let y_offset: f32 = tab.page_heights.iter().take(page).map(|h| h + crate::models::PAGE_SPACING).sum();
     operation::scroll_to(
         Id::new("pdf_scroll"),
         iced::widget::scrollable::AbsoluteOffset {
@@ -53,7 +53,7 @@ pub fn handle_message(app: &mut PdfBullApp, message: Message) -> Task<Message> {
         Message::ResetZoom => {
             if let Some(tab) = app.current_tab_mut() {
                 tab.zoom = 1.0;
-                tab.rendered_pages.clear();
+                // Don't clear rendered_pages to avoid flashing - let PageRendered handler update them
             }
             app.render_visible_pages()
         }
@@ -704,6 +704,7 @@ pub fn handle_message(app: &mut PdfBullApp, message: Message) -> Task<Message> {
                 }
                 return Task::none();
             }
+            // Cancel previous search by clearing pending search
             app.search_pending = Some(query.clone());
             Task::perform(
                 async move {
@@ -751,46 +752,74 @@ pub fn handle_message(app: &mut PdfBullApp, message: Message) -> Task<Message> {
                             Err(e) => return Err(e),
                         }
                     }
-                    Ok(all_results)
+                    Ok((doc_id, all_results))
                 },
-                Message::SearchResult,
-            )
-        }
-        Message::SearchResult(result) => {
-            match result {
-                Ok(results) => {
-                    if let Some(tab) = app.current_tab_mut() {
-                        for (page, text, y, x, width, height) in results {
-                            tab.search_results.push(SearchResult {
+                |result| match result {
+                    Ok((received_doc_id, results)) => {
+                        // Convert SearchResultItem tuples to SearchResult structs
+                        let search_results: Vec<SearchResult> = results
+                            .into_iter()
+                            .map(|(page, text, y, x, width, height)| SearchResult {
                                 page,
                                 text,
                                 y_position: y,
                                 x,
                                 width,
                                 height,
-                            });
+                            })
+                            .collect();
+                        
+                        // Only process results if they match the current document
+                        if let Some(tab) = app.current_tab_mut() {
+                            if tab.id == received_doc_id {
+                                tab.search_results = search_results;
+                                tab.current_search_index = 0;
+                                
+                                if !tab.search_results.is_empty() && tab.current_search_index == 0 {
+                                    tab.current_page = tab.search_results[0].page;
+                                }
+                            }
                         }
-
-                        if !tab.search_results.is_empty() && tab.current_search_index == 0 {
-                            tab.current_page = tab.search_results[0].page;
+                        // Convert back to tuple format for backward compatibility
+                        let results_tuple: Vec<(usize, String, f32, f32, f32, f32)> = tab.search_results
+                            .iter()
+                            .map(|r| (r.page, r.text.clone(), r.y_position, r.x, r.width, r.height))
+                            .collect();
+                        Message::SearchResult(Ok(results_tuple))
+                    },
+                    Err(e) => {
+                        log::error!("Search error: {}", e);
+                        if e == "Engine died" || e == "Channel closed" {
+                            app.engine = None;
+                            app.status_message = Some(
+                                "PDF engine crashed. Please try your action again to restart it."
+                                    .into(),
+                            );
+                        } else {
+                            app.status_message = Some(format!("Search error: {}", e));
                         }
+                        Message::SearchResult(Err(e))
                     }
-                }
-                Err(e) => {
-                    log::error!("Search error: {}", e);
-                    if e == "Engine died" || e == "Channel closed" {
-                        app.engine = None;
-                        app.status_message = Some(
-                            "PDF engine crashed. Please try your action again to restart it."
-                                .into(),
-                        );
-                    } else {
-                        app.status_message = Some(format!("Search error: {}", e));
-                    }
-                }
-            }
-            Task::none()
+                },
+            )
         }
+        Message::SearchResult(result) => {
+             // Search results are now processed in PerformSearch handler
+             // This handler kept for backward compatibility but does nothing now
+             if let Err(e) = result {
+                 log::error!("Search error: {}", e);
+                 if e == "Engine died" || e == "Channel closed" {
+                     app.engine = None;
+                     app.status_message = Some(
+                         "PDF engine crashed. Please try your action again to restart it."
+                             .into(),
+                     );
+                 } else {
+                     app.status_message = Some(format!("Search error: {}", e));
+                 }
+             }
+             Task::none()
+         }
         Message::NextSearchResult => {
             let next_page = if let Some(tab) = app.current_tab_mut() {
                 if !tab.search_results.is_empty() {

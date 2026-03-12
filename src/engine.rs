@@ -90,16 +90,14 @@ fn spawn_document_worker(
                         }
                     }
                 }
-                PdfCommand::ExtractText(_, page, resp) => {
-                    match store.extract_text(&path, page) {
-                        Ok(text) => {
-                            let _ = resp.send(Ok(text));
-                        }
-                        Err(e) => {
-                            let _ = resp.send(Err(e));
-                        }
+                PdfCommand::ExtractText(_, page, resp) => match store.extract_text(&path, page) {
+                    Ok(text) => {
+                        let _ = resp.send(Ok(text));
                     }
-                }
+                    Err(e) => {
+                        let _ = resp.send(Err(e));
+                    }
+                },
                 PdfCommand::ExportImage(_, page, zoom, output_path, resp) => {
                     match store.export_page_as_image(&path, page, zoom, &output_path) {
                         Ok(()) => {
@@ -130,16 +128,14 @@ fn spawn_document_worker(
                         }
                     }
                 }
-                PdfCommand::Search(_, query, resp) => {
-                    match store.search(&path, &query) {
-                        Ok(results) => {
-                            let _ = resp.send(Ok(results));
-                        }
-                        Err(e) => {
-                            let _ = resp.send(Err(e));
-                        }
+                PdfCommand::Search(_, query, resp) => match store.search(&path, &query) {
+                    Ok(results) => {
+                        let _ = resp.send(Ok(results));
                     }
-                }
+                    Err(e) => {
+                        let _ = resp.send(Err(e));
+                    }
+                },
                 PdfCommand::LoadAnnotations(_, pdf_path, resp) => {
                     match store.load_annotations(&pdf_path) {
                         Ok(annotations) => {
@@ -181,14 +177,15 @@ pub fn spawn_engine_thread(cache_size: u64) -> EngineState {
 
     // Dispatcher thread
     thread::spawn(move || {
-        let mut document_senders: HashMap<u64, crossbeam_channel::Sender<PdfCommand>> = HashMap::new();
+        let mut document_senders: HashMap<u64, crossbeam_channel::Sender<PdfCommand>> =
+            HashMap::new();
 
         while let Ok(cmd) = cmd_rx.recv() {
             match cmd {
                 PdfCommand::Open(path, resp) => {
                     let doc_id = next_doc_id();
                     let (worker_tx, worker_rx) = crossbeam_channel::unbounded();
-                    
+
                     spawn_document_worker(
                         doc_id,
                         path.clone(),
@@ -197,24 +194,47 @@ pub fn spawn_engine_thread(cache_size: u64) -> EngineState {
                         workers_clone.clone(),
                         pdfium_clone.clone(),
                     );
-                    
+
                     document_senders.insert(doc_id.0, worker_tx.clone());
                     // Forward the open command to the new worker
                     let _ = worker_tx.send(PdfCommand::Open(path, resp));
                 }
                 PdfCommand::Render(doc_id, page, opts, resp) => {
                     if let Some(tx) = document_senders.get(&doc_id.0) {
-                        let _ = tx.send(PdfCommand::Render(doc_id, page, opts, resp));
+                        if let Err(e) = tx.send(PdfCommand::Render(doc_id, page, opts, resp)) {
+                            log::error!(
+                                "Failed to send render command to worker {}: {}",
+                                doc_id.0,
+                                e
+                            );
+                            document_senders.remove(&doc_id.0);
+                        }
                     }
                 }
                 PdfCommand::RenderThumbnail(doc_id, page, zoom, resp) => {
                     if let Some(tx) = document_senders.get(&doc_id.0) {
-                        let _ = tx.send(PdfCommand::RenderThumbnail(doc_id, page, zoom, resp));
+                        if let Err(e) =
+                            tx.send(PdfCommand::RenderThumbnail(doc_id, page, zoom, resp))
+                        {
+                            log::error!(
+                                "Failed to send render thumbnail command to worker {}: {}",
+                                doc_id.0,
+                                e
+                            );
+                            document_senders.remove(&doc_id.0);
+                        }
                     }
                 }
                 PdfCommand::ExtractText(doc_id, page, resp) => {
                     if let Some(tx) = document_senders.get(&doc_id.0) {
-                        let _ = tx.send(PdfCommand::ExtractText(doc_id, page, resp));
+                        if let Err(e) = tx.send(PdfCommand::ExtractText(doc_id, page, resp)) {
+                            log::error!(
+                                "Failed to send extract text command to worker {}: {}",
+                                doc_id.0,
+                                e
+                            );
+                            document_senders.remove(&doc_id.0);
+                        }
                     }
                 }
                 PdfCommand::ExportImage(doc_id, page, zoom, path, resp) => {

@@ -173,6 +173,7 @@ pub struct DocumentTab {
 }
 
 const VIEWPORT_BUFFER: usize = 3;
+pub const PAGE_SPACING: f32 = 10.0;
 
 use std::sync::atomic::{AtomicU64, Ordering};
 
@@ -226,7 +227,7 @@ impl DocumentTab {
         let mut y = 0.0;
 
         for (idx, height) in self.page_heights.iter().enumerate() {
-            let page_bottom = y + height + 10.0;
+            let page_bottom = y + height + PAGE_SPACING;
             let viewport_top = self.viewport_y;
             let viewport_bottom = self.viewport_y + self.viewport_height;
 
