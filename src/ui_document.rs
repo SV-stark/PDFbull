@@ -856,7 +856,10 @@ fn render_pdf_content(app: &PdfBullApp) -> Element<'_, crate::message::Message> 
             }
         } else {
             // Invisible page placeholder to maintain scroll geometry
-            Space::new().height(Length::Fixed(scaled_height)).into()
+            Space::new()
+                .width(Length::Fixed(scaled_width))
+                .height(Length::Fixed(scaled_height))
+                .into()
         };
 
         pdf_column = pdf_column.push(page_element);

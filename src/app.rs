@@ -54,6 +54,7 @@ pub struct PdfBullApp {
     pub loaded: bool,
     pub rendering_count: usize,
     pub rendering_set: std::collections::HashSet<RenderTarget>,
+    pub modifiers: iced::keyboard::Modifiers,
 }
 
 impl Default for PdfBullApp {
@@ -77,6 +78,7 @@ impl Default for PdfBullApp {
             loaded: false,
             rendering_count: 0,
             rendering_set: std::collections::HashSet::new(),
+            modifiers: iced::keyboard::Modifiers::default(),
         }
     }
 }

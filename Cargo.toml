@@ -14,6 +14,13 @@ name = "pdfbull"
 path = "src/main.rs"
 
 
+[profile.release]
+opt-level = "z"     # Optimize for size
+lto = true          # Enable Link Time Optimization
+codegen-units = 1   # Reduce parallel code generation for better optimization
+panic = "abort"     # Remove panic unwinding
+strip = true        # Strip symbols from binary
+
 [dependencies]
 rfd = "0.14"
 pdfium-render = { git = "https://github.com/ajrcarey/pdfium-render.git", branch = "master" }

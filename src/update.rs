@@ -512,13 +512,13 @@ pub fn handle_message(app: &mut PdfBullApp, message: Message) -> Task<Message> {
         }
         Message::ZoomIn => {
             if let Some(tab) = app.current_tab_mut() {
-                tab.zoom = (tab.zoom * 1.25).min(5.0);
+                tab.zoom = (tab.zoom * 1.1).min(5.0);
             }
             app.render_visible_pages()
         }
         Message::ZoomOut => {
             if let Some(tab) = app.current_tab_mut() {
-                tab.zoom = (tab.zoom / 1.25).max(0.25);
+                tab.zoom = (tab.zoom / 1.1).max(0.25);
             }
             app.render_visible_pages()
         }
@@ -587,7 +587,13 @@ pub fn handle_message(app: &mut PdfBullApp, message: Message) -> Task<Message> {
                     None => return Task::none(),
                 };
 
-                if tab.rendered_pages.contains_key(&page_idx)
+                let needs_render = if let Some((scale, _)) = tab.rendered_pages.get(&page_idx) {
+                    (scale - tab.zoom).abs() > 0.001
+                } else {
+                    true
+                };
+
+                if !needs_render
                     || app
                         .rendering_set
                         .contains(&crate::app::RenderTarget::Page(page_idx))
@@ -647,9 +653,10 @@ pub fn handle_message(app: &mut PdfBullApp, message: Message) -> Task<Message> {
             if let Some(tab) = app.current_tab_mut() {
                 match result {
                     Ok((width, height, data)) => {
+                        // Use Arc directly to avoid expensive clones of pixel data
                         tab.rendered_pages.insert(
                             page_idx,
-                            (scale, iced_image::Handle::from_rgba(width, height, (*data).clone())),
+                            (scale, iced_image::Handle::from_rgba(width, height, data.to_vec())),
                         );
                     }
                     Err(e) => {
@@ -1161,6 +1168,24 @@ pub fn handle_message(app: &mut PdfBullApp, message: Message) -> Task<Message> {
                     // But we can pull the scroll offset!
                     // Actually, `mouse_area` only fires `on_press` and `on_release`.
                     // Let's just ignore `CursorMoved` here and rely on the start/end bounds.
+                }
+                iced::Event::Mouse(iced::mouse::Event::WheelScrolled { delta }) => {
+                    use iced::mouse::ScrollDelta;
+                    let modifiers = app.modifiers;
+                    if modifiers.control() && !app.tabs.is_empty() {
+                        match delta {
+                            ScrollDelta::Lines { y, .. } | ScrollDelta::Pixels { y, .. } => {
+                                if y > 0.0 {
+                                    return app.update(Message::ZoomIn);
+                                } else if y < 0.0 {
+                                    return app.update(Message::ZoomOut);
+                                }
+                            }
+                        }
+                    }
+                }
+                iced::Event::Keyboard(iced::keyboard::Event::ModifiersChanged(modifiers)) => {
+                    app.modifiers = modifiers;
                 }
                 iced::Event::Keyboard(iced::keyboard::Event::KeyPressed {
                     key, modifiers, ..

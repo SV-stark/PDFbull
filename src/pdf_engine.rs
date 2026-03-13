@@ -250,7 +250,7 @@ impl<'a> DocumentStore<'a> {
                     let end = ((y * w + x2 + 1) * 4) as usize;
                     cropped.extend_from_slice(&result_data[start..end]);
                 }
-                (crop_w.max(100), crop_h.max(100), cropped)
+                (crop_w, crop_h, cropped)
             } else {
                 (w, h, result_data)
             }

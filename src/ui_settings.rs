@@ -220,13 +220,13 @@ pub fn settings_view(app: &crate::app::PdfBullApp) -> Element<'_, crate::message
         Space::new().width(Length::Fill),
         action_btn("-", {
             let mut s = app.settings.clone();
-            s.default_zoom = (s.default_zoom - 0.25).max(0.25);
+            s.default_zoom = (s.default_zoom - 0.1).max(0.25);
             crate::message::Message::SaveSettings(s)
         }),
         Space::new().width(Length::Fixed(10.0)),
         action_btn("+", {
             let mut s = app.settings.clone();
-            s.default_zoom = (s.default_zoom + 0.25).min(5.0);
+            s.default_zoom = (s.default_zoom + 0.1).min(5.0);
             crate::message::Message::SaveSettings(s)
         }),
     ]

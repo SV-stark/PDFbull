@@ -29,14 +29,14 @@ jobs:
         uses: actions/cache@v3
         with:
           path: pdfium.dll
-          key: ${{ runner.os }}-pdfium-6899
+          key: ${{ runner.os }}-pdfium-7713
 
       - name: Download Build Resources (PDFium)
         if: steps.cache-pdfium.outputs.cache-hit != 'true'
         shell: pwsh
         run: |
           # Download PDFium (Required for pdfium-render)
-          $pdfium_ver = "6899"
+          $pdfium_ver = "7713"
           $pdfium_url = "https://github.com/bblanchon/pdfium-binaries/releases/download/chromium%2F$pdfium_ver/pdfium-win-x64.tgz"
           Invoke-WebRequest -Uri $pdfium_url -OutFile pdfium.tgz
           tar -xzf pdfium.tgz

@@ -172,7 +172,7 @@ pub struct DocumentTab {
     pub last_cleanup_time: std::time::Instant,
 }
 
-const VIEWPORT_BUFFER: usize = 1;
+const VIEWPORT_BUFFER: usize = 3;
 pub const PAGE_SPACING: f32 = 10.0;
 
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -224,24 +224,28 @@ impl DocumentTab {
 
     pub fn get_visible_pages(&self) -> std::collections::HashSet<usize> {
         let mut visible = std::collections::HashSet::new();
-        let mut y = 0.0;
+        
+        let scaled_spacing = PAGE_SPACING * self.zoom;
+        let scaled_padding = 10.0 * self.zoom; 
+        
+        let mut y = scaled_padding;
+
+        let v_height = if self.viewport_height > 0.0 { self.viewport_height } else { 2000.0 };
+        
+        // Use a VERY large margin to ensure pages don't go blank when viewport_y is slightly stale
+        let margin = v_height * 4.0; 
+        let viewport_top = (self.viewport_y - margin).max(0.0);
+        let viewport_bottom = self.viewport_y + v_height + margin;
 
         for (idx, height) in self.page_heights.iter().enumerate() {
             let scaled_height = height * self.zoom;
-            let scaled_spacing = PAGE_SPACING * self.zoom;
-            let page_bottom = y + scaled_height + scaled_spacing;
-            let viewport_top = self.viewport_y;
-            let viewport_bottom = self.viewport_y + self.viewport_height;
+            let page_bottom = y + scaled_height;
 
             if page_bottom >= viewport_top && y <= viewport_bottom {
                 visible.insert(idx);
             }
 
-            if y > viewport_bottom + self.viewport_height * 2.0 {
-                break;
-            }
-
-            y = page_bottom;
+            y = page_bottom + scaled_spacing;
         }
 
         visible

@@ -148,7 +148,7 @@ Download the latest binaries from the [Releases Page](https://github.com/SV-star
 **Prerequisites**:
 - Windows (Current target platform)
 - Rust (Stable)
-- pdfium.dll (Binary version `6899` recommended for compatibility - See [PDFium Binaries](https://github.com/bblanchon/pdfium-binaries/releases/tag/chromium%2F6899) and copy it to project root)
+- pdfium.dll (Binary version `7713` recommended for compatibility - See [PDFium Binaries](https://github.com/bblanchon/pdfium-binaries/releases/tag/chromium%2F7713) and copy it to project root)
 
 ```bash
 # 1. Clone & Enter
