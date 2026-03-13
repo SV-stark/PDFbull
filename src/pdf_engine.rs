@@ -2,8 +2,10 @@ use crate::models::{Annotation, AnnotationStyle, Hyperlink, SearchResultItem};
 use pdfium_render::prelude::*;
 use std::collections::HashMap;
 use std::sync::Arc;
+use lru::LruCache;
+use std::sync::Mutex;
 
-pub type SharedRenderCache = Arc<moka::sync::Cache<String, crate::models::RenderResult>>;
+pub type SharedRenderCache = Arc<Mutex<LruCache<String, crate::models::RenderResult>>>;
 
 #[derive(Clone, Copy, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 pub enum RenderQuality {
@@ -146,8 +148,11 @@ impl<'a> DocumentStore<'a> {
             path, page_num, options.scale, options.filter, options.auto_crop, options.quality
         );
 
-        if let Some(cached) = self.render_cache.get(&cache_key) {
-            return Ok(cached);
+        {
+            let mut cache = self.render_cache.lock().map_err(|e| e.to_string())?;
+            if let Some(cached) = cache.get(&cache_key) {
+                return Ok(cached.clone());
+            }
         }
 
         let state = self
@@ -219,7 +224,10 @@ impl<'a> DocumentStore<'a> {
         let result_data: Arc<Vec<u8>> = Arc::new(final_data);
         let result = (final_w, final_h, result_data.clone());
 
-        self.render_cache.insert(cache_key, result.clone());
+        {
+            let mut cache = self.render_cache.lock().map_err(|e| e.to_string())?;
+            cache.put(cache_key, result.clone());
+        }
 
         Ok(result)
     }
@@ -588,11 +596,9 @@ impl<'a> DocumentStore<'a> {
 }
 
 pub fn create_render_cache(cache_size: u64) -> SharedRenderCache {
-    Arc::new(
-        moka::sync::Cache::builder()
-            .max_capacity(cache_size)
-            .build(),
-    )
+    Arc::new(Mutex::new(LruCache::new(
+        std::num::NonZeroUsize::new(cache_size as usize).unwrap_or(std::num::NonZeroUsize::new(100).unwrap()),
+    )))
 }
 
 #[derive(Clone, Debug)]

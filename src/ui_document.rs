@@ -3,7 +3,6 @@ use crate::app::{icons, INTER_BOLD, INTER_REGULAR, LUCIDE};
 use crate::pdf_engine::RenderFilter;
 use iced::widget::{button, column, container, mouse_area, row, scrollable, text, text_input, Id, Space};
 use iced::{Color, Element, Length, Shadow, Vector};
-use iced_aw::widget::Card;
 
 fn hex_to_rgb(hex: &str) -> (f32, f32, f32) {
     let hex = hex.trim_start_matches('#');
@@ -288,7 +287,17 @@ fn render_page_nav(app: &PdfBullApp) -> Element<'_, crate::message::Message> {
 
     let loading_indicator = if app.rendering_count > 0 {
         row![
-            iced_aw::widget::Badge::new(text(format!("{}", app.rendering_count)).font(INTER_BOLD)),
+            container(text(format!("{}", app.rendering_count)).font(INTER_BOLD).size(12))
+                .padding([2, 6])
+                .style(|_| iced::widget::container::Style {
+                    background: Some(iced::Color::from_rgb8(59, 130, 246).into()),
+                    text_color: Some(iced::Color::WHITE),
+                    border: iced::Border {
+                        radius: 10.0.into(),
+                        ..Default::default()
+                    },
+                    ..Default::default()
+                }),
             text("Rendering")
                 .size(12)
                 .font(INTER_REGULAR)
@@ -297,6 +306,7 @@ fn render_page_nav(app: &PdfBullApp) -> Element<'_, crate::message::Message> {
                 })
         ]
         .spacing(8)
+        .align_y(iced::Alignment::Center)
     } else {
         row![]
     };
@@ -417,92 +427,85 @@ fn render_page_nav(app: &PdfBullApp) -> Element<'_, crate::message::Message> {
     .into()
 }
 
+fn section_title<'a>(label: &'a str) -> Element<'a, crate::message::Message> {
+    container(
+        text(label)
+            .size(14)
+            .font(INTER_BOLD)
+            .style(|_| iced::widget::text::Style {
+                color: Some(Color::from_rgb(0.2, 0.4, 0.6)),
+            }),
+    )
+    .padding([5, 0])
+    .into()
+}
+
 fn render_sidebar(app: &PdfBullApp) -> Element<'_, crate::message::Message> {
     let tab = &app.tabs[app.active_tab];
 
     let mut sidebar_col = column![].spacing(10).padding(5).width(Length::Fixed(180.0));
 
     if !tab.outline.is_empty() {
-        sidebar_col = sidebar_col.push(
-            Card::new(
-                text("Outline").size(14).font(INTER_BOLD).style(|_theme| {
-                    iced::widget::text::Style {
-                        color: Some(Color::from_rgb(0.2, 0.4, 0.6)),
-                    }
-                }),
-                {
-                    let mut outline_col = column![];
-                    for bookmark in &tab.outline {
-                        outline_col = outline_col.push(
-                            button(text(&bookmark.title))
-                                .on_press(crate::message::Message::JumpToPage(
-                                    bookmark.page_index as usize,
-                                ))
-                                .width(Length::Fill),
-                        );
-                    }
-                    outline_col.spacing(5)
-                },
-            )
-            .padding(10.0.into()),
-        );
+        let mut outline_col = column![section_title("Outline")];
+        for bookmark in &tab.outline {
+            outline_col = outline_col.push(
+                button(text(&bookmark.title))
+                    .on_press(crate::message::Message::JumpToPage(
+                        bookmark.page_index as usize,
+                    ))
+                    .width(Length::Fill),
+            );
+        }
+        sidebar_col = sidebar_col.push(container(outline_col.spacing(5)).padding(10));
     }
 
     if !tab.bookmarks.is_empty() {
-        sidebar_col = sidebar_col.push(
-            Card::new(text("Bookmarks").size(14).font(INTER_BOLD), {
-                let mut bookmarks_col = column![];
-                for (idx, bookmark) in tab.bookmarks.iter().enumerate() {
-                    bookmarks_col = bookmarks_col.push(row![
-                        button(text(&bookmark.label))
-                            .on_press(crate::message::Message::JumpToBookmark(idx))
-                            .width(Length::Fill),
-                        button("×").on_press(crate::message::Message::RemoveBookmark(idx))
-                    ]);
-                }
-                bookmarks_col.spacing(5)
-            })
-            .padding(10.0.into()),
-        );
+        let mut bookmarks_col = column![section_title("Bookmarks")];
+        for (idx, bookmark) in tab.bookmarks.iter().enumerate() {
+            bookmarks_col = bookmarks_col.push(row![
+                button(text(&bookmark.label))
+                    .on_press(crate::message::Message::JumpToBookmark(idx))
+                    .width(Length::Fill),
+                button("×").on_press(crate::message::Message::RemoveBookmark(idx))
+            ]);
+        }
+        sidebar_col = sidebar_col.push(container(bookmarks_col.spacing(5)).padding(10));
     }
 
     if !tab.annotations.is_empty() {
-        sidebar_col = sidebar_col.push(
-            Card::new(text("Annotations").size(14).font(INTER_BOLD), {
-                let mut annotations_col = column![];
-                for (idx, ann) in tab.annotations.iter().enumerate() {
-                    let label = match &ann.style {
-                        crate::models::AnnotationStyle::Highlight { .. } => {
-                            format!("Highlight P{}", ann.page + 1)
-                        }
-                        crate::models::AnnotationStyle::Rectangle { .. } => {
-                            format!("Rect P{}", ann.page + 1)
-                        }
-                        crate::models::AnnotationStyle::Text { text, .. } => {
-                            format!("Text: {}", &text[..text.len().min(20)])
-                        }
-                    };
-                    annotations_col = annotations_col.push(row![
-                        button(text(label))
-                            .on_press(crate::message::Message::JumpToPage(ann.page))
-                            .width(Length::Fill),
-                        button("×").on_press(crate::message::Message::DeleteAnnotation(idx))
-                    ]);
+        let mut annotations_col = column![section_title("Annotations")];
+        for (idx, ann) in tab.annotations.iter().enumerate() {
+            let label = match &ann.style {
+                crate::models::AnnotationStyle::Highlight { .. } => {
+                    format!("Highlight P{}", ann.page + 1)
                 }
-                annotations_col.spacing(5)
-            })
-            .padding(10.0.into()),
-        );
+                crate::models::AnnotationStyle::Rectangle { .. } => {
+                    format!("Rect P{}", ann.page + 1)
+                }
+                crate::models::AnnotationStyle::Text { text, .. } => {
+                    format!("Text: {}", &text[..text.len().min(20)])
+                }
+            };
+            annotations_col = annotations_col.push(row![
+                button(text(label))
+                    .on_press(crate::message::Message::JumpToPage(ann.page))
+                    .width(Length::Fill),
+                button("×").on_press(crate::message::Message::DeleteAnnotation(idx))
+            ]);
+        }
+        sidebar_col = sidebar_col.push(container(annotations_col.spacing(5)).padding(10));
     }
 
     sidebar_col = sidebar_col.push(
-        Card::new(
+        container(
             text(format!("Pages ({})", tab.total_pages))
                 .size(14)
-                .font(INTER_BOLD),
-            Space::new(),
+                .font(INTER_BOLD)
+                .style(|_| iced::widget::text::Style {
+                    color: Some(Color::from_rgb(0.2, 0.4, 0.6)),
+                }),
         )
-        .padding(10.0.into()),
+        .padding([5, 0]),
     );
 
     let thumbnail_height = 40.0;
