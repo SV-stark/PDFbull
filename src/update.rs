@@ -7,6 +7,7 @@ use iced::widget::image as iced_image;
 use iced::widget::{operation, Id};
 use iced::Task;
 use std::path::PathBuf;
+use webbrowser;
 
 fn scroll_to_page(tab: &crate::models::DocumentTab, page: usize) -> Task<Message> {
     let y_offset: f32 = tab.page_heights.iter().take(page).map(|h| (h + crate::models::PAGE_SPACING) * tab.zoom).sum();
@@ -36,7 +37,7 @@ pub fn handle_message(app: &mut PdfBullApp, message: Message) -> Task<Message> {
                 let target_tab = session_data.active_tab;
                 let mut tasks = Vec::new();
                 for path in session_data.open_tabs.drain(..) {
-                    tasks.push(app.update(Message::OpenFile(path)));
+                    tasks.push(app.update(Message::OpenFile(path.into())));
                 }
                 if !tasks.is_empty() {
                     tasks.push(Task::perform(
@@ -340,7 +341,7 @@ pub fn handle_message(app: &mut PdfBullApp, message: Message) -> Task<Message> {
             app.update(Message::DocumentOpened(Ok(data)))
         }
         Message::DocumentOpened(result) => match result {
-            Ok((doc_id, count, heights, width, outline)) => {
+            Ok((doc_id, count, heights, width, outline, links)) => {
                 let default_zoom = app.settings.default_zoom;
                 let default_filter = app.settings.default_filter;
                 let pdf_path = app
@@ -354,6 +355,7 @@ pub fn handle_message(app: &mut PdfBullApp, message: Message) -> Task<Message> {
                     tab.page_heights = heights;
                     tab.page_width = width;
                     tab.outline = outline;
+                    tab.links = links;
                     tab.is_loading = false;
                     tab.zoom = default_zoom;
                     tab.render_filter = default_filter;
@@ -1232,6 +1234,14 @@ pub fn handle_message(app: &mut PdfBullApp, message: Message) -> Task<Message> {
                     }
                 }
                 _ => {}
+            }
+            Task::none()
+        }
+        Message::LinkClicked(link) => {
+            if let Some(url) = link.url {
+                let _ = webbrowser::open(&url);
+            } else if let Some(dest_page) = link.destination_page {
+                return app.update(Message::JumpToPage(dest_page));
             }
             Task::none()
         }

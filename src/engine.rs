@@ -48,9 +48,16 @@ fn spawn_document_worker(
                 PdfCommand::Open(_p, resp) => {
                     // If we have a cached result from the pre-open above, use it for the first Open call
                     match &open_result {
-                        Ok((path_str, count, heights, width)) => {
+                        Ok((path_str, count, heights, width, links)) => {
                             let outline = store.get_outline(path_str);
-                            let _ = resp.send(Ok((doc_id, *count, heights.clone(), *width, outline)));
+                            let _ = resp.send(Ok((
+                                doc_id,
+                                *count,
+                                heights.clone(),
+                                *width,
+                                outline,
+                                links.clone(),
+                            )));
                         }
                         Err(e) => {
                             let _ = resp.send(Err(e.clone()));
@@ -58,7 +65,7 @@ fn spawn_document_worker(
                     }
                 }
                 PdfCommand::Render(_, page, options, resp) => {
-                    match store.render_page(&path, page, options) {
+                    match store.render_page(&path, page as usize, options) {
                         Ok((w, h, data)) => {
                             let _ = resp.send(Ok((w, h, data)));
                         }
@@ -70,7 +77,7 @@ fn spawn_document_worker(
                 PdfCommand::RenderThumbnail(_, page, zoom, resp) => {
                     match store.render_page(
                         &path,
-                        page,
+                        page as usize,
                         crate::pdf_engine::RenderOptions {
                             scale: zoom,
                             rotation: 0,

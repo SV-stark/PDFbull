@@ -1,13 +1,19 @@
-use moka::sync::Cache;
+use crate::models::{Annotation, AnnotationStyle, Hyperlink, SearchResultItem};
 use pdfium_render::prelude::*;
-use rayon::prelude::*;
-use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::sync::Arc;
 
-#[derive(Default, Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub type SharedRenderCache = Arc<moka::sync::Cache<String, crate::models::RenderResult>>;
+
+#[derive(Clone, Copy, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
+pub enum RenderQuality {
+    Low,
+    Medium,
+    High,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 pub enum RenderFilter {
-    #[default]
     None,
     Grayscale,
     Inverted,
@@ -17,15 +23,7 @@ pub enum RenderFilter {
     NoShadow,
 }
 
-#[derive(Default, Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Hash)]
-pub enum RenderQuality {
-    Low,
-    #[default]
-    Medium,
-    High,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone)]
 pub struct RenderOptions {
     pub scale: f32,
     pub rotation: i32,
@@ -33,8 +31,6 @@ pub struct RenderOptions {
     pub auto_crop: bool,
     pub quality: RenderQuality,
 }
-
-pub type SharedRenderCache = Cache<RenderCacheKey, (u32, u32, Arc<Vec<u8>>)>;
 
 pub struct DocumentStore<'a> {
     pdfium: &'a Pdfium,
@@ -47,30 +43,6 @@ struct DocumentState<'a> {
     path: String,
 }
 
-#[derive(Clone, Hash, Eq, PartialEq, Debug)]
-pub struct RenderCacheKey {
-    doc_id: String,
-    page: i32,
-    scale_key: u32,
-    rotation: u32,
-    filter: u32,
-    auto_crop: bool,
-    quality: RenderQuality,
-}
-
-pub fn create_render_cache(cache_size: u64) -> SharedRenderCache {
-    Cache::builder()
-        .max_capacity(cache_size)
-        .build()
-}
-
-#[derive(Clone, Debug)]
-pub struct Bookmark {
-    pub title: String,
-    pub page_index: u32,
-    pub children: Vec<Bookmark>,
-}
-
 impl<'a> DocumentStore<'a> {
     pub fn new(pdfium: &'a Pdfium, cache: SharedRenderCache) -> Result<Self, String> {
         Ok(Self {
@@ -80,7 +52,10 @@ impl<'a> DocumentStore<'a> {
         })
     }
 
-    pub fn open_document(&mut self, path: &str) -> Result<(String, usize, Vec<f32>, f32), String> {
+    pub fn open_document(
+        &mut self,
+        path: &str,
+    ) -> Result<(String, usize, Vec<f32>, f32, Vec<Hyperlink>), String> {
         let doc = self
             .pdfium
             .load_pdf_from_file(path, None)
@@ -91,14 +66,42 @@ impl<'a> DocumentStore<'a> {
 
         let mut heights = Vec::with_capacity(page_count as usize);
         let mut max_width = 0.0;
+        let mut all_links = Vec::new();
 
         for i in 0..page_count {
-            if let Ok(page) = pages.get(i) {
+            if let Ok(page) = pages.get(i as i32) {
                 let w = page.width().value;
                 let h = page.height().value;
                 heights.push(h);
                 if w > max_width {
                     max_width = w;
+                }
+
+                // Extract links
+                for link in page.links().iter() {
+                    if let Ok(rect) = link.rect() {
+                        let x = rect.left().value;
+                        let y = rect.bottom().value;
+                        let lw = rect.width().value;
+                        let lh = rect.height().value;
+
+                        let url = link.action().and_then(|a| {
+                            a.as_uri_action().and_then(|u| u.uri().ok())
+                        });
+                        let dest = link
+                            .destination()
+                            .and_then(|d| d.page_index().ok())
+                            .map(|idx| idx as usize);
+
+                        if url.is_some() || dest.is_some() {
+                            all_links.push(Hyperlink {
+                                page: i as usize,
+                                bounds: (x, y, lw, lh),
+                                url,
+                                destination_page: dest,
+                            });
+                        }
+                    }
                 }
             } else {
                 heights.push(0.0);
@@ -109,9 +112,16 @@ impl<'a> DocumentStore<'a> {
             doc,
             path: path.to_string(),
         };
+
         self.documents.insert(path.to_string(), state);
 
-        Ok((path.to_string(), page_count as usize, heights, max_width))
+        Ok((
+            path.to_string(),
+            page_count as usize,
+            heights,
+            max_width,
+            all_links,
+        ))
     }
 
     pub fn ensure_opened(&mut self, path: &str) -> Result<(), String> {
@@ -121,71 +131,20 @@ impl<'a> DocumentStore<'a> {
         Ok(())
     }
 
-    pub fn get_outline(&self, doc_id: &str) -> Vec<Bookmark> {
-        if let Some(state) = self.documents.get(doc_id) {
-            Self::extract_bookmarks_internal(state.doc.bookmarks().root().as_ref())
-        } else {
-            vec![]
-        }
-    }
-
-    fn extract_bookmarks_internal(bookmark: Option<&PdfBookmark>) -> Vec<Bookmark> {
-        let mut result = Vec::new();
-        let mut current = bookmark.and_then(|b| b.first_child());
-
-        while let Some(bm) = current {
-            let mut item = Bookmark {
-                title: bm.title().unwrap_or_default(),
-                page_index: 0,
-                children: Vec::new(),
-            };
-
-            if let Some(dest) = bm.destination() {
-                if let Ok(idx) = dest.page_index() {
-                    item.page_index = idx as u32;
-                }
-            }
-
-            item.children = Self::extract_bookmarks_internal(Some(&bm));
-            result.push(item);
-
-            current = bm.next_sibling();
-        }
-        result
-    }
-
-    pub fn invalidate_render_cache(&mut self, doc_id: &str) {
-        let target_id = doc_id.to_string();
-        let _ = self
-            .render_cache
-            .invalidate_entries_if(move |k: &RenderCacheKey, _v| k.doc_id == target_id);
-    }
-
-    pub fn close_document(&mut self, doc_id: &str) {
-        self.documents.remove(doc_id);
-        self.invalidate_render_cache(doc_id);
+    pub fn close_document(&mut self, path: &str) {
+        self.documents.remove(path);
     }
 
     pub fn render_page(
-        &self,
-        doc_id: &str,
-        page_num: i32,
+        &mut self,
+        path: &str,
+        page_num: usize,
         options: RenderOptions,
-    ) -> Result<(u32, u32, Arc<Vec<u8>>), String> {
-        let scale_key = (options.scale * 10000.0) as u32;
-        let rotation_key = ((options.rotation + 360) % 360) as u32;
-        let filter_key = options.filter as u32;
-        let crop_key = options.auto_crop;
-
-        let cache_key = RenderCacheKey {
-            doc_id: doc_id.to_string(),
-            page: page_num,
-            scale_key,
-            rotation: rotation_key,
-            filter: filter_key,
-            auto_crop: crop_key,
-            quality: options.quality,
-        };
+    ) -> Result<crate::models::RenderResult, String> {
+        let cache_key = format!(
+            "{}_{}_{}_{:?}_{}_{:?}",
+            path, page_num, options.scale, options.filter, options.auto_crop, options.quality
+        );
 
         if let Some(cached) = self.render_cache.get(&cache_key) {
             return Ok(cached);
@@ -193,24 +152,11 @@ impl<'a> DocumentStore<'a> {
 
         let state = self
             .documents
-            .get(doc_id)
+            .get(path)
             .ok_or_else(|| "Document not found or closed".to_string())?;
 
         let doc = &state.doc;
-
-        if page_num < 0 || page_num as usize >= doc.pages().len() as usize {
-            return Err("Page number out of bounds".to_string());
-        }
-
-        let page = doc.pages().get(page_num).map_err(|e| e.to_string())?;
-
-        let render_rotation = match ((options.rotation + 360) % 360) / 90 {
-            0 => PdfPageRenderRotation::None,
-            1 => PdfPageRenderRotation::Degrees90,
-            2 => PdfPageRenderRotation::Degrees180,
-            3 => PdfPageRenderRotation::Degrees270,
-            _ => PdfPageRenderRotation::None,
-        };
+        let page = doc.pages().get(page_num as i32).map_err(|e| e.to_string())?;
 
         let mut target_w = (page.width().value * options.scale) as i32;
         let mut target_h = (page.height().value * options.scale) as i32;
@@ -222,10 +168,22 @@ impl<'a> DocumentStore<'a> {
             target_h = (target_h as f32 * scale_factor) as i32;
         }
 
-        let render_config = PdfRenderConfig::new()
+        let render_rotation = match options.rotation {
+            90 => PdfPageRenderRotation::Degrees90,
+            180 => PdfPageRenderRotation::Degrees180,
+            270 => PdfPageRenderRotation::Degrees270,
+            _ => PdfPageRenderRotation::None,
+        };
+
+        let mut render_config = PdfRenderConfig::new()
             .set_target_width(target_w)
             .set_maximum_height(target_h)
-            .rotate(render_rotation, false);
+            .rotate(render_rotation, false)
+            .use_lcd_text_rendering(true);
+
+        if options.filter == RenderFilter::Grayscale {
+            render_config = render_config.use_grayscale_rendering(true);
+        }
 
         let bitmap = page
             .render_with_config(&render_config)
@@ -234,7 +192,7 @@ impl<'a> DocumentStore<'a> {
         let w = bitmap.width() as u32;
         let h = bitmap.height() as u32;
 
-        let result_data = if options.filter == RenderFilter::None {
+        let result_data = if options.filter == RenderFilter::None || options.filter == RenderFilter::Grayscale {
             bitmap.as_rgba_bytes().to_vec()
         } else {
             Self::apply_filter(bitmap.as_rgba_bytes().to_vec(), w, h, options.filter)
@@ -266,391 +224,217 @@ impl<'a> DocumentStore<'a> {
         Ok(result)
     }
 
-    fn calculate_corner_threshold(data: &[u8], width: usize, height: usize) -> u8 {
-        if width == 0 || height == 0 {
-            return 250;
-        }
-
-        // Sample 4 corners: top-left, top-right, bottom-left, bottom-right
-        let samples = [
-            (0, 0),                                      // top-left
-            ((width - 1) * 4, 0),                        // top-right
-            (0, (height - 1) * width * 4),               // bottom-left
-            ((width - 1) * 4, (height - 1) * width * 4), // bottom-right
-        ];
-
-        let mut sum = 0u32;
-        let mut count = 0;
-
-        for (x_offset, y_offset) in samples.iter() {
-            let idx = (*y_offset + *x_offset) as usize;
-            if idx + 3 < data.len() {
-                // Average of RGB components
-                let avg = (data[idx] as u32 + data[idx + 1] as u32 + data[idx + 2] as u32) / 3;
-                sum += avg;
-                count += 1;
-            }
-        }
-
-        if count == 0 {
-            return 250;
-        }
-
-        (sum / count) as u8
-    }
-
-    fn detect_content_bbox(data: &[u8], width: u32, height: u32) -> Option<(u32, u32, u32, u32)> {
-        let w = width as usize;
-        let h = height as usize;
-        // Calculate dynamic threshold based on corner pixels
-        let corner_threshold = Self::calculate_corner_threshold(data, w, h);
-        let threshold = corner_threshold.max(200).min(250); // Clamp between 200-250
-
-        let is_bg = |c: &[u8]| c[0] >= threshold && c[1] >= threshold && c[2] >= threshold;
-
-        let mut min_y = h;
-        for y in 0..h {
-            let row_start = y * w * 4;
-            let row = &data[row_start..row_start + w * 4];
-            if !row.chunks_exact(4).all(is_bg) {
-                min_y = y;
-                break;
-            }
-        }
-
-        if min_y == h {
-            return None;
-        }
-
-        let mut max_y = 0;
-        for y in (min_y..h).rev() {
-            let row_start = y * w * 4;
-            let row = &data[row_start..row_start + w * 4];
-            if !row.chunks_exact(4).all(is_bg) {
-                max_y = y;
-                break;
-            }
-        }
-
-        let mut min_x = w;
-        for x in 0..w {
-            let mut empty = true;
-            for y in min_y..=max_y {
-                let idx = (y * w + x) * 4;
-                if !is_bg(&data[idx..idx + 4]) {
-                    empty = false;
-                    break;
-                }
-            }
-            if !empty {
-                min_x = x;
-                break;
-            }
-        }
-
-        let mut max_x = 0;
-        for x in (min_x..w).rev() {
-            let mut empty = true;
-            for y in min_y..=max_y {
-                let idx = (y * w + x) * 4;
-                if !is_bg(&data[idx..idx + 4]) {
-                    empty = false;
-                    break;
-                }
-            }
-            if !empty {
-                max_x = x;
-                break;
-            }
-        }
-
-        if max_x >= min_x && max_y >= min_y {
-            let margin = 10;
-            Some((
-                (min_x as u32).saturating_sub(margin),
-                (min_y as u32).saturating_sub(margin),
-                (max_x as u32 + margin).min(width.saturating_sub(1)),
-                (max_y as u32 + margin).min(height.saturating_sub(1)),
-            ))
-        } else {
-            None
-        }
-    }
-
-    fn apply_filter(mut data: Vec<u8>, _width: u32, _height: u32, filter: RenderFilter) -> Vec<u8> {
-        if filter == RenderFilter::None {
-            return data;
-        }
-
-        match filter {
-            RenderFilter::Grayscale => {
-                data.par_chunks_exact_mut(4).for_each(|pixel| {
-                    let gray =
-                        (pixel[0] as u32 * 299 + pixel[1] as u32 * 587 + pixel[2] as u32 * 114)
-                            / 1000;
-                    pixel[0] = gray as u8;
-                    pixel[1] = gray as u8;
-                    pixel[2] = gray as u8;
-                });
-            }
-            RenderFilter::Inverted => {
-                data.par_chunks_exact_mut(4).for_each(|pixel| {
-                    pixel[0] = 255 - pixel[0];
-                    pixel[1] = 255 - pixel[1];
-                    pixel[2] = 255 - pixel[2];
-                });
-            }
-            RenderFilter::Eco => {
-                data.par_chunks_exact_mut(4).for_each(|pixel| {
-                    let avg = ((pixel[0] as u32 + pixel[1] as u32 + pixel[2] as u32) / 3) as u8;
-                    let eco = (avg as u32 * 8 / 10) as u8;
-                    pixel[0] = eco;
-                    pixel[1] = eco;
-                    pixel[2] = eco;
-                });
-            }
-            RenderFilter::BlackWhite => {
-                data.par_chunks_exact_mut(4).for_each(|pixel| {
-                    let gray =
-                        (pixel[0] as u32 * 299 + pixel[1] as u32 * 587 + pixel[2] as u32 * 114)
-                            / 1000;
-                    let bw = if gray > 128 { 255 } else { 0 };
-                    pixel[0] = bw;
-                    pixel[1] = bw;
-                    pixel[2] = bw;
-                });
-            }
-            RenderFilter::Lighten => {
-                data.par_chunks_exact_mut(4).for_each(|pixel| {
-                    let lighten = |c: u8| (c as u32 * 3 / 2).min(255) as u8;
-                    pixel[0] = lighten(pixel[0]);
-                    pixel[1] = lighten(pixel[1]);
-                    pixel[2] = lighten(pixel[2]);
-                });
-            }
-            RenderFilter::NoShadow => {
-                data.par_chunks_exact_mut(4).for_each(|pixel| {
-                    let avg = ((pixel[0] as u32 + pixel[1] as u32 + pixel[2] as u32) / 3) as u8;
-                    if avg < 64 {
-                        pixel[0] = pixel[0].saturating_add(64);
-                        pixel[1] = pixel[1].saturating_add(64);
-                        pixel[2] = pixel[2].saturating_add(64);
-                    }
-                });
-            }
-            RenderFilter::None => {}
-        }
-
-        data
-    }
-
-    pub fn extract_text(&self, doc_id: &str, page_num: i32) -> Result<String, String> {
+    pub fn extract_text(&self, path: &str, page_num: i32) -> Result<String, String> {
         let state = self
             .documents
-            .get(doc_id)
-            .ok_or_else(|| "Document not found or closed".to_string())?;
+            .get(path)
+            .ok_or_else(|| "Document not found".to_string())?;
+        let page = state
+            .doc
+            .pages()
+            .get(page_num)
+            .map_err(|e| e.to_string())?;
+        let text_page = page.text().map_err(|e| e.to_string())?;
+        Ok(text_page.all())
+    }
 
-        let doc = &state.doc;
+    pub fn save_annotations(
+        &mut self,
+        pdf_path: &str,
+        annotations: &[Annotation],
+    ) -> Result<String, String> {
+        let state = self
+            .documents
+            .get_mut(pdf_path)
+            .ok_or_else(|| "Document not found".to_string())?;
+        let doc = &mut state.doc;
 
-        if page_num < 0 || page_num as usize >= doc.pages().len() as usize {
-            return Err("Page number out of bounds".to_string());
+        for ann in annotations {
+            let mut page = doc.pages().get(ann.page as i32).map_err(|e| e.to_string())?;
+            let mut objects = page.objects_mut();
+
+            let rect = PdfRect::new(
+                PdfPoints::new(ann.y + ann.height),
+                PdfPoints::new(ann.x),
+                PdfPoints::new(ann.y),
+                PdfPoints::new(ann.x + ann.width),
+            );
+
+            match &ann.style {
+                AnnotationStyle::Highlight { color } => {
+                    let (r, g, b) = Self::hex_to_rgb(color);
+                    let fill_color = Some(PdfColor::new(
+                        (r * 255.0) as u8,
+                        (g * 255.0) as u8,
+                        (b * 255.0) as u8,
+                        100,
+                    ));
+                    
+                    let _rect_obj = objects
+                        .create_path_object_rect(
+                            rect,
+                            None,
+                            None,
+                            fill_color,
+                        )
+                        .map_err(|e| e.to_string())?;
+                }
+                AnnotationStyle::Rectangle {
+                    color,
+                    thickness,
+                    fill,
+                } => {
+                    let (r, g, b) = Self::hex_to_rgb(color);
+                    let fill_color = if *fill {
+                        Some(PdfColor::new(
+                            (r * 255.0) as u8,
+                            (g * 255.0) as u8,
+                            (b * 255.0) as u8,
+                            50,
+                        ))
+                    } else {
+                        None
+                    };
+                    let stroke_color = Some(PdfColor::new(
+                        (r * 255.0) as u8,
+                        (g * 255.0) as u8,
+                        (b * 255.0) as u8,
+                        255,
+                    ));
+
+                    let _rect_obj = objects
+                        .create_path_object_rect(
+                            rect,
+                            stroke_color,
+                            Some(PdfPoints::new(*thickness)),
+                            fill_color,
+                        )
+                        .map_err(|e| e.to_string())?;
+                }
+                AnnotationStyle::Text {
+                    text,
+                    color,
+                    font_size,
+                } => {
+                    let (_r, _g, _b) = Self::hex_to_rgb(color);
+                    let font = doc.fonts_mut().helvetica();
+                    let _text_obj = objects
+                        .create_text_object(
+                            PdfPoints::new(ann.x),
+                            PdfPoints::new(ann.y),
+                            text,
+                            font,
+                            PdfPoints::new(*font_size as f32),
+                        )
+                        .map_err(|e| e.to_string())?;
+                }
+            }
         }
 
-        let page = doc.pages().get(page_num).map_err(|e| e.to_string())?;
+        let output_path = pdf_path.replace(".pdf", "_annotated.pdf");
+        doc.save_to_file(&output_path).map_err(|e| e.to_string())?;
+        Ok(output_path)
+    }
 
-        let text = page.text().map_err(|e| e.to_string())?;
-
-        Ok(text.to_string())
+    pub fn load_annotations(&self, _pdf_path: &str) -> Result<Vec<Annotation>, String> {
+        Ok(Vec::new())
     }
 
     pub fn export_page_as_image(
         &self,
-        doc_id: &str,
+        path: &str,
         page_num: i32,
         scale: f32,
-        path: &str,
+        output_path: &str,
     ) -> Result<(), String> {
         let state = self
             .documents
-            .get(doc_id)
-            .ok_or_else(|| "Document not found or closed".to_string())?;
-
-        let doc = &state.doc;
-
-        if page_num < 0 || page_num as usize >= doc.pages().len() as usize {
-            return Err("Page number out of bounds".to_string());
-        }
-
-        let page = doc.pages().get(page_num).map_err(|e| e.to_string())?;
+            .get(path)
+            .ok_or_else(|| "Document not found".to_string())?;
+        let page = state
+            .doc
+            .pages()
+            .get(page_num)
+            .map_err(|e| e.to_string())?;
 
         let render_config = PdfRenderConfig::new()
             .set_target_width((page.width().value * scale) as i32)
             .set_maximum_height((page.height().value * scale) as i32)
-            .rotate(PdfPageRenderRotation::None, false);
+            .rotate(PdfPageRenderRotation::None, false)
+            .use_lcd_text_rendering(true);
 
         let bitmap = page
             .render_with_config(&render_config)
             .map_err(|e| e.to_string())?;
-
         let img = bitmap.as_image().map_err(|e| e.to_string())?;
-        let rgba = img.as_rgba8();
-        let image = match rgba {
-            Some(i) => i,
-            None => return Err("Failed to convert to RGBA8".to_string()),
-        };
-
-        image.save(path).map_err(|e| format!("{}", e))?;
-
+        img.save(output_path).map_err(|e| e.to_string())?;
         Ok(())
     }
 
     pub fn export_pages_as_images(
         &self,
-        doc_id: &str,
-        page_nums: &[i32],
+        path: &str,
+        pages: &[i32],
         scale: f32,
         output_dir: &str,
     ) -> Result<Vec<String>, String> {
         let state = self
             .documents
-            .get(doc_id)
-            .ok_or_else(|| "Document not found or closed".to_string())?;
+            .get(path)
+            .ok_or_else(|| "Document not found".to_string())?;
+        let mut paths = Vec::new();
 
-        let doc = &state.doc;
-
-        let doc_name = state
-            .path
-            .rsplit(['/', '\\'])
-            .next()
-            .and_then(|s| s.strip_suffix(".pdf").or(Some(s)))
-            .unwrap_or("document");
-
-        let mut exported_paths = Vec::new();
-
-        for (idx, &page_num) in page_nums.iter().enumerate() {
-            if page_num < 0 || page_num as usize >= doc.pages().len() as usize {
-                continue;
-            }
-
-            let page = match doc.pages().get(page_num) {
-                Ok(p) => p,
-                Err(_) => continue,
-            };
+        for &page_num in pages {
+            let page = state
+                .doc
+                .pages()
+                .get(page_num)
+                .map_err(|e| e.to_string())?;
 
             let render_config = PdfRenderConfig::new()
                 .set_target_width((page.width().value * scale) as i32)
                 .set_maximum_height((page.height().value * scale) as i32)
-                .rotate(PdfPageRenderRotation::None, false);
+                .rotate(PdfPageRenderRotation::None, false)
+                .use_lcd_text_rendering(true);
 
             let bitmap = match page.render_with_config(&render_config) {
                 Ok(b) => b,
                 Err(_) => continue,
             };
-
-            let img = bitmap.as_image().map_err(|e| e.to_string())?;
-            let rgba = match img.as_rgba8() {
-                Some(i) => i,
-                None => continue,
+            let img = match bitmap.as_image() {
+                Ok(i) => i,
+                Err(_) => continue,
             };
-
-            let filename = format!("{}_page{}_{}.png", doc_name, page_num, idx);
-            let path = std::path::Path::new(output_dir).join(&filename);
-
-            if let Err(e) = rgba.save(&path) {
-                eprintln!("Failed to save page {}: {}", page_num, e);
-                continue;
-            }
-
-            exported_paths.push(path.to_string_lossy().to_string());
-        }
-
-        Ok(exported_paths)
-    }
-
-    pub fn save_annotations(
-        &mut self,
-        doc_path: &str,
-        annotations: &[crate::models::Annotation],
-    ) -> Result<String, String> {
-        let state = self
-            .documents
-            .iter_mut()
-            .find(|(_, d)| d.path == doc_path)
-            .map(|(_, d)| d)
-            .ok_or_else(|| "Document not found".to_string())?;
-
-        let doc = &state.doc;
-
-        for ann in annotations {
-            if ann.page >= doc.pages().len() as usize {
-                continue;
-            }
-            let mut page = doc
-                .pages()
-                .get(ann.page as i32)
-                .map_err(|e| e.to_string())?;
-
-            match &ann.style {
-                crate::models::AnnotationStyle::Highlight { color: _ } => {
-                    let pdf_x = ann.x as f32;
-                    let pdf_y = (page.height().value - ann.y - ann.height) as f32;
-                    let pdf_w = ann.width as f32;
-                    let pdf_h = ann.height as f32;
-
-                    let rect = PdfRect::new(
-                        PdfPoints::new(pdf_x),
-                        PdfPoints::new(pdf_y),
-                        PdfPoints::new(pdf_x + pdf_w),
-                        PdfPoints::new(pdf_y + pdf_h),
-                    );
-
-                    let page_annotations = page.annotations_mut();
-                    if let Ok(mut pdf_ann) = page_annotations.create_highlight_annotation() {
-                        let _ = pdf_ann.set_bounds(rect);
-                    }
-                }
-                crate::models::AnnotationStyle::Rectangle { color: _, .. } => {
-                    let pdf_x = ann.x as f32;
-                    let pdf_y = (page.height().value - ann.y - ann.height) as f32;
-                    let pdf_w = ann.width as f32;
-                    let pdf_h = ann.height as f32;
-
-                    let rect = PdfRect::new(
-                        PdfPoints::new(pdf_x),
-                        PdfPoints::new(pdf_y),
-                        PdfPoints::new(pdf_x + pdf_w),
-                        PdfPoints::new(pdf_y + pdf_h),
-                    );
-
-                    let page_annotations = page.annotations_mut();
-                    if let Ok(mut pdf_ann) = page_annotations.create_square_annotation() {
-                        let _ = pdf_ann.set_bounds(rect);
-                    }
-                }
-                _ => {}
+            let out_path = format!("{}/page_{}.png", output_dir, page_num + 1);
+            if img.save(&out_path).is_ok() {
+                paths.push(out_path);
             }
         }
-
-        doc.save_to_file(doc_path).map_err(|e| e.to_string())?;
-        Ok(doc_path.to_string())
+        Ok(paths)
     }
 
-    pub fn load_annotations(
-        &self,
-        _doc_path: &str,
-    ) -> Result<Vec<crate::models::Annotation>, String> {
-        // Since we are now using native annotations, they are loaded automatically
-        // when the PDF is opened. However, the app might expect them translated to its model.
-        // For now, we'll return empty or potentially implement a translator if needed.
-        // The user's app seems to have its own internal state management for annotations.
-        Ok(Vec::new())
+    pub fn get_outline(&self, path: &str) -> Vec<Bookmark> {
+        if let Some(state) = self.documents.get(path) {
+            let mut bookmarks = Vec::new();
+            for b in state.doc.bookmarks().iter() {
+                if let Some(title) = b.title() {
+                    bookmarks.push(Bookmark {
+                        title,
+                        page_index: b.destination().and_then(|d| d.page_index().ok()).unwrap_or(0) as u16,
+                    });
+                }
+            }
+            bookmarks
+        } else {
+            Vec::new()
+        }
     }
 
     pub fn search(
         &self,
         doc_id: &str,
         query: &str,
-    ) -> Result<Vec<crate::models::SearchResultItem>, String> {
+    ) -> Result<Vec<SearchResultItem>, String> {
         let state = self
             .documents
             .get(doc_id)
@@ -658,15 +442,31 @@ impl<'a> DocumentStore<'a> {
 
         let doc = &state.doc;
         let mut results = Vec::new();
-        let query_lower = query.to_lowercase();
-        for (idx, page) in doc.pages().iter().enumerate() {
+
+        for (page_idx, page) in doc.pages().iter().enumerate() {
             if let Ok(text) = page.text() {
-                let all_text = text.all();
-                if all_text.to_lowercase().contains(&query_lower) {
-                    results.push((
-                        idx, all_text, 0.0, 0.0, 100.0,
-                        100.0, // Placeholder for now to ensure compilation
-                    ));
+                let search_options = PdfSearchOptions::new();
+                if let Ok(searcher) = text.search(query, &search_options) {
+                    for segments in searcher.iter(PdfSearchDirection::SearchForward) {
+                        let mut text_all = String::new();
+                        let mut first_rect = None;
+                        
+                        for segment in segments.iter() {
+                            if first_rect.is_none() {
+                                first_rect = Some(segment.bounds());
+                            }
+                            text_all.push_str(&segment.text());
+                        }
+
+                        if let Some(rect) = first_rect {
+                            let x = rect.left().value;
+                            let y = rect.bottom().value;
+                            let w = rect.width().value;
+                            let h = rect.height().value;
+
+                            results.push((page_idx, text_all, y, x, w, h));
+                        }
+                    }
                 }
             }
         }
@@ -674,22 +474,129 @@ impl<'a> DocumentStore<'a> {
         Ok(results)
     }
 
-    pub fn get_thumbnail(
-        &self,
-        doc_id: &str,
-        page_num: i32,
-        scale: f32,
-    ) -> Result<(u32, u32, Arc<Vec<u8>>), String> {
-        self.render_page(
-            doc_id,
-            page_num,
-            RenderOptions {
-                scale,
-                rotation: 0,
-                filter: RenderFilter::None,
-                auto_crop: false,
-                quality: RenderQuality::Low,
-            },
-        )
+    fn hex_to_rgb(hex: &str) -> (f32, f32, f32) {
+        let hex = hex.trim_start_matches('#');
+        if hex.len() != 6 {
+            return (0.0, 0.0, 0.0);
+        }
+        let r = u8::from_str_radix(&hex[0..2], 16).unwrap_or(0) as f32 / 255.0;
+        let g = u8::from_str_radix(&hex[2..4], 16).unwrap_or(0) as f32 / 255.0;
+        let b = u8::from_str_radix(&hex[4..6], 16).unwrap_or(0) as f32 / 255.0;
+        (r, g, b)
     }
+
+    fn detect_content_bbox(data: &[u8], width: u32, height: u32) -> Option<(u32, u32, u32, u32)> {
+        let mut min_x = width;
+        let mut min_y = height;
+        let mut max_x = 0;
+        let mut max_y = 0;
+        let mut found = false;
+
+        let is_bg = |p: &[u8]| {
+            let r = p[0];
+            let g = p[1];
+            let b = p[2];
+            r > 245 && g > 245 && b > 245
+        };
+
+        for y in 0..height {
+            let mut row_empty = true;
+            for x in 0..width {
+                let idx = ((y * width + x) * 4) as usize;
+                if !is_bg(&data[idx..idx + 4]) {
+                    row_empty = false;
+                    if x < min_x {
+                        min_x = x;
+                    }
+                    if x > max_x {
+                        max_x = x;
+                    }
+                    found = true;
+                }
+            }
+            if !row_empty {
+                if y < min_y {
+                    min_y = y;
+                }
+                if y > max_y {
+                    max_y = y;
+                }
+            }
+        }
+
+        if found {
+            let margin = 10;
+            Some((
+                min_x.saturating_sub(margin),
+                min_y.saturating_sub(margin),
+                (max_x + margin).min(width.saturating_sub(1)),
+                (max_y + margin).min(height.saturating_sub(1)),
+            ))
+        } else {
+            None
+        }
+    }
+
+    fn apply_filter(mut data: Vec<u8>, _width: u32, _height: u32, filter: RenderFilter) -> Vec<u8> {
+        match filter {
+            RenderFilter::Inverted => {
+                for i in (0..data.len()).step_by(4) {
+                    data[i] = 255 - data[i];
+                    data[i + 1] = 255 - data[i + 1];
+                    data[i + 2] = 255 - data[i + 2];
+                }
+            }
+            RenderFilter::Eco => {
+                for i in (0..data.len()).step_by(4) {
+                    let avg = (data[i] as u32 + data[i + 1] as u32 + data[i + 2] as u32) / 3;
+                    if avg > 200 {
+                        data[i] = 255;
+                        data[i + 1] = 255;
+                        data[i + 2] = 255;
+                    }
+                }
+            }
+            RenderFilter::BlackWhite => {
+                for i in (0..data.len()).step_by(4) {
+                    let avg = (data[i] as u32 + data[i + 1] as u32 + data[i + 2] as u32) / 3;
+                    let val = if avg > 128 { 255 } else { 0 };
+                    data[i] = val;
+                    data[i + 1] = val;
+                    data[i + 2] = val;
+                }
+            }
+            RenderFilter::Lighten => {
+                for i in (0..data.len()).step_by(4) {
+                    data[i] = data[i].saturating_add(20);
+                    data[i + 1] = data[i + 1].saturating_add(20);
+                    data[i + 2] = data[i + 2].saturating_add(20);
+                }
+            }
+            RenderFilter::NoShadow => {
+                for i in (0..data.len()).step_by(4) {
+                    if data[i] > 230 && data[i + 1] > 230 && data[i + 2] > 230 {
+                        data[i] = 255;
+                        data[i + 1] = 255;
+                        data[i + 2] = 255;
+                    }
+                }
+            }
+            _ => {}
+        }
+        data
+    }
+}
+
+pub fn create_render_cache(cache_size: u64) -> SharedRenderCache {
+    Arc::new(
+        moka::sync::Cache::builder()
+            .max_capacity(cache_size)
+            .build(),
+    )
+}
+
+#[derive(Clone, Debug)]
+pub struct Bookmark {
+    pub title: String,
+    pub page_index: u16,
 }

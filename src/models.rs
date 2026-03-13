@@ -4,35 +4,24 @@ use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 use std::sync::Arc;
 
-#[derive(Debug, Clone)]
-pub enum UndoableAction {
-    AddAnnotation(Annotation),
-    DeleteAnnotation(usize, Annotation),
-}
-
-#[derive(Debug, Clone, PartialEq)]
-pub enum PendingAnnotationKind {
-    Highlight,
-    Rectangle,
-}
-
-#[derive(Debug, Clone)]
-pub struct AnnotationDrag {
-    pub page: usize,
-    pub start: (f32, f32),
-    pub current: (f32, f32),
-    pub kind: PendingAnnotationKind,
-}
-
 pub type OpenResult = (
     DocumentId,
     usize,
     Vec<f32>,
     f32,
     Vec<crate::pdf_engine::Bookmark>,
+    Vec<Hyperlink>,
 );
 pub type RenderResult = (u32, u32, Arc<Vec<u8>>);
 pub type SearchResultItem = (usize, String, f32, f32, f32, f32);
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Hyperlink {
+    pub page: usize,
+    pub bounds: (f32, f32, f32, f32), // x, y, w, h in PDF points
+    pub url: Option<String>,
+    pub destination_page: Option<usize>,
+}
 
 #[derive(Default, Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct DocumentId(pub u64);
@@ -45,51 +34,33 @@ pub enum AppTheme {
     Dark,
 }
 
-impl From<&str> for AppTheme {
-    fn from(s: &str) -> Self {
-        match s {
-            "Light" => AppTheme::Light,
-            "Dark" => AppTheme::Dark,
-            _ => AppTheme::System,
-        }
-    }
-}
-
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AppSettings {
     pub theme: AppTheme,
-    pub auto_save: bool,
-    pub auto_save_interval: u32,
-    pub default_zoom: f32,
     pub cache_size: usize,
     pub render_quality: crate::pdf_engine::RenderQuality,
     pub default_filter: RenderFilter,
     pub accent_color: String,
     pub restore_session: bool,
     pub remember_last_file: bool,
+    pub default_zoom: f32,
+    pub auto_save: bool,
 }
 
 impl Default for AppSettings {
     fn default() -> Self {
         Self {
-            theme: AppTheme::default(),
-            auto_save: false,
-            auto_save_interval: 300,
-            default_zoom: 1.0,
-            cache_size: 50,
+            theme: AppTheme::System,
+            cache_size: 100,
             render_quality: crate::pdf_engine::RenderQuality::Medium,
             default_filter: RenderFilter::None,
             accent_color: "#3b82f6".to_string(),
             restore_session: true,
             remember_last_file: true,
+            default_zoom: 1.0,
+            auto_save: true,
         }
     }
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct SessionData {
-    pub open_tabs: Vec<PathBuf>,
-    pub active_tab: usize,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -97,6 +68,12 @@ pub struct RecentFile {
     pub path: String,
     pub name: String,
     pub last_opened: u64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SessionData {
+    pub open_tabs: Vec<String>,
+    pub active_tab: usize,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -123,13 +100,13 @@ pub enum AnnotationStyle {
         color: String,
         font_size: u32,
     },
+    Highlight {
+        color: String,
+    },
     Rectangle {
         color: String,
         thickness: f32,
         fill: bool,
-    },
-    Highlight {
-        color: String,
     },
 }
 
@@ -142,6 +119,26 @@ pub struct Annotation {
     pub y: f32,
     pub width: f32,
     pub height: f32,
+}
+
+#[derive(Debug, Clone)]
+pub enum UndoableAction {
+    AddAnnotation(Annotation),
+    DeleteAnnotation(usize, Annotation),
+}
+
+#[derive(Debug, Clone)]
+pub enum PendingAnnotationKind {
+    Highlight,
+    Rectangle,
+}
+
+#[derive(Debug, Clone)]
+pub struct AnnotationDrag {
+    pub page: usize,
+    pub start: (f32, f32),
+    pub current: (f32, f32),
+    pub kind: PendingAnnotationKind,
 }
 
 pub struct DocumentTab {
@@ -166,6 +163,7 @@ pub struct DocumentTab {
     pub outline: Vec<crate::pdf_engine::Bookmark>,
     pub bookmarks: Vec<PageBookmark>,
     pub annotations: Vec<Annotation>,
+    pub links: Vec<Hyperlink>,
     pub viewport_y: f32,
     pub viewport_height: f32,
     pub sidebar_viewport_y: f32,
@@ -178,14 +176,14 @@ pub const PAGE_SPACING: f32 = 10.0;
 use std::sync::atomic::{AtomicU64, Ordering};
 
 pub static NEXT_DOC_ID: AtomicU64 = AtomicU64::new(1);
-pub static NEXT_ANNOTATION_ID: AtomicU64 = AtomicU64::new(1);
+pub static NEXT_ANN_ID: AtomicU64 = AtomicU64::new(1);
 
 pub fn next_doc_id() -> DocumentId {
-    DocumentId(NEXT_DOC_ID.fetch_add(1, Ordering::Relaxed))
+    DocumentId(NEXT_DOC_ID.fetch_add(1, Ordering::SeqCst))
 }
 
 pub fn next_annotation_id() -> u64 {
-    NEXT_ANNOTATION_ID.fetch_add(1, Ordering::Relaxed)
+    NEXT_ANN_ID.fetch_add(1, Ordering::SeqCst)
 }
 
 impl DocumentTab {
@@ -195,7 +193,7 @@ impl DocumentTab {
             name: path
                 .file_name()
                 .map(|n| n.to_string_lossy().to_string())
-                .unwrap_or_else(|| "Untitled".to_string()),
+                .unwrap_or_else(|| "Unknown".to_string()),
             path,
             total_pages: 0,
             current_page: 0,
@@ -215,6 +213,7 @@ impl DocumentTab {
             outline: Vec::new(),
             bookmarks: Vec::new(),
             annotations: Vec::new(),
+            links: Vec::new(),
             viewport_y: 0.0,
             viewport_height: 800.0,
             sidebar_viewport_y: 0.0,
@@ -273,11 +272,18 @@ impl DocumentTab {
             })
             .collect();
 
+        let current_zoom = self.zoom;
         let to_remove_pages: Vec<usize> = self
             .rendered_pages
-            .keys()
-            .copied()
-            .filter(|p| !pages_to_keep.contains(p))
+            .iter()
+            .filter(|(&p, (scale, _))| {
+                if pages_to_keep.contains(&p) {
+                    (scale - current_zoom).abs() > 1.0
+                } else {
+                    true
+                }
+            })
+            .map(|(&p, _)| p)
             .collect();
 
         for p in to_remove_pages {
@@ -299,7 +305,6 @@ impl DocumentTab {
         for p in to_remove_thumbs {
             self.thumbnails.remove(&p);
         }
-
         self.last_cleanup_time = std::time::Instant::now();
     }
 

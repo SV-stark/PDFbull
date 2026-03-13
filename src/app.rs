@@ -97,7 +97,7 @@ impl PdfBullApp {
             return;
         }
         let session = crate::models::SessionData {
-            open_tabs: self.tabs.iter().map(|t| t.path.clone()).collect(),
+            open_tabs: self.tabs.iter().map(|t| t.path.to_string_lossy().to_string()).collect(),
             active_tab: self.active_tab,
         };
         crate::storage::save_session(&session);
@@ -167,6 +167,7 @@ impl PdfBullApp {
             self.rendering_set.insert(target);
             let tx = cmd_tx.clone();
             let doc_id_cloned = doc_id;
+            let current_scale = options.scale;
             tasks.push(Task::perform(
                 async move {
                     let (resp_tx, resp_rx) = tokio::sync::oneshot::channel();
@@ -180,7 +181,7 @@ impl PdfBullApp {
                         Ok(result) => result,
                         Err(_) => Err("Engine died".into()),
                     };
-                    (page_idx, options.scale, res)
+                    (page_idx, current_scale, res)
                 },
                 |(page_idx, scale, res)| Message::PageRendered(page_idx, scale, res),
             ));

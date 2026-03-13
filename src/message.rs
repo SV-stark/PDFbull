@@ -68,4 +68,5 @@ pub enum Message {
     ClearStatus,
     IcedEvent(iced::Event),
     ForceQuit,
+    LinkClicked(crate::models::Hyperlink),
 }

@@ -34,7 +34,11 @@ pub fn load_settings() -> AppSettings {
             if let Ok(value) = serde_json::from_str::<serde_json::Value>(&data) {
                 if let Some(obj) = value.as_object() {
                     if let Some(theme) = obj.get("theme").and_then(|v| v.as_str()) {
-                        settings.theme = AppTheme::from(theme);
+                        settings.theme = match theme {
+                            "Light" => AppTheme::Light,
+                            "Dark" => AppTheme::Dark,
+                            _ => AppTheme::System,
+                        };
                     }
                     if let Some(v) = obj.get("auto_save").and_then(|v| v.as_bool()) {
                         settings.auto_save = v;
