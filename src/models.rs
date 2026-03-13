@@ -154,7 +154,7 @@ pub struct DocumentTab {
     pub rotation: i32,
     pub render_filter: RenderFilter,
     pub auto_crop: bool,
-    pub rendered_pages: std::collections::HashMap<usize, iced_image::Handle>,
+    pub rendered_pages: std::collections::HashMap<usize, (f32, iced_image::Handle)>,
     pub thumbnails: std::collections::HashMap<usize, iced_image::Handle>,
     pub page_heights: Vec<f32>,
     pub page_width: f32,
@@ -172,7 +172,7 @@ pub struct DocumentTab {
     pub last_cleanup_time: std::time::Instant,
 }
 
-const VIEWPORT_BUFFER: usize = 3;
+const VIEWPORT_BUFFER: usize = 1;
 pub const PAGE_SPACING: f32 = 10.0;
 
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -227,7 +227,9 @@ impl DocumentTab {
         let mut y = 0.0;
 
         for (idx, height) in self.page_heights.iter().enumerate() {
-            let page_bottom = y + height + PAGE_SPACING;
+            let scaled_height = height * self.zoom;
+            let scaled_spacing = PAGE_SPACING * self.zoom;
+            let page_bottom = y + scaled_height + scaled_spacing;
             let viewport_top = self.viewport_y;
             let viewport_bottom = self.viewport_y + self.viewport_height;
 

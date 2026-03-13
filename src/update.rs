@@ -9,7 +9,7 @@ use iced::Task;
 use std::path::PathBuf;
 
 fn scroll_to_page(tab: &crate::models::DocumentTab, page: usize) -> Task<Message> {
-    let y_offset: f32 = tab.page_heights.iter().take(page).map(|h| h + crate::models::PAGE_SPACING).sum();
+    let y_offset: f32 = tab.page_heights.iter().take(page).map(|h| (h + crate::models::PAGE_SPACING) * tab.zoom).sum();
     operation::scroll_to(
         Id::new("pdf_scroll"),
         iced::widget::scrollable::AbsoluteOffset {
@@ -304,7 +304,10 @@ pub fn handle_message(app: &mut PdfBullApp, message: Message) -> Task<Message> {
                             let path = file.path().to_path_buf();
                             let path_s = path.to_string_lossy().to_string();
                             let (resp_tx, resp_rx) = tokio::sync::oneshot::channel();
-                            let _ = cmd_tx.send(PdfCommand::Open(path_s, resp_tx));
+                            if let Err(e) = cmd_tx.send(PdfCommand::Open(path_s, resp_tx)) {
+                                log::error!("Failed to send Open command: {}", e);
+                                return None;
+                            }
                             match resp_rx.await {
                                 Ok(Ok(data)) => Some((path, data)),
                                 _ => None,
@@ -419,7 +422,10 @@ pub fn handle_message(app: &mut PdfBullApp, message: Message) -> Task<Message> {
                 return Task::perform(
                     async move {
                         let (resp_tx, resp_rx) = tokio::sync::oneshot::channel();
-                        let _ = cmd_tx.send(PdfCommand::Open(path_s, resp_tx));
+                        if let Err(e) = cmd_tx.send(PdfCommand::Open(path_s, resp_tx)) {
+                            log::error!("Failed to send Open command: {}", e);
+                            return Err("Engine died".into());
+                        }
                         resp_rx.await.unwrap_or(Err("Engine died".into()))
                     },
                     Message::DocumentOpened,
@@ -507,21 +513,18 @@ pub fn handle_message(app: &mut PdfBullApp, message: Message) -> Task<Message> {
         Message::ZoomIn => {
             if let Some(tab) = app.current_tab_mut() {
                 tab.zoom = (tab.zoom * 1.25).min(5.0);
-                tab.rendered_pages.clear();
             }
             app.render_visible_pages()
         }
         Message::ZoomOut => {
             if let Some(tab) = app.current_tab_mut() {
                 tab.zoom = (tab.zoom / 1.25).max(0.25);
-                tab.rendered_pages.clear();
             }
             app.render_visible_pages()
         }
         Message::SetZoom(zoom) => {
             if let Some(tab) = app.current_tab_mut() {
                 tab.zoom = zoom.clamp(0.25, 5.0);
-                tab.rendered_pages.clear();
             }
             app.render_visible_pages()
         }
@@ -622,12 +625,15 @@ pub fn handle_message(app: &mut PdfBullApp, message: Message) -> Task<Message> {
                         auto_crop,
                         quality,
                     };
-                    let _ = cmd_tx.send(PdfCommand::Render(
+                    if let Err(e) = cmd_tx.send(PdfCommand::Render(
                         doc_id,
                         page_idx as i32,
                         options,
                         resp_tx,
-                    ));
+                    )) {
+                        log::error!("Failed to send Render command: {}", e);
+                        return Err("Engine died".into());
+                    }
                     resp_rx.await.unwrap_or(Err("Channel closed".into()))
                 },
                 move |res| Message::PageRendered(page_idx, zoom, res),
@@ -639,16 +645,11 @@ pub fn handle_message(app: &mut PdfBullApp, message: Message) -> Task<Message> {
                 .remove(&crate::app::RenderTarget::Page(page_idx));
 
             if let Some(tab) = app.current_tab_mut() {
-                // Only insert if the zoom level still matches
-                if (tab.zoom - scale).abs() > 0.001 {
-                    return Task::none();
-                }
-
                 match result {
                     Ok((width, height, data)) => {
                         tab.rendered_pages.insert(
                             page_idx,
-                            iced_image::Handle::from_rgba(width, height, (*data).clone()),
+                            (scale, iced_image::Handle::from_rgba(width, height, (*data).clone())),
                         );
                     }
                     Err(e) => {
@@ -667,7 +668,7 @@ pub fn handle_message(app: &mut PdfBullApp, message: Message) -> Task<Message> {
                     }
                 }
             }
-            Task::none()
+            app.render_visible_pages()
         }
         Message::ThumbnailRendered(page_idx, scale, result) => {
             app.rendering_count = app.rendering_count.saturating_sub(1);
@@ -704,21 +705,19 @@ pub fn handle_message(app: &mut PdfBullApp, message: Message) -> Task<Message> {
                 }
                 return Task::none();
             }
-            // Cancel previous search by clearing pending search
-            app.search_pending = Some(query.clone());
+            let query_clone = query.clone();
             Task::perform(
                 async move {
                     tokio::time::sleep(tokio::time::Duration::from_millis(300)).await;
-                    Message::PerformSearch
+                    Message::PerformSearch(query_clone)
                 },
                 |m| m,
             )
         }
-        Message::PerformSearch => {
-            let query = match app.search_pending.take() {
-                Some(q) => q,
-                None => return Task::none(),
-            };
+        Message::PerformSearch(query) => {
+            if query != app.search_query {
+                return Task::none();
+            }
 
             if query.is_empty() {
                 return Task::none();
@@ -744,7 +743,10 @@ pub fn handle_message(app: &mut PdfBullApp, message: Message) -> Task<Message> {
                 async move {
                     tokio::time::sleep(tokio::time::Duration::from_millis(300)).await;
                     let (resp_tx, resp_rx) = std::sync::mpsc::channel();
-                    let _ = cmd_tx.send(PdfCommand::Search(doc_id, query, resp_tx));
+                    if let Err(e) = cmd_tx.send(PdfCommand::Search(doc_id, query, resp_tx)) {
+                        log::error!("Failed to send Search command: {}", e);
+                        return Err("Engine died".into());
+                    }
                     let mut all_results = Vec::new();
                     while let Ok(res) = resp_rx.recv() {
                         match res {
@@ -752,74 +754,50 @@ pub fn handle_message(app: &mut PdfBullApp, message: Message) -> Task<Message> {
                             Err(e) => return Err(e),
                         }
                     }
-                    Ok((doc_id, all_results))
+                    Ok(all_results)
                 },
-                |result| match result {
-                    Ok((received_doc_id, results)) => {
-                        // Convert SearchResultItem tuples to SearchResult structs
-                        let search_results: Vec<SearchResult> = results
-                            .into_iter()
-                            .map(|(page, text, y, x, width, height)| SearchResult {
-                                page,
-                                text,
-                                y_position: y,
-                                x,
-                                width,
-                                height,
-                            })
-                            .collect();
-                        
-                        // Only process results if they match the current document
-                        if let Some(tab) = app.current_tab_mut() {
-                            if tab.id == received_doc_id {
-                                tab.search_results = search_results;
-                                tab.current_search_index = 0;
-                                
-                                if !tab.search_results.is_empty() && tab.current_search_index == 0 {
-                                    tab.current_page = tab.search_results[0].page;
-                                }
-                            }
-                        }
-                        // Convert back to tuple format for backward compatibility
-                        let results_tuple: Vec<(usize, String, f32, f32, f32, f32)> = tab.search_results
-                            .iter()
-                            .map(|r| (r.page, r.text.clone(), r.y_position, r.x, r.width, r.height))
-                            .collect();
-                        Message::SearchResult(Ok(results_tuple))
-                    },
-                    Err(e) => {
-                        log::error!("Search error: {}", e);
-                        if e == "Engine died" || e == "Channel closed" {
-                            app.engine = None;
-                            app.status_message = Some(
-                                "PDF engine crashed. Please try your action again to restart it."
-                                    .into(),
-                            );
-                        } else {
-                            app.status_message = Some(format!("Search error: {}", e));
-                        }
-                        Message::SearchResult(Err(e))
-                    }
-                },
+                move |result| Message::SearchResult(doc_id, result),
             )
         }
-        Message::SearchResult(result) => {
-             // Search results are now processed in PerformSearch handler
-             // This handler kept for backward compatibility but does nothing now
-             if let Err(e) = result {
-                 log::error!("Search error: {}", e);
-                 if e == "Engine died" || e == "Channel closed" {
-                     app.engine = None;
-                     app.status_message = Some(
-                         "PDF engine crashed. Please try your action again to restart it."
-                             .into(),
-                     );
-                 } else {
-                     app.status_message = Some(format!("Search error: {}", e));
-                 }
-             }
-             Task::none()
-         }
+        Message::SearchResult(received_doc_id, result) => {
+            match result {
+                Ok(results) => {
+                    if let Some(tab) = app.current_tab_mut() {
+                        if tab.id == received_doc_id {
+                            tab.search_results = results
+                                .into_iter()
+                                .map(|(page, text, y, x, width, height)| SearchResult {
+                                    page,
+                                    text,
+                                    y_position: y,
+                                    x,
+                                    width,
+                                    height,
+                                })
+                                .collect();
+                            tab.current_search_index = 0;
+
+                            if !tab.search_results.is_empty() && tab.current_search_index == 0 {
+                                tab.current_page = tab.search_results[0].page;
+                            }
+                        }
+                    }
+                }
+                Err(e) => {
+                    log::error!("Search error: {}", e);
+                    if e == "Engine died" || e == "Channel closed" {
+                        app.engine = None;
+                        app.status_message = Some(
+                            "PDF engine crashed. Please try your action again to restart it."
+                                .into(),
+                        );
+                    } else {
+                        app.status_message = Some(format!("Search error: {}", e));
+                    }
+                }
+            }
+            Task::none()
+        }
         Message::NextSearchResult => {
             let next_page = if let Some(tab) = app.current_tab_mut() {
                 if !tab.search_results.is_empty() {
@@ -907,7 +885,10 @@ pub fn handle_message(app: &mut PdfBullApp, message: Message) -> Task<Message> {
                         Some(f) => {
                             let path = f.path().to_path_buf();
                             let (resp_tx, resp_rx) = tokio::sync::oneshot::channel();
-                            let _ = cmd_tx.send(PdfCommand::ExtractText(doc_id, page, resp_tx));
+                            if let Err(e) = cmd_tx.send(PdfCommand::ExtractText(doc_id, page, resp_tx)) {
+                                log::error!("Failed to send ExtractText command: {}", e);
+                                return Err("Engine died".into());
+                            }
                             match resp_rx.await {
                                 Ok(Ok(text)) => {
                                     if let Err(e) = std::fs::write(&path, &text) {
@@ -974,13 +955,16 @@ pub fn handle_message(app: &mut PdfBullApp, message: Message) -> Task<Message> {
                         Some(f) => {
                             let path = f.path().to_string_lossy().to_string();
                             let (resp_tx, resp_rx) = tokio::sync::oneshot::channel();
-                            let _ = cmd_tx.send(PdfCommand::ExportImage(
+                            if let Err(e) = cmd_tx.send(PdfCommand::ExportImage(
                                 doc_id,
                                 page,
                                 zoom,
                                 path.clone(),
                                 resp_tx,
-                            ));
+                            )) {
+                                log::error!("Failed to send ExportImage command: {}", e);
+                                return Err("Engine died".into());
+                            }
                             match resp_rx.await {
                                 Ok(Ok(())) => Ok(path),
                                 Ok(Err(e)) => Err(e),
@@ -1034,13 +1018,16 @@ pub fn handle_message(app: &mut PdfBullApp, message: Message) -> Task<Message> {
                             let path = f.path().to_string_lossy().to_string();
                             let pages: Vec<i32> = (0..total_pages as i32).collect();
                             let (resp_tx, resp_rx) = tokio::sync::oneshot::channel();
-                            let _ = cmd_tx.send(PdfCommand::ExportImages(
+                            if let Err(e) = cmd_tx.send(PdfCommand::ExportImages(
                                 doc_id,
                                 pages,
                                 zoom,
                                 path.clone(),
                                 resp_tx,
-                            ));
+                            )) {
+                                log::error!("Failed to send ExportImages command: {}", e);
+                                return Err("Engine died".into());
+                            }
                             match resp_rx.await {
                                 Ok(Ok(paths)) => Ok(paths.join(", ")),
                                 Ok(Err(e)) => Err(e),
@@ -1075,12 +1062,15 @@ pub fn handle_message(app: &mut PdfBullApp, message: Message) -> Task<Message> {
             Task::perform(
                 async move {
                     let (resp_tx, resp_rx) = tokio::sync::oneshot::channel();
-                    let _ = cmd_tx.send(PdfCommand::ExportPdf(
+                    if let Err(e) = cmd_tx.send(PdfCommand::ExportPdf(
                         doc_id,
                         pdf_path.clone(),
                         annotations,
                         resp_tx,
-                    ));
+                    )) {
+                        log::error!("Failed to send ExportPdf command: {}", e);
+                        return Err("Engine died".into());
+                    }
                     match resp_rx.await {
                         Ok(Ok(path)) => Ok(format!("Annotations saved to {}", path)),
                         Ok(Err(e)) => Err(e),

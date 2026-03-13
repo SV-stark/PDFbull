@@ -41,22 +41,19 @@ fn spawn_document_worker(
 
         // Pre-open the document in this thread
         // This ensures the document is loaded EXACTLY once for this thread's lifetime
-        if let Err(e) = store.open_document(&path) {
-            log::error!("Failed to open document in worker thread: {}", e);
-            // We still need to listen for the initial Open command to send the error back
-        }
+        let open_result = store.open_document(&path);
 
         while let Ok(cmd) = cmd_rx.recv() {
             match cmd {
-                PdfCommand::Open(p, resp) => {
-                    // Since we already opened it above, we just need to send the shared state back
-                    match store.open_document(&p) {
+                PdfCommand::Open(_p, resp) => {
+                    // If we have a cached result from the pre-open above, use it for the first Open call
+                    match &open_result {
                         Ok((path_str, count, heights, width)) => {
-                            let outline = store.get_outline(&path_str);
-                            let _ = resp.send(Ok((doc_id, count, heights, width, outline)));
+                            let outline = store.get_outline(path_str);
+                            let _ = resp.send(Ok((doc_id, *count, heights.clone(), *width, outline)));
                         }
                         Err(e) => {
-                            let _ = resp.send(Err(e));
+                            let _ = resp.send(Err(e.clone()));
                         }
                     }
                 }
@@ -209,6 +206,8 @@ pub fn spawn_engine_thread(cache_size: u64) -> EngineState {
                             );
                             document_senders.remove(&doc_id.0);
                         }
+                    } else {
+                        let _ = resp.send(Err("Document closed or not found".into()));
                     }
                 }
                 PdfCommand::RenderThumbnail(doc_id, page, zoom, resp) => {
@@ -223,6 +222,8 @@ pub fn spawn_engine_thread(cache_size: u64) -> EngineState {
                             );
                             document_senders.remove(&doc_id.0);
                         }
+                    } else {
+                        let _ = resp.send(Err("Document closed or not found".into()));
                     }
                 }
                 PdfCommand::ExtractText(doc_id, page, resp) => {
@@ -235,31 +236,58 @@ pub fn spawn_engine_thread(cache_size: u64) -> EngineState {
                             );
                             document_senders.remove(&doc_id.0);
                         }
+                    } else {
+                        let _ = resp.send(Err("Document closed or not found".into()));
                     }
                 }
                 PdfCommand::ExportImage(doc_id, page, zoom, path, resp) => {
                     if let Some(tx) = document_senders.get(&doc_id.0) {
-                        let _ = tx.send(PdfCommand::ExportImage(doc_id, page, zoom, path, resp));
+                        if let Err(e) = tx.send(PdfCommand::ExportImage(doc_id, page, zoom, path, resp)) {
+                            log::error!("Failed to send export image command: {}", e);
+                            document_senders.remove(&doc_id.0);
+                        }
+                    } else {
+                        let _ = resp.send(Err("Document closed or not found".into()));
                     }
                 }
                 PdfCommand::ExportImages(doc_id, pages, zoom, dir, resp) => {
                     if let Some(tx) = document_senders.get(&doc_id.0) {
-                        let _ = tx.send(PdfCommand::ExportImages(doc_id, pages, zoom, dir, resp));
+                        if let Err(e) = tx.send(PdfCommand::ExportImages(doc_id, pages, zoom, dir, resp)) {
+                            log::error!("Failed to send export images command: {}", e);
+                            document_senders.remove(&doc_id.0);
+                        }
+                    } else {
+                        let _ = resp.send(Err("Document closed or not found".into()));
                     }
                 }
                 PdfCommand::ExportPdf(doc_id, path, ann, resp) => {
                     if let Some(tx) = document_senders.get(&doc_id.0) {
-                        let _ = tx.send(PdfCommand::ExportPdf(doc_id, path, ann, resp));
+                        if let Err(e) = tx.send(PdfCommand::ExportPdf(doc_id, path, ann, resp)) {
+                            log::error!("Failed to send export pdf command: {}", e);
+                            document_senders.remove(&doc_id.0);
+                        }
+                    } else {
+                        let _ = resp.send(Err("Document closed or not found".into()));
                     }
                 }
                 PdfCommand::Search(doc_id, query, resp) => {
                     if let Some(tx) = document_senders.get(&doc_id.0) {
-                        let _ = tx.send(PdfCommand::Search(doc_id, query, resp));
+                        if let Err(e) = tx.send(PdfCommand::Search(doc_id, query, resp)) {
+                            log::error!("Failed to send search command: {}", e);
+                            document_senders.remove(&doc_id.0);
+                        }
+                    } else {
+                        let _ = resp.send(Err("Document closed or not found".into()));
                     }
                 }
                 PdfCommand::LoadAnnotations(doc_id, path, resp) => {
                     if let Some(tx) = document_senders.get(&doc_id.0) {
-                        let _ = tx.send(PdfCommand::LoadAnnotations(doc_id, path, resp));
+                        if let Err(e) = tx.send(PdfCommand::LoadAnnotations(doc_id, path, resp)) {
+                            log::error!("Failed to send load annotations command: {}", e);
+                            document_senders.remove(&doc_id.0);
+                        }
+                    } else {
+                        let _ = resp.send(Err("Document closed or not found".into()));
                     }
                 }
                 PdfCommand::Close(doc_id) => {

@@ -61,7 +61,6 @@ pub struct RenderCacheKey {
 pub fn create_render_cache(cache_size: u64) -> SharedRenderCache {
     Cache::builder()
         .max_capacity(cache_size)
-        .weigher(|_key, val: &(u32, u32, Arc<Vec<u8>>)| val.2.len() as u32)
         .build()
 }
 
@@ -213,8 +212,15 @@ impl<'a> DocumentStore<'a> {
             _ => PdfPageRenderRotation::None,
         };
 
-        let target_w = (page.width().value * options.scale) as i32;
-        let target_h = (page.height().value * options.scale) as i32;
+        let mut target_w = (page.width().value * options.scale) as i32;
+        let mut target_h = (page.height().value * options.scale) as i32;
+
+        let max_dim = 4000;
+        if target_w > max_dim || target_h > max_dim {
+            let scale_factor = max_dim as f32 / (target_w.max(target_h) as f32);
+            target_w = (target_w as f32 * scale_factor) as i32;
+            target_h = (target_h as f32 * scale_factor) as i32;
+        }
 
         let render_config = PdfRenderConfig::new()
             .set_target_width(target_w)

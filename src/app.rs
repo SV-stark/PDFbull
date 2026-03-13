@@ -148,7 +148,8 @@ impl PdfBullApp {
 
             let is_rendered = self
                 .current_tab()
-                .is_some_and(|t| t.rendered_pages.contains_key(&page_idx));
+                .and_then(|t| t.rendered_pages.get(&page_idx))
+                .is_some_and(|(s, _)| (s - zoom).abs() < 0.001);
             if is_rendered || self.rendering_set.contains(&target) {
                 continue;
             }
