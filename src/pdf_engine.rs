@@ -597,7 +597,7 @@ impl<'a> DocumentStore<'a> {
 
 pub fn create_render_cache(cache_size: u64) -> SharedRenderCache {
     Arc::new(Mutex::new(LruCache::new(
-        std::num::NonZeroUsize::new(cache_size as usize).unwrap_or(std::num::NonZeroUsize::new(100).unwrap()),
+        std::num::NonZeroUsize::new(cache_size as usize).unwrap_or(std::num::NonZeroUsize::new(12).unwrap()),
     )))
 }
 

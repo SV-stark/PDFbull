@@ -170,7 +170,7 @@ pub struct DocumentTab {
     pub last_cleanup_time: std::time::Instant,
 }
 
-const VIEWPORT_BUFFER: usize = 3;
+const VIEWPORT_BUFFER: usize = 2;
 pub const PAGE_SPACING: f32 = 10.0;
 
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -231,8 +231,8 @@ impl DocumentTab {
 
         let v_height = if self.viewport_height > 0.0 { self.viewport_height } else { 2000.0 };
         
-        // Use a VERY large margin to ensure pages don't go blank when viewport_y is slightly stale
-        let margin = v_height * 4.0; 
+        // Use a smaller margin to save memory while still preventing blanks
+        let margin = v_height * 1.0; 
         let viewport_top = (self.viewport_y - margin).max(0.0);
         let viewport_bottom = self.viewport_y + v_height + margin;
 

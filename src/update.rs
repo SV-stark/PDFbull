@@ -7,6 +7,7 @@ use iced::widget::image as iced_image;
 use iced::widget::{operation, Id};
 use iced::Task;
 use std::path::PathBuf;
+use std::sync::Arc;
 use webbrowser;
 
 fn scroll_to_page(tab: &crate::models::DocumentTab, page: usize) -> Task<Message> {
@@ -655,10 +656,12 @@ pub fn handle_message(app: &mut PdfBullApp, message: Message) -> Task<Message> {
             if let Some(tab) = app.current_tab_mut() {
                 match result {
                     Ok((width, height, data)) => {
-                        // Use Arc directly to avoid expensive clones of pixel data
+                        // ZERO-COPY ATTEMPT: We convert the Arc back to Vec if unique, otherwise clone.
+                        // Since this is being moved out of the channel, it's often unique.
+                        let pixel_data = Arc::try_unwrap(data).unwrap_or_else(|a| (*a).clone());
                         tab.rendered_pages.insert(
                             page_idx,
-                            (scale, iced_image::Handle::from_rgba(width, height, data.to_vec())),
+                            (scale, iced_image::Handle::from_rgba(width, height, pixel_data)),
                         );
                     }
                     Err(e) => {
@@ -693,9 +696,11 @@ pub fn handle_message(app: &mut PdfBullApp, message: Message) -> Task<Message> {
 
                 match result {
                     Ok((width, height, data)) => {
+                        // ZERO-COPY ATTEMPT: We convert the Arc back to Vec if unique, otherwise clone.
+                        let pixel_data = Arc::try_unwrap(data).unwrap_or_else(|a| (*a).clone());
                         tab.thumbnails.insert(
                             page_idx,
-                            iced_image::Handle::from_rgba(width, height, (*data).clone()),
+                            iced_image::Handle::from_rgba(width, height, pixel_data),
                         );
                     }
                     Err(e) => {
