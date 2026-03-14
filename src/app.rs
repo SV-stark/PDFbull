@@ -3,7 +3,7 @@ use crate::message::Message;
 use crate::models::{AppSettings, DocumentTab, RecentFile};
 use crate::ui;
 use crate::update::handle_message;
-use iced::{Element, Task, Font};
+use iced::{Element, Font, Task};
 
 pub const INTER_REGULAR: Font = Font::with_name("Inter Regular");
 pub const INTER_BOLD: Font = Font::with_name("Inter Bold");
@@ -97,7 +97,11 @@ impl PdfBullApp {
             return;
         }
         let session = crate::models::SessionData {
-            open_tabs: self.tabs.iter().map(|t| t.path.to_string_lossy().to_string()).collect(),
+            open_tabs: self
+                .tabs
+                .iter()
+                .map(|t| t.path.to_string_lossy().to_string())
+                .collect(),
             active_tab: self.active_tab,
         };
         crate::storage::save_session(&session);
@@ -118,12 +122,13 @@ impl PdfBullApp {
             auto_crop,
             page_width,
         ) = {
-            let tab = match self.current_tab() {
+            let tab = match self.current_tab_mut() {
                 Some(t) => t,
                 None => return Task::none(),
             };
+            tab.update_visible_range();
             (
-                tab.get_visible_pages().iter().cloned().collect::<Vec<_>>(),
+                tab.get_visible_pages().into_iter().collect::<Vec<_>>(),
                 tab.get_visible_thumbnails(),
                 tab.id,
                 tab.zoom,
@@ -197,8 +202,8 @@ impl PdfBullApp {
                 if is_thumb_rendered || self.rendering_set.contains(&target) {
                     continue;
                 }
-                 self.rendering_count += 1;
-                 let thumb_zoom = (120.0 / page_width.max(1.0)).min(5.0);
+                self.rendering_count += 1;
+                let thumb_zoom = (120.0 / page_width.max(1.0)).min(5.0);
                 self.rendering_set.insert(target);
                 let tx = cmd_tx.clone();
                 let doc_id_cloned = doc_id;

@@ -1,7 +1,9 @@
 use crate::app::PdfBullApp;
 use crate::app::{icons, INTER_BOLD, INTER_REGULAR, LUCIDE};
 use crate::pdf_engine::RenderFilter;
-use iced::widget::{button, column, container, mouse_area, row, scrollable, text, text_input, Id, Space};
+use iced::widget::{
+    button, column, container, mouse_area, row, scrollable, text, text_input, Id, Space,
+};
 use iced::{Color, Element, Length, Shadow, Vector};
 
 fn hex_to_rgb(hex: &str) -> (f32, f32, f32) {
@@ -287,17 +289,21 @@ fn render_page_nav(app: &PdfBullApp) -> Element<'_, crate::message::Message> {
 
     let loading_indicator = if app.rendering_count > 0 {
         row![
-            container(text(format!("{}", app.rendering_count)).font(INTER_BOLD).size(12))
-                .padding([2, 6])
-                .style(|_| iced::widget::container::Style {
-                    background: Some(iced::Color::from_rgb8(59, 130, 246).into()),
-                    text_color: Some(iced::Color::WHITE),
-                    border: iced::Border {
-                        radius: 10.0.into(),
-                        ..Default::default()
-                    },
+            container(
+                text(format!("{}", app.rendering_count))
+                    .font(INTER_BOLD)
+                    .size(12)
+            )
+            .padding([2, 6])
+            .style(|_| iced::widget::container::Style {
+                background: Some(iced::Color::from_rgb8(59, 130, 246).into()),
+                text_color: Some(iced::Color::WHITE),
+                border: iced::Border {
+                    radius: 10.0.into(),
                     ..Default::default()
-                }),
+                },
+                ..Default::default()
+            }),
             text("Rendering")
                 .size(12)
                 .font(INTER_REGULAR)
@@ -616,7 +622,7 @@ fn render_tabs(app: &PdfBullApp) -> Element<'_, crate::message::Message> {
                     ..Default::default()
                 }),
         );
-        tabs = tabs.push(Space::new().width(2.0)); 
+        tabs = tabs.push(Space::new().width(2.0));
     }
 
     let add_button =
@@ -652,18 +658,38 @@ fn render_pdf_content(app: &PdfBullApp) -> Element<'_, crate::message::Message> 
     let tab = &app.tabs[app.active_tab];
     let zoom = tab.zoom;
 
-    let mut pdf_column = column![].spacing(10.0 * zoom).padding(10.0 * zoom).align_x(iced::Alignment::Center);
+    let mut pdf_column = column![]
+        .spacing(crate::models::PAGE_SPACING * zoom)
+        .padding(10.0 * zoom)
+        .align_x(iced::Alignment::Center);
 
-    let visible_pages = tab.get_visible_pages();
+    let (start_idx, end_idx) = tab.visible_range;
 
-    for page_idx in 0..tab.total_pages {
+    // Add space for non-visible pages above
+    if start_idx > 0 {
+        let y_above: f32 = tab
+            .page_heights
+            .iter()
+            .take(start_idx)
+            .map(|h| (h + crate::models::PAGE_SPACING) * zoom)
+            .sum();
+        // Subtract one spacing because the column will add it between the Space and the first Page
+        let y_above = (y_above - crate::models::PAGE_SPACING * zoom).max(0.0);
+        if y_above > 0.0 {
+            pdf_column = pdf_column.push(iced::widget::Space::new().height(Length::Fixed(y_above)));
+        }
+    }
+
+    for page_idx in start_idx..end_idx {
         let original_height = tab.page_heights.get(page_idx).copied().unwrap_or(800.0);
         let scaled_height = original_height * zoom;
         let scaled_width = tab.page_width * zoom;
 
-        let page_element: Element<'_, crate::message::Message> = if visible_pages.contains(&page_idx) {
+        let page_element: Element<'_, crate::message::Message> = {
             if let Some((_, handle)) = tab.rendered_pages.get(&page_idx) {
-                let img = iced::widget::Image::new(handle.clone()).width(Length::Fixed(scaled_width)).height(Length::Fixed(scaled_height));
+                let img = iced::widget::Image::new(handle.clone())
+                    .width(Length::Fixed(scaled_width))
+                    .height(Length::Fixed(scaled_height));
 
                 let mut page_stack = iced::widget::Stack::new().push(img);
 
@@ -677,17 +703,27 @@ fn render_pdf_content(app: &PdfBullApp) -> Element<'_, crate::message::Message> 
                                     .width(Length::Fixed(ann.width * zoom))
                                     .height(Length::Fixed(ann.height * zoom))
                                     .style(move |_| iced::widget::container::Style {
-                                        background: Some(iced::Color::from_rgba(r, g, b, 0.4).into()),
+                                        background: Some(
+                                            iced::Color::from_rgba(r, g, b, 0.4).into(),
+                                        ),
                                         ..Default::default()
                                     })
                             }
-                            crate::models::AnnotationStyle::Rectangle { color, thickness, fill } => {
+                            crate::models::AnnotationStyle::Rectangle {
+                                color,
+                                thickness,
+                                fill,
+                            } => {
                                 let (r, g, b) = hex_to_rgb(color);
                                 container(Space::new())
                                     .width(Length::Fixed(ann.width * zoom))
                                     .height(Length::Fixed(ann.height * zoom))
                                     .style(move |_| iced::widget::container::Style {
-                                        background: if *fill { Some(iced::Color::from_rgba(r, g, b, 0.2).into()) } else { None },
+                                        background: if *fill {
+                                            Some(iced::Color::from_rgba(r, g, b, 0.2).into())
+                                        } else {
+                                            None
+                                        },
                                         border: iced::Border {
                                             color: iced::Color::from_rgb(r, g, b),
                                             width: *thickness * zoom,
@@ -696,7 +732,11 @@ fn render_pdf_content(app: &PdfBullApp) -> Element<'_, crate::message::Message> 
                                         ..Default::default()
                                     })
                             }
-                            crate::models::AnnotationStyle::Text { text, color, font_size } => {
+                            crate::models::AnnotationStyle::Text {
+                                text,
+                                color,
+                                font_size,
+                            } => {
                                 let (r, g, b) = hex_to_rgb(color);
                                 container(
                                     iced::widget::text(text.clone())
@@ -707,13 +747,12 @@ fn render_pdf_content(app: &PdfBullApp) -> Element<'_, crate::message::Message> 
                             }
                         };
 
-                        page_stack = page_stack.push(
-                            container(ann_overlay).padding(iced::Padding {
+                        page_stack =
+                            page_stack.push(container(ann_overlay).padding(iced::Padding {
                                 top: ann.y * zoom,
                                 left: ann.x * zoom,
                                 ..Default::default()
-                            })
-                        );
+                            }));
                     }
                 }
 
@@ -725,17 +764,15 @@ fn render_pdf_content(app: &PdfBullApp) -> Element<'_, crate::message::Message> 
                             container(Space::new())
                                 .width(Length::Fixed(lw * zoom))
                                 .height(Length::Fixed(lh * zoom))
-                                .style(|_| iced::widget::container::Style::default())
+                                .style(|_| iced::widget::container::Style::default()),
                         )
                         .on_release(crate::message::Message::LinkClicked(link.clone()));
 
-                        page_stack = page_stack.push(
-                            container(overlay).padding(iced::Padding {
-                                top: ly * zoom,
-                                left: lx * zoom,
-                                ..Default::default()
-                            })
-                        );
+                        page_stack = page_stack.push(container(overlay).padding(iced::Padding {
+                            top: ly * zoom,
+                            left: lx * zoom,
+                            ..Default::default()
+                        }));
                     }
                 }
 
@@ -745,9 +782,9 @@ fn render_pdf_content(app: &PdfBullApp) -> Element<'_, crate::message::Message> 
                         if result.page == page_idx {
                             let is_active = result_idx == tab.current_search_index;
                             let highlight_color = if is_active {
-                                iced::Color::from_rgba(1.0, 0.6, 0.0, 0.6) 
+                                iced::Color::from_rgba(1.0, 0.6, 0.0, 0.6)
                             } else {
-                                iced::Color::from_rgba(1.0, 1.0, 0.0, 0.4) 
+                                iced::Color::from_rgba(1.0, 1.0, 0.0, 0.4)
                             };
 
                             page_stack = page_stack.push(
@@ -829,13 +866,18 @@ fn render_pdf_content(app: &PdfBullApp) -> Element<'_, crate::message::Message> 
             } else {
                 let loading_placeholder = container(
                     column![
-                        text(format!("Page {}", page_idx + 1)).font(INTER_REGULAR).size(16),
-                        text("Loading...").size(12).font(INTER_REGULAR).style(|_theme| iced::widget::text::Style {
-                            color: Some(Color::from_rgb8(150, 150, 160)),
-                        })
+                        text(format!("Page {}", page_idx + 1))
+                            .font(INTER_REGULAR)
+                            .size(16),
+                        text("Loading...")
+                            .size(12)
+                            .font(INTER_REGULAR)
+                            .style(|_theme| iced::widget::text::Style {
+                                color: Some(Color::from_rgb8(150, 150, 160)),
+                            })
                     ]
                     .spacing(10)
-                    .align_x(iced::Alignment::Center)
+                    .align_x(iced::Alignment::Center),
                 )
                 .width(Length::Fixed(scaled_width))
                 .height(Length::Fixed(scaled_height))
@@ -847,30 +889,38 @@ fn render_pdf_content(app: &PdfBullApp) -> Element<'_, crate::message::Message> 
                 });
                 loading_placeholder.into()
             }
-        } else {
-            Space::new()
-                .width(Length::Fixed(scaled_width))
-                .height(Length::Fixed(scaled_height))
-                .into()
         };
-
         pdf_column = pdf_column.push(page_element);
+    }
+
+    // Add space for non-visible pages below
+    if end_idx < tab.total_pages {
+        let y_below: f32 = tab
+            .page_heights
+            .iter()
+            .skip(end_idx)
+            .map(|h| (h + crate::models::PAGE_SPACING) * zoom)
+            .sum();
+        let y_below = (y_below - crate::models::PAGE_SPACING * zoom).max(0.0);
+        if y_below > 0.0 {
+            pdf_column = pdf_column.push(iced::widget::Space::new().height(Length::Fixed(y_below)));
+        }
     }
 
     scrollable(
         container(pdf_column)
             .width(Length::Fill)
-            .center_x(Length::Fill)
+            .center_x(Length::Fill),
     )
-        .id(Id::new("pdf_scroll"))
-        .on_scroll(|viewport| {
-            crate::message::Message::ViewportChanged(
-                viewport.absolute_offset().y,
-                viewport.bounds().height,
-            )
-        })
-        .height(Length::Fill)
-        .into()
+    .id(Id::new("pdf_scroll"))
+    .on_scroll(|viewport| {
+        crate::message::Message::ViewportChanged(
+            viewport.absolute_offset().y,
+            viewport.bounds().height,
+        )
+    })
+    .height(Length::Fill)
+    .into()
 }
 
 pub fn document_view(app: &PdfBullApp) -> Element<'_, crate::message::Message> {

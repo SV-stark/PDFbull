@@ -168,6 +168,7 @@ pub struct DocumentTab {
     pub viewport_height: f32,
     pub sidebar_viewport_y: f32,
     pub last_cleanup_time: std::time::Instant,
+    pub visible_range: (usize, usize),
 }
 
 const VIEWPORT_BUFFER: usize = 2;
@@ -218,36 +219,57 @@ impl DocumentTab {
             viewport_height: 800.0,
             sidebar_viewport_y: 0.0,
             last_cleanup_time: std::time::Instant::now(),
+            visible_range: (0, 1),
         }
     }
 
-    pub fn get_visible_pages(&self) -> std::collections::HashSet<usize> {
-        let mut visible = std::collections::HashSet::new();
-        
+    pub fn update_visible_range(&mut self) {
+        if self.page_heights.is_empty() {
+            self.visible_range = (0, 0);
+            return;
+        }
+
         let scaled_spacing = PAGE_SPACING * self.zoom;
-        let scaled_padding = 10.0 * self.zoom; 
-        
+        let scaled_padding = 10.0 * self.zoom;
         let mut y = scaled_padding;
 
-        let v_height = if self.viewport_height > 0.0 { self.viewport_height } else { 2000.0 };
-        
-        // Use a smaller margin to save memory while still preventing blanks
-        let margin = v_height * 1.0; 
+        let v_height = if self.viewport_height > 0.0 {
+            self.viewport_height
+        } else {
+            2000.0
+        };
+
+        let margin = v_height * 1.5; // Increased margin for smoother prefetching
         let viewport_top = (self.viewport_y - margin).max(0.0);
         let viewport_bottom = self.viewport_y + v_height + margin;
+
+        let mut start = 0;
+        let mut end = 0;
+        let mut found_start = false;
 
         for (idx, height) in self.page_heights.iter().enumerate() {
             let scaled_height = height * self.zoom;
             let page_bottom = y + scaled_height;
 
+            if !found_start && page_bottom >= viewport_top {
+                start = idx;
+                found_start = true;
+            }
+
             if page_bottom >= viewport_top && y <= viewport_bottom {
-                visible.insert(idx);
+                end = idx;
+            } else if found_start && y > viewport_bottom {
+                break;
             }
 
             y = page_bottom + scaled_spacing;
         }
 
-        visible
+        self.visible_range = (start, end + 1);
+    }
+
+    pub fn get_visible_pages(&self) -> std::collections::HashSet<usize> {
+        (self.visible_range.0..self.visible_range.1).collect()
     }
 
     pub fn get_visible_thumbnails(&self) -> std::collections::HashSet<usize> {

@@ -11,7 +11,12 @@ use std::sync::Arc;
 use webbrowser;
 
 fn scroll_to_page(tab: &crate::models::DocumentTab, page: usize) -> Task<Message> {
-    let y_offset: f32 = tab.page_heights.iter().take(page).map(|h| (h + crate::models::PAGE_SPACING) * tab.zoom).sum();
+    let y_offset: f32 = tab
+        .page_heights
+        .iter()
+        .take(page)
+        .map(|h| (h + crate::models::PAGE_SPACING) * tab.zoom)
+        .sum();
     operation::scroll_to(
         Id::new("pdf_scroll"),
         iced::widget::scrollable::AbsoluteOffset {
@@ -568,6 +573,7 @@ pub fn handle_message(app: &mut PdfBullApp, message: Message) -> Task<Message> {
             if let Some(tab) = app.current_tab_mut() {
                 tab.viewport_y = y;
                 tab.viewport_height = height;
+                tab.update_visible_range();
                 tab.cleanup_distant_pages();
             }
             for tab in &mut app.tabs {
@@ -661,7 +667,10 @@ pub fn handle_message(app: &mut PdfBullApp, message: Message) -> Task<Message> {
                         let pixel_data = Arc::try_unwrap(data).unwrap_or_else(|a| (*a).clone());
                         tab.rendered_pages.insert(
                             page_idx,
-                            (scale, iced_image::Handle::from_rgba(width, height, pixel_data)),
+                            (
+                                scale,
+                                iced_image::Handle::from_rgba(width, height, pixel_data),
+                            ),
                         );
                     }
                     Err(e) => {
@@ -899,7 +908,9 @@ pub fn handle_message(app: &mut PdfBullApp, message: Message) -> Task<Message> {
                         Some(f) => {
                             let path = f.path().to_path_buf();
                             let (resp_tx, resp_rx) = tokio::sync::oneshot::channel();
-                            if let Err(e) = cmd_tx.send(PdfCommand::ExtractText(doc_id, page, resp_tx)) {
+                            if let Err(e) =
+                                cmd_tx.send(PdfCommand::ExtractText(doc_id, page, resp_tx))
+                            {
                                 log::error!("Failed to send ExtractText command: {}", e);
                                 return Err("Engine died".into());
                             }
