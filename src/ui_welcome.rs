@@ -202,12 +202,11 @@ pub fn welcome_view(app: &crate::app::PdfBullApp) -> Element<'_, crate::message:
                     include_bytes!("../PDFbull.png").to_vec(),
                 ))
                 .width(Length::Fixed(32.0)),
-                text("PDFbull")
-                    .size(28)
-                    .font(INTER_BOLD)
-                    .style(|_theme| iced::widget::text::Style {
-                        color: Some(Color::WHITE)
-                    }),
+                text("PDFbull").size(28).font(INTER_BOLD).style(|_theme| {
+                    iced::widget::text::Style {
+                        color: Some(Color::WHITE),
+                    }
+                }),
                 text(format!("v{}", env!("CARGO_PKG_VERSION")))
                     .size(12)
                     .font(INTER_REGULAR)

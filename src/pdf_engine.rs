@@ -1,8 +1,8 @@
 use crate::models::{Annotation, AnnotationStyle, Hyperlink, SearchResultItem};
+use lru::LruCache;
 use pdfium_render::prelude::*;
 use std::collections::HashMap;
 use std::sync::Arc;
-use lru::LruCache;
 use std::sync::Mutex;
 
 pub type SharedRenderCache = Arc<Mutex<LruCache<String, crate::models::RenderResult>>>;
@@ -87,9 +87,9 @@ impl<'a> DocumentStore<'a> {
                         let lw = rect.width().value;
                         let lh = rect.height().value;
 
-                        let url = link.action().and_then(|a| {
-                            a.as_uri_action().and_then(|u| u.uri().ok())
-                        });
+                        let url = link
+                            .action()
+                            .and_then(|a| a.as_uri_action().and_then(|u| u.uri().ok()));
                         let dest = link
                             .destination()
                             .and_then(|d| d.page_index().ok())
@@ -161,7 +161,10 @@ impl<'a> DocumentStore<'a> {
             .ok_or_else(|| "Document not found or closed".to_string())?;
 
         let doc = &state.doc;
-        let page = doc.pages().get(page_num as i32).map_err(|e| e.to_string())?;
+        let page = doc
+            .pages()
+            .get(page_num as i32)
+            .map_err(|e| e.to_string())?;
 
         let mut target_w = (page.width().value * options.scale) as i32;
         let mut target_h = (page.height().value * options.scale) as i32;
@@ -197,11 +200,12 @@ impl<'a> DocumentStore<'a> {
         let w = bitmap.width() as u32;
         let h = bitmap.height() as u32;
 
-        let result_data = if options.filter == RenderFilter::None || options.filter == RenderFilter::Grayscale {
-            bitmap.as_rgba_bytes().to_vec()
-        } else {
-            Self::apply_filter(bitmap.as_rgba_bytes().to_vec(), w, h, options.filter)
-        };
+        let result_data =
+            if options.filter == RenderFilter::None || options.filter == RenderFilter::Grayscale {
+                bitmap.as_rgba_bytes().to_vec()
+            } else {
+                Self::apply_filter(bitmap.as_rgba_bytes().to_vec(), w, h, options.filter)
+            };
 
         let (final_w, final_h, final_data) = if options.auto_crop {
             if let Some((x1, y1, x2, y2)) = Self::detect_content_bbox(&result_data, w, h) {
@@ -237,11 +241,7 @@ impl<'a> DocumentStore<'a> {
             .documents
             .get(path)
             .ok_or_else(|| "Document not found".to_string())?;
-        let page = state
-            .doc
-            .pages()
-            .get(page_num)
-            .map_err(|e| e.to_string())?;
+        let page = state.doc.pages().get(page_num).map_err(|e| e.to_string())?;
         let text_page = page.text().map_err(|e| e.to_string())?;
         Ok(text_page.all())
     }
@@ -258,7 +258,10 @@ impl<'a> DocumentStore<'a> {
         let doc = &mut state.doc;
 
         for ann in annotations {
-            let mut page = doc.pages().get(ann.page as i32).map_err(|e| e.to_string())?;
+            let mut page = doc
+                .pages()
+                .get(ann.page as i32)
+                .map_err(|e| e.to_string())?;
             let mut objects = page.objects_mut();
 
             let rect = PdfRect::new(
@@ -277,14 +280,9 @@ impl<'a> DocumentStore<'a> {
                         (b * 255.0) as u8,
                         100,
                     ));
-                    
+
                     let _rect_obj = objects
-                        .create_path_object_rect(
-                            rect,
-                            None,
-                            None,
-                            fill_color,
-                        )
+                        .create_path_object_rect(rect, None, None, fill_color)
                         .map_err(|e| e.to_string())?;
                 }
                 AnnotationStyle::Rectangle {
@@ -359,11 +357,7 @@ impl<'a> DocumentStore<'a> {
             .documents
             .get(path)
             .ok_or_else(|| "Document not found".to_string())?;
-        let page = state
-            .doc
-            .pages()
-            .get(page_num)
-            .map_err(|e| e.to_string())?;
+        let page = state.doc.pages().get(page_num).map_err(|e| e.to_string())?;
 
         let render_config = PdfRenderConfig::new()
             .set_target_width((page.width().value * scale) as i32)
@@ -393,11 +387,7 @@ impl<'a> DocumentStore<'a> {
         let mut paths = Vec::new();
 
         for &page_num in pages {
-            let page = state
-                .doc
-                .pages()
-                .get(page_num)
-                .map_err(|e| e.to_string())?;
+            let page = state.doc.pages().get(page_num).map_err(|e| e.to_string())?;
 
             let render_config = PdfRenderConfig::new()
                 .set_target_width((page.width().value * scale) as i32)
@@ -428,7 +418,10 @@ impl<'a> DocumentStore<'a> {
                 if let Some(title) = b.title() {
                     bookmarks.push(Bookmark {
                         title,
-                        page_index: b.destination().and_then(|d| d.page_index().ok()).unwrap_or(0) as u16,
+                        page_index: b
+                            .destination()
+                            .and_then(|d| d.page_index().ok())
+                            .unwrap_or(0) as u16,
                     });
                 }
             }
@@ -438,11 +431,7 @@ impl<'a> DocumentStore<'a> {
         }
     }
 
-    pub fn search(
-        &self,
-        doc_id: &str,
-        query: &str,
-    ) -> Result<Vec<SearchResultItem>, String> {
+    pub fn search(&self, doc_id: &str, query: &str) -> Result<Vec<SearchResultItem>, String> {
         let state = self
             .documents
             .get(doc_id)
@@ -458,7 +447,7 @@ impl<'a> DocumentStore<'a> {
                     for segments in searcher.iter(PdfSearchDirection::SearchForward) {
                         let mut text_all = String::new();
                         let mut first_rect = None;
-                        
+
                         for segment in segments.iter() {
                             if first_rect.is_none() {
                                 first_rect = Some(segment.bounds());
@@ -597,7 +586,8 @@ impl<'a> DocumentStore<'a> {
 
 pub fn create_render_cache(cache_size: u64) -> SharedRenderCache {
     Arc::new(Mutex::new(LruCache::new(
-        std::num::NonZeroUsize::new(cache_size as usize).unwrap_or(std::num::NonZeroUsize::new(12).unwrap()),
+        std::num::NonZeroUsize::new(cache_size as usize)
+            .unwrap_or(std::num::NonZeroUsize::new(12).unwrap()),
     )))
 }
 

@@ -249,7 +249,9 @@ pub fn spawn_engine_thread(cache_size: u64) -> EngineState {
                 }
                 PdfCommand::ExportImage(doc_id, page, zoom, path, resp) => {
                     if let Some(tx) = document_senders.get(&doc_id.0) {
-                        if let Err(e) = tx.send(PdfCommand::ExportImage(doc_id, page, zoom, path, resp)) {
+                        if let Err(e) =
+                            tx.send(PdfCommand::ExportImage(doc_id, page, zoom, path, resp))
+                        {
                             log::error!("Failed to send export image command: {}", e);
                             document_senders.remove(&doc_id.0);
                         }
@@ -259,7 +261,9 @@ pub fn spawn_engine_thread(cache_size: u64) -> EngineState {
                 }
                 PdfCommand::ExportImages(doc_id, pages, zoom, dir, resp) => {
                     if let Some(tx) = document_senders.get(&doc_id.0) {
-                        if let Err(e) = tx.send(PdfCommand::ExportImages(doc_id, pages, zoom, dir, resp)) {
+                        if let Err(e) =
+                            tx.send(PdfCommand::ExportImages(doc_id, pages, zoom, dir, resp))
+                        {
                             log::error!("Failed to send export images command: {}", e);
                             document_senders.remove(&doc_id.0);
                         }

@@ -1,7 +1,7 @@
 use crate::app::{INTER_BOLD, INTER_REGULAR};
 use crate::models::AppTheme;
 use crate::pdf_engine::{RenderFilter, RenderQuality};
-use iced::widget::{button, column, container, image, row, text, Space, scrollable};
+use iced::widget::{button, column, container, image, row, scrollable, text, Space};
 use iced::{Alignment, Border, Color, Element, Length, Shadow, Vector};
 
 fn custom_card<'a>(
@@ -206,9 +206,11 @@ pub fn settings_view(app: &crate::app::PdfBullApp) -> Element<'_, crate::message
     .spacing(10);
 
     let default_zoom_row = row![
-        text("Default Zoom:").font(INTER_REGULAR).style(|_theme| iced::widget::text::Style {
-            color: Some(Color::WHITE)
-        }),
+        text("Default Zoom:")
+            .font(INTER_REGULAR)
+            .style(|_theme| iced::widget::text::Style {
+                color: Some(Color::WHITE)
+            }),
         Space::new().width(Length::Fixed(10.0)),
         text(format!("{}%", (app.settings.default_zoom * 100.0) as i32))
             .font(INTER_BOLD)
@@ -295,57 +297,51 @@ pub fn settings_view(app: &crate::app::PdfBullApp) -> Element<'_, crate::message
         behavior_buttons,
     );
 
-    container(
-        scrollable(
-            column![
-                row![
-                    image(iced::widget::image::Handle::from_bytes(
-                        include_bytes!("../PDFbull.png").to_vec(),
-                    ))
-                    .width(Length::Fixed(48.0)),
-                    column![
-                        text("Settings")
-                            .size(28)
-                            .font(INTER_BOLD)
-                            .style(|_theme| iced::widget::text::Style {
-                                color: Some(Color::WHITE)
-                            }),
-                        text(format!("v{}", env!("CARGO_PKG_VERSION")))
-                            .size(12)
-                            .font(INTER_REGULAR)
-                            .style(|_theme| iced::widget::text::Style {
-                                color: Some(Color::from_rgb8(180, 180, 180))
-                            }),
-                    ],
-                    Space::new().width(Length::Fill),
-                    button(
-                        text("Close")
-                            .size(16)
-                            .font(INTER_BOLD)
-                            .style(|_theme| iced::widget::text::Style {
-                                color: Some(Color::WHITE)
-                            })
-                    )
-                    .on_press(crate::message::Message::CloseSettings)
-                    .style(iced::widget::button::text),
-                ]
-                .spacing(15)
-                .align_y(Alignment::Center)
-                .padding(20),
-                appearance_card,
-                Space::new().height(Length::Fixed(20.0)),
-                performance_card,
-                Space::new().height(Length::Fixed(20.0)),
-                defaults_card,
-                Space::new().height(Length::Fixed(20.0)),
-                behavior_card,
-                Space::new().height(Length::Fixed(40.0)),
+    container(scrollable(
+        column![
+            row![
+                image(iced::widget::image::Handle::from_bytes(
+                    include_bytes!("../PDFbull.png").to_vec(),
+                ))
+                .width(Length::Fixed(48.0)),
+                column![
+                    text("Settings").size(28).font(INTER_BOLD).style(|_theme| {
+                        iced::widget::text::Style {
+                            color: Some(Color::WHITE),
+                        }
+                    }),
+                    text(format!("v{}", env!("CARGO_PKG_VERSION")))
+                        .size(12)
+                        .font(INTER_REGULAR)
+                        .style(|_theme| iced::widget::text::Style {
+                            color: Some(Color::from_rgb8(180, 180, 180))
+                        }),
+                ],
+                Space::new().width(Length::Fill),
+                button(text("Close").size(16).font(INTER_BOLD).style(|_theme| {
+                    iced::widget::text::Style {
+                        color: Some(Color::WHITE),
+                    }
+                }))
+                .on_press(crate::message::Message::CloseSettings)
+                .style(iced::widget::button::text),
             ]
-            .padding(30)
-            .width(Length::Fixed(640.0))
-            .align_x(Alignment::Center)
-        )
-    )
+            .spacing(15)
+            .align_y(Alignment::Center)
+            .padding(20),
+            appearance_card,
+            Space::new().height(Length::Fixed(20.0)),
+            performance_card,
+            Space::new().height(Length::Fixed(20.0)),
+            defaults_card,
+            Space::new().height(Length::Fixed(20.0)),
+            behavior_card,
+            Space::new().height(Length::Fixed(40.0)),
+        ]
+        .padding(30)
+        .width(Length::Fixed(640.0))
+        .align_x(Alignment::Center),
+    ))
     .width(Length::Fill)
     .height(Length::Fill)
     .style(|_| iced::widget::container::Style {
