@@ -25,7 +25,7 @@ strip = true        # Strip symbols from binary
 rfd = "0.14"
 pdfium-render = { git = "https://github.com/ajrcarey/pdfium-render.git", branch = "master" }
 image = { version = "0.24", default-features = false, features = ["png"] }
-iced = { version = "0.14", features = ["image", "canvas", "tokio"] }
+iced = { version = "0.14", default-features = false, features = ["tiny-skia", "image", "canvas", "tokio"] }
 tokio = { version = "1.43.0", features = ["rt", "time", "macros", "sync", "rt-multi-thread"] }
 uuid = { version = "1", features = ["v4"] }
 crossbeam-channel = "0.5"

@@ -166,7 +166,7 @@ impl<'a> DocumentStore<'a> {
         let mut target_w = (page.width().value * options.scale) as i32;
         let mut target_h = (page.height().value * options.scale) as i32;
 
-        let max_dim = 4000;
+        let max_dim = 2500;
         if target_w > max_dim || target_h > max_dim {
             let scale_factor = max_dim as f32 / (target_w.max(target_h) as f32);
             target_w = (target_w as f32 * scale_factor) as i32;
