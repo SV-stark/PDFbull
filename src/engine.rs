@@ -48,16 +48,8 @@ fn spawn_document_worker(
                 PdfCommand::Open(_p, resp) => {
                     // If we have a cached result from the pre-open above, use it for the first Open call
                     match &open_result {
-                        Ok((path_str, count, heights, width, links)) => {
-                            let outline = store.get_outline(path_str);
-                            let _ = resp.send(Ok((
-                                doc_id,
-                                *count,
-                                heights.clone(),
-                                *width,
-                                outline,
-                                links.clone(),
-                            )));
+                        Ok(res) => {
+                            let _ = resp.send(Ok(res.clone()));
                         }
                         Err(e) => {
                             let _ = resp.send(Err(e.clone()));
@@ -66,8 +58,8 @@ fn spawn_document_worker(
                 }
                 PdfCommand::Render(_, page, options, resp) => {
                     match store.render_page(&path, page as usize, options) {
-                        Ok((w, h, data)) => {
-                            let _ = resp.send(Ok((w, h, data)));
+                        Ok(res) => {
+                            let _ = resp.send(Ok(res));
                         }
                         Err(e) => {
                             let _ = resp.send(Err(e));
@@ -86,8 +78,8 @@ fn spawn_document_worker(
                             quality: crate::pdf_engine::RenderQuality::Low,
                         },
                     ) {
-                        Ok((w, h, data)) => {
-                            let _ = resp.send(Ok((w, h, data)));
+                        Ok(res) => {
+                            let _ = resp.send(Ok(res));
                         }
                         Err(e) => {
                             let _ = resp.send(Err(e));
@@ -160,9 +152,9 @@ fn spawn_document_worker(
     });
 }
 
-pub fn spawn_engine_thread(cache_size: u64) -> EngineState {
+pub fn spawn_engine_thread(cache_size: u64, max_memory_mb: u64) -> EngineState {
     let (cmd_tx, cmd_rx) = crossbeam_channel::unbounded();
-    let cache = create_render_cache(cache_size);
+    let cache = create_render_cache(cache_size, max_memory_mb);
     let active_workers = Arc::new(AtomicUsize::new(0));
 
     let pdfium = match Pdfium::bind_to_library(Pdfium::pdfium_platform_library_name_at_path("./"))

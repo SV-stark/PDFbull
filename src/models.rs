@@ -4,16 +4,32 @@ use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 use std::sync::Arc;
 
-pub type OpenResult = (
-    DocumentId,
-    usize,
-    Vec<f32>,
-    f32,
-    Vec<crate::pdf_engine::Bookmark>,
-    Vec<Hyperlink>,
-);
-pub type RenderResult = (u32, u32, Arc<Vec<u8>>);
-pub type SearchResultItem = (usize, String, f32, f32, f32, f32);
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct OpenResult {
+    pub id: DocumentId,
+    pub page_count: usize,
+    pub page_heights: Vec<f32>,
+    pub max_width: f32,
+    pub outline: Vec<crate::pdf_engine::Bookmark>,
+    pub links: Vec<Hyperlink>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RenderResult {
+    pub width: u32,
+    pub height: u32,
+    pub data: Arc<Vec<u8>>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SearchResultItem {
+    pub page_index: usize,
+    pub text: String,
+    pub y: f32,
+    pub x: f32,
+    pub width: f32,
+    pub height: f32,
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Hyperlink {
@@ -38,6 +54,7 @@ pub enum AppTheme {
 pub struct AppSettings {
     pub theme: AppTheme,
     pub cache_size: usize,
+    pub max_cache_memory: usize,
     pub render_quality: crate::pdf_engine::RenderQuality,
     pub default_filter: RenderFilter,
     pub accent_color: String,
@@ -52,6 +69,7 @@ impl Default for AppSettings {
         Self {
             theme: AppTheme::System,
             cache_size: 100,
+            max_cache_memory: 512, // 512MB
             render_quality: crate::pdf_engine::RenderQuality::Medium,
             default_filter: RenderFilter::None,
             accent_color: "#3b82f6".to_string(),

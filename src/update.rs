@@ -57,10 +57,76 @@ pub fn handle_message(app: &mut PdfBullApp, message: Message) -> Task<Message> {
     }
 
     match message {
+        Message::ResetZoom
+        | Message::OpenSettings
+        | Message::CloseSettings
+        | Message::SaveSettings(_)
+        | Message::ToggleSidebar
+        | Message::ToggleFullscreen
+        | Message::ToggleKeyboardHelp
+        | Message::RotateClockwise
+        | Message::RotateCounterClockwise
+        | Message::ClearRecentFiles => handle_app_message(app, message),
+        Message::AddBookmark | Message::RemoveBookmark(_) | Message::JumpToBookmark(_) => {
+            handle_bookmark_message(app, message)
+        }
+        Message::SetAnnotationMode(_)
+        | Message::AnnotationDragStart { .. }
+        | Message::AnnotationDragUpdate { .. }
+        | Message::AnnotationDragEnd
+        | Message::DeleteAnnotation(_)
+        | Message::Undo
+        | Message::Redo
+        | Message::SaveAnnotations
+        | Message::AnnotationsSaved(_)
+        | Message::AnnotationsLoaded(_, _) => handle_annotation_message(app, message),
+        Message::SetFilter(_)
+        | Message::ToggleAutoCrop
+        | Message::ViewportChanged(_, _)
+        | Message::SidebarViewportChanged(_)
+        | Message::RequestRender(_)
+        | Message::PageRendered(_, _, _)
+        | Message::ThumbnailRendered(_, _, _) => handle_render_message(app, message),
+        Message::OpenDocument
+        | Message::DocumentOpenedWithPath(_)
+        | Message::DocumentOpened(_)
+        | Message::OpenFile(_)
+        | Message::OpenRecentFile(_)
+        | Message::CloseTab(_)
+        | Message::SwitchTab(_) => handle_tab_message(app, message),
+        Message::NextPage
+        | Message::PrevPage
+        | Message::ZoomIn
+        | Message::ZoomOut
+        | Message::SetZoom(_)
+        | Message::JumpToPage(_)
+        | Message::PageInputChanged(_)
+        | Message::PageInputSubmitted => handle_nav_message(app, message),
+        Message::Search(_)
+        | Message::PerformSearch(_)
+        | Message::SearchResult(_, _)
+        | Message::NextSearchResult
+        | Message::PrevSearchResult
+        | Message::ClearSearch => handle_search_message(app, message),
+        Message::ExtractText
+        | Message::TextExtracted(_)
+        | Message::ExportImage
+        | Message::ImageExported(_)
+        | Message::ExportImages => handle_export_message(app, message),
+        Message::EngineInitialized(_)
+        | Message::Error(_)
+        | Message::ClearStatus
+        | Message::IcedEvent(_)
+        | Message::LinkClicked(_)
+        | Message::ForceQuit => handle_misc_message(app, message),
+    }
+}
+
+fn handle_app_message(app: &mut PdfBullApp, message: Message) -> Task<Message> {
+    match message {
         Message::ResetZoom => {
             if let Some(tab) = app.current_tab_mut() {
                 tab.zoom = 1.0;
-                // Don't clear rendered_pages to avoid flashing - let PageRendered handler update them
             }
             app.render_visible_pages()
         }
@@ -103,6 +169,17 @@ pub fn handle_message(app: &mut PdfBullApp, message: Message) -> Task<Message> {
             }
             app.render_visible_pages()
         }
+        Message::ClearRecentFiles => {
+            app.recent_files.clear();
+            crate::storage::save_recent_files(&app.recent_files);
+            Task::none()
+        }
+        _ => Task::none(),
+    }
+}
+
+fn handle_bookmark_message(app: &mut PdfBullApp, message: Message) -> Task<Message> {
+    match message {
         Message::AddBookmark => {
             if let Some(tab) = app.current_tab_mut() {
                 let page = tab.current_page;
@@ -149,6 +226,12 @@ pub fn handle_message(app: &mut PdfBullApp, message: Message) -> Task<Message> {
             }
             Task::none()
         }
+        _ => Task::none(),
+    }
+}
+
+fn handle_annotation_message(app: &mut PdfBullApp, message: Message) -> Task<Message> {
+    match message {
         Message::SetAnnotationMode(mode) => {
             app.annotation_mode = mode;
             if app.annotation_mode.is_none() {
@@ -215,10 +298,6 @@ pub fn handle_message(app: &mut PdfBullApp, message: Message) -> Task<Message> {
                     }
                 }
             }
-
-            // Optionally reset mode after drawing
-            // app.annotation_mode = None;
-
             Task::none()
         }
         Message::DeleteAnnotation(idx) => {
@@ -276,6 +355,64 @@ pub fn handle_message(app: &mut PdfBullApp, message: Message) -> Task<Message> {
             }
             Task::none()
         }
+        Message::SaveAnnotations => {
+            let (doc_id, annotations, pdf_path) = match app.current_tab() {
+                Some(t) if !t.annotations.is_empty() => (
+                    t.id,
+                    t.annotations.clone(),
+                    t.path.to_string_lossy().to_string(),
+                ),
+                _ => {
+                    log::warn!("No annotations to save");
+                    return Task::none();
+                }
+            };
+
+            let engine = match &app.engine {
+                Some(e) => e,
+                None => return Task::none(),
+            };
+
+            let cmd_tx = engine.cmd_tx.clone();
+            Task::perform(
+                async move {
+                    let (resp_tx, resp_rx) = tokio::sync::oneshot::channel();
+                    let _ =
+                        cmd_tx.send(crate::commands::PdfCommand::SaveAnnotations(doc_id, pdf_path, annotations, resp_tx));
+                    match resp_rx.await {
+                        Ok(Ok(path)) => Ok(path),
+                        Ok(Err(e)) => Err(e),
+                        Err(_) => Err("Engine died".into()),
+                    }
+                },
+                Message::AnnotationsSaved,
+            )
+        }
+        Message::AnnotationsSaved(result) => {
+            match result {
+                Ok(path) => app.status_message = Some(format!("Annotations saved to: {}", path)),
+                Err(e) => {
+                    log::error!("Error saving annotations: {}", e);
+                    app.status_message = Some(format!("Error saving annotations: {}", e));
+                }
+            }
+            Task::none()
+        }
+        Message::AnnotationsLoaded(doc_id, annotations) => {
+            if let Some(tab) = app.tabs.iter_mut().find(|t| t.id == doc_id) {
+                tab.annotations = annotations;
+            }
+            app.render_visible_pages()
+        }
+        _ => Task::none(),
+    }
+}
+        _ => Task::none(),
+    }
+}
+
+fn handle_render_message(app: &mut PdfBullApp, message: Message) -> Task<Message> {
+    match message {
         Message::SetFilter(filter) => {
             if let Some(tab) = app.current_tab_mut() {
                 if tab.render_filter != filter {
@@ -292,10 +429,332 @@ pub fn handle_message(app: &mut PdfBullApp, message: Message) -> Task<Message> {
             }
             app.render_visible_pages()
         }
+        Message::ViewportChanged(y, height) => {
+            if let Some(tab) = app.current_tab_mut() {
+                tab.viewport_y = y;
+                tab.viewport_height = height;
+                tab.update_visible_range();
+                tab.cleanup_distant_pages();
+            }
+            for tab in &mut app.tabs {
+                if tab.needs_periodic_cleanup() {
+                    tab.cleanup_distant_pages();
+                }
+            }
+            app.render_visible_pages()
+        }
+        Message::SidebarViewportChanged(y) => {
+            if let Some(tab) = app.current_tab_mut() {
+                tab.sidebar_viewport_y = y;
+            }
+            Task::none()
+        }
+        Message::RequestRender(page_idx) => {
+            let (doc_id, zoom, rotation, filter, auto_crop, quality) = {
+                let tab = match app.current_tab() {
+                    Some(t) => t,
+                    None => return Task::none(),
+                };
+
+                let needs_render = if let Some((scale, _)) = tab.rendered_pages.get(&page_idx) {
+                    (scale - tab.zoom).abs() > 0.001
+                } else {
+                    true
+                };
+
+                if !needs_render
+                    || app
+                        .rendering_set
+                        .contains(&crate::app::RenderTarget::Page(page_idx))
+                {
+                    return Task::none();
+                }
+
+                (
+                    tab.id,
+                    tab.zoom,
+                    tab.rotation,
+                    tab.render_filter,
+                    tab.auto_crop,
+                    app.settings.render_quality,
+                )
+            };
+
+            app.rendering_set
+                .insert(crate::app::RenderTarget::Page(page_idx));
+            app.rendering_count += 1;
+
+            let engine = match &app.engine {
+                Some(e) => e,
+                None => return Task::none(),
+            };
+
+            let cmd_tx = engine.cmd_tx.clone();
+            Task::perform(
+                async move {
+                    let (resp_tx, resp_rx) = tokio::sync::oneshot::channel();
+                    let options = crate::pdf_engine::RenderOptions {
+                        scale: zoom,
+                        rotation,
+                        filter,
+                        auto_crop,
+                        quality,
+                    };
+                    if let Err(e) = cmd_tx.send(crate::commands::PdfCommand::Render(
+                        doc_id,
+                        page_idx as i32,
+                        options,
+                        resp_tx,
+                    )) {
+                        log::error!("Failed to send Render command: {}", e);
+                        return Err("Engine died".into());
+                    }
+                    resp_rx.await.unwrap_or(Err("Channel closed".into()))
+                },
+                move |res| Message::PageRendered(page_idx, zoom, res),
+            )
+        }
+        Message::PageRendered(page_idx, scale, result) => {
+            app.rendering_count = app.rendering_count.saturating_sub(1);
+            app.rendering_set
+                .remove(&crate::app::RenderTarget::Page(page_idx));
+
+            if let Some(tab) = app.current_tab_mut() {
+                match result {
+                    Ok(res) => {
+                        let width = res.width;
+                        let height = res.height;
+                        let data = res.data;
+                        let pixel_data = Arc::try_unwrap(data).unwrap_or_else(|a| (*a).clone());
+                        tab.rendered_pages.insert(
+                            page_idx,
+                            (
+                                scale,
+                                iced_image::Handle::from_rgba(width, height, pixel_data),
+                            ),
+                        );
+                    }
+                    Err(e) => {
+                        log::error!("Render error: {}", e);
+                        if e == "Engine died" || e == "Channel closed" {
+                            app.engine = None;
+                            app.status_message = Some(
+                                "PDF engine crashed. Please try your action again to restart it."
+                                    .into(),
+                            );
+                        } else if e.to_lowercase().contains("pdfium") {
+                            app.engine = None;
+                            app.status_message =
+                                Some("Failed to load PDF engine (pdfium.dll missing).".into());
+                        }
+                    }
+                }
+            }
+            app.render_visible_pages()
+        }
+        Message::ThumbnailRendered(page_idx, scale, result) => {
+            app.rendering_count = app.rendering_count.saturating_sub(1);
+            app.rendering_set
+                .remove(&crate::app::RenderTarget::Thumbnail(page_idx));
+
+            if let Some(tab) = app.current_tab_mut() {
+                let expected_thumb_zoom = 120.0 / tab.page_width.max(1.0);
+                if (expected_thumb_zoom - scale).abs() > 0.001 {
+                    return Task::none();
+                }
+
+                match result {
+                    Ok(res) => {
+                        let width = res.width;
+                        let height = res.height;
+                        let data = res.data;
+                        let pixel_data = Arc::try_unwrap(data).unwrap_or_else(|a| (*a).clone());
+                        tab.thumbnails.insert(
+                            page_idx,
+                            iced_image::Handle::from_rgba(width, height, pixel_data),
+                        );
+                    }
+                    Err(e) => {
+                        log::error!("Thumbnail render error: {}", e);
+                    }
+                }
+            }
+            Task::none()
+        }
+        _ => Task::none(),
+    }
+}
+
+fn handle_search_message(app: &mut PdfBullApp, message: Message) -> Task<Message> {
+    match message {
+        Message::Search(query) => {
+            app.search_query = query.clone();
+            if query.is_empty() {
+                if let Some(tab) = app.current_tab_mut() {
+                    tab.search_results.clear();
+                    tab.current_search_index = 0;
+                }
+                return Task::none();
+            }
+            let query_clone = query.clone();
+            Task::perform(
+                async move {
+                    tokio::time::sleep(tokio::time::Duration::from_millis(300)).await;
+                    Message::PerformSearch(query_clone)
+                },
+                |m| m,
+            )
+        }
+        Message::PerformSearch(query) => {
+            if query != app.search_query {
+                return Task::none();
+            }
+
+            if query.is_empty() {
+                return Task::none();
+            }
+
+            let tab = match app.current_tab_mut() {
+                Some(t) => t,
+                None => return Task::none(),
+            };
+
+            tab.search_results.clear();
+            tab.current_search_index = 0;
+
+            let doc_id = tab.id;
+
+            let engine = match &app.engine {
+                Some(e) => e,
+                None => return Task::none(),
+            };
+
+            let cmd_tx = engine.cmd_tx.clone();
+            Task::perform(
+                async move {
+                    tokio::time::sleep(tokio::time::Duration::from_millis(300)).await;
+                    let (resp_tx, resp_rx) = std::sync::mpsc::channel();
+                    if let Err(e) = cmd_tx.send(crate::commands::PdfCommand::Search(doc_id, query, resp_tx)) {
+                        log::error!("Failed to send Search command: {}", e);
+                        return Err("Engine died".into());
+                    }
+                    let mut all_results = Vec::new();
+                    while let Ok(res) = resp_rx.recv() {
+                        match res {
+                            Ok(mut batch) => all_results.append(&mut batch),
+                            Err(e) => return Err(e),
+                        }
+                    }
+                    Ok(all_results)
+                },
+                move |result| Message::SearchResult(doc_id, result),
+            )
+        }
+        Message::SearchResult(received_doc_id, result) => {
+            match result {
+                Ok(results) => {
+                    if let Some(tab) = app.current_tab_mut() {
+                        if tab.id == received_doc_id {
+                            tab.search_results = results
+                                .into_iter()
+                                .map(|item| SearchResult {
+                                    page: item.page_index,
+                                    text: item.text,
+                                    y_position: item.y,
+                                    x: item.x,
+                                    width: item.width,
+                                    height: item.height,
+                                })
+                                .collect();
+                            tab.current_search_index = 0;
+
+                            if !tab.search_results.is_empty() && tab.current_search_index == 0 {
+                                tab.current_page = tab.search_results[0].page;
+                            }
+                        }
+                    }
+                }
+                Err(e) => {
+                    log::error!("Search error: {}", e);
+                    if e == "Engine died" || e == "Channel closed" {
+                        app.engine = None;
+                        app.status_message = Some(
+                            "PDF engine crashed. Please try your action again to restart it."
+                                .into(),
+                        );
+                    } else {
+                        app.status_message = Some(format!("Search error: {}", e));
+                    }
+                }
+            }
+            Task::none()
+        }
+        Message::NextSearchResult => {
+            let next_page = if let Some(tab) = app.current_tab_mut() {
+                if !tab.search_results.is_empty() {
+                    tab.current_search_index =
+                        (tab.current_search_index + 1) % tab.search_results.len();
+                    tab.current_page = tab.search_results[tab.current_search_index].page;
+                    Some(tab.current_page)
+                } else {
+                    None
+                }
+            } else {
+                None
+            };
+
+            if let Some(page) = next_page {
+                app.page_input = (page + 1).to_string();
+                if let Some(tab) = app.current_tab_mut() {
+                    return scroll_to_page(tab, page);
+                }
+            }
+            Task::none()
+        }
+        Message::PrevSearchResult => {
+            let prev_page = if let Some(tab) = app.current_tab_mut() {
+                if !tab.search_results.is_empty() {
+                    tab.current_search_index = if tab.current_search_index == 0 {
+                        tab.search_results.len() - 1
+                    } else {
+                        tab.current_search_index - 1
+                    };
+                    tab.current_page = tab.search_results[tab.current_search_index].page;
+                    Some(tab.current_page)
+                } else {
+                    None
+                }
+            } else {
+                None
+            };
+
+            if let Some(page) = prev_page {
+                app.page_input = (page + 1).to_string();
+                if let Some(tab) = app.current_tab_mut() {
+                    return scroll_to_page(tab, page);
+                }
+            }
+            Task::none()
+        }
+        Message::ClearSearch => {
+            if let Some(tab) = app.current_tab_mut() {
+                tab.search_results.clear();
+                tab.current_search_index = 0;
+            }
+            app.search_query.clear();
+            Task::none()
+        }
+        _ => Task::none(),
+    }
+}
+
+fn handle_tab_message(app: &mut PdfBullApp, message: Message) -> Task<Message> {
+    match message {
         Message::OpenDocument => {
             if app.engine.is_none() {
                 let cache_size = app.settings.cache_size as u64;
-                app.engine = Some(crate::engine::spawn_engine_thread(cache_size));
+                let max_mem = app.settings.max_cache_memory as u64;
+                app.engine = Some(crate::engine::spawn_engine_thread(cache_size, max_mem));
             }
 
             if let Some(engine) = &app.engine {
@@ -311,7 +770,7 @@ pub fn handle_message(app: &mut PdfBullApp, message: Message) -> Task<Message> {
                             let path = file.path().to_path_buf();
                             let path_s = path.to_string_lossy().to_string();
                             let (resp_tx, resp_rx) = tokio::sync::oneshot::channel();
-                            if let Err(e) = cmd_tx.send(PdfCommand::Open(path_s, resp_tx)) {
+                            if let Err(e) = cmd_tx.send(crate::commands::PdfCommand::Open(path_s, resp_tx)) {
                                 log::error!("Failed to send Open command: {}", e);
                                 return None;
                             }
@@ -342,12 +801,17 @@ pub fn handle_message(app: &mut PdfBullApp, message: Message) -> Task<Message> {
             app.active_tab = tab_idx;
             app.add_recent_file(&path);
 
-            let _doc_id = data.0;
-            let _total_pages = data.1;
             app.update(Message::DocumentOpened(Ok(data)))
         }
         Message::DocumentOpened(result) => match result {
-            Ok((doc_id, count, heights, width, outline, links)) => {
+            Ok(res) => {
+                let doc_id = res.id;
+                let count = res.page_count;
+                let heights = res.page_heights;
+                let width = res.max_width;
+                let outline = res.outline;
+                let links = res.links;
+
                 let default_zoom = app.settings.default_zoom;
                 let default_filter = app.settings.default_filter;
                 let pdf_path = app
@@ -374,7 +838,7 @@ pub fn handle_message(app: &mut PdfBullApp, message: Message) -> Task<Message> {
                             async move {
                                 let (resp_tx, resp_rx) = tokio::sync::oneshot::channel();
                                 let _ = cmd_tx
-                                    .send(PdfCommand::LoadAnnotations(doc_id, path_str, resp_tx));
+                                    .send(crate::commands::PdfCommand::LoadAnnotations(doc_id, path_str, resp_tx));
                                 match resp_rx.await {
                                     Ok(Ok(annotations)) => (doc_id, annotations),
                                     Ok(Err(_)) => (doc_id, Vec::new()),
@@ -407,16 +871,11 @@ pub fn handle_message(app: &mut PdfBullApp, message: Message) -> Task<Message> {
                 Task::none()
             }
         },
-        Message::AnnotationsLoaded(doc_id, annotations) => {
-            if let Some(tab) = app.tabs.iter_mut().find(|t| t.id == doc_id) {
-                tab.annotations = annotations;
-            }
-            app.render_visible_pages()
-        }
         Message::OpenFile(path) => {
             if app.engine.is_none() {
                 let cache_size = app.settings.cache_size as u64;
-                app.engine = Some(crate::engine::spawn_engine_thread(cache_size));
+                let max_mem = app.settings.max_cache_memory as u64;
+                app.engine = Some(crate::engine::spawn_engine_thread(cache_size, max_mem));
             }
 
             let tab = DocumentTab::new(path.clone());
@@ -430,7 +889,7 @@ pub fn handle_message(app: &mut PdfBullApp, message: Message) -> Task<Message> {
                 return Task::perform(
                     async move {
                         let (resp_tx, resp_rx) = tokio::sync::oneshot::channel();
-                        if let Err(e) = cmd_tx.send(PdfCommand::Open(path_s, resp_tx)) {
+                        if let Err(e) = cmd_tx.send(crate::commands::PdfCommand::Open(path_s, resp_tx)) {
                             log::error!("Failed to send Open command: {}", e);
                             return Err("Engine died".into());
                         }
@@ -459,7 +918,7 @@ pub fn handle_message(app: &mut PdfBullApp, message: Message) -> Task<Message> {
             if let Some(engine) = &app.engine {
                 let cmd_tx = engine.cmd_tx.clone();
                 let doc_id = tab.id;
-                let _ = cmd_tx.send(PdfCommand::Close(doc_id));
+                let _ = cmd_tx.send(crate::commands::PdfCommand::Close(doc_id));
             }
 
             if app.active_tab >= app.tabs.len() && !app.tabs.is_empty() {
@@ -478,6 +937,12 @@ pub fn handle_message(app: &mut PdfBullApp, message: Message) -> Task<Message> {
             }
             Task::none()
         }
+        _ => Task::none(),
+    }
+}
+
+fn handle_nav_message(app: &mut PdfBullApp, message: Message) -> Task<Message> {
+    match message {
         Message::NextPage => {
             let next_page = if let Some(tab) = app.current_tab_mut() {
                 if tab.current_page + 1 < tab.total_pages {
@@ -569,318 +1034,12 @@ pub fn handle_message(app: &mut PdfBullApp, message: Message) -> Task<Message> {
             }
             Task::none()
         }
-        Message::ViewportChanged(y, height) => {
-            if let Some(tab) = app.current_tab_mut() {
-                tab.viewport_y = y;
-                tab.viewport_height = height;
-                tab.update_visible_range();
-                tab.cleanup_distant_pages();
-            }
-            for tab in &mut app.tabs {
-                if tab.needs_periodic_cleanup() {
-                    tab.cleanup_distant_pages();
-                }
-            }
-            app.render_visible_pages()
-        }
-        Message::SidebarViewportChanged(y) => {
-            if let Some(tab) = app.current_tab_mut() {
-                tab.sidebar_viewport_y = y;
-            }
-            Task::none()
-        }
-        Message::RequestRender(page_idx) => {
-            let (doc_id, zoom, rotation, filter, auto_crop, quality) = {
-                let tab = match app.current_tab() {
-                    Some(t) => t,
-                    None => return Task::none(),
-                };
+        _ => Task::none(),
+    }
+}
 
-                let needs_render = if let Some((scale, _)) = tab.rendered_pages.get(&page_idx) {
-                    (scale - tab.zoom).abs() > 0.001
-                } else {
-                    true
-                };
-
-                if !needs_render
-                    || app
-                        .rendering_set
-                        .contains(&crate::app::RenderTarget::Page(page_idx))
-                {
-                    return Task::none();
-                }
-
-                (
-                    tab.id,
-                    tab.zoom,
-                    tab.rotation,
-                    tab.render_filter,
-                    tab.auto_crop,
-                    app.settings.render_quality,
-                )
-            };
-
-            app.rendering_set
-                .insert(crate::app::RenderTarget::Page(page_idx));
-            app.rendering_count += 1;
-
-            let engine = match &app.engine {
-                Some(e) => e,
-                None => return Task::none(),
-            };
-
-            let cmd_tx = engine.cmd_tx.clone();
-            Task::perform(
-                async move {
-                    let (resp_tx, resp_rx) = tokio::sync::oneshot::channel();
-                    let options = crate::pdf_engine::RenderOptions {
-                        scale: zoom,
-                        rotation,
-                        filter,
-                        auto_crop,
-                        quality,
-                    };
-                    if let Err(e) = cmd_tx.send(PdfCommand::Render(
-                        doc_id,
-                        page_idx as i32,
-                        options,
-                        resp_tx,
-                    )) {
-                        log::error!("Failed to send Render command: {}", e);
-                        return Err("Engine died".into());
-                    }
-                    resp_rx.await.unwrap_or(Err("Channel closed".into()))
-                },
-                move |res| Message::PageRendered(page_idx, zoom, res),
-            )
-        }
-        Message::PageRendered(page_idx, scale, result) => {
-            app.rendering_count = app.rendering_count.saturating_sub(1);
-            app.rendering_set
-                .remove(&crate::app::RenderTarget::Page(page_idx));
-
-            if let Some(tab) = app.current_tab_mut() {
-                match result {
-                    Ok((width, height, data)) => {
-                        // ZERO-COPY ATTEMPT: We convert the Arc back to Vec if unique, otherwise clone.
-                        // Since this is being moved out of the channel, it's often unique.
-                        let pixel_data = Arc::try_unwrap(data).unwrap_or_else(|a| (*a).clone());
-                        tab.rendered_pages.insert(
-                            page_idx,
-                            (
-                                scale,
-                                iced_image::Handle::from_rgba(width, height, pixel_data),
-                            ),
-                        );
-                    }
-                    Err(e) => {
-                        log::error!("Render error: {}", e);
-                        if e == "Engine died" || e == "Channel closed" {
-                            app.engine = None;
-                            app.status_message = Some(
-                                "PDF engine crashed. Please try your action again to restart it."
-                                    .into(),
-                            );
-                        } else if e.to_lowercase().contains("pdfium") {
-                            app.engine = None;
-                            app.status_message =
-                                Some("Failed to load PDF engine (pdfium.dll missing).".into());
-                        }
-                    }
-                }
-            }
-            app.render_visible_pages()
-        }
-        Message::ThumbnailRendered(page_idx, scale, result) => {
-            app.rendering_count = app.rendering_count.saturating_sub(1);
-            app.rendering_set
-                .remove(&crate::app::RenderTarget::Thumbnail(page_idx));
-
-            if let Some(tab) = app.current_tab_mut() {
-                // For thumbnails, we check against the expected thumbnail zoom
-                let expected_thumb_zoom = 120.0 / tab.page_width.max(1.0);
-                if (expected_thumb_zoom - scale).abs() > 0.001 {
-                    return Task::none();
-                }
-
-                match result {
-                    Ok((width, height, data)) => {
-                        // ZERO-COPY ATTEMPT: We convert the Arc back to Vec if unique, otherwise clone.
-                        let pixel_data = Arc::try_unwrap(data).unwrap_or_else(|a| (*a).clone());
-                        tab.thumbnails.insert(
-                            page_idx,
-                            iced_image::Handle::from_rgba(width, height, pixel_data),
-                        );
-                    }
-                    Err(e) => {
-                        log::error!("Thumbnail render error: {}", e);
-                    }
-                }
-            }
-            Task::none()
-        }
-        Message::Search(query) => {
-            app.search_query = query.clone();
-            if query.is_empty() {
-                if let Some(tab) = app.current_tab_mut() {
-                    tab.search_results.clear();
-                    tab.current_search_index = 0;
-                }
-                return Task::none();
-            }
-            let query_clone = query.clone();
-            Task::perform(
-                async move {
-                    tokio::time::sleep(tokio::time::Duration::from_millis(300)).await;
-                    Message::PerformSearch(query_clone)
-                },
-                |m| m,
-            )
-        }
-        Message::PerformSearch(query) => {
-            if query != app.search_query {
-                return Task::none();
-            }
-
-            if query.is_empty() {
-                return Task::none();
-            }
-
-            let tab = match app.current_tab_mut() {
-                Some(t) => t,
-                None => return Task::none(),
-            };
-
-            tab.search_results.clear();
-            tab.current_search_index = 0;
-
-            let doc_id = tab.id;
-
-            let engine = match &app.engine {
-                Some(e) => e,
-                None => return Task::none(),
-            };
-
-            let cmd_tx = engine.cmd_tx.clone();
-            Task::perform(
-                async move {
-                    tokio::time::sleep(tokio::time::Duration::from_millis(300)).await;
-                    let (resp_tx, resp_rx) = std::sync::mpsc::channel();
-                    if let Err(e) = cmd_tx.send(PdfCommand::Search(doc_id, query, resp_tx)) {
-                        log::error!("Failed to send Search command: {}", e);
-                        return Err("Engine died".into());
-                    }
-                    let mut all_results = Vec::new();
-                    while let Ok(res) = resp_rx.recv() {
-                        match res {
-                            Ok(mut batch) => all_results.append(&mut batch),
-                            Err(e) => return Err(e),
-                        }
-                    }
-                    Ok(all_results)
-                },
-                move |result| Message::SearchResult(doc_id, result),
-            )
-        }
-        Message::SearchResult(received_doc_id, result) => {
-            match result {
-                Ok(results) => {
-                    if let Some(tab) = app.current_tab_mut() {
-                        if tab.id == received_doc_id {
-                            tab.search_results = results
-                                .into_iter()
-                                .map(|(page, text, y, x, width, height)| SearchResult {
-                                    page,
-                                    text,
-                                    y_position: y,
-                                    x,
-                                    width,
-                                    height,
-                                })
-                                .collect();
-                            tab.current_search_index = 0;
-
-                            if !tab.search_results.is_empty() && tab.current_search_index == 0 {
-                                tab.current_page = tab.search_results[0].page;
-                            }
-                        }
-                    }
-                }
-                Err(e) => {
-                    log::error!("Search error: {}", e);
-                    if e == "Engine died" || e == "Channel closed" {
-                        app.engine = None;
-                        app.status_message = Some(
-                            "PDF engine crashed. Please try your action again to restart it."
-                                .into(),
-                        );
-                    } else {
-                        app.status_message = Some(format!("Search error: {}", e));
-                    }
-                }
-            }
-            Task::none()
-        }
-        Message::NextSearchResult => {
-            let next_page = if let Some(tab) = app.current_tab_mut() {
-                if !tab.search_results.is_empty() {
-                    tab.current_search_index =
-                        (tab.current_search_index + 1) % tab.search_results.len();
-                    tab.current_page = tab.search_results[tab.current_search_index].page;
-                    Some(tab.current_page)
-                } else {
-                    None
-                }
-            } else {
-                None
-            };
-
-            if let Some(page) = next_page {
-                app.page_input = (page + 1).to_string();
-                if let Some(tab) = app.current_tab_mut() {
-                    return scroll_to_page(tab, page);
-                }
-            }
-            Task::none()
-        }
-        Message::PrevSearchResult => {
-            let prev_page = if let Some(tab) = app.current_tab_mut() {
-                if !tab.search_results.is_empty() {
-                    tab.current_search_index = if tab.current_search_index == 0 {
-                        tab.search_results.len() - 1
-                    } else {
-                        tab.current_search_index - 1
-                    };
-                    tab.current_page = tab.search_results[tab.current_search_index].page;
-                    Some(tab.current_page)
-                } else {
-                    None
-                }
-            } else {
-                None
-            };
-
-            if let Some(page) = prev_page {
-                app.page_input = (page + 1).to_string();
-                if let Some(tab) = app.current_tab_mut() {
-                    return scroll_to_page(tab, page);
-                }
-            }
-            Task::none()
-        }
-        Message::ClearSearch => {
-            if let Some(tab) = app.current_tab_mut() {
-                tab.search_results.clear();
-                tab.current_search_index = 0;
-            }
-            app.search_query.clear();
-            Task::none()
-        }
-        Message::ClearRecentFiles => {
-            app.recent_files.clear();
-            crate::storage::save_recent_files(&app.recent_files);
-            Task::none()
-        }
+fn handle_export_message(app: &mut PdfBullApp, message: Message) -> Task<Message> {
+    match message {
         Message::ExtractText => {
             let tab = match app.current_tab() {
                 Some(t) => t,
@@ -1065,62 +1224,12 @@ pub fn handle_message(app: &mut PdfBullApp, message: Message) -> Task<Message> {
                 Message::ImageExported,
             )
         }
-        Message::SaveAnnotations => {
-            let (doc_id, annotations, pdf_path) = match app.current_tab() {
-                Some(t) if !t.annotations.is_empty() => (
-                    t.id,
-                    t.annotations.clone(),
-                    t.path.to_string_lossy().to_string(),
-                ),
-                _ => {
-                    log::warn!("No annotations to save");
-                    return Task::none();
-                }
-            };
+        _ => Task::none(),
+    }
+}
 
-            let engine = match &app.engine {
-                Some(e) => e,
-                None => return Task::none(),
-            };
-
-            let cmd_tx = engine.cmd_tx.clone();
-            Task::perform(
-                async move {
-                    let (resp_tx, resp_rx) = tokio::sync::oneshot::channel();
-                    if let Err(e) = cmd_tx.send(PdfCommand::ExportPdf(
-                        doc_id,
-                        pdf_path.clone(),
-                        annotations,
-                        resp_tx,
-                    )) {
-                        log::error!("Failed to send ExportPdf command: {}", e);
-                        return Err("Engine died".into());
-                    }
-                    match resp_rx.await {
-                        Ok(Ok(path)) => Ok(format!("Annotations saved to {}", path)),
-                        Ok(Err(e)) => Err(e),
-                        Err(_) => Err("Engine died".into()),
-                    }
-                },
-                Message::AnnotationsSaved,
-            )
-        }
-        Message::AnnotationsSaved(result) => {
-            match result {
-                Ok(msg) => app.status_message = Some(msg),
-                Err(e) => {
-                    log::error!("Save error: {}", e);
-                    if e == "Engine died" || e == "Channel closed" {
-                        app.engine = None;
-                        app.status_message =
-                            Some("PDF engine crashed. Please try saving again.".into());
-                    } else if e != "Cancelled" {
-                        app.status_message = Some(format!("Save error: {}", e));
-                    }
-                }
-            }
-            Task::none()
-        }
+fn handle_misc_message(app: &mut PdfBullApp, message: Message) -> Task<Message> {
+    match message {
         Message::EngineInitialized(state) => {
             app.engine = Some(state);
             Task::none()
@@ -1163,29 +1272,6 @@ pub fn handle_message(app: &mut PdfBullApp, message: Message) -> Task<Message> {
                 }
                 iced::Event::Window(iced::window::Event::FileDropped(path)) => {
                     return app.update(Message::OpenFile(path));
-                }
-                iced::Event::Mouse(iced::mouse::Event::CursorMoved { position: _ }) => {
-                    // We only care about tracking when dragging an annotation
-                    // But CursorMoved position is in absolute screen coords,
-                    // while AnnotationDrag tracks page-relative coords.
-                    // Ideally we'd use mouse_area's on_move but it's not supported natively yet.
-                    // A simple approximation for drag:
-                    // Since we don't have absolute window coords trivially mapped to page coords,
-                    // we will need to calculate the relative delta if we really want to track outside the mouse_area.
-                    // Actually, we can get local coords by updating via mouse_area if we had an event listener,
-                    // but we can just use the fact that Iced 0.12+ doesn't have on_move in mouse_area.
-                    // Wait, we can't easily map window coordinates to page coordinates here without knowing the scroll/zoom.
-                    // Let's rely on standard iced widget events if possible, or just accept that the visual preview
-                    // might be slightly off until we release.
-                    // Or better, let's keep the drag state and just live with no preview if we can't get local coords.
-                    // No, wait, if we drop iced::mouse::Event tracking, the preview won't update.
-                    // Let's just pass the absolute coords and we'll have to adjust them by scroll and zoom later.
-                    // A better way is to see if Iced's `mouse_area` supports movement tracking. It doesn't in 0.12, but does in 0.13.
-                    // Given I'm not sure what version of Iced this uses (likely 0.12), I'll omit live drag preview
-                    // updates if it requires too much math, and just use the DragEnd coords.
-                    // But we can pull the scroll offset!
-                    // Actually, `mouse_area` only fires `on_press` and `on_release`.
-                    // Let's just ignore `CursorMoved` here and rely on the start/end bounds.
                 }
                 iced::Event::Mouse(iced::mouse::Event::WheelScrolled { delta }) => {
                     use iced::mouse::ScrollDelta;
@@ -1262,5 +1348,6 @@ pub fn handle_message(app: &mut PdfBullApp, message: Message) -> Task<Message> {
             Task::none()
         }
         Message::ForceQuit => iced::exit(),
+        _ => Task::none(),
     }
 }

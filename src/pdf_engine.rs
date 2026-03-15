@@ -5,7 +5,61 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use std::sync::Mutex;
 
-pub type SharedRenderCache = Arc<Mutex<LruCache<String, crate::models::RenderResult>>>;
+pub struct RenderCache {
+    lru: LruCache<String, crate::models::RenderResult>,
+    /// Maps (path, page_num) -> last used cache key to allow evicting old scales of the same page
+    scale_index: HashMap<(String, usize), String>,
+    current_bytes: usize,
+    max_bytes: usize,
+}
+
+impl RenderCache {
+    pub fn new(capacity: usize, max_bytes: usize) -> Self {
+        Self {
+            lru: LruCache::new(std::num::NonZeroUsize::new(capacity).unwrap_or(std::num::NonZeroUsize::new(1).unwrap())),
+            scale_index: HashMap::new(),
+            current_bytes: 0,
+            max_bytes,
+        }
+    }
+
+    pub fn get(&mut self, key: &str) -> Option<crate::models::RenderResult> {
+        self.lru.get(key).cloned()
+    }
+
+    pub fn put(&mut self, path: &str, page_num: usize, key: String, result: crate::models::RenderResult) {
+        let entry_bytes = result.data.len();
+
+        // 1. Evict stale scale for the SAME page to prevent multi-resolution bloat
+        let page_key = (path.to_string(), page_num);
+        if let Some(old_key) = self.scale_index.insert(page_key.clone(), key.clone()) {
+            if old_key != key {
+                if let Some(old_res) = self.lru.pop(&old_key) {
+                    self.current_bytes = self.current_bytes.saturating_sub(old_res.data.len());
+                }
+            }
+        }
+
+        // 2. Enforce memory limits by evicting LRU items
+        while self.current_bytes + entry_bytes > self.max_bytes && self.lru.len() > 0 {
+            if let Some((k, v)) = self.lru.pop_lru() {
+                self.current_bytes = self.current_bytes.saturating_sub(v.data.len());
+                
+                // Cleanup scale_index if this was the registered key for that page
+                // Note: This is an optimization; if we don't do this, the next 'insert' will just overwrite it.
+                // Parsing the key to find the path/page is possible but expensive. 
+                // Instead, we just let the scale_index lazily update or stay slightly out of sync (item-wise).
+                // However, stale items in scale_index are just Strings, not large Bitmaps.
+            }
+        }
+
+        // 3. Add to cache
+        self.lru.put(key, result);
+        self.current_bytes += entry_bytes;
+    }
+}
+
+pub type SharedRenderCache = Arc<Mutex<RenderCache>>;
 
 #[derive(Clone, Copy, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 pub enum RenderQuality {
@@ -57,7 +111,8 @@ impl<'a> DocumentStore<'a> {
     pub fn open_document(
         &mut self,
         path: &str,
-    ) -> Result<(String, usize, Vec<f32>, f32, Vec<Hyperlink>), String> {
+    ) -> Result<crate::models::OpenResult, String> {
+        let doc_id = crate::models::next_doc_id(); // Generate ID here or pass it in
         let doc = self
             .pdfium
             .load_pdf_from_file(path, None)
@@ -115,15 +170,17 @@ impl<'a> DocumentStore<'a> {
             path: path.to_string(),
         };
 
+
         self.documents.insert(path.to_string(), state);
 
-        Ok((
-            path.to_string(),
-            page_count as usize,
-            heights,
+        Ok(crate::models::OpenResult {
+            id: doc_id,
+            page_count: page_count as usize,
+            page_heights: heights,
             max_width,
-            all_links,
-        ))
+            outline: self.get_outline(path),
+            links: all_links,
+        })
     }
 
     pub fn ensure_opened(&mut self, path: &str) -> Result<(), String> {
@@ -143,15 +200,16 @@ impl<'a> DocumentStore<'a> {
         page_num: usize,
         options: RenderOptions,
     ) -> Result<crate::models::RenderResult, String> {
+        let rounded_scale = (options.scale * 100.0).round() / 100.0;
         let cache_key = format!(
             "{}_{}_{}_{:?}_{}_{:?}",
-            path, page_num, options.scale, options.filter, options.auto_crop, options.quality
+            path, page_num, rounded_scale, options.filter, options.auto_crop, options.quality
         );
 
         {
             let mut cache = self.render_cache.lock().map_err(|e| e.to_string())?;
             if let Some(cached) = cache.get(&cache_key) {
-                return Ok(cached.clone());
+                return Ok(cached);
             }
         }
 
@@ -166,8 +224,8 @@ impl<'a> DocumentStore<'a> {
             .get(page_num as i32)
             .map_err(|e| e.to_string())?;
 
-        let mut target_w = (page.width().value * options.scale) as i32;
-        let mut target_h = (page.height().value * options.scale) as i32;
+        let mut target_w = (page.width().value * rounded_scale) as i32;
+        let mut target_h = (page.height().value * rounded_scale) as i32;
 
         let max_dim = 2500;
         if target_w > max_dim || target_h > max_dim {
@@ -225,12 +283,15 @@ impl<'a> DocumentStore<'a> {
             (w, h, result_data)
         };
 
-        let result_data: Arc<Vec<u8>> = Arc::new(final_data);
-        let result = (final_w, final_h, result_data.clone());
+        let result = crate::models::RenderResult {
+            width: final_w,
+            height: final_h,
+            data: Arc::new(final_data),
+        };
 
         {
             let mut cache = self.render_cache.lock().map_err(|e| e.to_string())?;
-            cache.put(cache_key, result.clone());
+            cache.put(path, page_num, cache_key, result.clone());
         }
 
         Ok(result)
@@ -461,7 +522,14 @@ impl<'a> DocumentStore<'a> {
                             let w = rect.width().value;
                             let h = rect.height().value;
 
-                            results.push((page_idx, text_all, y, x, w, h));
+                            results.push(SearchResultItem {
+                                page_index: page_idx,
+                                text: text_all,
+                                y,
+                                x,
+                                width: w,
+                                height: h,
+                            });
                         }
                     }
                 }
@@ -584,10 +652,11 @@ impl<'a> DocumentStore<'a> {
     }
 }
 
-pub fn create_render_cache(cache_size: u64) -> SharedRenderCache {
-    Arc::new(Mutex::new(LruCache::new(
-        std::num::NonZeroUsize::new(cache_size as usize)
-            .unwrap_or(std::num::NonZeroUsize::new(12).unwrap()),
+pub fn create_render_cache(cache_size: u64, max_memory_mb: u64) -> SharedRenderCache {
+    let max_bytes = (max_memory_mb * 1024 * 1024) as usize;
+    Arc::new(Mutex::new(RenderCache::new(
+        cache_size as usize,
+        if max_bytes == 0 { 512 * 1024 * 1024 } else { max_bytes },
     )))
 }
 
