@@ -377,8 +377,12 @@ fn handle_annotation_message(app: &mut PdfBullApp, message: Message) -> Task<Mes
             Task::perform(
                 async move {
                     let (resp_tx, resp_rx) = tokio::sync::oneshot::channel();
-                    let _ =
-                        cmd_tx.send(crate::commands::PdfCommand::SaveAnnotations(doc_id, pdf_path, annotations, resp_tx));
+                    let _ = cmd_tx.send(crate::commands::PdfCommand::ExportPdf(
+                        doc_id,
+                        pdf_path,
+                        annotations,
+                        resp_tx,
+                    ));
                     match resp_rx.await {
                         Ok(Ok(path)) => Ok(path),
                         Ok(Err(e)) => Err(e),
@@ -404,9 +408,6 @@ fn handle_annotation_message(app: &mut PdfBullApp, message: Message) -> Task<Mes
             }
             app.render_visible_pages()
         }
-        _ => Task::none(),
-    }
-}
         _ => Task::none(),
     }
 }
@@ -634,7 +635,9 @@ fn handle_search_message(app: &mut PdfBullApp, message: Message) -> Task<Message
                 async move {
                     tokio::time::sleep(tokio::time::Duration::from_millis(300)).await;
                     let (resp_tx, resp_rx) = std::sync::mpsc::channel();
-                    if let Err(e) = cmd_tx.send(crate::commands::PdfCommand::Search(doc_id, query, resp_tx)) {
+                    if let Err(e) =
+                        cmd_tx.send(crate::commands::PdfCommand::Search(doc_id, query, resp_tx))
+                    {
                         log::error!("Failed to send Search command: {}", e);
                         return Err("Engine died".into());
                     }
@@ -770,7 +773,9 @@ fn handle_tab_message(app: &mut PdfBullApp, message: Message) -> Task<Message> {
                             let path = file.path().to_path_buf();
                             let path_s = path.to_string_lossy().to_string();
                             let (resp_tx, resp_rx) = tokio::sync::oneshot::channel();
-                            if let Err(e) = cmd_tx.send(crate::commands::PdfCommand::Open(path_s, resp_tx)) {
+                            if let Err(e) =
+                                cmd_tx.send(crate::commands::PdfCommand::Open(path_s, resp_tx))
+                            {
                                 log::error!("Failed to send Open command: {}", e);
                                 return None;
                             }
@@ -837,8 +842,9 @@ fn handle_tab_message(app: &mut PdfBullApp, message: Message) -> Task<Message> {
                         return Task::perform(
                             async move {
                                 let (resp_tx, resp_rx) = tokio::sync::oneshot::channel();
-                                let _ = cmd_tx
-                                    .send(crate::commands::PdfCommand::LoadAnnotations(doc_id, path_str, resp_tx));
+                                let _ = cmd_tx.send(crate::commands::PdfCommand::LoadAnnotations(
+                                    doc_id, path_str, resp_tx,
+                                ));
                                 match resp_rx.await {
                                     Ok(Ok(annotations)) => (doc_id, annotations),
                                     Ok(Err(_)) => (doc_id, Vec::new()),
@@ -889,7 +895,9 @@ fn handle_tab_message(app: &mut PdfBullApp, message: Message) -> Task<Message> {
                 return Task::perform(
                     async move {
                         let (resp_tx, resp_rx) = tokio::sync::oneshot::channel();
-                        if let Err(e) = cmd_tx.send(crate::commands::PdfCommand::Open(path_s, resp_tx)) {
+                        if let Err(e) =
+                            cmd_tx.send(crate::commands::PdfCommand::Open(path_s, resp_tx))
+                        {
                             log::error!("Failed to send Open command: {}", e);
                             return Err("Engine died".into());
                         }

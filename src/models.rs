@@ -4,7 +4,7 @@ use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 use std::sync::Arc;
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone)]
 pub struct OpenResult {
     pub id: DocumentId,
     pub page_count: usize,
@@ -14,7 +14,7 @@ pub struct OpenResult {
     pub links: Vec<Hyperlink>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone)]
 pub struct RenderResult {
     pub width: u32,
     pub height: u32,

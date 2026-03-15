@@ -16,7 +16,10 @@ pub struct RenderCache {
 impl RenderCache {
     pub fn new(capacity: usize, max_bytes: usize) -> Self {
         Self {
-            lru: LruCache::new(std::num::NonZeroUsize::new(capacity).unwrap_or(std::num::NonZeroUsize::new(1).unwrap())),
+            lru: LruCache::new(
+                std::num::NonZeroUsize::new(capacity)
+                    .unwrap_or(std::num::NonZeroUsize::new(1).unwrap()),
+            ),
             scale_index: HashMap::new(),
             current_bytes: 0,
             max_bytes,
@@ -27,7 +30,13 @@ impl RenderCache {
         self.lru.get(key).cloned()
     }
 
-    pub fn put(&mut self, path: &str, page_num: usize, key: String, result: crate::models::RenderResult) {
+    pub fn put(
+        &mut self,
+        path: &str,
+        page_num: usize,
+        key: String,
+        result: crate::models::RenderResult,
+    ) {
         let entry_bytes = result.data.len();
 
         // 1. Evict stale scale for the SAME page to prevent multi-resolution bloat
@@ -44,10 +53,10 @@ impl RenderCache {
         while self.current_bytes + entry_bytes > self.max_bytes && self.lru.len() > 0 {
             if let Some((k, v)) = self.lru.pop_lru() {
                 self.current_bytes = self.current_bytes.saturating_sub(v.data.len());
-                
+
                 // Cleanup scale_index if this was the registered key for that page
                 // Note: This is an optimization; if we don't do this, the next 'insert' will just overwrite it.
-                // Parsing the key to find the path/page is possible but expensive. 
+                // Parsing the key to find the path/page is possible but expensive.
                 // Instead, we just let the scale_index lazily update or stay slightly out of sync (item-wise).
                 // However, stale items in scale_index are just Strings, not large Bitmaps.
             }
@@ -108,10 +117,7 @@ impl<'a> DocumentStore<'a> {
         })
     }
 
-    pub fn open_document(
-        &mut self,
-        path: &str,
-    ) -> Result<crate::models::OpenResult, String> {
+    pub fn open_document(&mut self, path: &str) -> Result<crate::models::OpenResult, String> {
         let doc_id = crate::models::next_doc_id(); // Generate ID here or pass it in
         let doc = self
             .pdfium
@@ -169,7 +175,6 @@ impl<'a> DocumentStore<'a> {
             doc,
             path: path.to_string(),
         };
-
 
         self.documents.insert(path.to_string(), state);
 
@@ -656,7 +661,11 @@ pub fn create_render_cache(cache_size: u64, max_memory_mb: u64) -> SharedRenderC
     let max_bytes = (max_memory_mb * 1024 * 1024) as usize;
     Arc::new(Mutex::new(RenderCache::new(
         cache_size as usize,
-        if max_bytes == 0 { 512 * 1024 * 1024 } else { max_bytes },
+        if max_bytes == 0 {
+            512 * 1024 * 1024
+        } else {
+            max_bytes
+        },
     )))
 }
 
