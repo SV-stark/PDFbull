@@ -117,8 +117,7 @@ impl<'a> DocumentStore<'a> {
         })
     }
 
-    pub fn open_document(&mut self, path: &str) -> Result<crate::models::OpenResult, String> {
-        let doc_id = crate::models::next_doc_id(); // Generate ID here or pass it in
+    pub fn open_document(&mut self, path: &str, doc_id: crate::models::DocumentId) -> Result<crate::models::OpenResult, String> {
         let doc = self
             .pdfium
             .load_pdf_from_file(path, None)
@@ -188,9 +187,9 @@ impl<'a> DocumentStore<'a> {
         })
     }
 
-    pub fn ensure_opened(&mut self, path: &str) -> Result<(), String> {
+    pub fn ensure_opened(&mut self, path: &str, doc_id: crate::models::DocumentId) -> Result<(), String> {
         if !self.documents.contains_key(path) {
-            self.open_document(path)?;
+            self.open_document(path, doc_id)?;
         }
         Ok(())
     }
@@ -328,13 +327,20 @@ impl<'a> DocumentStore<'a> {
                 .pages()
                 .get(ann.page as i32)
                 .map_err(|e| e.to_string())?;
+            let page_height = page.height().value;
             let mut objects = page.objects_mut();
 
+            // Flip Y coordinate (from top-left unscaled to bottom-left PDF points)
+            let pdf_top = page_height - ann.y;
+            let pdf_bottom = page_height - (ann.y + ann.height);
+            let pdf_left = ann.x;
+            let pdf_right = ann.x + ann.width;
+
             let rect = PdfRect::new(
-                PdfPoints::new(ann.y + ann.height),
-                PdfPoints::new(ann.x),
-                PdfPoints::new(ann.y),
-                PdfPoints::new(ann.x + ann.width),
+                PdfPoints::new(pdf_top),
+                PdfPoints::new(pdf_left),
+                PdfPoints::new(pdf_bottom),
+                PdfPoints::new(pdf_right),
             );
 
             match &ann.style {
@@ -367,6 +373,7 @@ impl<'a> DocumentStore<'a> {
                     } else {
                         None
                     };
+
                     let stroke_color = Some(PdfColor::new(
                         (r * 255.0) as u8,
                         (g * 255.0) as u8,
@@ -392,8 +399,8 @@ impl<'a> DocumentStore<'a> {
                     let font = doc.fonts_mut().helvetica();
                     let _text_obj = objects
                         .create_text_object(
-                            PdfPoints::new(ann.x),
-                            PdfPoints::new(ann.y),
+                            PdfPoints::new(pdf_left),
+                            PdfPoints::new(pdf_bottom),
                             text,
                             font,
                             PdfPoints::new(*font_size as f32),

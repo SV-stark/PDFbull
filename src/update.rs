@@ -8,6 +8,7 @@ use iced::widget::{operation, Id};
 use iced::Task;
 use std::path::PathBuf;
 use std::sync::Arc;
+use tokio::sync::oneshot;
 use webbrowser;
 
 fn scroll_to_page(tab: &crate::models::DocumentTab, page: usize) -> Task<Message> {
@@ -259,12 +260,13 @@ fn handle_annotation_message(app: &mut PdfBullApp, message: Message) -> Task<Mes
         Message::AnnotationDragEnd => {
             if let Some(drag) = app.annotation_drag.take() {
                 if let Some(tab) = app.current_tab_mut() {
+                    let zoom = tab.zoom;
                     let min_x = drag.start.0.min(drag.current.0);
                     let min_y = drag.start.1.min(drag.current.1);
                     let w = (drag.start.0 - drag.current.0).abs();
                     let h = (drag.start.1 - drag.current.1).abs();
 
-                    if w > 5.0 && h > 5.0 {
+                    if (w / zoom) > 5.0 && (h / zoom) > 5.0 {
                         let id = crate::models::next_annotation_id();
                         let style = match drag.kind {
                             crate::models::PendingAnnotationKind::Highlight => {
@@ -285,10 +287,10 @@ fn handle_annotation_message(app: &mut PdfBullApp, message: Message) -> Task<Mes
                             id,
                             page: drag.page,
                             style,
-                            x: min_x,
-                            y: min_y,
-                            width: w,
-                            height: h,
+                            x: min_x / zoom,
+                            y: min_y / zoom,
+                            width: w / zoom,
+                            height: h / zoom,
                         };
 
                         tab.undo_stack
@@ -634,21 +636,17 @@ fn handle_search_message(app: &mut PdfBullApp, message: Message) -> Task<Message
             Task::perform(
                 async move {
                     tokio::time::sleep(tokio::time::Duration::from_millis(300)).await;
-                    let (resp_tx, resp_rx) = std::sync::mpsc::channel();
+                    let (resp_tx, resp_rx) = oneshot::channel();
                     if let Err(e) =
                         cmd_tx.send(crate::commands::PdfCommand::Search(doc_id, query, resp_tx))
                     {
                         log::error!("Failed to send Search command: {}", e);
                         return Err("Engine died".into());
                     }
-                    let mut all_results = Vec::new();
-                    while let Ok(res) = resp_rx.recv() {
-                        match res {
-                            Ok(mut batch) => all_results.append(&mut batch),
-                            Err(e) => return Err(e),
-                        }
+                    match resp_rx.await {
+                        Ok(res) => res,
+                        Err(_) => Err("Engine died".into()),
                     }
-                    Ok(all_results)
                 },
                 move |result| Message::SearchResult(doc_id, result),
             )

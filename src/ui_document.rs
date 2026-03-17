@@ -75,7 +75,9 @@ fn filter_btn_custom(
 }
 
 fn render_toolbar(app: &PdfBullApp) -> Element<'_, crate::message::Message> {
-    let tab = &app.tabs[app.active_tab];
+    let Some(tab) = app.current_tab() else {
+        return container(row![]).into();
+    };
 
     let open_btn = stacked_tool(
         tooltip(
@@ -233,6 +235,7 @@ fn render_toolbar(app: &PdfBullApp) -> Element<'_, crate::message::Message> {
             .spacing(4)
             .align_y(iced::Alignment::Center)
         )
+        .on_press(crate::message::Message::ExportImage)
         .style(iced::widget::button::text),
     ]
     .spacing(2)
@@ -285,7 +288,9 @@ fn render_toolbar(app: &PdfBullApp) -> Element<'_, crate::message::Message> {
 }
 
 fn render_page_nav(app: &PdfBullApp) -> Element<'_, crate::message::Message> {
-    let tab = &app.tabs[app.active_tab];
+    let Some(tab) = app.current_tab() else {
+        return container(row![]).into();
+    };
 
     let loading_indicator = if app.rendering_count > 0 {
         row![
@@ -447,7 +452,9 @@ fn section_title<'a>(label: &'a str) -> Element<'a, crate::message::Message> {
 }
 
 fn render_sidebar(app: &PdfBullApp) -> Element<'_, crate::message::Message> {
-    let tab = &app.tabs[app.active_tab];
+    let Some(tab) = app.current_tab() else {
+        return container(column![]).into();
+    };
 
     let mut sidebar_col = column![].spacing(10).padding(5).width(Length::Fixed(180.0));
 
@@ -557,8 +564,8 @@ fn render_tabs(app: &PdfBullApp) -> Element<'_, crate::message::Message> {
     for (i, t) in app.tabs.iter().enumerate() {
         let is_active = i == app.active_tab;
 
-        let display_name = if t.name.len() > 20 {
-            format!("{}…", &t.name[..18])
+        let display_name = if t.name.chars().count() > 20 {
+            format!("{}…", t.name.chars().take(18).collect::<String>())
         } else {
             t.name.clone()
         };
@@ -655,7 +662,9 @@ fn render_tabs(app: &PdfBullApp) -> Element<'_, crate::message::Message> {
 }
 
 fn render_pdf_content(app: &PdfBullApp) -> Element<'_, crate::message::Message> {
-    let tab = &app.tabs[app.active_tab];
+    let Some(tab) = app.current_tab() else {
+        return container(column![]).into();
+    };
     let zoom = tab.zoom;
 
     let mut pdf_column = column![]
@@ -924,7 +933,9 @@ fn render_pdf_content(app: &PdfBullApp) -> Element<'_, crate::message::Message> 
 }
 
 pub fn document_view(app: &PdfBullApp) -> Element<'_, crate::message::Message> {
-    let tab = &app.tabs[app.active_tab];
+    let Some(tab) = app.current_tab() else {
+        return container(text("Loading tab...")).center_x(Length::Fill).center_y(Length::Fill).into();
+    };
 
     let content: Element<crate::message::Message> = if app.show_sidebar && !app.is_fullscreen {
         let sidebar = render_sidebar(app);

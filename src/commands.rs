@@ -45,7 +45,7 @@ pub enum PdfCommand {
     Search(
         DocumentId,
         String,
-        std::sync::mpsc::Sender<Result<Vec<SearchResultItem>, String>>,
+        oneshot::Sender<Result<Vec<SearchResultItem>, String>>,
     ),
     Close(DocumentId),
 }

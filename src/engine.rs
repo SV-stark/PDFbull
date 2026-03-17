@@ -41,7 +41,7 @@ fn spawn_document_worker(
 
         // Pre-open the document in this thread
         // This ensures the document is loaded EXACTLY once for this thread's lifetime
-        let open_result = store.open_document(&path);
+        let open_result = store.open_document(&path, doc_id);
 
         while let Ok(cmd) = cmd_rx.recv() {
             match cmd {
