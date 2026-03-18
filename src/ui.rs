@@ -1,3 +1,5 @@
+pub mod theme;
+
 use crate::app::PdfBullApp;
 use crate::ui_document::document_view;
 use crate::ui_keyboard_help::keyboard_help_view;

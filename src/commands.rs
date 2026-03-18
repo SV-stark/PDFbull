@@ -1,51 +1,15 @@
-use crate::models::{Annotation, DocumentId, OpenResult, RenderResult, SearchResultItem};
+use crate::models::{Annotation, DocumentId, OpenResult, RenderResult, SearchResultItem, PdfResult};
+use crate::pdf_engine::{RenderOptions};
 use tokio::sync::oneshot;
 
 #[derive(Debug)]
 pub enum PdfCommand {
-    Open(String, oneshot::Sender<Result<OpenResult, String>>),
-    Render(
-        DocumentId,
-        i32,
-        crate::pdf_engine::RenderOptions,
-        oneshot::Sender<Result<RenderResult, String>>,
-    ),
-    RenderThumbnail(
-        DocumentId,
-        i32,
-        f32,
-        oneshot::Sender<Result<RenderResult, String>>,
-    ),
-    ExtractText(DocumentId, i32, oneshot::Sender<Result<String, String>>),
-    ExportImage(
-        DocumentId,
-        i32,
-        f32,
-        String,
-        oneshot::Sender<Result<(), String>>,
-    ),
-    ExportImages(
-        DocumentId,
-        Vec<i32>,
-        f32,
-        String,
-        oneshot::Sender<Result<Vec<String>, String>>,
-    ),
-    ExportPdf(
-        DocumentId,
-        String,
-        Vec<Annotation>,
-        oneshot::Sender<Result<String, String>>,
-    ),
-    LoadAnnotations(
-        DocumentId,
-        String,
-        oneshot::Sender<Result<Vec<Annotation>, String>>,
-    ),
-    Search(
-        DocumentId,
-        String,
-        oneshot::Sender<Result<Vec<SearchResultItem>, String>>,
-    ),
+    Open(String, DocumentId, oneshot::Sender<PdfResult<OpenResult>>),
+    Render(String, usize, RenderOptions, oneshot::Sender<PdfResult<RenderResult>>),
     Close(DocumentId),
+    ExtractText(String, i32, oneshot::Sender<PdfResult<String>>),
+    Search(String, String, oneshot::Sender<PdfResult<Vec<SearchResultItem>>>),
+    SaveAnnotations(String, Vec<Annotation>, oneshot::Sender<PdfResult<String>>),
+    LoadAnnotations(DocumentId, String, oneshot::Sender<PdfResult<Vec<Annotation>>>),
+    ExportImage(String, i32, f32, String, oneshot::Sender<PdfResult<()>>),
 }

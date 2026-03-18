@@ -16,7 +16,7 @@ fn scroll_to_page(tab: &crate::models::DocumentTab, page: usize) -> Task<Message
         .page_heights
         .iter()
         .take(page)
-        .map(|h| (h + crate::models::PAGE_SPACING) * tab.zoom)
+        .map(|h| (h + crate::ui::theme::PAGE_SPACING) * tab.zoom)
         .sum();
     operation::scroll_to(
         Id::new("pdf_scroll"),
@@ -159,14 +159,14 @@ fn handle_app_message(app: &mut PdfBullApp, message: Message) -> Task<Message> {
         Message::RotateClockwise => {
             if let Some(tab) = app.current_tab_mut() {
                 tab.rotation = (tab.rotation + 90) % 360;
-                tab.rendered_pages.clear();
+                tab.view_state.rendered_pages.clear();
             }
             app.render_visible_pages()
         }
         Message::RotateCounterClockwise => {
             if let Some(tab) = app.current_tab_mut() {
                 tab.rotation = (tab.rotation - 90 + 360) % 360;
-                tab.rendered_pages.clear();
+                tab.view_state.rendered_pages.clear();
             }
             app.render_visible_pages()
         }
@@ -420,7 +420,7 @@ fn handle_render_message(app: &mut PdfBullApp, message: Message) -> Task<Message
             if let Some(tab) = app.current_tab_mut() {
                 if tab.render_filter != filter {
                     tab.render_filter = filter;
-                    tab.rendered_pages.clear();
+                    tab.view_state.rendered_pages.clear();
                 }
             }
             app.render_visible_pages()
@@ -428,14 +428,14 @@ fn handle_render_message(app: &mut PdfBullApp, message: Message) -> Task<Message
         Message::ToggleAutoCrop => {
             if let Some(tab) = app.current_tab_mut() {
                 tab.auto_crop = !tab.auto_crop;
-                tab.rendered_pages.clear();
+                tab.view_state.rendered_pages.clear();
             }
             app.render_visible_pages()
         }
         Message::ViewportChanged(y, height) => {
             if let Some(tab) = app.current_tab_mut() {
-                tab.viewport_y = y;
-                tab.viewport_height = height;
+                tab.view_state.viewport_y = y;
+                tab.view_state.viewport_height = height;
                 tab.update_visible_range();
                 tab.cleanup_distant_pages();
             }
@@ -448,7 +448,7 @@ fn handle_render_message(app: &mut PdfBullApp, message: Message) -> Task<Message
         }
         Message::SidebarViewportChanged(y) => {
             if let Some(tab) = app.current_tab_mut() {
-                tab.sidebar_viewport_y = y;
+                tab.view_state.sidebar_viewport_y = y;
             }
             Task::none()
         }
@@ -459,7 +459,7 @@ fn handle_render_message(app: &mut PdfBullApp, message: Message) -> Task<Message
                     None => return Task::none(),
                 };
 
-                let needs_render = if let Some((scale, _)) = tab.rendered_pages.get(&page_idx) {
+                let needs_render = if let Some((scale, _)) = tab.view_state.rendered_pages.get(&page_idx) {
                     (scale - tab.zoom).abs() > 0.001
                 } else {
                     true
@@ -529,7 +529,7 @@ fn handle_render_message(app: &mut PdfBullApp, message: Message) -> Task<Message
                         let height = res.height;
                         let data = res.data;
                         let pixel_data = Arc::try_unwrap(data).unwrap_or_else(|a| (*a).clone());
-                        tab.rendered_pages.insert(
+                        tab.view_state.rendered_pages.insert(
                             page_idx,
                             (
                                 scale,
@@ -572,7 +572,7 @@ fn handle_render_message(app: &mut PdfBullApp, message: Message) -> Task<Message
                         let height = res.height;
                         let data = res.data;
                         let pixel_data = Arc::try_unwrap(data).unwrap_or_else(|a| (*a).clone());
-                        tab.thumbnails.insert(
+                        tab.view_state.thumbnails.insert(
                             page_idx,
                             iced_image::Handle::from_rgba(width, height, pixel_data),
                         );
@@ -787,7 +787,7 @@ fn handle_tab_message(app: &mut PdfBullApp, message: Message) -> Task<Message> {
                     },
                     |result| match result {
                         Some((path, data)) => Message::DocumentOpenedWithPath((path, data)),
-                        None => Message::DocumentOpened(Err("Cancelled".into())),
+                        None => Message::DocumentOpened(Err(crate::models::PdfError::OpenFailed("Cancelled".into()))),
                     },
                 );
             }
@@ -829,7 +829,7 @@ fn handle_tab_message(app: &mut PdfBullApp, message: Message) -> Task<Message> {
                     tab.page_width = width;
                     tab.outline = outline;
                     tab.links = links;
-                    tab.is_loading = false;
+                    tab.view_state.is_loading = false;
                     tab.zoom = default_zoom;
                     tab.render_filter = default_filter;
                 }

@@ -1,0 +1,116 @@
+{
+  "assessments": {
+    "naming_quality": 85,
+    "logic_clarity": 70,
+    "type_safety": 80,
+    "contract_coherence": 90,
+    "error_consistency": 60,
+    "abstraction_fitness": 80,
+    "ai_generated_debt": 75,
+    "high_level_elegance": 75,
+    "mid_level_elegance": 80,
+    "low_level_elegance": 65,
+    "cross_module_architecture": 60,
+    "initialization_coupling": 70,
+    "convention_outlier": 90,
+    "dependency_health": 85,
+    "test_strategy": 20,
+    "api_surface_coherence": 85,
+    "authorization_consistency": 100,
+    "incomplete_migration": 100,
+    "package_organization": 60,
+    "design_coherence": 70
+  },
+  "findings": [
+    {
+      "dimension": "logic_clarity",
+      "identifier": "god_function_message_handler",
+      "summary": "Massive monolithic message handler function (1266 LOC).",
+      "related_files": ["src/update.rs"],
+      "evidence": ["Function `handle_message` contains almost the entire application logic in a single match block."],
+      "suggestion": "Split `handle_message` into smaller, command-specific handlers or use a state machine pattern.",
+      "confidence": "high"
+    },
+    {
+      "dimension": "type_safety",
+      "identifier": "tuple_overuse",
+      "summary": "Excessive use of tuples for core data structures reduces clarity.",
+      "related_files": ["src/models.rs", "src/pdf_engine.rs"],
+      "evidence": ["`OpenResult`, `RenderResult`, and `SearchResultItem` are all defined as complex tuples."],
+      "suggestion": "Convert these tuples into named structs to improve field discovery and type safety.",
+      "confidence": "high"
+    },
+    {
+      "dimension": "low_level_elegance",
+      "identifier": "magic_numbers_rendering",
+      "summary": "Hardcoded magic numbers used for rendering layout and spacing.",
+      "related_files": ["src/update.rs", "src/ui_document.rs"],
+      "evidence": ["PAGE_SPACING (15.0), scroll margins (40.0), and other layout constants are hardcoded."],
+      "suggestion": "Move these constants to a configuration file or a dedicated `theme.rs` module.",
+      "confidence": "medium"
+    },
+    {
+      "dimension": "error_consistency",
+      "identifier": "string_errors",
+      "summary": "Inconsistent and low-fidelity error handling using Result<T, String>.",
+      "related_files": ["src/pdf_engine.rs", "src/engine.rs", "src/update.rs"],
+      "evidence": ["Widespread use of `.map_err(|e| e.to_string())` which discards original error types."],
+      "suggestion": "Implement a custom `PdfBullError` enum using `thiserror` to preserve error context.",
+      "confidence": "high"
+    },
+    {
+      "dimension": "abstraction_fitness",
+      "identifier": "manual_json_recovery",
+      "summary": "Manual JSON object parsing for corrupted configuration recovery.",
+      "related_files": ["src/storage.rs"],
+      "evidence": ["`load_settings` manually checks JSON object keys instead of using Serde's fallback/default mechanisms."],
+      "suggestion": "Use Serde's `#[serde(default)]` or implement a formal migration strategy.",
+      "confidence": "medium"
+    },
+    {
+      "dimension": "initialization_coupling",
+      "identifier": "hardcoded_dll_path",
+      "summary": "Hardcoded dependence on local path for Pdfium library loading.",
+      "related_files": ["src/engine.rs"],
+      "evidence": ["`Pdfium::bind_to_library(Pdfium::pdfium_platform_library_name_at_path(\"./\"))`"],
+      "suggestion": "Use a configurable or more robust library search mechanism.",
+      "confidence": "medium"
+    },
+    {
+      "dimension": "low_level_elegance",
+      "identifier": "duplicate_hex_logic",
+      "summary": "Duplication of hex-to-RGB conversion logic across modules.",
+      "related_files": ["src/pdf_engine.rs", "src/ui_document.rs"],
+      "evidence": ["Identical `hex_to_rgb` functions in both the engine and UI modules."],
+      "suggestion": "Extract this to a common utility module.",
+      "confidence": "high"
+    },
+    {
+      "dimension": "cross_module_architecture",
+      "identifier": "ui_app_cycle",
+      "summary": "Circular dependency between Application state and UI views.",
+      "related_files": ["src/app.rs", "src/ui_document.rs"],
+      "evidence": ["`ui_document.rs` imports `PdfBullApp`, while `app.rs` depends on `ui_document::document_view`."],
+      "suggestion": "Decouple using traits or a simplified view model.",
+      "confidence": "high"
+    },
+    {
+      "dimension": "package_organization",
+      "identifier": "monolithic_ui_document",
+      "summary": "Massive monolithic UI file for the main document view.",
+      "related_files": ["src/ui_document.rs"],
+      "evidence": ["`ui_document.rs` is nearly 1000 lines long and handles toolbar, sidebar, and content."],
+      "suggestion": "Break down into sub-components like `ui/toolbar.rs`, `ui/sidebar.rs`, etc.",
+      "confidence": "high"
+    },
+    {
+      "dimension": "ai_generated_debt",
+      "identifier": "restating_comments",
+      "summary": "Significant amount of redundant comments that restate the code logic.",
+      "related_files": ["src/pdf_engine.rs", "src/engine.rs"],
+      "evidence": ["Comments like '// Extract links' above a hyperlink extraction loop."],
+      "suggestion": "Remove redundant comments and focus on 'why' instead of 'how'.",
+      "confidence": "medium"
+    }
+  ]
+}

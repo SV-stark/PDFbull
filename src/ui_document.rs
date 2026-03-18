@@ -1,23 +1,12 @@
 use crate::app::PdfBullApp;
 use crate::app::{icons, INTER_BOLD, INTER_REGULAR, LUCIDE};
+use crate::models::{DocumentTab, SearchResult, Annotation, Hyperlink, PendingAnnotationKind, AnnotationStyle};
 use crate::pdf_engine::RenderFilter;
+use crate::ui::theme::{self, hex_to_rgb};
 use iced::widget::{
-    button, column, container, mouse_area, row, scrollable, text, text_input, Id, Space,
+    button, column, container, mouse_area, row, scrollable, text, text_input, Id, Space, Stack, tooltip,
 };
-use iced::{Color, Element, Length, Shadow, Vector};
-
-fn hex_to_rgb(hex: &str) -> (f32, f32, f32) {
-    let hex = hex.trim_start_matches('#');
-    if hex.len() != 6 {
-        return (0.0, 0.0, 0.0);
-    }
-    let r = u8::from_str_radix(&hex[0..2], 16).unwrap_or(0) as f32 / 255.0;
-    let g = u8::from_str_radix(&hex[2..4], 16).unwrap_or(0) as f32 / 255.0;
-    let b = u8::from_str_radix(&hex[4..6], 16).unwrap_or(0) as f32 / 255.0;
-    (r, g, b)
-}
-
-use iced::widget::tooltip;
+use iced::{Color, Element, Length, Shadow, Vector, Padding, Alignment};
 
 fn stacked_tool<'a>(
     top: impl Into<Element<'a, crate::message::Message>>,
@@ -28,11 +17,11 @@ fn stacked_tool<'a>(
         text(label)
             .font(INTER_REGULAR)
             .style(|_theme| iced::widget::text::Style {
-                color: Some(Color::from_rgb8(150, 150, 160)),
+                color: Some(theme::COLOR_TEXT_DIM),
             })
     ]
     .spacing(4)
-    .align_x(iced::Alignment::Center)
+    .align_x(Alignment::Center)
     .into()
 }
 
@@ -48,11 +37,10 @@ fn filter_btn_custom(
             .align_x(iced::alignment::Horizontal::Center),
     );
     if f == active {
-        btn.style(|theme: &iced::Theme, _| {
-            let _palette = theme.extended_palette();
+        btn.style(|_theme, _| {
             iced::widget::button::Style {
-                background: Some(iced::Color::from_rgb8(150, 220, 220).into()),
-                text_color: iced::Color::BLACK,
+                background: Some(Color::from_rgb8(150, 220, 220).into()),
+                text_color: Color::BLACK,
                 border: iced::Border {
                     radius: 4.0.into(),
                     ..Default::default()
@@ -62,8 +50,8 @@ fn filter_btn_custom(
         })
     } else {
         btn.style(|_theme, _status| iced::widget::button::Style {
-            background: Some(iced::Color::from_rgb8(60, 60, 65).into()),
-            text_color: iced::Color::WHITE,
+            background: Some(Color::from_rgb8(60, 60, 65).into()),
+            text_color: Color::WHITE,
             border: iced::Border {
                 radius: 4.0.into(),
                 ..Default::default()
@@ -107,7 +95,7 @@ fn render_toolbar(app: &PdfBullApp) -> Element<'_, crate::message::Message> {
                 button(text(icons::ZOOM_OUT).size(14).font(LUCIDE))
                     .on_press(crate::message::Message::ZoomOut)
                     .style(|_theme, _status| iced::widget::button::Style {
-                        text_color: iced::Color::WHITE,
+                        text_color: Color::WHITE,
                         ..Default::default()
                     }),
                 text(format!("{}%", (tab.zoom * 100.0) as u32))
@@ -119,16 +107,16 @@ fn render_toolbar(app: &PdfBullApp) -> Element<'_, crate::message::Message> {
                 button(text(icons::ZOOM_IN).size(14).font(LUCIDE))
                     .on_press(crate::message::Message::ZoomIn)
                     .style(|_theme, _status| iced::widget::button::Style {
-                        text_color: iced::Color::WHITE,
+                        text_color: Color::WHITE,
                         ..Default::default()
                     }),
             ]
             .spacing(12)
-            .align_y(iced::Alignment::Center),
+            .align_y(Alignment::Center),
         )
         .padding([4, 10])
         .style(|_theme| iced::widget::container::Style {
-            background: Some(iced::Color::from_rgb8(30, 31, 34).into()),
+            background: Some(Color::from_rgb8(30, 31, 34).into()),
             border: iced::Border {
                 radius: 20.0.into(),
                 ..Default::default()
@@ -154,12 +142,12 @@ fn render_toolbar(app: &PdfBullApp) -> Element<'_, crate::message::Message> {
             .size(12)
             .font(INTER_REGULAR)
             .style(|_theme| iced::widget::text::Style {
-                color: Some(Color::from_rgb8(150, 150, 160)),
+                color: Some(theme::COLOR_TEXT_DIM),
             }),
         button(text("None v").size(12).font(INTER_REGULAR)).style(iced::widget::button::text)
     ]
     .spacing(5)
-    .align_y(iced::Alignment::Center);
+    .align_y(Alignment::Center);
 
     let crop_filters = stacked_tool(
         row![
@@ -181,7 +169,7 @@ fn render_toolbar(app: &PdfBullApp) -> Element<'_, crate::message::Message> {
     let highlight_btn = stacked_tool(
         button(text(icons::HIGHLIGHT).size(16).font(LUCIDE))
             .on_press(crate::message::Message::SetAnnotationMode(Some(
-                crate::models::PendingAnnotationKind::Highlight,
+                PendingAnnotationKind::Highlight,
             )))
             .style(iced::widget::button::text),
         "Highlight",
@@ -190,7 +178,7 @@ fn render_toolbar(app: &PdfBullApp) -> Element<'_, crate::message::Message> {
     let rectangle_btn = stacked_tool(
         button(text(icons::RECTANGLE).size(16).font(LUCIDE))
             .on_press(crate::message::Message::SetAnnotationMode(Some(
-                crate::models::PendingAnnotationKind::Rectangle,
+                PendingAnnotationKind::Rectangle,
             )))
             .style(iced::widget::button::text),
         "Rectangle",
@@ -201,11 +189,11 @@ fn render_toolbar(app: &PdfBullApp) -> Element<'_, crate::message::Message> {
             text(icons::SAVE)
                 .font(LUCIDE)
                 .size(16)
-                .color(iced::Color::BLACK),
+                .color(Color::BLACK),
         )
         .on_press(crate::message::Message::SaveAnnotations)
         .style(|_theme, _status| iced::widget::button::Style {
-            background: Some(iced::Color::from_rgb8(150, 220, 220).into()),
+            background: Some(Color::from_rgb8(150, 220, 220).into()),
             border: iced::Border {
                 radius: 12.0.into(),
                 ..Default::default()
@@ -226,20 +214,20 @@ fn render_toolbar(app: &PdfBullApp) -> Element<'_, crate::message::Message> {
                 .style(iced::widget::button::text),
         ]
         .spacing(12)
-        .align_y(iced::Alignment::Center),
+        .align_y(Alignment::Center),
         button(
             row![
                 text(icons::EXPORT).size(12).font(LUCIDE),
                 text("Export").size(11).font(INTER_REGULAR),
             ]
             .spacing(4)
-            .align_y(iced::Alignment::Center)
+            .align_y(Alignment::Center)
         )
         .on_press(crate::message::Message::ExportImage)
         .style(iced::widget::button::text),
     ]
     .spacing(2)
-    .align_x(iced::Alignment::Center);
+    .align_x(Alignment::Center);
 
     container(
         row![
@@ -266,17 +254,17 @@ fn render_toolbar(app: &PdfBullApp) -> Element<'_, crate::message::Message> {
             right_tools,
         ]
         .spacing(5)
-        .align_y(iced::Alignment::Center),
+        .align_y(Alignment::Center),
     )
     .width(Length::Fill)
-    .padding(iced::Padding {
+    .padding(Padding {
         top: 8.0,
         right: 15.0,
         bottom: 8.0,
         left: 15.0,
     })
     .style(|_theme| iced::widget::container::Style {
-        background: Some(iced::Color::from_rgb8(43, 45, 49).into()),
+        background: Some(Color::from_rgb8(43, 45, 49).into()),
         shadow: Shadow {
             color: Color::from_rgba(0.0, 0.0, 0.0, 0.2),
             offset: Vector::new(0.0, 2.0),
@@ -301,8 +289,8 @@ fn render_page_nav(app: &PdfBullApp) -> Element<'_, crate::message::Message> {
             )
             .padding([2, 6])
             .style(|_| iced::widget::container::Style {
-                background: Some(iced::Color::from_rgb8(59, 130, 246).into()),
-                text_color: Some(iced::Color::WHITE),
+                background: Some(theme::COLOR_ACCENT.into()),
+                text_color: Some(Color::WHITE),
                 border: iced::Border {
                     radius: 10.0.into(),
                     ..Default::default()
@@ -313,11 +301,11 @@ fn render_page_nav(app: &PdfBullApp) -> Element<'_, crate::message::Message> {
                 .size(12)
                 .font(INTER_REGULAR)
                 .style(|_theme| iced::widget::text::Style {
-                    color: Some(Color::from_rgb8(150, 150, 160))
+                    color: Some(theme::COLOR_TEXT_DIM)
                 })
         ]
         .spacing(8)
-        .align_y(iced::Alignment::Center)
+        .align_y(Alignment::Center)
     } else {
         row![]
     };
@@ -328,8 +316,8 @@ fn render_page_nav(app: &PdfBullApp) -> Element<'_, crate::message::Message> {
             button(text(icons::PREV).size(14).font(LUCIDE))
                 .on_press(crate::message::Message::PrevPage)
                 .style(|_theme, _status| iced::widget::button::Style {
-                    background: Some(iced::Color::from_rgb8(60, 60, 65).into()),
-                    text_color: iced::Color::WHITE,
+                    background: Some(Color::from_rgb8(60, 60, 65).into()),
+                    text_color: Color::WHITE,
                     border: iced::Border {
                         radius: 6.0.into(),
                         ..Default::default()
@@ -341,16 +329,14 @@ fn render_page_nav(app: &PdfBullApp) -> Element<'_, crate::message::Message> {
                 .size(13)
                 .font(INTER_REGULAR)
                 .style(|_theme| iced::widget::text::Style {
-                    color: Some(Color::from_rgb8(150, 150, 160))
+                    color: Some(theme::COLOR_TEXT_DIM)
                 }),
             container(
                 text_input("Page", &app.page_input)
                     .on_input(|input| {
-                        // Validate input is numeric or empty
                         if input.is_empty() || input.parse::<usize>().is_ok() {
                             crate::message::Message::PageInputChanged(input)
                         } else {
-                            // Ignore invalid input by not changing the value
                             crate::message::Message::PageInputChanged(app.page_input.clone())
                         }
                     })
@@ -362,23 +348,23 @@ fn render_page_nav(app: &PdfBullApp) -> Element<'_, crate::message::Message> {
             .style(|_theme| iced::widget::container::Style {
                 border: iced::Border {
                     width: 1.0,
-                    color: iced::Color::from_rgb8(80, 80, 80),
+                    color: Color::from_rgb8(80, 80, 80),
                     radius: 6.0.into()
                 },
-                background: Some(iced::Color::from_rgb8(30, 31, 34).into()),
+                background: Some(Color::from_rgb8(30, 31, 34).into()),
                 ..Default::default()
             }),
             text(format!("of {}", tab.total_pages.max(1)))
                 .size(13)
                 .font(INTER_REGULAR)
                 .style(|_theme| iced::widget::text::Style {
-                    color: Some(Color::from_rgb8(150, 150, 160))
+                    color: Some(theme::COLOR_TEXT_DIM)
                 }),
             button(text(icons::NEXT).size(14).font(LUCIDE))
                 .on_press(crate::message::Message::NextPage)
                 .style(|_theme, _status| iced::widget::button::Style {
-                    background: Some(iced::Color::from_rgb8(60, 60, 65).into()),
-                    text_color: iced::Color::WHITE,
+                    background: Some(Color::from_rgb8(60, 60, 65).into()),
+                    text_color: Color::WHITE,
                     border: iced::Border {
                         radius: 6.0.into(),
                         ..Default::default()
@@ -403,34 +389,34 @@ fn render_page_nav(app: &PdfBullApp) -> Element<'_, crate::message::Message> {
                         .width(Length::Fixed(180.0))
                 ]
                 .spacing(8)
-                .align_y(iced::Alignment::Center)
+                .align_y(Alignment::Center)
                 .padding([0, 12])
             )
             .style(|_theme| iced::widget::container::Style {
                 border: iced::Border {
                     width: 1.0,
-                    color: iced::Color::from_rgb8(80, 80, 80),
+                    color: Color::from_rgb8(80, 80, 80),
                     radius: 20.0.into()
                 },
-                background: Some(iced::Color::from_rgb8(30, 31, 34).into()),
+                background: Some(Color::from_rgb8(30, 31, 34).into()),
                 ..Default::default()
             }),
         ]
         .spacing(10)
-        .align_y(iced::Alignment::Center),
+        .align_y(Alignment::Center),
     )
     .width(Length::Fill)
-    .padding(iced::Padding {
+    .padding(Padding {
         top: 6.0,
         right: 15.0,
         bottom: 6.0,
         left: 15.0,
     })
     .style(|_theme| iced::widget::container::Style {
-        background: Some(iced::Color::from_rgb8(35, 36, 40).into()),
+        background: Some(Color::from_rgb8(35, 36, 40).into()),
         border: iced::Border {
             width: 1.0,
-            color: iced::Color::from_rgb8(20, 20, 20),
+            color: Color::from_rgb8(20, 20, 20),
             ..Default::default()
         },
         ..Default::default()
@@ -456,7 +442,7 @@ fn render_sidebar(app: &PdfBullApp) -> Element<'_, crate::message::Message> {
         return container(column![]).into();
     };
 
-    let mut sidebar_col = column![].spacing(10).padding(5).width(Length::Fixed(180.0));
+    let mut sidebar_col = column![].spacing(10).padding(5).width(Length::Fixed(theme::SIDEBAR_WIDTH));
 
     if !tab.outline.is_empty() {
         let mut outline_col = column![section_title("Outline")];
@@ -489,13 +475,13 @@ fn render_sidebar(app: &PdfBullApp) -> Element<'_, crate::message::Message> {
         let mut annotations_col = column![section_title("Annotations")];
         for (idx, ann) in tab.annotations.iter().enumerate() {
             let label = match &ann.style {
-                crate::models::AnnotationStyle::Highlight { .. } => {
+                AnnotationStyle::Highlight { .. } => {
                     format!("Highlight P{}", ann.page + 1)
                 }
-                crate::models::AnnotationStyle::Rectangle { .. } => {
+                AnnotationStyle::Rectangle { .. } => {
                     format!("Rect P{}", ann.page + 1)
                 }
-                crate::models::AnnotationStyle::Text { text, .. } => {
+                AnnotationStyle::Text { text, .. } => {
                     format!("Text: {}", &text[..text.len().min(20)])
                 }
             };
@@ -521,25 +507,24 @@ fn render_sidebar(app: &PdfBullApp) -> Element<'_, crate::message::Message> {
         .padding([5, 0]),
     );
 
-    let thumbnail_height = 40.0;
-    let start_idx = (tab.sidebar_viewport_y / thumbnail_height).max(0.0) as usize;
+    let start_idx = (tab.view_state.sidebar_viewport_y / theme::THUMBNAIL_HEIGHT).max(0.0) as usize;
     let end_idx = (start_idx + 30).min(tab.total_pages);
 
     if start_idx > 0 {
         sidebar_col = sidebar_col
-            .push(Space::new().height(Length::Fixed(start_idx as f32 * thumbnail_height)));
+            .push(Space::new().height(Length::Fixed(start_idx as f32 * theme::THUMBNAIL_HEIGHT)));
     }
 
     for page_idx in start_idx..end_idx {
-        if let Some(handle) = tab.thumbnails.get(&page_idx) {
-            let img = iced::widget::Image::new(handle.clone()).width(Length::Fixed(120.0));
+        if let Some(handle) = tab.view_state.thumbnails.get(&page_idx) {
+            let img = iced::widget::Image::new(handle.clone()).width(Length::Fixed(theme::THUMBNAIL_WIDTH));
             sidebar_col = sidebar_col
                 .push(button(img).on_press(crate::message::Message::JumpToPage(page_idx)));
         } else {
             sidebar_col = sidebar_col.push(
                 button(text(format!("Page {}", page_idx + 1)).font(INTER_REGULAR))
                     .on_press(crate::message::Message::JumpToPage(page_idx))
-                    .width(Length::Fixed(120.0)),
+                    .width(Length::Fixed(theme::THUMBNAIL_WIDTH)),
             );
         }
     }
@@ -547,7 +532,7 @@ fn render_sidebar(app: &PdfBullApp) -> Element<'_, crate::message::Message> {
     let remaining = tab.total_pages.saturating_sub(end_idx);
     if remaining > 0 {
         sidebar_col = sidebar_col
-            .push(Space::new().height(Length::Fixed(remaining as f32 * thumbnail_height)));
+            .push(Space::new().height(Length::Fixed(remaining as f32 * theme::THUMBNAIL_HEIGHT)));
     }
 
     scrollable(sidebar_col)
@@ -555,7 +540,7 @@ fn render_sidebar(app: &PdfBullApp) -> Element<'_, crate::message::Message> {
         .on_scroll(|viewport| {
             crate::message::Message::SidebarViewportChanged(viewport.absolute_offset().y)
         })
-        .width(Length::Fixed(180.0))
+        .width(Length::Fixed(theme::SIDEBAR_WIDTH))
         .into()
 }
 
@@ -571,15 +556,15 @@ fn render_tabs(app: &PdfBullApp) -> Element<'_, crate::message::Message> {
         };
 
         let tab_bg = if is_active {
-            iced::Color::from_rgb8(43, 45, 49)
+            Color::from_rgb8(43, 45, 49)
         } else {
-            iced::Color::from_rgb8(30, 31, 34)
+            Color::from_rgb8(30, 31, 34)
         };
 
         let text_color = if is_active {
-            iced::Color::WHITE
+            Color::WHITE
         } else {
-            iced::Color::from_rgb8(150, 150, 150)
+            Color::from_rgb8(150, 150, 150)
         };
 
         let tab_content = row![
@@ -604,11 +589,11 @@ fn render_tabs(app: &PdfBullApp) -> Element<'_, crate::message::Message> {
             .style(iced::widget::button::text)
             .padding(2)
         ]
-        .align_y(iced::Alignment::Center);
+        .align_y(Alignment::Center);
 
         tabs = tabs.push(
             container(tab_content)
-                .padding(iced::Padding {
+                .padding(Padding {
                     top: 6.0,
                     right: 12.0,
                     bottom: 6.0,
@@ -624,7 +609,7 @@ fn render_tabs(app: &PdfBullApp) -> Element<'_, crate::message::Message> {
                             bottom_right: 0.0,
                         },
                         width: if is_active { 0.0 } else { 1.0 },
-                        color: iced::Color::from_rgb8(20, 20, 20),
+                        color: Color::from_rgb8(20, 20, 20),
                     },
                     ..Default::default()
                 }),
@@ -645,20 +630,211 @@ fn render_tabs(app: &PdfBullApp) -> Element<'_, crate::message::Message> {
         .on_press(crate::message::Message::OpenDocument)
         .style(iced::widget::button::text);
 
-    let tab_bar_bg = container(row![tabs, add_button].align_y(iced::Alignment::End))
+    let tab_bar_bg = container(row![tabs, add_button].align_y(Alignment::End))
         .width(Length::Fill)
-        .padding(iced::Padding {
+        .padding(Padding {
             top: 6.0,
             right: 5.0,
             bottom: 0.0,
             left: 10.0,
         })
         .style(|_theme| iced::widget::container::Style {
-            background: Some(iced::Color::from_rgb8(25, 26, 28).into()),
+            background: Some(Color::from_rgb8(25, 26, 28).into()),
             ..Default::default()
         });
 
     tab_bar_bg.into()
+}
+
+fn render_annotations<'a>(page_idx: usize, tab: &'a DocumentTab, zoom: f32) -> Vec<Element<'a, crate::message::Message>> {
+    tab.annotations.iter()
+        .filter(|ann| ann.page == page_idx)
+        .map(|ann| {
+            let ann_overlay = match &ann.style {
+                AnnotationStyle::Highlight { color } => {
+                    let (r, g, b) = hex_to_rgb(color);
+                    container(Space::new())
+                        .width(Length::Fixed(ann.width * zoom))
+                        .height(Length::Fixed(ann.height * zoom))
+                        .style(move |_| iced::widget::container::Style {
+                            background: Some(Color::from_rgba(r, g, b, 0.4).into()),
+                            ..Default::default()
+                        })
+                }
+                AnnotationStyle::Rectangle { color, thickness, fill } => {
+                    let (r, g, b) = hex_to_rgb(color);
+                    container(Space::new())
+                        .width(Length::Fixed(ann.width * zoom))
+                        .height(Length::Fixed(ann.height * zoom))
+                        .style(move |_| iced::widget::container::Style {
+                            background: if *fill { Some(Color::from_rgba(r, g, b, 0.2).into()) } else { None },
+                            border: iced::Border {
+                                color: Color::from_rgb(r, g, b),
+                                width: *thickness * zoom,
+                                radius: 0.0.into(),
+                            },
+                            ..Default::default()
+                        })
+                }
+                AnnotationStyle::Text { text, color, font_size } => {
+                    let (r, g, b) = hex_to_rgb(color);
+                    container(
+                        iced::widget::text(text.clone())
+                            .size(*font_size as f32 * zoom)
+                            .font(INTER_REGULAR)
+                            .color(Color::from_rgb(r, g, b)),
+                    )
+                }
+            };
+
+            container(ann_overlay).padding(Padding {
+                top: ann.y * zoom,
+                left: ann.x * zoom,
+                ..Default::default()
+            }).into()
+        })
+        .collect()
+}
+
+fn render_hyperlinks<'a>(page_idx: usize, tab: &'a DocumentTab, zoom: f32) -> Vec<Element<'a, crate::message::Message>> {
+    tab.links.iter()
+        .filter(|link| link.page == page_idx)
+        .map(|link| {
+            let (lx, ly, lw, lh) = link.bounds;
+            let overlay = mouse_area(
+                container(Space::new())
+                    .width(Length::Fixed(lw * zoom))
+                    .height(Length::Fixed(lh * zoom))
+                    .style(|_| iced::widget::container::Style::default()),
+            )
+            .on_release(crate::message::Message::LinkClicked(link.clone()));
+
+            container(overlay).padding(Padding {
+                top: ly * zoom,
+                left: lx * zoom,
+                ..Default::default()
+            }).into()
+        })
+        .collect()
+}
+
+fn render_search_highlights<'a>(page_idx: usize, tab: &'a DocumentTab, zoom: f32, app: &'a PdfBullApp) -> Vec<Element<'a, crate::message::Message>> {
+    if app.search_query.is_empty() { return vec![]; }
+    
+    tab.search_results.iter().enumerate()
+        .filter(|(_, result)| result.page == page_idx)
+        .map(|(result_idx, result)| {
+            let is_active = result_idx == tab.current_search_index;
+            let highlight_color = if is_active {
+                Color::from_rgba(1.0, 0.6, 0.0, 0.6)
+            } else {
+                Color::from_rgba(1.0, 1.0, 0.0, 0.4)
+            };
+
+            container(
+                Space::new()
+                    .width(Length::Fixed(result.width * zoom))
+                    .height(Length::Fixed(result.height * zoom)),
+            )
+            .style(move |_| iced::widget::container::Style {
+                background: Some(iced::Background::Color(highlight_color)),
+                ..Default::default()
+            })
+            .padding(Padding {
+                top: result.y_position * zoom,
+                left: result.x * zoom,
+                ..Default::default()
+            })
+            .into()
+        })
+        .collect()
+}
+
+fn render_active_drag<'a>(page_idx: usize, zoom: f32, app: &'a PdfBullApp) -> Vec<Element<'a, crate::message::Message>> {
+    if let Some(drag) = &app.annotation_drag {
+        if drag.page == page_idx {
+            let min_x = drag.start.0.min(drag.current.0);
+            let min_y = drag.start.1.min(drag.current.1);
+            let w = (drag.start.0 - drag.current.0).abs();
+            let h = (drag.start.1 - drag.current.1).abs();
+
+            let preview_bg = match drag.kind {
+                PendingAnnotationKind::Highlight => Color::from_rgba(1.0, 1.0, 0.0, 0.4),
+                PendingAnnotationKind::Rectangle => Color::from_rgba(1.0, 0.0, 0.0, 0.2),
+            };
+
+            let preview_border = match drag.kind {
+                PendingAnnotationKind::Highlight => iced::Border::default(),
+                PendingAnnotationKind::Rectangle => iced::Border {
+                    color: Color::from_rgb(1.0, 0.0, 0.0),
+                    width: 2.0 * zoom,
+                    radius: 0.0.into(),
+                },
+            };
+
+            return vec![container(
+                Space::new()
+                    .width(Length::Fixed(w * zoom))
+                    .height(Length::Fixed(h * zoom)),
+            )
+            .style(move |_| iced::widget::container::Style {
+                background: Some(iced::Background::Color(preview_bg)),
+                border: preview_border,
+                ..Default::default()
+            })
+            .padding(Padding {
+                top: min_y * zoom,
+                left: min_x * zoom,
+                ..Default::default()
+            })
+            .into()];
+        }
+    }
+    vec![]
+}
+
+fn render_page_canvas<'a>(page_idx: usize, tab: &'a DocumentTab, app: &'a PdfBullApp) -> Element<'a, crate::message::Message> {
+    let zoom = tab.zoom;
+    let original_height = tab.page_heights.get(page_idx).copied().unwrap_or(800.0);
+    let scaled_height = original_height * zoom;
+    let scaled_width = tab.page_width * zoom;
+
+    if let Some((_, handle)) = tab.view_state.rendered_pages.get(&page_idx) {
+        let img = iced::widget::Image::new(handle.clone())
+            .width(Length::Fixed(scaled_width))
+            .height(Length::Fixed(scaled_height));
+
+        let mut page_stack = Stack::new().push(img);
+
+        for el in render_annotations(page_idx, tab, zoom) { page_stack = page_stack.push(el); }
+        for el in render_hyperlinks(page_idx, tab, zoom) { page_stack = page_stack.push(el); }
+        for el in render_search_highlights(page_idx, tab, zoom, app) { page_stack = page_stack.push(el); }
+        for el in render_active_drag(page_idx, zoom, app) { page_stack = page_stack.push(el); }
+
+        container(page_stack)
+            .width(Length::Fixed(scaled_width))
+            .height(Length::Fixed(scaled_height))
+            .style(|_| iced::widget::container::Style {
+                background: Some(iced::Background::Color(Color::WHITE)),
+                ..Default::default()
+            })
+            .into()
+    } else {
+        container(
+            column![
+                text(format!("Page {}", page_idx + 1)).font(INTER_REGULAR).size(16),
+                text("Loading...").size(12).font(INTER_REGULAR).style(|_| iced::widget::text::Style { color: Some(theme::COLOR_TEXT_DIM) })
+            ]
+            .spacing(10)
+            .align_x(Alignment::Center),
+        )
+        .width(Length::Fixed(scaled_width))
+        .height(Length::Fixed(scaled_height))
+        .center_x(Length::Fill)
+        .center_y(Length::Fill)
+        .style(|_| iced::widget::container::Style { background: Some(Color::from_rgb8(45, 46, 50).into()), ..Default::default() })
+        .into()
+    }
 }
 
 fn render_pdf_content(app: &PdfBullApp) -> Element<'_, crate::message::Message> {
@@ -666,270 +842,40 @@ fn render_pdf_content(app: &PdfBullApp) -> Element<'_, crate::message::Message> 
         return container(column![]).into();
     };
     let zoom = tab.zoom;
+    let scaled_spacing = theme::PAGE_SPACING * zoom;
 
     let mut pdf_column = column![]
-        .spacing(crate::models::PAGE_SPACING * zoom)
-        .padding(10.0 * zoom)
-        .align_x(iced::Alignment::Center);
+        .spacing(scaled_spacing)
+        .padding(theme::PAGE_PADDING * zoom)
+        .align_x(Alignment::Center);
 
-    let (start_idx, end_idx) = tab.visible_range;
+    let (start_idx, end_idx) = tab.view_state.visible_range;
 
-    // Add space for non-visible pages above
     if start_idx > 0 {
-        let y_above: f32 = tab
-            .page_heights
-            .iter()
-            .take(start_idx)
-            .map(|h| (h + crate::models::PAGE_SPACING) * zoom)
-            .sum();
-        // Subtract one spacing because the column will add it between the Space and the first Page
-        let y_above = (y_above - crate::models::PAGE_SPACING * zoom).max(0.0);
-        if y_above > 0.0 {
-            pdf_column = pdf_column.push(iced::widget::Space::new().height(Length::Fixed(y_above)));
-        }
+        let y_above: f32 = tab.page_heights.iter().take(start_idx)
+            .map(|h| (h + theme::PAGE_SPACING) * zoom).sum();
+        let y_above = (y_above - scaled_spacing).max(0.0);
+        if y_above > 0.0 { pdf_column = pdf_column.push(Space::new().height(Length::Fixed(y_above))); }
     }
 
     for page_idx in start_idx..end_idx {
-        let original_height = tab.page_heights.get(page_idx).copied().unwrap_or(800.0);
-        let scaled_height = original_height * zoom;
-        let scaled_width = tab.page_width * zoom;
-
-        let page_element: Element<'_, crate::message::Message> = {
-            if let Some((_, handle)) = tab.rendered_pages.get(&page_idx) {
-                let img = iced::widget::Image::new(handle.clone())
-                    .width(Length::Fixed(scaled_width))
-                    .height(Length::Fixed(scaled_height));
-
-                let mut page_stack = iced::widget::Stack::new().push(img);
-
-                // Draw annotations
-                for ann in &tab.annotations {
-                    if ann.page == page_idx {
-                        let ann_overlay = match &ann.style {
-                            crate::models::AnnotationStyle::Highlight { color } => {
-                                let (r, g, b) = hex_to_rgb(color);
-                                container(Space::new())
-                                    .width(Length::Fixed(ann.width * zoom))
-                                    .height(Length::Fixed(ann.height * zoom))
-                                    .style(move |_| iced::widget::container::Style {
-                                        background: Some(
-                                            iced::Color::from_rgba(r, g, b, 0.4).into(),
-                                        ),
-                                        ..Default::default()
-                                    })
-                            }
-                            crate::models::AnnotationStyle::Rectangle {
-                                color,
-                                thickness,
-                                fill,
-                            } => {
-                                let (r, g, b) = hex_to_rgb(color);
-                                container(Space::new())
-                                    .width(Length::Fixed(ann.width * zoom))
-                                    .height(Length::Fixed(ann.height * zoom))
-                                    .style(move |_| iced::widget::container::Style {
-                                        background: if *fill {
-                                            Some(iced::Color::from_rgba(r, g, b, 0.2).into())
-                                        } else {
-                                            None
-                                        },
-                                        border: iced::Border {
-                                            color: iced::Color::from_rgb(r, g, b),
-                                            width: *thickness * zoom,
-                                            radius: 0.0.into(),
-                                        },
-                                        ..Default::default()
-                                    })
-                            }
-                            crate::models::AnnotationStyle::Text {
-                                text,
-                                color,
-                                font_size,
-                            } => {
-                                let (r, g, b) = hex_to_rgb(color);
-                                container(
-                                    iced::widget::text(text.clone())
-                                        .size(*font_size as f32 * zoom)
-                                        .font(INTER_REGULAR)
-                                        .color(iced::Color::from_rgb(r, g, b)),
-                                )
-                            }
-                        };
-
-                        page_stack =
-                            page_stack.push(container(ann_overlay).padding(iced::Padding {
-                                top: ann.y * zoom,
-                                left: ann.x * zoom,
-                                ..Default::default()
-                            }));
-                    }
-                }
-
-                // Draw hyperlinks
-                for link in &tab.links {
-                    if link.page == page_idx {
-                        let (lx, ly, lw, lh) = link.bounds;
-                        let overlay = mouse_area(
-                            container(Space::new())
-                                .width(Length::Fixed(lw * zoom))
-                                .height(Length::Fixed(lh * zoom))
-                                .style(|_| iced::widget::container::Style::default()),
-                        )
-                        .on_release(crate::message::Message::LinkClicked(link.clone()));
-
-                        page_stack = page_stack.push(container(overlay).padding(iced::Padding {
-                            top: ly * zoom,
-                            left: lx * zoom,
-                            ..Default::default()
-                        }));
-                    }
-                }
-
-                // Draw search result overlays
-                if !app.search_query.is_empty() {
-                    for (result_idx, result) in tab.search_results.iter().enumerate() {
-                        if result.page == page_idx {
-                            let is_active = result_idx == tab.current_search_index;
-                            let highlight_color = if is_active {
-                                iced::Color::from_rgba(1.0, 0.6, 0.0, 0.6)
-                            } else {
-                                iced::Color::from_rgba(1.0, 1.0, 0.0, 0.4)
-                            };
-
-                            page_stack = page_stack.push(
-                                container(
-                                    Space::new()
-                                        .width(Length::Fixed(result.width * zoom))
-                                        .height(Length::Fixed(result.height * zoom)),
-                                )
-                                .style(move |_| iced::widget::container::Style {
-                                    background: Some(iced::Background::Color(highlight_color)),
-                                    ..Default::default()
-                                })
-                                .padding(iced::Padding {
-                                    top: result.y_position * zoom,
-                                    left: result.x * zoom,
-                                    ..Default::default()
-                                }),
-                            );
-                        }
-                    }
-                }
-
-                // Draw active drag overlay if any
-                if let Some(drag) = &app.annotation_drag {
-                    if drag.page == page_idx {
-                        let min_x = drag.start.0.min(drag.current.0);
-                        let min_y = drag.start.1.min(drag.current.1);
-                        let w = (drag.start.0 - drag.current.0).abs();
-                        let h = (drag.start.1 - drag.current.1).abs();
-
-                        let preview_bg = match drag.kind {
-                            crate::models::PendingAnnotationKind::Highlight => {
-                                iced::Color::from_rgba(1.0, 1.0, 0.0, 0.4)
-                            }
-                            crate::models::PendingAnnotationKind::Rectangle => {
-                                iced::Color::from_rgba(1.0, 0.0, 0.0, 0.2)
-                            }
-                        };
-
-                        let preview_border = match drag.kind {
-                            crate::models::PendingAnnotationKind::Highlight => {
-                                iced::Border::default()
-                            }
-                            crate::models::PendingAnnotationKind::Rectangle => iced::Border {
-                                color: iced::Color::from_rgb(1.0, 0.0, 0.0),
-                                width: 2.0 * zoom,
-                                radius: 0.0.into(),
-                            },
-                        };
-
-                        page_stack = page_stack.push(
-                            container(
-                                Space::new()
-                                    .width(Length::Fixed(w * zoom))
-                                    .height(Length::Fixed(h * zoom)),
-                            )
-                            .style(move |_| iced::widget::container::Style {
-                                background: Some(iced::Background::Color(preview_bg)),
-                                border: preview_border,
-                                ..Default::default()
-                            })
-                            .padding(iced::Padding {
-                                top: min_y * zoom,
-                                left: min_x * zoom,
-                                ..Default::default()
-                            }),
-                        );
-                    }
-                }
-
-                container(page_stack)
-                    .width(Length::Fixed(scaled_width))
-                    .height(Length::Fixed(scaled_height))
-                    .style(|_| iced::widget::container::Style {
-                        background: Some(iced::Background::Color(iced::Color::WHITE)),
-                        ..Default::default()
-                    })
-                    .into()
-            } else {
-                let loading_placeholder = container(
-                    column![
-                        text(format!("Page {}", page_idx + 1))
-                            .font(INTER_REGULAR)
-                            .size(16),
-                        text("Loading...")
-                            .size(12)
-                            .font(INTER_REGULAR)
-                            .style(|_theme| iced::widget::text::Style {
-                                color: Some(Color::from_rgb8(150, 150, 160)),
-                            })
-                    ]
-                    .spacing(10)
-                    .align_x(iced::Alignment::Center),
-                )
-                .width(Length::Fixed(scaled_width))
-                .height(Length::Fixed(scaled_height))
-                .center_x(Length::Fill)
-                .center_y(Length::Fill)
-                .style(|_theme| iced::widget::container::Style {
-                    background: Some(iced::Color::from_rgb8(45, 46, 50).into()),
-                    ..Default::default()
-                });
-                loading_placeholder.into()
-            }
-        };
-        pdf_column = pdf_column.push(page_element);
+        pdf_column = pdf_column.push(render_page_canvas(page_idx, tab, app));
     }
 
-    // Add space for non-visible pages below
     if end_idx < tab.total_pages {
-        let y_below: f32 = tab
-            .page_heights
-            .iter()
-            .skip(end_idx)
-            .map(|h| (h + crate::models::PAGE_SPACING) * zoom)
-            .sum();
-        let y_below = (y_below - crate::models::PAGE_SPACING * zoom).max(0.0);
-        if y_below > 0.0 {
-            pdf_column = pdf_column.push(iced::widget::Space::new().height(Length::Fixed(y_below)));
-        }
+        let y_below: f32 = tab.page_heights.iter().skip(end_idx)
+            .map(|h| (h + theme::PAGE_SPACING) * zoom).sum();
+        let y_below = (y_below - scaled_spacing).max(0.0);
+        if y_below > 0.0 { pdf_column = pdf_column.push(Space::new().height(Length::Fixed(y_below))); }
     }
 
-    scrollable(
-        container(pdf_column)
-            .width(Length::Fill)
-            .center_x(Length::Fill),
-    )
-    .id(Id::new("pdf_scroll"))
-    .on_scroll(|viewport| {
-        crate::message::Message::ViewportChanged(
-            viewport.absolute_offset().y,
-            viewport.bounds().height,
-        )
-    })
-    .height(Length::Fill)
-    .into()
+    scrollable(container(pdf_column).width(Length::Fill).center_x(Length::Fill))
+        .id(Id::new("pdf_scroll"))
+        .on_scroll(|viewport| {
+            crate::message::Message::ViewportChanged(viewport.absolute_offset().y, viewport.bounds().height)
+        })
+        .height(Length::Fill)
+        .into()
 }
 
 pub fn document_view(app: &PdfBullApp) -> Element<'_, crate::message::Message> {
@@ -938,24 +884,15 @@ pub fn document_view(app: &PdfBullApp) -> Element<'_, crate::message::Message> {
     };
 
     let content: Element<crate::message::Message> = if app.show_sidebar && !app.is_fullscreen {
-        let sidebar = render_sidebar(app);
-        let main_content = render_pdf_content(app);
-        row![sidebar, main_content].into()
+        row![render_sidebar(app), render_pdf_content(app)].into()
     } else if tab.total_pages == 0 {
-        let empty_content: Element<_> = if tab.is_loading {
+        let empty_content: Element<_> = if tab.view_state.is_loading {
             column![text("⏳").size(50), text("Loading Document...").size(24)]
-                .align_x(iced::Alignment::Center)
-                .spacing(20)
-                .into()
+                .align_x(Alignment::Center).spacing(20).into()
         } else {
             text("No pages").into()
         };
-        container(empty_content)
-            .width(Length::Fill)
-            .height(Length::Fill)
-            .center_x(Length::Fill)
-            .center_y(Length::Fill)
-            .into()
+        container(empty_content).width(Length::Fill).height(Length::Fill).center_x(Length::Fill).center_y(Length::Fill).into()
     } else {
         render_pdf_content(app)
     };
@@ -965,24 +902,13 @@ pub fn document_view(app: &PdfBullApp) -> Element<'_, crate::message::Message> {
             content,
             row![
                 button("Exit Fullscreen (F)").on_press(crate::message::Message::ToggleFullscreen),
-                container(text(format!(
-                    "Page {} of {}",
-                    tab.current_page + 1,
-                    tab.total_pages
-                )))
-                .padding(10),
+                container(text(format!("Page {} of {}", tab.current_page + 1, tab.total_pages))).padding(10),
                 button("-").on_press(crate::message::Message::ZoomOut),
                 text(format!("{}%", (tab.zoom * 100.0) as u32)),
                 button("+").on_press(crate::message::Message::ZoomIn),
-            ]
-            .padding(5)
-        ]
-        .into()
+            ].padding(5)
+        ].into()
     } else {
-        let tabs_row = render_tabs(app);
-        let toolbar = render_toolbar(app);
-        let page_nav = render_page_nav(app);
-
-        column![tabs_row, toolbar, page_nav, content].into()
+        column![render_tabs(app), render_toolbar(app), render_page_nav(app), content].into()
     }
 }

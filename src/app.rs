@@ -155,7 +155,7 @@ impl PdfBullApp {
 
             let is_rendered = self
                 .current_tab()
-                .and_then(|t| t.rendered_pages.get(&page_idx))
+                .and_then(|t| t.view_state.rendered_pages.get(&page_idx))
                 .is_some_and(|(s, _)| (s - zoom).abs() < 0.001);
             if is_rendered || self.rendering_set.contains(&target) {
                 continue;
@@ -197,7 +197,7 @@ impl PdfBullApp {
                 let target = RenderTarget::Thumbnail(page_idx);
                 let is_thumb_rendered = self
                     .current_tab()
-                    .is_some_and(|t| t.thumbnails.contains_key(&page_idx));
+                    .is_some_and(|t| t.view_state.thumbnails.contains_key(&page_idx));
 
                 if is_thumb_rendered || self.rendering_set.contains(&target) {
                     continue;

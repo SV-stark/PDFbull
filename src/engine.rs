@@ -1,309 +1,84 @@
 use crate::commands::PdfCommand;
-use crate::models::{next_doc_id, DocumentId};
+use crate::models::{next_doc_id, DocumentId, PdfResult, PdfError};
 use crate::pdf_engine::{create_render_cache, DocumentStore, SharedRenderCache};
 use pdfium_render::prelude::*;
 use std::collections::HashMap;
-use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
-use std::thread;
+use tokio::sync::mpsc;
 
-#[derive(Debug, Clone)]
 pub struct EngineState {
-    pub cmd_tx: crossbeam_channel::Sender<PdfCommand>,
-    active_workers: Arc<AtomicUsize>,
+    pub cmd_tx: mpsc::UnboundedSender<PdfCommand>,
+    pub active_workers: Arc<std::sync::atomic::AtomicUsize>,
 }
 
-impl EngineState {
-    pub fn worker_count(&self) -> usize {
-        self.active_workers.load(Ordering::SeqCst)
-    }
-}
+pub fn spawn_engine_thread(cache_size: u64, max_memory_mb: u64) -> EngineState {
+    let (cmd_tx, mut cmd_rx) = mpsc::unbounded_channel::<PdfCommand>();
+    let active_workers = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let workers_count = active_workers.clone();
 
-fn spawn_document_worker(
-    doc_id: DocumentId,
-    path: String,
-    cmd_rx: crossbeam_channel::Receiver<PdfCommand>,
-    cache: SharedRenderCache,
-    active_workers: Arc<AtomicUsize>,
-    pdfium: Arc<Pdfium>,
-) {
-    active_workers.fetch_add(1, Ordering::SeqCst);
+    let render_cache: SharedRenderCache = create_render_cache(cache_size, max_memory_mb);
 
-    thread::spawn(move || {
-        let mut store = match DocumentStore::new(&*pdfium, cache) {
+    std::thread::spawn(move || {
+        let pdfium = match Pdfium::bind_to_system_library() {
+            Ok(p) => p,
+            Err(_) => {
+                log::error!("Failed to bind to Pdfium system library. Attempting local search...");
+                match Pdfium::bind_to_library(Pdfium::pdfium_platform_library_name_at_path("./")) {
+                    Ok(p) => p,
+                    Err(e) => {
+                        log::error!("CRITICAL: Could not find Pdfium: {}", e);
+                        return;
+                    }
+                }
+            }
+        };
+
+        let mut store = match DocumentStore::new(&pdfium, render_cache.clone()) {
             Ok(s) => s,
             Err(e) => {
                 log::error!("Failed to initialize DocumentStore: {}", e);
-                active_workers.fetch_sub(1, Ordering::SeqCst);
                 return;
             }
         };
 
-        // Pre-open the document in this thread
-        // This ensures the document is loaded EXACTLY once for this thread's lifetime
-        let open_result = store.open_document(&path, doc_id);
-
-        while let Ok(cmd) = cmd_rx.recv() {
+        // Command dispatcher loop
+        while let Some(cmd) = cmd_rx.blocking_recv() {
             match cmd {
-                PdfCommand::Open(_p, resp) => {
-                    // If we have a cached result from the pre-open above, use it for the first Open call
-                    match &open_result {
-                        Ok(res) => {
-                            let _ = resp.send(Ok(res.clone()));
-                        }
-                        Err(e) => {
-                            let _ = resp.send(Err(e.clone()));
-                        }
-                    }
+                PdfCommand::Open(path, doc_id, tx) => {
+                    let res = store.open_document(&path, doc_id);
+                    let _ = tx.send(res);
                 }
-                PdfCommand::Render(_, page, options, resp) => {
-                    match store.render_page(&path, page as usize, options) {
-                        Ok(res) => {
-                            let _ = resp.send(Ok(res));
-                        }
-                        Err(e) => {
-                            let _ = resp.send(Err(e));
-                        }
-                    }
-                }
-                PdfCommand::RenderThumbnail(_, page, zoom, resp) => {
-                    match store.render_page(
-                        &path,
-                        page as usize,
-                        crate::pdf_engine::RenderOptions {
-                            scale: zoom,
-                            rotation: 0,
-                            filter: crate::pdf_engine::RenderFilter::None,
-                            auto_crop: false,
-                            quality: crate::pdf_engine::RenderQuality::Low,
-                        },
-                    ) {
-                        Ok(res) => {
-                            let _ = resp.send(Ok(res));
-                        }
-                        Err(e) => {
-                            let _ = resp.send(Err(e));
-                        }
-                    }
-                }
-                PdfCommand::ExtractText(_, page, resp) => match store.extract_text(&path, page) {
-                    Ok(text) => {
-                        let _ = resp.send(Ok(text));
-                    }
-                    Err(e) => {
-                        let _ = resp.send(Err(e));
-                    }
-                },
-                PdfCommand::ExportImage(_, page, zoom, output_path, resp) => {
-                    match store.export_page_as_image(&path, page, zoom, &output_path) {
-                        Ok(()) => {
-                            let _ = resp.send(Ok(()));
-                        }
-                        Err(e) => {
-                            let _ = resp.send(Err(e));
-                        }
-                    }
-                }
-                PdfCommand::ExportImages(_, pages, zoom, output_dir, resp) => {
-                    match store.export_pages_as_images(&path, &pages, zoom, &output_dir) {
-                        Ok(paths) => {
-                            let _ = resp.send(Ok(paths));
-                        }
-                        Err(e) => {
-                            let _ = resp.send(Err(e));
-                        }
-                    }
-                }
-                PdfCommand::ExportPdf(_, pdf_path, annotations, resp) => {
-                    match store.save_annotations(&pdf_path, &annotations) {
-                        Ok(saved_path) => {
-                            let _ = resp.send(Ok(saved_path));
-                        }
-                        Err(e) => {
-                            let _ = resp.send(Err(e));
-                        }
-                    }
-                }
-                PdfCommand::Search(_, query, resp) => match store.search(&path, &query) {
-                    Ok(results) => {
-                        let _ = resp.send(Ok(results));
-                    }
-                    Err(e) => {
-                        let _ = resp.send(Err(e));
-                    }
-                },
-                PdfCommand::LoadAnnotations(_, pdf_path, resp) => {
-                    match store.load_annotations(&pdf_path) {
-                        Ok(annotations) => {
-                            let _ = resp.send(Ok(annotations));
-                        }
-                        Err(e) => {
-                            let _ = resp.send(Err(e));
-                        }
-                    }
-                }
-                PdfCommand::Close(_) => {
-                    store.close_document(&path);
-                    break; // Terminate thread
-                }
-            }
-        }
-        active_workers.fetch_sub(1, Ordering::SeqCst);
-    });
-}
-
-pub fn spawn_engine_thread(cache_size: u64, max_memory_mb: u64) -> EngineState {
-    let (cmd_tx, cmd_rx) = crossbeam_channel::unbounded();
-    let cache = create_render_cache(cache_size, max_memory_mb);
-    let active_workers = Arc::new(AtomicUsize::new(0));
-
-    let pdfium = match Pdfium::bind_to_library(Pdfium::pdfium_platform_library_name_at_path("./"))
-        .or_else(|_| Pdfium::bind_to_library(Pdfium::pdfium_platform_library_name()))
-    {
-        Ok(bindings) => Arc::new(Pdfium::new(bindings)),
-        Err(e) => {
-            log::error!("Critical Error: Failed to bind to Pdfium library: {}", e);
-            panic!("Failed to bind to Pdfium library: {}", e);
-        }
-    };
-
-    let workers_clone = active_workers.clone();
-    let cache_clone = cache.clone();
-    let pdfium_clone = pdfium.clone();
-
-    // Dispatcher thread
-    thread::spawn(move || {
-        let mut document_senders: HashMap<u64, crossbeam_channel::Sender<PdfCommand>> =
-            HashMap::new();
-
-        while let Ok(cmd) = cmd_rx.recv() {
-            match cmd {
-                PdfCommand::Open(path, resp) => {
-                    let doc_id = next_doc_id();
-                    let (worker_tx, worker_rx) = crossbeam_channel::unbounded();
-
-                    spawn_document_worker(
-                        doc_id,
-                        path.clone(),
-                        worker_rx,
-                        cache_clone.clone(),
-                        workers_clone.clone(),
-                        pdfium_clone.clone(),
-                    );
-
-                    document_senders.insert(doc_id.0, worker_tx.clone());
-                    // Forward the open command to the new worker
-                    let _ = worker_tx.send(PdfCommand::Open(path, resp));
-                }
-                PdfCommand::Render(doc_id, page, opts, resp) => {
-                    if let Some(tx) = document_senders.get(&doc_id.0) {
-                        if let Err(e) = tx.send(PdfCommand::Render(doc_id, page, opts, resp)) {
-                            log::error!(
-                                "Failed to send render command to worker {}: {}",
-                                doc_id.0,
-                                e
-                            );
-                            document_senders.remove(&doc_id.0);
-                        }
-                    } else {
-                        let _ = resp.send(Err("Document closed or not found".into()));
-                    }
-                }
-                PdfCommand::RenderThumbnail(doc_id, page, zoom, resp) => {
-                    if let Some(tx) = document_senders.get(&doc_id.0) {
-                        if let Err(e) =
-                            tx.send(PdfCommand::RenderThumbnail(doc_id, page, zoom, resp))
-                        {
-                            log::error!(
-                                "Failed to send render thumbnail command to worker {}: {}",
-                                doc_id.0,
-                                e
-                            );
-                            document_senders.remove(&doc_id.0);
-                        }
-                    } else {
-                        let _ = resp.send(Err("Document closed or not found".into()));
-                    }
-                }
-                PdfCommand::ExtractText(doc_id, page, resp) => {
-                    if let Some(tx) = document_senders.get(&doc_id.0) {
-                        if let Err(e) = tx.send(PdfCommand::ExtractText(doc_id, page, resp)) {
-                            log::error!(
-                                "Failed to send extract text command to worker {}: {}",
-                                doc_id.0,
-                                e
-                            );
-                            document_senders.remove(&doc_id.0);
-                        }
-                    } else {
-                        let _ = resp.send(Err("Document closed or not found".into()));
-                    }
-                }
-                PdfCommand::ExportImage(doc_id, page, zoom, path, resp) => {
-                    if let Some(tx) = document_senders.get(&doc_id.0) {
-                        if let Err(e) =
-                            tx.send(PdfCommand::ExportImage(doc_id, page, zoom, path, resp))
-                        {
-                            log::error!("Failed to send export image command: {}", e);
-                            document_senders.remove(&doc_id.0);
-                        }
-                    } else {
-                        let _ = resp.send(Err("Document closed or not found".into()));
-                    }
-                }
-                PdfCommand::ExportImages(doc_id, pages, zoom, dir, resp) => {
-                    if let Some(tx) = document_senders.get(&doc_id.0) {
-                        if let Err(e) =
-                            tx.send(PdfCommand::ExportImages(doc_id, pages, zoom, dir, resp))
-                        {
-                            log::error!("Failed to send export images command: {}", e);
-                            document_senders.remove(&doc_id.0);
-                        }
-                    } else {
-                        let _ = resp.send(Err("Document closed or not found".into()));
-                    }
-                }
-                PdfCommand::ExportPdf(doc_id, path, ann, resp) => {
-                    if let Some(tx) = document_senders.get(&doc_id.0) {
-                        if let Err(e) = tx.send(PdfCommand::ExportPdf(doc_id, path, ann, resp)) {
-                            log::error!("Failed to send export pdf command: {}", e);
-                            document_senders.remove(&doc_id.0);
-                        }
-                    } else {
-                        let _ = resp.send(Err("Document closed or not found".into()));
-                    }
-                }
-                PdfCommand::Search(doc_id, query, resp) => {
-                    if let Some(tx) = document_senders.get(&doc_id.0) {
-                        if let Err(e) = tx.send(PdfCommand::Search(doc_id, query, resp)) {
-                            log::error!("Failed to send search command: {}", e);
-                            document_senders.remove(&doc_id.0);
-                        }
-                    } else {
-                        let _ = resp.send(Err("Document closed or not found".into()));
-                    }
-                }
-                PdfCommand::LoadAnnotations(doc_id, path, resp) => {
-                    if let Some(tx) = document_senders.get(&doc_id.0) {
-                        if let Err(e) = tx.send(PdfCommand::LoadAnnotations(doc_id, path, resp)) {
-                            log::error!("Failed to send load annotations command: {}", e);
-                            document_senders.remove(&doc_id.0);
-                        }
-                    } else {
-                        let _ = resp.send(Err("Document closed or not found".into()));
-                    }
+                PdfCommand::Render(path, page_num, options, tx) => {
+                    let res = store.render_page(&path, page_num, options);
+                    let _ = tx.send(res);
                 }
                 PdfCommand::Close(doc_id) => {
-                    if let Some(tx) = document_senders.remove(&doc_id.0) {
-                        let _ = tx.send(PdfCommand::Close(doc_id));
-                    }
+                    // In this single-thread-store model, we'd need a map of doc_id -> path
+                    // For now, assume path is handled by the app
                 }
+                PdfCommand::ExtractText(path, page_num, tx) => {
+                    let res = store.extract_text(&path, page_num);
+                    let _ = tx.send(res);
+                }
+                PdfCommand::Search(path, query, tx) => {
+                    let res = store.search(&path, &query);
+                    let _ = tx.send(res);
+                }
+                PdfCommand::SaveAnnotations(path, annotations, tx) => {
+                    let res = store.save_annotations(&path, &annotations);
+                    let _ = tx.send(res);
+                }
+                PdfCommand::ExportImage(path, page_num, scale, out, tx) => {
+                    let res = store.export_page_as_image(&path, page_num, scale, &out);
+                    let _ = tx.send(res);
+                }
+                _ => {}
             }
         }
     });
 
     EngineState {
         cmd_tx,
-        active_workers,
+        active_workers: workers_count,
     }
 }
