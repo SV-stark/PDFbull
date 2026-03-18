@@ -13,17 +13,20 @@ iced = { version = "0.13", features = ["image", "svg", "canvas", "tokio", "advan
 pdfium-render = "0.8"
 tokio = { version = "1.0", features = ["full"] }
 rfd = "0.14"
-image = "0.25"
+zune-image = "0.4"
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 dirs = "5"
 rayon = "1.10"
 dark-light = "1.1"
-log = "0.4"
-env_logger = "0.11"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 webbrowser = "1.2.0"
 lru = "0.16.3"
 thiserror = "1.0"
+anyhow = "1.0"
+lopdf = "0.34"
+pdf-form = "0.1"
 
 [build-dependencies]
 winresource = "0.1"

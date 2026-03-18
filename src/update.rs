@@ -113,7 +113,13 @@ pub fn handle_message(app: &mut PdfBullApp, message: Message) -> Task<Message> {
         | Message::TextExtracted(_)
         | Message::ExportImage
         | Message::ImageExported(_)
-        | Message::ExportImages => handle_export_message(app, message),
+        | Message::ExportImages
+        | Message::MergeDocuments(_)
+        | Message::DocumentsMerged(_)
+        | Message::LoadFormFields
+        | Message::FormFieldsLoaded(_)
+        | Message::FillForm(_)
+        | Message::FormFilled(_) => handle_export_message(app, message),
         Message::EngineInitialized(_)
         | Message::Error(_)
         | Message::ClearStatus
@@ -365,7 +371,7 @@ fn handle_annotation_message(app: &mut PdfBullApp, message: Message) -> Task<Mes
                     t.path.to_string_lossy().to_string(),
                 ),
                 _ => {
-                    log::warn!("No annotations to save");
+                    tracing::warn!("No annotations to save");
                     return Task::none();
                 }
             };
@@ -398,7 +404,7 @@ fn handle_annotation_message(app: &mut PdfBullApp, message: Message) -> Task<Mes
             match result {
                 Ok(path) => app.status_message = Some(format!("Annotations saved to: {}", path)),
                 Err(e) => {
-                    log::error!("Error saving annotations: {}", e);
+                    tracing::error!("Error saving annotations: {}", e);
                     app.status_message = Some(format!("Error saving annotations: {}", e));
                 }
             }
@@ -509,7 +515,7 @@ fn handle_render_message(app: &mut PdfBullApp, message: Message) -> Task<Message
                         options,
                         resp_tx,
                     )) {
-                        log::error!("Failed to send Render command: {}", e);
+                        tracing::error!("Failed to send Render command: {}", e);
                         return Err("Engine died".into());
                     }
                     resp_rx.await.unwrap_or(Err("Channel closed".into()))
@@ -538,7 +544,7 @@ fn handle_render_message(app: &mut PdfBullApp, message: Message) -> Task<Message
                         );
                     }
                     Err(e) => {
-                        log::error!("Render error: {}", e);
+                        tracing::error!("Render error: {}", e);
                         if e == "Engine died" || e == "Channel closed" {
                             app.engine = None;
                             app.status_message = Some(
@@ -578,7 +584,7 @@ fn handle_render_message(app: &mut PdfBullApp, message: Message) -> Task<Message
                         );
                     }
                     Err(e) => {
-                        log::error!("Thumbnail render error: {}", e);
+                        tracing::error!("Thumbnail render error: {}", e);
                     }
                 }
             }
@@ -640,7 +646,7 @@ fn handle_search_message(app: &mut PdfBullApp, message: Message) -> Task<Message
                     if let Err(e) =
                         cmd_tx.send(crate::commands::PdfCommand::Search(doc_id, query, resp_tx))
                     {
-                        log::error!("Failed to send Search command: {}", e);
+                        tracing::error!("Failed to send Search command: {}", e);
                         return Err("Engine died".into());
                     }
                     match resp_rx.await {
@@ -676,7 +682,7 @@ fn handle_search_message(app: &mut PdfBullApp, message: Message) -> Task<Message
                     }
                 }
                 Err(e) => {
-                    log::error!("Search error: {}", e);
+                    tracing::error!("Search error: {}", e);
                     if e == "Engine died" || e == "Channel closed" {
                         app.engine = None;
                         app.status_message = Some(
@@ -774,7 +780,7 @@ fn handle_tab_message(app: &mut PdfBullApp, message: Message) -> Task<Message> {
                             if let Err(e) =
                                 cmd_tx.send(crate::commands::PdfCommand::Open(path_s, resp_tx))
                             {
-                                log::error!("Failed to send Open command: {}", e);
+                                tracing::error!("Failed to send Open command: {}", e);
                                 return None;
                             }
                             match resp_rx.await {
@@ -857,7 +863,7 @@ fn handle_tab_message(app: &mut PdfBullApp, message: Message) -> Task<Message> {
                 app.render_visible_pages()
             }
             Err(e) => {
-                log::error!("Error opening document: {}", e);
+                tracing::error!("Error opening document: {}", e);
                 if e == "Engine died" || e == "Channel closed" {
                     app.engine = None;
                     app.status_message = Some(
@@ -896,7 +902,7 @@ fn handle_tab_message(app: &mut PdfBullApp, message: Message) -> Task<Message> {
                         if let Err(e) =
                             cmd_tx.send(crate::commands::PdfCommand::Open(path_s, resp_tx))
                         {
-                            log::error!("Failed to send Open command: {}", e);
+                            tracing::error!("Failed to send Open command: {}", e);
                             return Err("Engine died".into());
                         }
                         resp_rx.await.unwrap_or(Err("Engine died".into()))
@@ -1076,7 +1082,7 @@ fn handle_export_message(app: &mut PdfBullApp, message: Message) -> Task<Message
                             if let Err(e) =
                                 cmd_tx.send(PdfCommand::ExtractText(doc_id, page, resp_tx))
                             {
-                                log::error!("Failed to send ExtractText command: {}", e);
+                                tracing::error!("Failed to send ExtractText command: {}", e);
                                 return Err("Engine died".into());
                             }
                             match resp_rx.await {
@@ -1102,7 +1108,7 @@ fn handle_export_message(app: &mut PdfBullApp, message: Message) -> Task<Message
                 Ok(path) => app.status_message = Some(format!("Text extracted to: {}", path)),
                 Err(e) => {
                     if e != "Cancelled" {
-                        log::error!("Text extraction error: {}", e);
+                        tracing::error!("Text extraction error: {}", e);
                         if e == "Engine died" || e == "Channel closed" {
                             app.engine = None;
                             app.status_message = Some(
@@ -1152,7 +1158,7 @@ fn handle_export_message(app: &mut PdfBullApp, message: Message) -> Task<Message
                                 path.clone(),
                                 resp_tx,
                             )) {
-                                log::error!("Failed to send ExportImage command: {}", e);
+                                tracing::error!("Failed to send ExportImage command: {}", e);
                                 return Err("Engine died".into());
                             }
                             match resp_rx.await {
@@ -1171,7 +1177,7 @@ fn handle_export_message(app: &mut PdfBullApp, message: Message) -> Task<Message
             match result {
                 Ok(path) => app.status_message = Some(format!("Exported to: {}", path)),
                 Err(e) => {
-                    log::error!("Export error: {}", e);
+                    tracing::error!("Export error: {}", e);
                     if e == "Engine died" || e == "Channel closed" {
                         app.engine = None;
                         app.status_message =
@@ -1215,20 +1221,52 @@ fn handle_export_message(app: &mut PdfBullApp, message: Message) -> Task<Message
                                 path.clone(),
                                 resp_tx,
                             )) {
-                                log::error!("Failed to send ExportImages command: {}", e);
-                                return Err("Engine died".into());
+                                tracing::error!("Failed to send ExportImages command: {}", e);
+                                return Err(crate::models::PdfError::EngineError("Engine died".into()));
                             }
                             match resp_rx.await {
                                 Ok(Ok(paths)) => Ok(paths.join(", ")),
                                 Ok(Err(e)) => Err(e),
-                                Err(_) => Err("Engine died".into()),
+                                Err(_) => Err(crate::models::PdfError::EngineError("Engine died".into())),
                             }
                         }
-                        None => Err("Cancelled".into()),
+                        None => Err(crate::models::PdfError::OpenFailed("Cancelled".into())),
                     }
                 },
                 Message::ImageExported,
             )
+        }
+        Message::MergeDocuments(paths) => {
+            let engine = match &app.engine {
+                Some(e) => e,
+                None => return Task::none(),
+            };
+            let cmd_tx = engine.cmd_tx.clone();
+            Task::perform(
+                async move {
+                    let out = rfd::AsyncFileDialog::new()
+                        .add_filter("PDF", &["pdf"])
+                        .set_file_name("merged.pdf")
+                        .save_file()
+                        .await;
+                    if let Some(f) = out {
+                        let path_strs: Vec<String> = paths.iter().map(|p| p.to_string_lossy().to_string()).collect();
+                        let (tx, rx) = tokio::sync::oneshot::channel();
+                        let _ = cmd_tx.send(PdfCommand::Merge(path_strs, f.path().to_string_lossy().to_string(), tx));
+                        rx.await.unwrap_or(Err(crate::models::PdfError::EngineError("Engine died".into())))
+                    } else {
+                        Err(crate::models::PdfError::OpenFailed("Cancelled".into()))
+                    }
+                },
+                Message::DocumentsMerged,
+            )
+        }
+        Message::DocumentsMerged(res) => {
+            match res {
+                Ok(p) => app.status_message = Some(format!("Merged PDF saved to: {}", p)),
+                Err(e) => app.status_message = Some(format!("Merge failed: {}", e)),
+            }
+            Task::none()
         }
         _ => Task::none(),
     }
@@ -1241,7 +1279,7 @@ fn handle_misc_message(app: &mut PdfBullApp, message: Message) -> Task<Message> 
             Task::none()
         }
         Message::Error(e) => {
-            log::error!("Error: {}", e);
+            tracing::error!("Error: {}", e);
             app.status_message = Some(format!("Error: {}", e));
             Task::none()
         }

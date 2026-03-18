@@ -22,11 +22,11 @@ pub fn spawn_engine_thread(cache_size: u64, max_memory_mb: u64) -> EngineState {
         let pdfium = match Pdfium::bind_to_system_library() {
             Ok(p) => p,
             Err(_) => {
-                log::error!("Failed to bind to Pdfium system library. Attempting local search...");
+                tracing::error!("Failed to bind to Pdfium system library. Attempting local search...");
                 match Pdfium::bind_to_library(Pdfium::pdfium_platform_library_name_at_path("./")) {
                     Ok(p) => p,
                     Err(e) => {
-                        log::error!("CRITICAL: Could not find Pdfium: {}", e);
+                        tracing::error!("CRITICAL: Could not find Pdfium: {}", e);
                         return;
                     }
                 }
@@ -36,12 +36,11 @@ pub fn spawn_engine_thread(cache_size: u64, max_memory_mb: u64) -> EngineState {
         let mut store = match DocumentStore::new(&pdfium, render_cache.clone()) {
             Ok(s) => s,
             Err(e) => {
-                log::error!("Failed to initialize DocumentStore: {}", e);
+                tracing::error!("Failed to initialize DocumentStore: {}", e);
                 return;
             }
         };
 
-        // Command dispatcher loop
         while let Some(cmd) = cmd_rx.blocking_recv() {
             match cmd {
                 PdfCommand::Open(path, doc_id, tx) => {
@@ -52,10 +51,7 @@ pub fn spawn_engine_thread(cache_size: u64, max_memory_mb: u64) -> EngineState {
                     let res = store.render_page(&path, page_num, options);
                     let _ = tx.send(res);
                 }
-                PdfCommand::Close(doc_id) => {
-                    // In this single-thread-store model, we'd need a map of doc_id -> path
-                    // For now, assume path is handled by the app
-                }
+                PdfCommand::Close(_doc_id) => {}
                 PdfCommand::ExtractText(path, page_num, tx) => {
                     let res = store.extract_text(&path, page_num);
                     let _ = tx.send(res);
@@ -70,6 +66,22 @@ pub fn spawn_engine_thread(cache_size: u64, max_memory_mb: u64) -> EngineState {
                 }
                 PdfCommand::ExportImage(path, page_num, scale, out, tx) => {
                     let res = store.export_page_as_image(&path, page_num, scale, &out);
+                    let _ = tx.send(res);
+                }
+                PdfCommand::ExportPdf(_doc_id, path, annotations, tx) => {
+                    let res = store.save_annotations(&path, &annotations);
+                    let _ = tx.send(res);
+                }
+                PdfCommand::Merge(paths, out, tx) => {
+                    let res = crate::pdf_engine::DocumentStore::merge_documents(paths, out);
+                    let _ = tx.send(res);
+                }
+                PdfCommand::GetFormFields(path, tx) => {
+                    let res = crate::pdf_engine::DocumentStore::get_form_fields(&path);
+                    let _ = tx.send(res);
+                }
+                PdfCommand::FillForm(path, fields, out, tx) => {
+                    let res = crate::pdf_engine::DocumentStore::fill_form(&path, fields, out);
                     let _ = tx.send(res);
                 }
                 _ => {}

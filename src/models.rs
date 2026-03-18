@@ -172,6 +172,14 @@ pub enum PendingAnnotationKind {
     Rectangle,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct FormField {
+    pub name: String,
+    pub value: String,
+    pub field_type: String,
+    pub page: usize,
+}
+
 #[derive(Debug, Clone)]
 pub struct AnnotationDrag {
     pub page: usize,

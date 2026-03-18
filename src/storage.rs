@@ -30,7 +30,7 @@ pub fn load_settings() -> AppSettings {
         if let Ok(loaded) = serde_json::from_str::<AppSettings>(&data) {
             settings = loaded;
         } else {
-            log::warn!("Corrupted settings.json, using defaults");
+            tracing::warn!("Corrupted settings.json, using defaults");
             if let Ok(value) = serde_json::from_str::<serde_json::Value>(&data) {
                 if let Some(obj) = value.as_object() {
                     if let Some(theme) = obj.get("theme").and_then(|v| v.as_str()) {
@@ -62,7 +62,7 @@ pub fn save_settings(settings: &AppSettings) {
     let path = dir.join("settings.json");
     if let Ok(data) = serde_json::to_string_pretty(settings) {
         if let Err(e) = atomic_write(&path, &data) {
-            log::error!("Failed to save settings: {}", e);
+            tracing::error!("Failed to save settings: {}", e);
         }
     }
 }
@@ -73,7 +73,7 @@ pub fn load_recent_files() -> Vec<RecentFile> {
         if let Ok(files) = serde_json::from_str(&data) {
             return files;
         } else {
-            log::warn!("Corrupted recent_files.json, using empty list");
+            tracing::warn!("Corrupted recent_files.json, using empty list");
         }
     }
     Vec::new()
@@ -82,13 +82,13 @@ pub fn load_recent_files() -> Vec<RecentFile> {
 pub fn save_recent_files(recent_files: &Vec<RecentFile>) {
     let dir = get_config_dir();
     if let Err(e) = fs::create_dir_all(&dir) {
-        log::error!("Failed to create config directory: {}", e);
+        tracing::error!("Failed to create config directory: {}", e);
         return;
     }
     let path = dir.join("recent_files.json");
     if let Ok(data) = serde_json::to_string_pretty(recent_files) {
         if let Err(e) = atomic_write(&path, &data) {
-            log::error!("Failed to save recent files: {}", e);
+            tracing::error!("Failed to save recent files: {}", e);
         }
     }
 }
@@ -123,7 +123,7 @@ pub fn load_session() -> Option<SessionData> {
         match serde_json::from_str::<SessionData>(&data) {
             Ok(session) => return Some(session),
             Err(e) => {
-                log::warn!("Corrupted session.json: {}", e);
+                tracing::warn!("Corrupted session.json: {}", e);
                 let _ = fs::rename(&path, path.with_extension("bak"));
             }
         }
@@ -134,14 +134,14 @@ pub fn load_session() -> Option<SessionData> {
 pub fn save_session(session: &SessionData) {
     let dir = get_config_dir();
     if let Err(e) = fs::create_dir_all(&dir) {
-        log::error!("Failed to create config directory: {}", e);
+        tracing::error!("Failed to create config directory: {}", e);
         return;
     }
     let path = dir.join("session.json");
 
     if let Ok(data) = serde_json::to_string_pretty(session) {
         if let Err(e) = atomic_write(&path, &data) {
-            log::error!("Failed to save session: {}", e);
+            tracing::error!("Failed to save session: {}", e);
         }
     }
 }
