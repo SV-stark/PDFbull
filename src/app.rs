@@ -27,6 +27,8 @@ pub mod icons {
     pub const CLOSE: &str = "\u{e1b2}";
     pub const PLUS: &str = "\u{e13d}";
     pub const EXPORT: &str = "\u{e0b9}";
+    pub const MERGE: &str = "\u{e0dc}";
+    pub const FORMS: &str = "\u{e2a8}";
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -44,6 +46,8 @@ pub struct PdfBullApp {
     pub show_sidebar: bool,
     pub show_keyboard_help: bool,
     pub is_fullscreen: bool,
+    pub show_forms_sidebar: bool,
+    pub form_fields: Vec<crate::models::FormField>,
     pub search_query: String,
     pub search_pending: Option<String>,
     pub page_input: String,

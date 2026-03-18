@@ -12,6 +12,7 @@ pub enum Message {
     CloseSettings,
     SaveSettings(AppSettings),
     ToggleSidebar,
+    ToggleFormsSidebar,
     ToggleFullscreen,
     ToggleKeyboardHelp,
     RotateClockwise,

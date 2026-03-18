@@ -1,7 +1,6 @@
 use crate::app::{icons, INTER_BOLD, INTER_REGULAR, LUCIDE};
 use iced::widget::{button, column, container, image, row, scrollable, text, Space};
 use iced::{Alignment, Border, Color, Element, Length, Shadow, Vector};
-// Removed usage, but kept import if needed elsewhere
 
 fn custom_card<'a>(
     content: impl Into<Element<'a, crate::message::Message>>,
@@ -24,6 +23,78 @@ fn custom_card<'a>(
             ..Default::default()
         })
         .into()
+}
+
+fn quick_action_card<'a>(
+    icon: &'static str,
+    title: &'static str,
+    description: &'static str,
+    action_label: &'static str,
+    on_press: crate::message::Message,
+) -> Element<'a, crate::message::Message> {
+    container(
+        column![
+            text(icon)
+                .size(40)
+                .font(LUCIDE)
+                .style(|_| iced::widget::text::Style {
+                    color: Some(Color::from_rgb8(120, 120, 130))
+                }),
+            text(title)
+                .size(20)
+                .font(INTER_BOLD)
+                .style(|_| iced::widget::text::Style {
+                    color: Some(Color::WHITE)
+                }),
+            text(description)
+                .size(14)
+                .font(INTER_REGULAR)
+                .style(|_| iced::widget::text::Style {
+                    color: Some(Color::from_rgb8(160, 160, 170))
+                })
+                .align_x(Alignment::Center),
+            Space::new().height(Length::Fixed(12.0)),
+            button(
+                text(action_label)
+                    .size(14)
+                    .font(INTER_BOLD)
+                    .style(|_| iced::widget::text::Style {
+                        color: Some(Color::WHITE)
+                    })
+            )
+            .on_press(on_press)
+            .padding([10, 20])
+            .style(|_theme, status| {
+                let bg = if status == iced::widget::button::Status::Hovered {
+                    Color::from_rgb8(80, 80, 85)
+                } else {
+                    Color::from_rgb8(60, 60, 65)
+                };
+                iced::widget::button::Style {
+                    background: Some(bg.into()),
+                    border: Border {
+                        radius: 8.0.into(),
+                        ..Default::default()
+                    },
+                    ..Default::default()
+                }
+            }),
+        ]
+        .align_x(Alignment::Center)
+        .spacing(12),
+    )
+    .width(Length::FillPortion(1))
+    .padding(32)
+    .style(|_| iced::widget::container::Style {
+        border: Border {
+            color: Color::from_rgb8(60, 60, 65),
+            width: 1.0,
+            radius: 12.0.into(),
+        },
+        background: Some(iced::Background::Color(Color::from_rgb8(30, 31, 34))),
+        ..Default::default()
+    })
+    .into()
 }
 
 pub fn welcome_view(app: &crate::app::PdfBullApp) -> Element<'_, crate::message::Message> {
@@ -104,67 +175,24 @@ pub fn welcome_view(app: &crate::app::PdfBullApp) -> Element<'_, crate::message:
         column![].into()
     };
 
-    let drop_zone = container(
-        column![
-            text(icons::OPEN)
-                .size(48)
-                .font(LUCIDE)
-                .style(|_theme| iced::widget::text::Style {
-                    color: Some(Color::from_rgb8(100, 100, 110))
-                }),
-            text("Open a PDF")
-                .size(24)
-                .font(INTER_BOLD)
-                .style(|_theme| iced::widget::text::Style {
-                    color: Some(Color::WHITE)
-                }),
-            text("Drag & drop a file or click Open")
-                .size(15)
-                .font(INTER_REGULAR)
-                .style(|_theme| iced::widget::text::Style {
-                    color: Some(Color::from_rgb8(180, 180, 180))
-                }),
-            Space::new().height(Length::Fixed(20.0)),
-            button(
-                text("Open Document")
-                    .size(14)
-                    .font(INTER_BOLD)
-                    .style(|_theme| iced::widget::text::Style {
-                        color: Some(Color::WHITE)
-                    })
-            )
-            .on_press(crate::message::Message::OpenDocument)
-            .padding([12, 24])
-            .style(|_theme, status| {
-                let bg = if status == iced::widget::button::Status::Hovered {
-                    Color::from_rgb8(90, 90, 95)
-                } else {
-                    Color::from_rgb8(70, 70, 75)
-                };
-                iced::widget::button::Style {
-                    background: Some(bg.into()),
-                    border: Border {
-                        radius: 10.0.into(),
-                        ..Default::default()
-                    },
-                    ..Default::default()
-                }
-            }),
-        ]
-        .align_x(Alignment::Center)
-        .spacing(12),
-    )
-    .width(Length::Fill)
-    .padding(48)
-    .style(|_| iced::widget::container::Style {
-        border: Border {
-            color: Color::from_rgb8(60, 60, 65),
-            width: 2.0,
-            radius: 12.0.into(),
-        },
-        background: Some(iced::Background::Color(Color::from_rgb8(30, 31, 34))),
-        ..Default::default()
-    });
+    let actions = row![
+        quick_action_card(
+            icons::OPEN,
+            "Open PDF",
+            "Read and annotate a single document",
+            "Pick File",
+            crate::message::Message::OpenDocument
+        ),
+        quick_action_card(
+            icons::MERGE,
+            "Merge PDFs",
+            "Combine multiple PDFs into one",
+            "Pick Files",
+            crate::message::Message::MergeDocuments(vec![]) // Note: update.rs handles the file picking when paths are empty
+        ),
+    ]
+    .spacing(24)
+    .width(Length::Fill);
 
     let logo = image(iced::widget::image::Handle::from_bytes(
         include_bytes!("../PDFbull.png").to_vec(),
@@ -192,7 +220,7 @@ pub fn welcome_view(app: &crate::app::PdfBullApp) -> Element<'_, crate::message:
         ]
         .align_y(Alignment::Center),
         Space::new().height(Length::Fixed(24.0)),
-        drop_zone,
+        actions,
     ]);
 
     container(
@@ -235,7 +263,7 @@ pub fn welcome_view(app: &crate::app::PdfBullApp) -> Element<'_, crate::message:
                     recent_section,
                     Space::new().height(Length::Fixed(40.0)),
                 ]
-                .width(Length::Fixed(640.0))
+                .width(Length::Fixed(720.0))
                 .align_x(Alignment::Center)
             )
             .height(Length::Fill),

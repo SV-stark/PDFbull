@@ -1,6 +1,6 @@
 use crate::app::PdfBullApp;
 use crate::app::{icons, INTER_BOLD, INTER_REGULAR, LUCIDE};
-use crate::models::{DocumentTab, SearchResult, Annotation, Hyperlink, PendingAnnotationKind, AnnotationStyle};
+use crate::models::{DocumentTab, SearchResult, Annotation, Hyperlink, PendingAnnotationKind, AnnotationStyle, FormField};
 use crate::pdf_engine::RenderFilter;
 use crate::ui::theme::{self, hex_to_rgb};
 use iced::widget::{
@@ -137,18 +137,6 @@ fn render_toolbar(app: &PdfBullApp) -> Element<'_, crate::message::Message> {
         "Rotate",
     );
 
-    let filters_dropdown = row![
-        text("Filters")
-            .size(12)
-            .font(INTER_REGULAR)
-            .style(|_theme| iced::widget::text::Style {
-                color: Some(theme::COLOR_TEXT_DIM),
-            }),
-        button(text("None v").size(12).font(INTER_REGULAR)).style(iced::widget::button::text)
-    ]
-    .spacing(5)
-    .align_y(Alignment::Center);
-
     let crop_filters = stacked_tool(
         row![
             filter_btn_custom("B&W", RenderFilter::BlackWhite, tab.render_filter),
@@ -157,6 +145,17 @@ fn render_toolbar(app: &PdfBullApp) -> Element<'_, crate::message::Message> {
         ]
         .spacing(2),
         "Crop",
+    );
+
+    let forms_btn = stacked_tool(
+        tooltip(
+            button(text(icons::FORMS).size(16).font(LUCIDE))
+                .on_press(crate::message::Message::ToggleFormsSidebar)
+                .style(iced::widget::button::text),
+            "Interactive Forms",
+            tooltip::Position::Bottom,
+        ),
+        "Forms",
     );
 
     let bookmark_btn = stacked_tool(
@@ -239,10 +238,10 @@ fn render_toolbar(app: &PdfBullApp) -> Element<'_, crate::message::Message> {
             Space::new().width(Length::Fixed(20.0)),
             rotate_btn,
             Space::new().width(Length::Fixed(20.0)),
-            filters_dropdown,
-            Space::new().width(Length::Fixed(10.0)),
             crop_filters,
             Space::new().width(Length::Fill),
+            forms_btn,
+            Space::new().width(Length::Fixed(15.0)),
             bookmark_btn,
             Space::new().width(Length::Fixed(15.0)),
             highlight_btn,
@@ -541,6 +540,64 @@ fn render_sidebar(app: &PdfBullApp) -> Element<'_, crate::message::Message> {
             crate::message::Message::SidebarViewportChanged(viewport.absolute_offset().y)
         })
         .width(Length::Fixed(theme::SIDEBAR_WIDTH))
+        .into()
+}
+
+fn render_forms_sidebar(app: &PdfBullApp) -> Element<'_, crate::message::Message> {
+    let mut fields_col = column![
+        section_title("Interactive Form"),
+        text("Fill out the fields below and save as a new PDF.")
+            .size(12)
+            .style(|_| iced::widget::text::Style { color: Some(theme::COLOR_TEXT_DIM) }),
+        Space::new().height(10.0),
+    ].spacing(10).padding(15);
+
+    if app.form_fields.is_empty() {
+        fields_col = fields_col.push(text("No interactive fields found in this document.").size(13));
+    } else {
+        for field in &app.form_fields {
+            fields_col = fields_col.push(column![
+                text(&field.name).size(12).font(INTER_BOLD),
+                text_input("Value...", &field.value)
+                    .on_input({
+                        let name = field.name.clone();
+                        let mut updates = app.form_fields.clone();
+                        move |val| {
+                            if let Some(f) = updates.iter_mut().find(|f| f.name == name) {
+                                f.value = val;
+                            }
+                            crate::message::Message::FillForm(updates)
+                        }
+                    })
+                    .padding(8)
+            ].spacing(4));
+        }
+
+        fields_col = fields_col.push(
+            button(text("Save Filled Form").font(INTER_BOLD))
+                .on_press(crate::message::Message::FillForm(app.form_fields.clone()))
+                .width(Length::Fill)
+                .padding(10)
+                .style(|_, _| iced::widget::button::Style {
+                    background: Some(theme::COLOR_ACCENT.into()),
+                    text_color: Color::WHITE,
+                    border: Border { radius: 8.0.into(), ..Default::default() },
+                    ..Default::default()
+                })
+        );
+    }
+
+    container(scrollable(fields_col))
+        .width(Length::Fixed(250.0))
+        .style(|_| iced::widget::container::Style {
+            background: Some(Color::from_rgb8(35, 36, 40).into()),
+            border: Border {
+                width: 1.0,
+                color: Color::from_rgb8(50, 52, 56),
+                ..Default::default()
+            },
+            ..Default::default()
+        })
         .into()
 }
 
@@ -883,9 +940,19 @@ pub fn document_view(app: &PdfBullApp) -> Element<'_, crate::message::Message> {
         return container(text("Loading tab...")).center_x(Length::Fill).center_y(Length::Fill).into();
     };
 
-    let content: Element<crate::message::Message> = if app.show_sidebar && !app.is_fullscreen {
-        row![render_sidebar(app), render_pdf_content(app)].into()
-    } else if tab.total_pages == 0 {
+    let mut content_row = row![];
+    
+    if app.show_sidebar && !app.is_fullscreen {
+        content_row = content_row.push(render_sidebar(app));
+    }
+    
+    content_row = content_row.push(render_pdf_content(app));
+    
+    if app.show_forms_sidebar && !app.is_fullscreen {
+        content_row = content_row.push(render_forms_sidebar(app));
+    }
+
+    let content: Element<crate::message::Message> = if tab.total_pages == 0 {
         let empty_content: Element<_> = if tab.view_state.is_loading {
             column![text("⏳").size(50), text("Loading Document...").size(24)]
                 .align_x(Alignment::Center).spacing(20).into()
@@ -894,7 +961,7 @@ pub fn document_view(app: &PdfBullApp) -> Element<'_, crate::message::Message> {
         };
         container(empty_content).width(Length::Fill).height(Length::Fill).center_x(Length::Fill).center_y(Length::Fill).into()
     } else {
-        render_pdf_content(app)
+        content_row.into()
     };
 
     if app.is_fullscreen {

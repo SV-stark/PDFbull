@@ -154,6 +154,13 @@ fn handle_app_message(app: &mut PdfBullApp, message: Message) -> Task<Message> {
             app.show_sidebar = !app.show_sidebar;
             Task::none()
         }
+        Message::ToggleFormsSidebar => {
+            app.show_forms_sidebar = !app.show_forms_sidebar;
+            if app.show_forms_sidebar {
+                return app.update(Message::LoadFormFields);
+            }
+            Task::none()
+        }
         Message::ToggleFullscreen => {
             app.is_fullscreen = !app.is_fullscreen;
             Task::none()
@@ -1239,21 +1246,52 @@ fn handle_export_message(app: &mut PdfBullApp, message: Message) -> Task<Message
         Message::MergeDocuments(paths) => {
             let engine = match &app.engine {
                 Some(e) => e,
-                None => return Task::none(),
+                None => {
+                    let cache_size = app.settings.cache_size as u64;
+                    let max_mem = app.settings.max_cache_memory as u64;
+                    app.engine = Some(crate::engine::spawn_engine_thread(cache_size, max_mem));
+                    app.engine.as_ref().unwrap()
+                }
             };
             let cmd_tx = engine.cmd_tx.clone();
             Task::perform(
                 async move {
+                    use anyhow::Context;
+                    
+                    let mut final_paths = paths;
+                    if final_paths.is_empty() {
+                        let picked = rfd::AsyncFileDialog::new()
+                            .add_filter("PDF", &["pdf"])
+                            .set_title("Select PDFs to Merge")
+                            .pick_files()
+                            .await;
+                        
+                        if let Some(files) = picked {
+                            final_paths = files.into_iter().map(|f| f.path().to_path_buf()).collect();
+                        } else {
+                            return Err(crate::models::PdfError::OpenFailed("Cancelled".into()));
+                        }
+                    }
+
+                    if final_paths.len() < 2 {
+                        return Err(crate::models::PdfError::OpenFailed("Please select at least 2 files to merge".into()));
+                    }
+
                     let out = rfd::AsyncFileDialog::new()
                         .add_filter("PDF", &["pdf"])
                         .set_file_name("merged.pdf")
+                        .set_title("Save Merged PDF")
                         .save_file()
                         .await;
+
                     if let Some(f) = out {
-                        let path_strs: Vec<String> = paths.iter().map(|p| p.to_string_lossy().to_string()).collect();
+                        let path_strs: Vec<String> = final_paths.iter().map(|p| p.to_string_lossy().to_string()).collect();
                         let (tx, rx) = tokio::sync::oneshot::channel();
-                        let _ = cmd_tx.send(PdfCommand::Merge(path_strs, f.path().to_string_lossy().to_string(), tx));
-                        rx.await.unwrap_or(Err(crate::models::PdfError::EngineError("Engine died".into())))
+                        
+                        cmd_tx.send(PdfCommand::Merge(path_strs, f.path().to_string_lossy().to_string(), tx))
+                            .map_err(|_| crate::models::PdfError::EngineError("Failed to communicate with engine".into()))?;
+                        
+                        rx.await.map_err(|_| crate::models::PdfError::EngineError("Engine response channel closed".into()))?
                     } else {
                         Err(crate::models::PdfError::OpenFailed("Cancelled".into()))
                     }
@@ -1265,6 +1303,60 @@ fn handle_export_message(app: &mut PdfBullApp, message: Message) -> Task<Message
             match res {
                 Ok(p) => app.status_message = Some(format!("Merged PDF saved to: {}", p)),
                 Err(e) => app.status_message = Some(format!("Merge failed: {}", e)),
+            }
+            Task::none()
+        }
+        Message::LoadFormFields => {
+            let (path, engine) = match (app.current_tab(), &app.engine) {
+                (Some(t), Some(e)) => (t.path.to_string_lossy().to_string(), e),
+                _ => return Task::none(),
+            };
+            let cmd_tx = engine.cmd_tx.clone();
+            Task::perform(
+                async move {
+                    let (tx, rx) = tokio::sync::oneshot::channel();
+                    cmd_tx.send(PdfCommand::GetFormFields(path, tx)).map_err(|_| crate::models::PdfError::EngineError("Engine died".into()))?;
+                    rx.await.map_err(|_| crate::models::PdfError::EngineError("Engine response channel closed".into()))?
+                },
+                Message::FormFieldsLoaded,
+            )
+        }
+        Message::FormFieldsLoaded(res) => {
+            match res {
+                Ok(fields) => app.form_fields = fields,
+                Err(e) => app.status_message = Some(format!("Failed to load form fields: {}", e)),
+            }
+            Task::none()
+        }
+        Message::FillForm(fields) => {
+            let (path, engine) = match (app.current_tab(), &app.engine) {
+                (Some(t), Some(e)) => (t.path.to_string_lossy().to_string(), e),
+                _ => return Task::none(),
+            };
+            let cmd_tx = engine.cmd_tx.clone();
+            Task::perform(
+                async move {
+                    let out = rfd::AsyncFileDialog::new()
+                        .add_filter("PDF", &["pdf"])
+                        .set_file_name("filled_form.pdf")
+                        .save_file()
+                        .await;
+                    if let Some(f) = out {
+                        let (tx, rx) = tokio::sync::oneshot::channel();
+                        cmd_tx.send(PdfCommand::FillForm(path, fields, f.path().to_string_lossy().to_string(), tx))
+                            .map_err(|_| crate::models::PdfError::EngineError("Engine died".into()))?;
+                        rx.await.map_err(|_| crate::models::PdfError::EngineError("Engine response channel closed".into()))?
+                    } else {
+                        Err(crate::models::PdfError::OpenFailed("Cancelled".into()))
+                    }
+                },
+                Message::FormFilled,
+            )
+        }
+        Message::FormFilled(res) => {
+            match res {
+                Ok(p) => app.status_message = Some(format!("Form saved to: {}", p)),
+                Err(e) => app.status_message = Some(format!("Form filling failed: {}", e)),
             }
             Task::none()
         }
