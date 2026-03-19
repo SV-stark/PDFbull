@@ -1,4 +1,5 @@
 use crate::app::{icons, INTER_BOLD, INTER_REGULAR, LUCIDE};
+use crate::storage;
 use iced::widget::{button, column, container, image, row, scrollable, text, Space};
 use iced::{Alignment, Border, Color, Element, Length, Shadow, Vector};
 
@@ -13,14 +14,13 @@ fn custom_card<'a>(
                 radius: 12.0.into(),
                 width: 1.0,
                 color: Color::from_rgb8(50, 52, 56),
-                ..Default::default()
             },
             shadow: Shadow {
                 color: Color::from_rgba(0.0, 0.0, 0.0, 0.3),
                 offset: Vector::new(0.0, 4.0),
                 blur_radius: 12.0,
             },
-            ..Default::default()
+            text_color: None,
         })
         .into()
 }
@@ -53,15 +53,12 @@ fn quick_action_card<'a>(
                     color: Some(Color::from_rgb8(160, 160, 170))
                 })
                 .align_x(Alignment::Center),
-            Space::new().height(Length::Fixed(12.0)),
-            button(
-                text(action_label)
-                    .size(14)
-                    .font(INTER_BOLD)
-                    .style(|_| iced::widget::text::Style {
-                        color: Some(Color::WHITE)
-                    })
-            )
+            Space::new(0, 12),
+            button(text(action_label).size(14).font(INTER_BOLD).style(|_| {
+                iced::widget::text::Style {
+                    color: Some(Color::WHITE),
+                }
+            }))
             .on_press(on_press)
             .padding([10, 20])
             .style(|_theme, status| {
@@ -119,6 +116,13 @@ pub fn welcome_view(app: &crate::app::PdfBullApp) -> Element<'_, crate::message:
                     text(file.path.clone()).font(INTER_REGULAR),
                     iced::widget::tooltip::Position::Bottom
                 ),
+                Space::new(Length::Fill, 0),
+                text(storage::time_ago(file.last_opened))
+                    .size(11)
+                    .font(INTER_REGULAR)
+                    .style(|_theme| iced::widget::text::Style {
+                        color: Some(Color::from_rgb8(120, 120, 130))
+                    }),
             ]
             .spacing(12)
             .align_y(iced::Alignment::Center);
@@ -154,7 +158,7 @@ pub fn welcome_view(app: &crate::app::PdfBullApp) -> Element<'_, crate::message:
                     .style(|_theme| iced::widget::text::Style {
                         color: Some(Color::WHITE)
                     }),
-                Space::new().width(Length::Fill),
+                Space::new(Length::Fill, 0),
                 button(
                     text("Clear All")
                         .size(12)
@@ -168,7 +172,7 @@ pub fn welcome_view(app: &crate::app::PdfBullApp) -> Element<'_, crate::message:
                 .style(iced::widget::button::text)
             ]
             .align_y(Alignment::Center),
-            Space::new().height(Length::Fixed(12.0)),
+            Space::new(0, 12),
             files,
         ])
     } else {
@@ -202,7 +206,7 @@ pub fn welcome_view(app: &crate::app::PdfBullApp) -> Element<'_, crate::message:
     let open_card = custom_card(column![
         row![
             logo,
-            Space::new().width(Length::Fixed(24.0)),
+            Space::new(24, 0),
             column![
                 text("Welcome to PDFbull")
                     .size(28)
@@ -219,7 +223,7 @@ pub fn welcome_view(app: &crate::app::PdfBullApp) -> Element<'_, crate::message:
             ]
         ]
         .align_y(Alignment::Center),
-        Space::new().height(Length::Fixed(24.0)),
+        Space::new(0, 24),
         actions,
     ]);
 
@@ -241,7 +245,7 @@ pub fn welcome_view(app: &crate::app::PdfBullApp) -> Element<'_, crate::message:
                     .style(|_theme| iced::widget::text::Style {
                         color: Some(Color::from_rgb8(180, 180, 180))
                     }),
-                Space::new().width(Length::Fill),
+                Space::new(Length::Fill, 0),
                 button(
                     row![
                         text(icons::SETTINGS).font(LUCIDE).size(16),
@@ -259,9 +263,9 @@ pub fn welcome_view(app: &crate::app::PdfBullApp) -> Element<'_, crate::message:
             scrollable(
                 column![
                     open_card,
-                    Space::new().height(Length::Fixed(24.0)),
+                    Space::new(0, 24),
                     recent_section,
-                    Space::new().height(Length::Fixed(40.0)),
+                    Space::new(0, 40),
                 ]
                 .width(Length::Fixed(720.0))
                 .align_x(Alignment::Center)

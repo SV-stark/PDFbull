@@ -1,11 +1,10 @@
 use crate::commands::PdfCommand;
-use crate::models::{next_doc_id, DocumentId, PdfResult, PdfError};
 use crate::pdf_engine::{create_render_cache, DocumentStore, SharedRenderCache};
 use pdfium_render::prelude::*;
-use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::sync::mpsc;
 
+#[derive(Debug, Clone)]
 pub struct EngineState {
     pub cmd_tx: mpsc::UnboundedSender<PdfCommand>,
     pub active_workers: Arc<std::sync::atomic::AtomicUsize>,
@@ -20,11 +19,13 @@ pub fn spawn_engine_thread(cache_size: u64, max_memory_mb: u64) -> EngineState {
 
     std::thread::spawn(move || {
         let pdfium = match Pdfium::bind_to_system_library() {
-            Ok(p) => p,
+            Ok(p) => Pdfium::new(p),
             Err(_) => {
-                tracing::error!("Failed to bind to Pdfium system library. Attempting local search...");
+                tracing::error!(
+                    "Failed to bind to Pdfium system library. Attempting local search..."
+                );
                 match Pdfium::bind_to_library(Pdfium::pdfium_platform_library_name_at_path("./")) {
-                    Ok(p) => p,
+                    Ok(p) => Pdfium::new(p),
                     Err(e) => {
                         tracing::error!("CRITICAL: Could not find Pdfium: {}", e);
                         return;
@@ -47,29 +48,55 @@ pub fn spawn_engine_thread(cache_size: u64, max_memory_mb: u64) -> EngineState {
                     let res = store.open_document(&path, doc_id);
                     let _ = tx.send(res);
                 }
-                PdfCommand::Render(path, page_num, options, tx) => {
-                    let res = store.render_page(&path, page_num, options);
+                PdfCommand::Render(doc_id, page_num, options, tx) => {
+                    let res = store.render_page(doc_id, page_num, options);
                     let _ = tx.send(res);
                 }
-                PdfCommand::Close(_doc_id) => {}
-                PdfCommand::ExtractText(path, page_num, tx) => {
-                    let res = store.extract_text(&path, page_num);
+                PdfCommand::RenderThumbnail(doc_id, page_num, scale, tx) => {
+                    let options = crate::pdf_engine::RenderOptions {
+                        scale,
+                        rotation: 0,
+                        filter: crate::pdf_engine::RenderFilter::None,
+                        auto_crop: false,
+                        quality: crate::pdf_engine::RenderQuality::Low,
+                    };
+                    let res = store.render_page(doc_id, page_num, options);
                     let _ = tx.send(res);
                 }
-                PdfCommand::Search(path, query, tx) => {
-                    let res = store.search(&path, &query);
+                PdfCommand::Close(doc_id) => {
+                    store.close_document(doc_id);
+                }
+                PdfCommand::ExtractText(doc_id, page_num, tx) => {
+                    let res = store.extract_text(doc_id, page_num);
                     let _ = tx.send(res);
                 }
-                PdfCommand::SaveAnnotations(path, annotations, tx) => {
-                    let res = store.save_annotations(&path, &annotations);
+                PdfCommand::Search(doc_id, query, tx) => {
+                    let res = store.search(doc_id, &query);
                     let _ = tx.send(res);
                 }
-                PdfCommand::ExportImage(path, page_num, scale, out, tx) => {
-                    let res = store.export_page_as_image(&path, page_num, scale, &out);
+                PdfCommand::SaveAnnotations(doc_id, annotations, tx) => {
+                    let res = store.save_annotations(doc_id, &annotations);
                     let _ = tx.send(res);
                 }
-                PdfCommand::ExportPdf(_doc_id, path, annotations, tx) => {
-                    let res = store.save_annotations(&path, &annotations);
+                PdfCommand::ExportImage(doc_id, page_num, scale, out, tx) => {
+                    let res = store.export_page_as_image(doc_id, page_num, scale, &out);
+                    let _ = tx.send(res);
+                }
+                PdfCommand::ExportImages(doc_id, pages, scale, out_dir, tx) => {
+                    let mut paths = Vec::new();
+                    for page_num in pages {
+                        let out_path = format!("{}/page_{}.png", out_dir, page_num);
+                        if store
+                            .export_page_as_image(doc_id, page_num, scale, &out_path)
+                            .is_ok()
+                        {
+                            paths.push(out_path);
+                        }
+                    }
+                    let _ = tx.send(Ok(paths));
+                }
+                PdfCommand::ExportPdf(doc_id, _path, annotations, tx) => {
+                    let res = store.save_annotations(doc_id, &annotations);
                     let _ = tx.send(res);
                 }
                 PdfCommand::Merge(paths, out, tx) => {
@@ -82,6 +109,15 @@ pub fn spawn_engine_thread(cache_size: u64, max_memory_mb: u64) -> EngineState {
                 }
                 PdfCommand::FillForm(path, fields, out, tx) => {
                     let res = crate::pdf_engine::DocumentStore::fill_form(&path, fields, out);
+                    let _ = tx.send(res);
+                }
+                PdfCommand::PrintPdf(path, tx) => {
+                    let res = crate::pdf_engine::DocumentStore::print_document(&path);
+                    let _ = tx.send(res);
+                }
+                PdfCommand::AddWatermark(input, text, output, tx) => {
+                    let res =
+                        crate::pdf_engine::DocumentStore::add_watermark(&input, &text, &output);
                     let _ = tx.send(res);
                 }
                 _ => {}

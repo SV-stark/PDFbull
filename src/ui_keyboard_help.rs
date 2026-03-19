@@ -1,5 +1,5 @@
 use crate::app::{INTER_BOLD, INTER_REGULAR};
-use iced::widget::{button, column, container, scrollable, text, Space};
+use iced::widget::{button, column, container, row, scrollable, text, Space};
 use iced::{Alignment, Color, Element, Length, Shadow, Vector};
 
 pub fn keyboard_help_view(_app: &crate::app::PdfBullApp) -> Element<'_, crate::message::Message> {
@@ -10,7 +10,7 @@ pub fn keyboard_help_view(_app: &crate::app::PdfBullApp) -> Element<'_, crate::m
             .style(|_| iced::widget::text::Style {
                 color: Some(Color::WHITE)
             }),
-        Space::new().height(Length::Fixed(24.0)),
+        Space::new(0, 24),
         shortcut_section(
             "Navigation",
             vec![
@@ -33,13 +33,15 @@ pub fn keyboard_help_view(_app: &crate::app::PdfBullApp) -> Element<'_, crate::m
             "Document",
             vec![
                 ("Ctrl + O", "Open File"),
+                ("Ctrl + P", "Print"),
                 ("Ctrl + S", "Save/Export"),
                 ("Ctrl + D", "Add Bookmark"),
                 ("Ctrl + F", "Search"),
                 ("Ctrl + B", "Toggle Sidebar"),
+                ("Ctrl + W", "Close Tab"),
             ]
         ),
-        Space::new().height(Length::Fixed(20.0)),
+        Space::new(0, 20),
         text("Press ? or F1 to close this help")
             .size(13)
             .font(INTER_REGULAR)
@@ -54,7 +56,7 @@ pub fn keyboard_help_view(_app: &crate::app::PdfBullApp) -> Element<'_, crate::m
     container(
         container(column![
             row![
-                Space::new().width(Length::Fill),
+                Space::new(Length::Fill, 0),
                 button(text("Close").font(INTER_BOLD).size(14))
                     .on_press(crate::message::Message::ToggleKeyboardHelp)
                     .style(iced::widget::button::text)
@@ -68,15 +70,14 @@ pub fn keyboard_help_view(_app: &crate::app::PdfBullApp) -> Element<'_, crate::m
                 radius: 12.0.into(),
                 width: 1.0,
                 color: Color::from_rgb8(60, 60, 65),
-                ..Default::default()
             },
             shadow: Shadow {
                 color: Color::from_rgba(0.0, 0.0, 0.0, 0.4),
                 offset: Vector::new(0.0, 10.0),
                 blur_radius: 30.0,
             },
-            ..Default::default()
-        }),
+            text_color: None,
+        })
     )
     .width(Length::Fill)
     .height(Length::Fill)
@@ -100,7 +101,7 @@ fn shortcut_section<'a>(
             .style(|_| iced::widget::text::Style {
                 color: Some(Color::from_rgb8(150, 220, 220))
             }),
-        Space::new().height(Length::Fixed(10.0)),
+        Space::new(0, 10),
     ]
     .spacing(8);
 
@@ -129,7 +130,5 @@ fn shortcut_section<'a>(
         );
     }
 
-    col.push(Space::new().height(Length::Fixed(20.0))).into()
+    col.push(Space::new(0, 20)).into()
 }
-
-use iced::widget::row;

@@ -5,7 +5,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use thiserror::Error;
 
-#[derive(Error, Debug, Clone)]
+#[derive(Error, Debug, Clone, PartialEq)]
 pub enum PdfError {
     #[error("Failed to open document: {0}")]
     OpenFailed(String),
@@ -21,6 +21,31 @@ pub enum PdfError {
     SearchError(String),
     #[error("Invalid path")]
     InvalidPath,
+}
+
+impl From<&str> for PdfError {
+    fn from(s: &str) -> Self {
+        PdfError::EngineError(s.to_string())
+    }
+}
+
+impl From<String> for PdfError {
+    fn from(s: String) -> Self {
+        PdfError::EngineError(s)
+    }
+}
+
+impl PartialEq<&str> for PdfError {
+    fn eq(&self, other: &&str) -> bool {
+        match self {
+            PdfError::EngineError(s) => s == *other,
+            PdfError::OpenFailed(s) => s == *other,
+            PdfError::RenderFailed(s) => s == *other,
+            PdfError::IoError(s) => s == *other,
+            PdfError::SearchError(s) => s == *other,
+            _ => false,
+        }
+    }
 }
 
 pub type PdfResult<T> = Result<T, PdfError>;
@@ -330,7 +355,8 @@ impl DocumentTab {
 
     pub fn get_visible_thumbnails(&self) -> std::collections::HashSet<usize> {
         let mut visible = std::collections::HashSet::new();
-        let start_idx = (self.view_state.sidebar_viewport_y / crate::ui::theme::THUMBNAIL_HEIGHT).max(0.0) as usize;
+        let start_idx = (self.view_state.sidebar_viewport_y / crate::ui::theme::THUMBNAIL_HEIGHT)
+            .max(0.0) as usize;
         let end_idx = (start_idx + 30).min(self.total_pages);
         for i in start_idx..end_idx {
             visible.insert(i);

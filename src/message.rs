@@ -1,6 +1,6 @@
 use crate::engine::EngineState;
 use crate::models::{
-    AppSettings, DocumentId, OpenResult, RecentFile, RenderResult, SearchResultItem, PdfResult,
+    AppSettings, DocumentId, OpenResult, PdfResult, RecentFile, RenderResult, SearchResultItem,
 };
 use crate::pdf_engine::RenderFilter;
 use std::path::PathBuf;
@@ -21,15 +21,8 @@ pub enum Message {
     RemoveBookmark(usize),
     JumpToBookmark(usize),
     SetAnnotationMode(Option<crate::models::PendingAnnotationKind>),
-    AnnotationDragStart {
-        page: usize,
-        x: f32,
-        y: f32,
-    },
-    AnnotationDragUpdate {
-        x: f32,
-        y: f32,
-    },
+    AnnotationDragStart { page: usize, x: f32, y: f32 },
+    AnnotationDragUpdate { x: f32, y: f32 },
     AnnotationDragEnd,
     DeleteAnnotation(usize),
     Undo,
@@ -72,11 +65,16 @@ pub enum Message {
     DocumentsMerged(PdfResult<String>),
     LoadFormFields,
     FormFieldsLoaded(PdfResult<Vec<crate::models::FormField>>),
+    FormFieldChanged(String, String),
     FillForm(Vec<crate::models::FormField>),
     FormFilled(PdfResult<String>),
     ExportImage,
     ImageExported(PdfResult<String>),
     ExportImages,
+    Print,
+    PrintDone(PdfResult<()>),
+    AddWatermark(String),
+    WatermarkDone(PdfResult<String>),
     EngineInitialized(EngineState),
     Error(String),
     ClearStatus,

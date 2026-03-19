@@ -54,11 +54,10 @@ pub fn main() -> iced::Result {
     let icon = iced::window::icon::from_file_data(include_bytes!("../PDFbull.png"), None).ok();
 
     iced::application(
-        app::PdfBullApp::default,
+        "PDFbull",
         app::PdfBullApp::update,
         app::PdfBullApp::view,
     )
-    .title("PDFbull")
     .font(include_bytes!("../src/assets/fonts/Inter-Regular.ttf"))
     .font(include_bytes!("../src/assets/fonts/Inter-Bold.ttf"))
     .font(include_bytes!("../src/assets/fonts/lucide.ttf"))

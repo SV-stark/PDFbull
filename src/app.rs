@@ -29,6 +29,7 @@ pub mod icons {
     pub const EXPORT: &str = "\u{e0b9}";
     pub const MERGE: &str = "\u{e0dc}";
     pub const FORMS: &str = "\u{e2a8}";
+    pub const PRINT: &str = "\u{e13f}";
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -72,6 +73,8 @@ impl Default for PdfBullApp {
             show_sidebar: false,
             show_keyboard_help: false,
             is_fullscreen: false,
+            show_forms_sidebar: false,
+            form_fields: Vec::new(),
             search_query: String::new(),
             search_pending: None,
             page_input: "1".to_string(),
@@ -182,7 +185,7 @@ impl PdfBullApp {
                     let (resp_tx, resp_rx) = tokio::sync::oneshot::channel();
                     let _ = tx.send(crate::commands::PdfCommand::Render(
                         doc_id_cloned,
-                        page_idx as i32,
+                        page_idx,
                         options,
                         resp_tx,
                     ));
@@ -216,7 +219,7 @@ impl PdfBullApp {
                         let (resp_tx, resp_rx) = tokio::sync::oneshot::channel();
                         let _ = tx.send(crate::commands::PdfCommand::RenderThumbnail(
                             doc_id_cloned,
-                            page_idx as i32,
+                            page_idx,
                             thumb_zoom,
                             resp_tx,
                         ));

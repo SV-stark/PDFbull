@@ -1,7 +1,47 @@
 use crate::models::{AppSettings, AppTheme, RecentFile, SessionData};
+use chrono::{Local, TimeZone, Utc};
 use std::fs;
 use std::io::{self, Write};
 use std::path::PathBuf;
+
+pub fn time_ago(unix_secs: u64) -> String {
+    let dt = Utc.timestamp_opt(unix_secs as i64, 0).single();
+    match dt {
+        Some(utc) => {
+            let now = Local::now();
+            let past = utc.with_timezone(&Local);
+            let diff = now.signed_duration_since(past);
+            let secs = diff.num_seconds();
+            if secs < 60 {
+                "just now".into()
+            } else if secs < 3600 {
+                let m = secs / 60;
+                if m == 1 {
+                    "1 min ago".into()
+                } else {
+                    format!("{} mins ago", m)
+                }
+            } else if secs < 86400 {
+                let h = secs / 3600;
+                if h == 1 {
+                    "1 hour ago".into()
+                } else {
+                    format!("{} hours ago", h)
+                }
+            } else if secs < 172800 {
+                "yesterday".into()
+            } else {
+                let d = secs / 86400;
+                if d < 30 {
+                    format!("{} days ago", d)
+                } else {
+                    past.format("%b %d, %Y").to_string()
+                }
+            }
+        }
+        None => "unknown".into(),
+    }
+}
 
 pub fn get_config_dir() -> PathBuf {
     dirs::config_dir()
@@ -104,10 +144,7 @@ pub fn add_recent_file(recent_files: &mut Vec<RecentFile>, path: &std::path::Pat
     let new_file = RecentFile {
         path: path.to_string_lossy().to_string(),
         name,
-        last_opened: std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map(|d| d.as_secs())
-            .unwrap_or(0),
+        last_opened: Utc::now().timestamp() as u64,
     };
 
     recent_files.insert(0, new_file);
