@@ -8,28 +8,24 @@ fn custom_card<'a>(
     header: impl Into<Element<'a, crate::message::Message>>,
     body: impl Into<Element<'a, crate::message::Message>>,
 ) -> Element<'a, crate::message::Message> {
-    container(column![
-        header.into(),
-        Space::new(0, 15),
-        body.into()
-    ])
-    .padding(20)
-    .width(Length::Fill)
-    .style(|_theme| iced::widget::container::Style {
-        background: Some(Color::from_rgb8(43, 45, 49).into()),
-        border: Border {
-            radius: 12.0.into(),
-            width: 1.0,
-            color: Color::from_rgb8(50, 52, 56),
-        },
-        shadow: Shadow {
-            color: Color::from_rgba(0.0, 0.0, 0.0, 0.2),
-            offset: Vector::new(0.0, 4.0),
-            blur_radius: 12.0,
-        },
-        text_color: None,
-    })
-    .into()
+    container(column![header.into(), Space::new(0, 15), body.into()])
+        .padding(20)
+        .width(Length::Fill)
+        .style(|_theme| iced::widget::container::Style {
+            background: Some(Color::from_rgb8(43, 45, 49).into()),
+            border: Border {
+                radius: 12.0.into(),
+                width: 1.0,
+                color: Color::from_rgb8(50, 52, 56),
+            },
+            shadow: Shadow {
+                color: Color::from_rgba(0.0, 0.0, 0.0, 0.2),
+                offset: Vector::new(0.0, 4.0),
+                blur_radius: 12.0,
+            },
+            text_color: None,
+        })
+        .into()
 }
 
 fn setting_btn<'a>(

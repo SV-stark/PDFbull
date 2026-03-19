@@ -53,23 +53,19 @@ pub fn main() -> iced::Result {
 
     let icon = iced::window::icon::from_file_data(include_bytes!("../PDFbull.png"), None).ok();
 
-    iced::application(
-        "PDFbull",
-        app::PdfBullApp::update,
-        app::PdfBullApp::view,
-    )
-    .font(include_bytes!("../src/assets/fonts/Inter-Regular.ttf"))
-    .font(include_bytes!("../src/assets/fonts/Inter-Bold.ttf"))
-    .font(include_bytes!("../src/assets/fonts/lucide.ttf"))
-    .theme(|app: &app::PdfBullApp| match app.settings.theme {
-        crate::models::AppTheme::Light => iced::Theme::Light,
-        _ => iced::Theme::Dark,
-    })
-    .subscription(app::PdfBullApp::subscription)
-    .window(iced::window::Settings {
-        icon,
-        exit_on_close_request: false,
-        ..Default::default()
-    })
-    .run()
+    iced::application("PDFbull", app::PdfBullApp::update, app::PdfBullApp::view)
+        .font(include_bytes!("../src/assets/fonts/Inter-Regular.ttf"))
+        .font(include_bytes!("../src/assets/fonts/Inter-Bold.ttf"))
+        .font(include_bytes!("../src/assets/fonts/lucide.ttf"))
+        .theme(|app: &app::PdfBullApp| match app.settings.theme {
+            crate::models::AppTheme::Light => iced::Theme::Light,
+            _ => iced::Theme::Dark,
+        })
+        .subscription(app::PdfBullApp::subscription)
+        .window(iced::window::Settings {
+            icon,
+            exit_on_close_request: false,
+            ..Default::default()
+        })
+        .run()
 }

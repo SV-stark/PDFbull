@@ -26,7 +26,11 @@ pub enum PdfCommand {
         String,
         oneshot::Sender<PdfResult<Vec<SearchResultItem>>>,
     ),
-    SaveAnnotations(DocumentId, Vec<Annotation>, oneshot::Sender<PdfResult<String>>),
+    SaveAnnotations(
+        DocumentId,
+        Vec<Annotation>,
+        oneshot::Sender<PdfResult<String>>,
+    ),
     LoadAnnotations(
         DocumentId,
         String,

@@ -77,7 +77,7 @@ pub fn keyboard_help_view(_app: &crate::app::PdfBullApp) -> Element<'_, crate::m
                 blur_radius: 30.0,
             },
             text_color: None,
-        })
+        }),
     )
     .width(Length::Fill)
     .height(Length::Fill)

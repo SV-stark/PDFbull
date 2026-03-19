@@ -1,5 +1,6 @@
 use crate::models::{
-    Annotation, AnnotationStyle, DocumentId, FormField, Hyperlink, PdfError, PdfResult, SearchResultItem,
+    Annotation, AnnotationStyle, DocumentId, FormField, Hyperlink, PdfError, PdfResult,
+    SearchResultItem,
 };
 use lopdf::{Document, Object, ObjectId};
 use pdfium_render::prelude::*;
@@ -316,7 +317,10 @@ impl<'a> DocumentStore<'a> {
         doc_id: DocumentId,
         annotations: &[Annotation],
     ) -> PdfResult<String> {
-        let pdf_path = self.paths.get(&doc_id).ok_or_else(|| PdfError::EngineError("Document path not found".to_string()))?;
+        let pdf_path = self
+            .paths
+            .get(&doc_id)
+            .ok_or_else(|| PdfError::EngineError("Document path not found".to_string()))?;
         let state = self
             .documents
             .get_mut(&doc_id)
@@ -641,11 +645,13 @@ impl<'a> DocumentStore<'a> {
         _updates: Vec<FormField>,
         _output_path: String,
     ) -> PdfResult<String> {
-        Err(PdfError::EngineError("Form filling not yet implemented for this version".into()))
+        Err(PdfError::EngineError(
+            "Form filling not yet implemented for this version".into(),
+        ))
     }
 
     pub fn print_document(path: &str) -> PdfResult<()> {
-        use winprint::printer::{PdfiumPrinter, PrinterDevice, FilePrinter};
+        use winprint::printer::{FilePrinter, PdfiumPrinter, PrinterDevice};
 
         let device = PrinterDevice::all()
             .map_err(|e| PdfError::IoError(format!("Failed to list printers: {}", e)))?

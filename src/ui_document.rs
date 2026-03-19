@@ -1,8 +1,6 @@
 use crate::app::PdfBullApp;
 use crate::app::{icons, INTER_BOLD, INTER_REGULAR, LUCIDE};
-use crate::models::{
-    AnnotationStyle, DocumentTab, PendingAnnotationKind,
-};
+use crate::models::{AnnotationStyle, DocumentTab, PendingAnnotationKind};
 use crate::pdf_engine::RenderFilter;
 use crate::ui::theme::{self, hex_to_rgb};
 use iced::widget::{

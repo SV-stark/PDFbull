@@ -521,15 +521,14 @@ fn handle_render_message(app: &mut PdfBullApp, message: Message) -> Task<Message
                         quality,
                     };
                     if let Err(e) = cmd_tx.send(crate::commands::PdfCommand::Render(
-                        doc_id,
-                        page_idx,
-                        options,
-                        resp_tx,
+                        doc_id, page_idx, options, resp_tx,
                     )) {
                         tracing::error!("Failed to send Render command: {}", e);
                         return Err(crate::models::PdfError::from("Engine died"));
                     }
-                    resp_rx.await.unwrap_or(Err(crate::models::PdfError::from("Channel closed")))
+                    resp_rx
+                        .await
+                        .unwrap_or(Err(crate::models::PdfError::from("Channel closed")))
                 },
                 move |res| Message::PageRendered(page_idx, zoom, res),
             )
@@ -789,8 +788,8 @@ fn handle_tab_message(app: &mut PdfBullApp, message: Message) -> Task<Message> {
                             let path_s = path.to_string_lossy().to_string();
                             let (resp_tx, resp_rx) = tokio::sync::oneshot::channel();
                             let doc_id = crate::models::next_doc_id();
-                            if let Err(e) =
-                                cmd_tx.send(crate::commands::PdfCommand::Open(path_s, doc_id, resp_tx))
+                            if let Err(e) = cmd_tx
+                                .send(crate::commands::PdfCommand::Open(path_s, doc_id, resp_tx))
                             {
                                 tracing::error!("Failed to send Open command: {}", e);
                                 return None;
@@ -920,7 +919,9 @@ fn handle_tab_message(app: &mut PdfBullApp, message: Message) -> Task<Message> {
                             tracing::error!("Failed to send Open command: {}", e);
                             return Err(crate::models::PdfError::from("Engine died"));
                         }
-                        resp_rx.await.unwrap_or(Err(crate::models::PdfError::from("Engine died")))
+                        resp_rx
+                            .await
+                            .unwrap_or(Err(crate::models::PdfError::from("Engine died")))
                     },
                     Message::DocumentOpened,
                 );
@@ -1103,7 +1104,10 @@ fn handle_export_message(app: &mut PdfBullApp, message: Message) -> Task<Message
                             match resp_rx.await {
                                 Ok(Ok(text)) => {
                                     if let Err(e) = std::fs::write(&path, &text) {
-                                        Err(crate::models::PdfError::from(format!("Failed to write file: {}", e)))
+                                        Err(crate::models::PdfError::from(format!(
+                                            "Failed to write file: {}",
+                                            e
+                                        )))
                                     } else {
                                         Ok(path.to_string_lossy().to_string())
                                     }
