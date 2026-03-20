@@ -81,4 +81,6 @@ pub enum Message {
     IcedEvent(iced::Event),
     LinkClicked(crate::models::Hyperlink),
     ForceQuit,
+    DocumentModifiedExternally(PathBuf),
+    ReloadDocument(PathBuf),
 }

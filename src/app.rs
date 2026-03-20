@@ -280,6 +280,41 @@ impl PdfBullApp {
     }
 
     pub fn subscription(&self) -> iced::Subscription<Message> {
-        iced::event::listen_with(|event, _status, _id| Some(Message::IcedEvent(event)))
+        let events = iced::event::listen_with(|event, _status, _id| Some(Message::IcedEvent(event)));
+
+        let paths: Vec<std::path::PathBuf> = self.tabs.iter().map(|t| t.path.clone()).collect();
+        if paths.is_empty() {
+            return events;
+        }
+
+        let watch_sub = iced::subscription::run_with_id(
+            paths.clone(),
+            iced::stream::channel(10, move |mut output| async move {
+                use notify_debouncer_mini::{new_debouncer, notify::RecursiveMode};
+                let (tx, mut rx) = tokio::sync::mpsc::channel(10);
+                
+                let mut debouncer = match new_debouncer(std::time::Duration::from_secs(1), move |res: Result<Vec<notify_debouncer_mini::DebouncedEvent>, _>| {
+                    if let Ok(events) = res {
+                        for event in events {
+                            let _ = tx.blocking_send(event.path);
+                        }
+                    }
+                }) {
+                    Ok(d) => d,
+                    Err(_) => return,
+                };
+
+                let watcher = debouncer.watcher();
+                for path in &paths {
+                    let _ = watcher.watch(path, RecursiveMode::NonRecursive);
+                }
+
+                while let Some(path) = rx.recv().await {
+                    let _ = output.send(Message::DocumentModifiedExternally(path)).await;
+                }
+            })
+        );
+
+        iced::Subscription::batch(vec![events, watch_sub])
     }
 }

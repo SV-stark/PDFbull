@@ -16,22 +16,21 @@ rfd = "0.14"
 zune-image = "0.4"
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
-dirs = "5"
+directories = "5"
 rayon = "1.10"
 dark-light = "1.1"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 webbrowser = "1.2.0"
 thiserror = "1.0"
-anyhow = "1.0"
 lopdf = "0.34"
-pdf_form = "0.1"
 winprint = { version = "0.2.0", features = ["pdfium"] }
-pdf-writer = "0.14.0"
 oxipng = { version = "10.1.0", default-features = false, features = ["parallel"] }
 chrono = { version = "0.4.44", features = ["serde", "clock"] }
 quick_cache = "0.6.20"
-zune-core = "0.4"
+human-panic = "2.0"
+notify = "6.1"
+notify-debouncer-mini = "0.4"
 
 [build-dependencies]
 winresource = "0.1"

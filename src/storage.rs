@@ -44,9 +44,26 @@ pub fn time_ago(unix_secs: u64) -> String {
 }
 
 pub fn get_config_dir() -> PathBuf {
-    dirs::config_dir()
-        .unwrap_or_else(|| PathBuf::from("."))
-        .join("pdfbull")
+    let new_dir = directories::ProjectDirs::from("", "SV-stark", "PDFbull")
+        .map(|p| p.config_dir().to_path_buf())
+        .unwrap_or_else(|| PathBuf::from("."));
+
+    let old_dir = directories::BaseDirs::new()
+        .map(|b| b.config_dir().join("pdfbull"))
+        .unwrap_or_else(|| PathBuf::from(".").join("pdfbull"));
+
+    if old_dir.exists() && !new_dir.exists() {
+        if let Err(e) = fs::create_dir_all(&new_dir.parent().unwrap_or(&new_dir)) {
+            tracing::warn!("Failed to create parent dir for migration: {}", e);
+        }
+        if let Err(e) = fs::rename(&old_dir, &new_dir) {
+            tracing::warn!("Failed to migrate old config from {:?} to {:?}: {}", old_dir, new_dir, e);
+        } else {
+            tracing::info!("Migrated config from {:?} to {:?}", old_dir, new_dir);
+        }
+    }
+
+    new_dir
 }
 
 fn atomic_write(path: &PathBuf, data: &str) -> io::Result<()> {

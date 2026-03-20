@@ -95,7 +95,9 @@ pub fn handle_message(app: &mut PdfBullApp, message: Message) -> Task<Message> {
         | Message::OpenFile(_)
         | Message::OpenRecentFile(_)
         | Message::CloseTab(_)
-        | Message::SwitchTab(_) => handle_tab_message(app, message),
+        | Message::SwitchTab(_)
+        | Message::DocumentModifiedExternally(_)
+        | Message::ReloadDocument(_) => handle_tab_message(app, message),
         Message::NextPage
         | Message::PrevPage
         | Message::ZoomIn
@@ -961,6 +963,59 @@ fn handle_tab_message(app: &mut PdfBullApp, message: Message) -> Task<Message> {
                 if safe_idx != app.active_tab {
                     app.active_tab = safe_idx;
                     app.save_session();
+                }
+            }
+            Task::none()
+        }
+        Message::DocumentModifiedExternally(path) => {
+            if app.tabs.iter().any(|t| t.path == path) {
+                let path_clone = path.clone();
+                let file_name = path.file_name().unwrap_or_default().to_string_lossy().to_string();
+                return Task::perform(
+                    async move {
+                        let answer = rfd::AsyncMessageDialog::new()
+                            .set_level(rfd::MessageLevel::Info)
+                            .set_title("File Modified")
+                            .set_description(&format!("The file '{}' has been modified by another program. Would you like to reload it?", file_name))
+                            .set_buttons(rfd::MessageButtons::YesNo)
+                            .show()
+                            .await;
+                        
+                        if answer == rfd::MessageDialogResult::Yes {
+                            Some(Message::ReloadDocument(path_clone))
+                        } else {
+                            None
+                        }
+                    },
+                    |m| m.unwrap_or(Message::ClearStatus)
+                );
+            }
+            Task::none()
+        }
+        Message::ReloadDocument(path) => {
+            if let Some(idx) = app.tabs.iter().position(|t| t.path == path) {
+                let doc_id = app.tabs[idx].id;
+                if let Some(engine) = &app.engine {
+                    let cmd_tx = engine.cmd_tx.clone();
+                    let _ = cmd_tx.send(crate::commands::PdfCommand::Close(doc_id));
+                    
+                    let new_tab = DocumentTab::new(path.clone());
+                    let new_doc_id = new_tab.id;
+                    app.tabs[idx] = new_tab;
+                    app.active_tab = idx;
+                    
+                    let path_s = path.to_string_lossy().to_string();
+                    return Task::perform(
+                        async move {
+                            let (resp_tx, resp_rx) = tokio::sync::oneshot::channel();
+                            if let Err(e) = cmd_tx.send(crate::commands::PdfCommand::Open(path_s, new_doc_id, resp_tx)) {
+                                tracing::error!("Failed to send Open command: {}", e);
+                                return Err(crate::models::PdfError::from("Engine died"));
+                            }
+                            resp_rx.await.unwrap_or(Err(crate::models::PdfError::from("Engine died")))
+                        },
+                        Message::DocumentOpened
+                    );
                 }
             }
             Task::none()
