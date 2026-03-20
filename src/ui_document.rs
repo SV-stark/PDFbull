@@ -204,6 +204,30 @@ fn render_toolbar(app: &PdfBullApp) -> Element<'_, crate::message::Message> {
         ]
         .spacing(8)
         .align_y(Alignment::Center),
+        row![
+            button(
+                row![
+                    text(icons::COPY).size(12).font(LUCIDE),
+                    text("Text").size(11).font(INTER_REGULAR),
+                ]
+                .spacing(4)
+                .align_y(Alignment::Center)
+            )
+            .on_press(crate::message::Message::ExtractTextToClipboard)
+            .style(iced::widget::button::text),
+            button(
+                row![
+                    text(icons::COPY).size(12).font(LUCIDE),
+                    text("Image").size(11).font(INTER_REGULAR),
+                ]
+                .spacing(4)
+                .align_y(Alignment::Center)
+            )
+            .on_press(crate::message::Message::CopyImageToClipboard)
+            .style(iced::widget::button::text),
+        ]
+        .spacing(8)
+        .align_y(Alignment::Center),
         button(
             row![
                 text(icons::EXPORT).size(12).font(LUCIDE),

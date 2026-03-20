@@ -1179,6 +1179,109 @@ fn handle_export_message(app: &mut PdfBullApp, message: Message) -> Task<Message
                 Message::TextExtracted,
             )
         }
+        Message::ExtractTextToClipboard => {
+            let tab = match app.current_tab() {
+                Some(t) => t,
+                None => return Task::none(),
+            };
+
+            let page = tab.current_page as i32;
+            let doc_id = tab.id;
+
+            let engine = match &app.engine {
+                Some(e) => e,
+                None => return Task::none(),
+            };
+
+            let cmd_tx = engine.cmd_tx.clone();
+            Task::perform(
+                async move {
+                    let (resp_tx, resp_rx) = tokio::sync::oneshot::channel();
+                    if let Err(e) =
+                        cmd_tx.send(PdfCommand::ExtractText(doc_id, page, resp_tx))
+                    {
+                        tracing::error!("Failed to send ExtractText command: {}", e);
+                        return Err(crate::models::PdfError::from("Engine died"));
+                    }
+                    match resp_rx.await {
+                        Ok(Ok(text)) => Ok(text),
+                        Ok(Err(e)) => Err(e),
+                        Err(_) => Err(crate::models::PdfError::from("Engine died")),
+                    }
+                },
+                |res| match res {
+                    Ok(text) => Message::CopyToClipboard(text),
+                    Err(e) => Message::Error(format!("Extraction failed: {}", e)),
+                }
+            )
+        }
+        Message::CopyToClipboard(text) => {
+            let mut clipboard = match arboard::Clipboard::new() {
+                Ok(c) => c,
+                Err(e) => return app.update(Message::Error(format!("Clipboard error: {}", e))),
+            };
+            if let Err(e) = clipboard.set_text(text) {
+                return app.update(Message::Error(format!("Failed to copy: {}", e)));
+            }
+            app.status_message = Some("Copied to clipboard".into());
+            Task::none()
+        }
+        Message::CopyImageToClipboard => {
+            let tab = match app.current_tab() {
+                Some(t) => t,
+                None => return Task::none(),
+            };
+
+            let page = tab.current_page;
+            let doc_id = tab.id;
+            let zoom = tab.zoom;
+            let rotation = tab.rotation;
+            let filter = tab.render_filter;
+            let auto_crop = tab.auto_crop;
+            let quality = app.settings.render_quality;
+
+            let engine = match &app.engine {
+                Some(e) => e,
+                None => return Task::none(),
+            };
+
+            let cmd_tx = engine.cmd_tx.clone();
+            Task::perform(
+                async move {
+                    let (resp_tx, resp_rx) = tokio::sync::oneshot::channel();
+                    let options = crate::pdf_engine::RenderOptions {
+                        scale: zoom,
+                        rotation,
+                        filter,
+                        auto_crop,
+                        quality,
+                    };
+                    if let Err(e) = cmd_tx.send(crate::commands::PdfCommand::Render(
+                        doc_id, page, options, resp_tx,
+                    )) {
+                        return Err(crate::models::PdfError::from("Engine died"));
+                    }
+                    match resp_rx.await {
+                        Ok(Ok(res)) => {
+                            let mut clipboard = arboard::Clipboard::new().map_err(|e| crate::models::PdfError::from(e.to_string()))?;
+                            let image_data = arboard::ImageData {
+                                width: res.width as usize,
+                                height: res.height as usize,
+                                bytes: std::borrow::Cow::Borrowed(&res.data),
+                            };
+                            clipboard.set_image(image_data).map_err(|e| crate::models::PdfError::from(e.to_string()))?;
+                            Ok(())
+                        }
+                        Ok(Err(e)) => Err(e),
+                        Err(_) => Err(crate::models::PdfError::from("Engine died")),
+                    }
+                },
+                |res| match res {
+                    Ok(_) => Message::ClearStatus, // We can set a message, but ClearStatus is safe
+                    Err(e) => Message::Error(format!("Copy image failed: {}", e)),
+                }
+            )
+        }
         Message::TextExtracted(result) => {
             match result {
                 Ok(path) => app.status_message = Some(format!("Text extracted to: {}", path)),

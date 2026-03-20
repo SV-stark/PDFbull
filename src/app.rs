@@ -27,6 +27,7 @@ pub mod icons {
     pub const CLOSE: &str = "\u{e1b2}";
     pub const PLUS: &str = "\u{e13d}";
     pub const EXPORT: &str = "\u{e0b9}";
+    pub const COPY: &str = "\u{e03f}";
     pub const MERGE: &str = "\u{e0dc}";
     pub const FORMS: &str = "\u{e2a8}";
     pub const PRINT: &str = "\u{e13f}";
