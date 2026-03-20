@@ -22,7 +22,7 @@ rayon = "1.10"
 dark-light = "1.1"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
-webbrowser = "1.2.0"
+open = "5"
 thiserror = "1.0"
 arboard = "3"
 lopdf = "0.34"
@@ -30,7 +30,7 @@ pdf-writer = "0.12"
 font-kit = "0.14"
 winprint = { version = "0.2.0", features = ["pdfium"] }
 oxipng = { version = "10.1.0", default-features = false, features = ["parallel"] }
-chrono = { version = "0.4.44", features = ["serde", "clock"] }
+time = { version = "0.3", features = ["serde", "formatting", "macros"] }
 quick_cache = "0.6.20"
 mimalloc = "0.1"
 bytes = "1.5"

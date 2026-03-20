@@ -1,45 +1,44 @@
 use crate::models::{AppSettings, AppTheme, RecentFile, SessionData};
-use chrono::{Local, TimeZone, Utc};
 use std::fs;
 use std::io::{self, Write};
 use std::path::PathBuf;
+use time::{Duration, OffsetDateTime};
 
 pub fn time_ago(unix_secs: u64) -> String {
-    let dt = Utc.timestamp_opt(unix_secs as i64, 0).single();
-    match dt {
-        Some(utc) => {
-            let now = Local::now();
-            let past = utc.with_timezone(&Local);
-            let diff = now.signed_duration_since(past);
-            let secs = diff.num_seconds();
-            if secs < 60 {
-                "just now".into()
-            } else if secs < 3600 {
-                let m = secs / 60;
-                if m == 1 {
-                    "1 min ago".into()
-                } else {
-                    format!("{} mins ago", m)
-                }
-            } else if secs < 86400 {
-                let h = secs / 3600;
-                if h == 1 {
-                    "1 hour ago".into()
-                } else {
-                    format!("{} hours ago", h)
-                }
-            } else if secs < 172800 {
-                "yesterday".into()
+    if let Ok(past) = OffsetDateTime::from_unix_timestamp(unix_secs as i64) {
+        let now = OffsetDateTime::now_utc();
+        let diff = now - past;
+        let secs = diff.whole_seconds();
+        
+        if secs < 60 {
+            "just now".into()
+        } else if secs < 3600 {
+            let m = secs / 60;
+            if m == 1 {
+                "1 min ago".into()
             } else {
-                let d = secs / 86400;
-                if d < 30 {
-                    format!("{} days ago", d)
-                } else {
-                    past.format("%b %d, %Y").to_string()
-                }
+                format!("{} mins ago", m)
+            }
+        } else if secs < 86400 {
+            let h = secs / 3600;
+            if h == 1 {
+                "1 hour ago".into()
+            } else {
+                format!("{} hours ago", h)
+            }
+        } else if secs < 172800 {
+            "yesterday".into()
+        } else {
+            let d = secs / 86400;
+            if d < 30 {
+                format!("{} days ago", d)
+            } else {
+                let format = time::format_description::parse("[month repr:short] [day], [year]").unwrap();
+                past.format(&format).unwrap_or_else(|_| "unknown".to_string())
             }
         }
-        None => "unknown".into(),
+    } else {
+        "unknown".into()
     }
 }
 
@@ -161,7 +160,7 @@ pub fn add_recent_file(recent_files: &mut Vec<RecentFile>, path: &std::path::Pat
     let new_file = RecentFile {
         path: path.to_string_lossy().to_string(),
         name,
-        last_opened: Utc::now().timestamp() as u64,
+        last_opened: OffsetDateTime::now_utc().unix_timestamp() as u64,
     };
 
     recent_files.insert(0, new_file);

@@ -9,7 +9,6 @@ use iced::Task;
 use std::path::PathBuf;
 use std::sync::Arc;
 use tokio::sync::oneshot;
-use webbrowser;
 
 fn scroll_to_page(tab: &crate::models::DocumentTab, page: usize) -> Task<Message> {
     let y_offset: f32 = tab
@@ -210,7 +209,7 @@ fn handle_bookmark_message(app: &mut PdfBullApp, message: Message) -> Task<Messa
                 let bookmark = crate::models::PageBookmark {
                     page,
                     label,
-                    created_at: chrono::Utc::now().timestamp() as u64,
+                    created_at: time::OffsetDateTime::now_utc().unix_timestamp() as u64,
                 };
                 if !tab.bookmarks.iter().any(|b| b.page == page) {
                     tab.bookmarks.push(bookmark);
@@ -1773,7 +1772,7 @@ fn handle_misc_message(app: &mut PdfBullApp, message: Message) -> Task<Message> 
         }
         Message::LinkClicked(link) => {
             if let Some(url) = link.url {
-                let _ = webbrowser::open(&url);
+                let _ = open::that(&url);
             } else if let Some(dest_page) = link.destination_page {
                 return app.update(Message::JumpToPage(dest_page));
             }
