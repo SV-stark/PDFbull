@@ -60,7 +60,7 @@ pub fn spawn_engine_thread(cache_size: u64, max_memory_mb: u64) -> EngineState {
                         auto_crop: false,
                         quality: crate::pdf_engine::RenderQuality::Low,
                     };
-                    let res = store.render_page(doc_id, page_num, options);
+                    let res = store.render_thumbnail(doc_id, page_num, options);
                     let _ = tx.send(res);
                 }
                 PdfCommand::Close(doc_id) => {

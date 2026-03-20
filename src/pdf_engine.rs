@@ -312,7 +312,6 @@ impl<'a> DocumentStore<'a> {
             width: final_w,
             height: final_h,
             data: bytes::Bytes::from(final_data),
-        };
         {
             let mut cache = self
                 .render_cache
@@ -321,8 +320,83 @@ impl<'a> DocumentStore<'a> {
             cache.put(doc_id, page_num, cache_key, result.clone());
         }
         Ok(result)
-    }
+        }
 
+        pub fn render_thumbnail(
+        &mut self,
+        doc_id: DocumentId,
+        page_num: usize,
+        options: RenderOptions,
+        ) -> PdfResult<crate::models::RenderResult> {
+        let rounded_scale = (options.scale * 100.0).round() as u32;
+        let cache_key = RenderKey {
+            doc_id,
+            page_num,
+            scale: rounded_scale,
+            filter: RenderFilter::None, // Force no filter for thumbs cache key
+            auto_crop: false, // Force no auto-crop for thumbs
+            quality: RenderQuality::Low, // Force low quality
+        };
+
+        {
+            let cache = self
+                .render_cache
+                .lock()
+                .map_err(|e| PdfError::EngineError(e.to_string()))?;
+            if let Some(cached) = cache.get(&cache_key) {
+                return Ok(cached);
+            }
+        }
+
+        let state = self
+            .documents
+            .get(&doc_id)
+            .ok_or_else(|| PdfError::EngineError("Document not found".to_string()))?;
+        let page = state
+            .doc
+            .pages()
+            .get(page_num as u16)
+            .map_err(|_| PdfError::PageNotFound(page_num))?;
+
+        // 1. Attempt to extract zero-cost embedded thumbnail
+        // Note: pdfium-render currently does not expose FPDFPage_GetThumbnail directly.
+        // We will simulate the optimal path by forcing a highly optimized render config.
+        // Future enhancement: Bind to FPDFPage_GetThumbnail via FFI if pdfium-render adds support.
+
+        let target_w = (page.width().value * options.scale) as i32;
+        let target_h = (page.height().value * options.scale) as i32;
+
+        let render_config = PdfRenderConfig::new()
+            .set_target_width(target_w)
+            .set_maximum_height(target_h)
+            .use_lcd_text_rendering(false) // Disable heavy subpixel rendering for thumbs
+            .clear_render_device_before_rendering(true);
+
+        let bitmap = page
+            .render_with_config(&render_config)
+            .map_err(|e| PdfError::RenderFailed(e.to_string()))?;
+
+        let w = bitmap.width() as u32;
+        let h = bitmap.height() as u32;
+        let result_data = bitmap.as_rgba_bytes().to_vec();
+
+        let result = crate::models::RenderResult {
+            width: w,
+            height: h,
+            data: bytes::Bytes::from(result_data),
+        };
+
+        {
+            let mut cache = self
+                .render_cache
+                .lock()
+                .map_err(|e| PdfError::EngineError(e.to_string()))?;
+            cache.put(doc_id, page_num, cache_key, result.clone());
+        }
+        Ok(result)
+        }
+
+        pub fn save_annotations(
     pub fn extract_text(&self, doc_id: DocumentId, page_num: i32) -> PdfResult<String> {
         let state = self
             .documents
