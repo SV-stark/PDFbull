@@ -972,17 +972,18 @@ fn handle_tab_message(app: &mut PdfBullApp, message: Message) -> Task<Message> {
             if app.tabs.iter().any(|t| t.path == path) {
                 let path_clone = path.clone();
                 let file_name = path.file_name().unwrap_or_default().to_string_lossy().to_string();
+                
                 return Task::perform(
                     async move {
-                        let answer = rfd::AsyncMessageDialog::new()
-                            .set_level(rfd::MessageLevel::Info)
-                            .set_title("File Modified")
-                            .set_description(&format!("The file '{}' has been modified by another program. Would you like to reload it?", file_name))
-                            .set_buttons(rfd::MessageButtons::YesNo)
-                            .show()
-                            .await;
+                        use native_dialog::{MessageDialog, MessageType};
+                        let yes = MessageDialog::new()
+                            .set_type(MessageType::Info)
+                            .set_title("File Modified Externally")
+                            .set_text(&format!("The file '{}' has been modified by another program.\n\nWould you like to reload it?", file_name))
+                            .show_confirm()
+                            .unwrap_or(false);
                         
-                        if answer == rfd::MessageDialogResult::Yes {
+                        if yes {
                             Some(Message::ReloadDocument(path_clone))
                         } else {
                             None
@@ -1578,24 +1579,19 @@ fn handle_misc_message(app: &mut PdfBullApp, message: Message) -> Task<Message> 
                 iced::Event::Window(iced::window::Event::CloseRequested) => {
                     let has_dirty = app.tabs.iter().any(|t| !t.annotations.is_empty());
                     if has_dirty {
-                        return Task::perform(
-                            async move {
-                                let answer = rfd::AsyncMessageDialog::new()
-                                    .set_level(rfd::MessageLevel::Warning)
-                                    .set_title("Unsaved Annotations")
-                                    .set_description("You have annotations that haven't been saved to a PDF. Quitting will lose them. Are you sure you want to quit?")
-                                    .set_buttons(rfd::MessageButtons::YesNo)
-                                    .show()
-                                    .await;
+                        use native_dialog::{MessageDialog, MessageType};
+                        let yes = MessageDialog::new()
+                            .set_type(MessageType::Warning)
+                            .set_title("Unsaved Annotations")
+                            .set_text("You have annotations that haven't been saved to a PDF.\n\nQuitting will lose them. Are you sure you want to quit?")
+                            .show_confirm()
+                            .unwrap_or(false);
 
-                                if answer == rfd::MessageDialogResult::Yes {
-                                    Message::ForceQuit
-                                } else {
-                                    Message::ClearStatus
-                                }
-                            },
-                            |m| m,
-                        );
+                        if yes {
+                            return iced::exit();
+                        } else {
+                            return Task::none();
+                        }
                     } else {
                         return iced::exit();
                     }

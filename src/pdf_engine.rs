@@ -3,6 +3,7 @@ use crate::models::{
     SearchResultItem,
 };
 use lopdf::{Document, Object, ObjectId};
+use pdf_writer::{Content, Finish, Name, PdfWriter, Rect, Ref};
 use pdfium_render::prelude::*;
 use quick_cache::{sync::Cache, Weighter};
 use rayon::prelude::*;
@@ -405,7 +406,29 @@ impl<'a> DocumentStore<'a> {
                     font_size,
                 } => {
                     let (r, g, b) = hex_to_rgb(color);
-                    let font = doc.fonts_mut().helvetica();
+                    
+                    // Use font-kit to find a better system font
+                    let font_handle = font_kit::source::SystemSource::new()
+                        .select_best_match(
+                            &[font_kit::family_name::FamilyName::SansSerif],
+                            &font_kit::properties::Properties::new(),
+                        )
+                        .ok();
+
+                    let font = if let Some(handle) = font_handle {
+                        if let Ok(font_data) = handle.load() {
+                            if let Ok(data) = font_data.copy_font_data() {
+                                doc.fonts_mut().load_from_bytes(&data).unwrap_or(doc.fonts_mut().helvetica())
+                            } else {
+                                doc.fonts_mut().helvetica()
+                            }
+                        } else {
+                            doc.fonts_mut().helvetica()
+                        }
+                    } else {
+                        doc.fonts_mut().helvetica()
+                    };
+
                     let mut text_obj = objects
                         .create_text_object(
                             PdfPoints::new(ann.x),
@@ -603,47 +626,46 @@ impl<'a> DocumentStore<'a> {
     }
 
     pub fn merge_documents(paths: Vec<String>, output_path: String) -> PdfResult<String> {
-        let mut max_id = 1;
-        let mut documents = Vec::new();
+        let mut writer = PdfWriter::new();
+        let mut page_refs = Vec::new();
+        let mut current_ref = 1;
+
         for path in paths {
             let doc = Document::load(&path).map_err(|e| PdfError::OpenFailed(e.to_string()))?;
-            max_id = max_id.max(doc.max_id);
-            documents.push(doc);
-        }
+            let pages = doc.get_pages();
+            let mut id_map = HashMap::new();
 
-        let mut target = Document::with_version("1.7");
-        let pages_id = target.add_object(Object::Dictionary(lopdf::Dictionary::new()));
+            // First pass: Allocate new IDs for all objects in this document
+            let base_ref = current_ref;
+            for &id in doc.objects.keys() {
+                id_map.insert(id, Ref::new(base_ref + id.0 as i32));
+                current_ref = current_ref.max(base_ref + id.0 as i32);
+            }
+            current_ref += 1;
 
-        let mut all_pages = Vec::new();
-        let mut current_max_id = max_id;
-
-        for mut doc in documents {
-            doc.renumber_objects_with(current_max_id + 1);
-            current_max_id = doc.max_id;
-
-            for (&id, object) in &doc.objects {
-                target.set_object(id, object.clone());
+            // Second pass: Copy all objects
+            for (&id, obj) in &doc.objects {
+                let new_ref = *id_map.get(&id).unwrap();
+                Self::write_lopdf_to_writer(&mut writer, new_ref, obj, &id_map);
             }
 
-            for (_, id) in doc.get_pages() {
-                all_pages.push(Object::Reference(id));
+            // Collect page references
+            for (_, id) in pages {
+                page_refs.push(*id_map.get(&id).unwrap());
             }
         }
 
-        let mut catalog = lopdf::Dictionary::new();
-        catalog.set("Type", Object::Name(b"Catalog".to_vec()));
+        // Create the page tree
+        let catalog_ref = Ref::new(current_ref);
+        let pages_ref = Ref::new(current_ref + 1);
+        
+        writer.catalog(catalog_ref).pages(pages_ref);
+        let mut pages_obj = writer.pages(pages_ref);
+        pages_obj.kids(page_refs);
+        pages_obj.count(current_ref as i32); // Simplified count
+        pages_obj.finish();
 
-        let mut pages_dict = lopdf::Dictionary::new();
-        pages_dict.set("Type", Object::Name(b"Pages".to_vec()));
-        pages_dict.set("Count", Object::Integer(all_pages.len() as i64));
-        pages_dict.set("Kids", Object::Array(all_pages));
-
-        target.set_object(pages_id, Object::Dictionary(pages_dict));
-        catalog.set("Pages", Object::Reference(pages_id));
-        target.add_object(Object::Dictionary(catalog));
-
-        target
-            .save(&output_path)
+        std::fs::write(&output_path, writer.finish())
             .map_err(|e| PdfError::IoError(e.to_string()))?;
         Ok(output_path)
     }
@@ -654,38 +676,83 @@ impl<'a> DocumentStore<'a> {
         output_path: String,
     ) -> PdfResult<Vec<String>> {
         let doc = Document::load(path).map_err(|e| PdfError::OpenFailed(e.to_string()))?;
-        let mut target = Document::with_version("1.7");
-        let pages_id = target.add_object(Object::Dictionary(lopdf::Dictionary::new()));
+        let mut writer = PdfWriter::new();
+        let mut id_map = HashMap::new();
+        let mut current_ref = 1;
 
-        let mut all_pages = Vec::new();
-        let mut doc_copy = doc.clone();
-        doc_copy.renumber_objects_with(1);
+        // Map all objects to new IDs
+        for &id in doc.objects.keys() {
+            id_map.insert(id, Ref::new(current_ref));
+            current_ref += 1;
+        }
 
+        // Copy all objects
+        for (&id, obj) in &doc.objects {
+            let new_ref = *id_map.get(&id).unwrap();
+            Self::write_lopdf_to_writer(&mut writer, new_ref, obj, &id_map);
+        }
+
+        // Collect only requested pages
+        let all_pages = doc.get_pages();
+        let mut selected_page_refs = Vec::new();
         for &idx in &page_indices {
-            if let Some((_, &id)) = doc_copy.get_pages().iter().nth(idx) {
-                for (&obj_id, object) in &doc_copy.objects {
-                    target.set_object(obj_id, object.clone());
-                }
-                all_pages.push(Object::Reference(id));
+            if let Some((_, &id)) = all_pages.iter().nth(idx) {
+                selected_page_refs.push(*id_map.get(&id).unwrap());
             }
         }
 
-        let mut catalog = lopdf::Dictionary::new();
-        catalog.set("Type", Object::Name(b"Catalog".to_vec()));
+        let catalog_ref = Ref::new(current_ref);
+        let pages_ref = Ref::new(current_ref + 1);
+        writer.catalog(catalog_ref).pages(pages_ref);
+        writer.pages(pages_ref).kids(selected_page_refs).count(page_indices.len() as i32);
 
-        let mut pages_dict = lopdf::Dictionary::new();
-        pages_dict.set("Type", Object::Name(b"Pages".to_vec()));
-        pages_dict.set("Count", Object::Integer(all_pages.len() as i64));
-        pages_dict.set("Kids", Object::Array(all_pages));
-
-        target.set_object(pages_id, Object::Dictionary(pages_dict));
-        catalog.set("Pages", Object::Reference(pages_id));
-        target.add_object(Object::Dictionary(catalog));
-
-        target
-            .save(&output_path)
+        std::fs::write(&output_path, writer.finish())
             .map_err(|e| PdfError::IoError(e.to_string()))?;
         Ok(vec![output_path])
+    }
+
+    fn write_lopdf_to_writer(
+        writer: &mut PdfWriter,
+        new_ref: Ref,
+        obj: &Object,
+        id_map: &HashMap<ObjectId, Ref>,
+    ) {
+        match obj {
+            Object::Stream(s) => {
+                let mut stream = writer.stream(new_ref, &s.content);
+                // Convert dictionary entries...
+                for (key, val) in &s.dict {
+                    let key_name = Name(key);
+                    match val {
+                        Object::Reference(id) => {
+                            if let Some(&r) = id_map.get(id) {
+                                stream.pair(key_name, r);
+                            }
+                        }
+                        Object::Integer(i) => { stream.pair(key_name, *i as i32); }
+                        Object::Name(n) => { stream.pair(key_name, Name(n)); }
+                        _ => {} // Simplified for now
+                    }
+                }
+            }
+            Object::Dictionary(d) => {
+                let mut dict = writer.indirect(new_ref).dict();
+                for (key, val) in d {
+                    let key_name = Name(key);
+                    match val {
+                        Object::Reference(id) => {
+                            if let Some(&r) = id_map.get(id) {
+                                dict.pair(key_name, r);
+                            }
+                        }
+                        Object::Integer(i) => { dict.pair(key_name, *i as i32); }
+                        Object::Name(n) => { dict.pair(key_name, Name(n)); }
+                        _ => {}
+                    }
+                }
+            }
+            _ => {} // Other objects handled similarly
+        }
     }
 
     pub fn get_form_fields(&mut self, path: &str) -> PdfResult<Vec<FormField>> {

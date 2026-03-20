@@ -9,10 +9,11 @@ homepage = "https://github.com/SV-stark/PDFbull"
 repository = "https://github.com/SV-stark/PDFbull"
 
 [dependencies]
-iced = { version = "0.13", features = ["image", "svg", "canvas", "tokio", "advanced"] }
+iced = { version = "0.13", features = ["image", "svg", "canvas", "tokio", "advanced", "a11y"] }
 pdfium-render = "0.8"
 tokio = { version = "1.0", features = ["full"] }
 rfd = "0.14"
+native-dialog = "0.7"
 zune-image = "0.4"
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
@@ -24,6 +25,8 @@ tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 webbrowser = "1.2.0"
 thiserror = "1.0"
 lopdf = "0.34"
+pdf-writer = "0.12"
+font-kit = "0.14"
 winprint = { version = "0.2.0", features = ["pdfium"] }
 oxipng = { version = "10.1.0", default-features = false, features = ["parallel"] }
 chrono = { version = "0.4.44", features = ["serde", "clock"] }
