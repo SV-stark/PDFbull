@@ -546,8 +546,7 @@ fn handle_render_message(app: &mut PdfBullApp, message: Message) -> Task<Message
                     Ok(res) => {
                         let width = res.width;
                         let height = res.height;
-                        let data = res.data;
-                        let pixel_data = Arc::try_unwrap(data).unwrap_or_else(|a| (*a).clone());
+                        let pixel_data = res.data.to_vec();
                         tab.view_state.rendered_pages.insert(
                             page_idx,
                             (
@@ -589,8 +588,7 @@ fn handle_render_message(app: &mut PdfBullApp, message: Message) -> Task<Message
                     Ok(res) => {
                         let width = res.width;
                         let height = res.height;
-                        let data = res.data;
-                        let pixel_data = Arc::try_unwrap(data).unwrap_or_else(|a| (*a).clone());
+                        let pixel_data = res.data.to_vec();
                         tab.view_state.thumbnails.insert(
                             page_idx,
                             iced_image::Handle::from_rgba(width, height, pixel_data),

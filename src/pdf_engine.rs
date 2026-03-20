@@ -16,18 +16,28 @@ use zune_image::traits::EncoderTrait;
 
 use crate::ui::theme::hex_to_rgb;
 
+#[derive(Hash, Eq, PartialEq, Clone, Debug)]
+pub struct RenderKey {
+    pub doc_id: DocumentId,
+    pub page_num: usize,
+    pub scale: u32,
+    pub filter: RenderFilter,
+    pub auto_crop: bool,
+    pub quality: RenderQuality,
+}
+
 #[derive(Clone)]
 struct RenderWeighter;
 
-impl Weighter<String, crate::models::RenderResult> for RenderWeighter {
-    fn weight(&self, _key: &String, val: &crate::models::RenderResult) -> u64 {
+impl Weighter<RenderKey, crate::models::RenderResult> for RenderWeighter {
+    fn weight(&self, _key: &RenderKey, val: &crate::models::RenderResult) -> u64 {
         val.data.len() as u64
     }
 }
 
 pub struct RenderCache {
-    cache: Cache<String, crate::models::RenderResult, RenderWeighter>,
-    scale_index: HashMap<(DocumentId, usize), String>,
+    cache: Cache<RenderKey, crate::models::RenderResult, RenderWeighter>,
+    scale_index: HashMap<(DocumentId, usize), RenderKey>,
 }
 
 impl RenderCache {
@@ -46,15 +56,15 @@ impl RenderCache {
         }
     }
 
-    pub fn get(&self, key: &str) -> Option<crate::models::RenderResult> {
-        self.cache.get(&key.to_string())
+    pub fn get(&self, key: &RenderKey) -> Option<crate::models::RenderResult> {
+        self.cache.get(key)
     }
 
     pub fn put(
         &mut self,
         doc_id: DocumentId,
         page_num: usize,
-        key: String,
+        key: RenderKey,
         result: crate::models::RenderResult,
     ) {
         let page_key = (doc_id, page_num);
@@ -209,11 +219,15 @@ impl<'a> DocumentStore<'a> {
         page_num: usize,
         options: RenderOptions,
     ) -> PdfResult<crate::models::RenderResult> {
-        let rounded_scale = (options.scale * 100.0).round() / 100.0;
-        let cache_key = format!(
-            "{:?}_{}_{}_{:?}_{}_{:?}",
-            doc_id, page_num, rounded_scale, options.filter, options.auto_crop, options.quality
-        );
+        let rounded_scale = (options.scale * 100.0).round() as u32;
+        let cache_key = RenderKey {
+            doc_id,
+            page_num,
+            scale: rounded_scale,
+            filter: options.filter,
+            auto_crop: options.auto_crop,
+            quality: options.quality,
+        };
 
         {
             let cache = self
@@ -235,8 +249,8 @@ impl<'a> DocumentStore<'a> {
             .get(page_num as u16)
             .map_err(|_| PdfError::PageNotFound(page_num))?;
 
-        let mut target_w = (page.width().value * rounded_scale) as i32;
-        let mut target_h = (page.height().value * rounded_scale) as i32;
+        let mut target_w = (page.width().value * options.scale) as i32;
+        let mut target_h = (page.height().value * options.scale) as i32;
 
         let max_dim = 2500;
         if target_w > max_dim || target_h > max_dim {
@@ -269,12 +283,12 @@ impl<'a> DocumentStore<'a> {
         let w = bitmap.width() as u32;
         let h = bitmap.height() as u32;
 
-        let result_data =
-            if options.filter == RenderFilter::None || options.filter == RenderFilter::Grayscale {
-                bitmap.as_rgba_bytes().to_vec()
-            } else {
-                Self::apply_filter_parallel(bitmap.as_rgba_bytes().to_vec(), options.filter)
-            };
+        // Optimization: Use bitmap bytes directly and handle filtering in-place if possible
+        let mut result_data = bitmap.as_rgba_bytes().to_vec();
+        
+        if options.filter != RenderFilter::None && options.filter != RenderFilter::Grayscale {
+            Self::apply_filter_in_place(&mut result_data, options.filter);
+        }
 
         let (final_w, final_h, final_data) = if options.auto_crop {
             if let Some((x1, y1, x2, y2)) = Self::detect_content_bbox_parallel(&result_data, w, h) {
@@ -297,7 +311,7 @@ impl<'a> DocumentStore<'a> {
         let result = crate::models::RenderResult {
             width: final_w,
             height: final_h,
-            data: Arc::new(final_data),
+            data: bytes::Bytes::from(final_data),
         };
         {
             let mut cache = self
@@ -586,7 +600,7 @@ impl<'a> DocumentStore<'a> {
         ))
     }
 
-    pub fn apply_filter_parallel(mut data: Vec<u8>, filter: RenderFilter) -> Vec<u8> {
+    pub fn apply_filter_in_place(data: &mut [u8], filter: RenderFilter) {
         data.par_chunks_exact_mut(4).for_each(|pixel| match filter {
             RenderFilter::Inverted => {
                 pixel[0] = 255 - pixel[0];
@@ -622,6 +636,10 @@ impl<'a> DocumentStore<'a> {
             }
             _ => {}
         });
+    }
+
+    pub fn apply_filter_parallel(mut data: Vec<u8>, filter: RenderFilter) -> Vec<u8> {
+        Self::apply_filter_in_place(&mut data, filter);
         data
     }
 

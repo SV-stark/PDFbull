@@ -32,6 +32,8 @@ winprint = { version = "0.2.0", features = ["pdfium"] }
 oxipng = { version = "10.1.0", default-features = false, features = ["parallel"] }
 chrono = { version = "0.4.44", features = ["serde", "clock"] }
 quick_cache = "0.6.20"
+mimalloc = "0.1"
+bytes = "1.5"
 human-panic = "2.0"
 notify = "6.1"
 notify-debouncer-mini = "0.4"

@@ -77,7 +77,7 @@ pub struct OpenResult {
 pub struct RenderResult {
     pub width: u32,
     pub height: u32,
-    pub data: Arc<Vec<u8>>,
+    pub data: bytes::Bytes,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
