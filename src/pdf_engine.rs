@@ -171,6 +171,17 @@ impl<'a> DocumentStore<'a> {
         }
 
         let outline = self.get_outline_internal(&doc);
+        let metadata = crate::models::DocumentMetadata {
+            title: doc.metadata().get(PdfDocumentMetadataTag::Title),
+            author: doc.metadata().get(PdfDocumentMetadataTag::Author),
+            subject: doc.metadata().get(PdfDocumentMetadataTag::Subject),
+            keywords: doc.metadata().get(PdfDocumentMetadataTag::Keywords),
+            creator: doc.metadata().get(PdfDocumentMetadataTag::Creator),
+            producer: doc.metadata().get(PdfDocumentMetadataTag::Producer),
+            creation_date: doc.metadata().get(PdfDocumentMetadataTag::CreationDate),
+            modification_date: doc.metadata().get(PdfDocumentMetadataTag::ModificationDate),
+        };
+
         let state = DocumentState { doc };
         self.documents.insert(doc_id, state);
         self.paths.insert(doc_id, path.to_string());
@@ -182,6 +193,7 @@ impl<'a> DocumentStore<'a> {
             max_width,
             outline,
             links: all_links,
+            metadata,
         })
     }
 
@@ -636,18 +648,88 @@ impl<'a> DocumentStore<'a> {
         Ok(output_path)
     }
 
-    pub fn get_form_fields(_path: &str) -> PdfResult<Vec<FormField>> {
-        Ok(Vec::new())
+    pub fn split_pdf(
+        path: &str,
+        page_indices: Vec<usize>,
+        output_path: String,
+    ) -> PdfResult<Vec<String>> {
+        let doc = Document::load(path).map_err(|e| PdfError::OpenFailed(e.to_string()))?;
+        let mut target = Document::with_version("1.7");
+        let pages_id = target.add_object(Object::Dictionary(lopdf::Dictionary::new()));
+
+        let mut all_pages = Vec::new();
+        let mut doc_copy = doc.clone();
+        doc_copy.renumber_objects_with(1);
+
+        for &idx in &page_indices {
+            if let Some((_, &id)) = doc_copy.get_pages().iter().nth(idx) {
+                for (&obj_id, object) in &doc_copy.objects {
+                    target.set_object(obj_id, object.clone());
+                }
+                all_pages.push(Object::Reference(id));
+            }
+        }
+
+        let mut catalog = lopdf::Dictionary::new();
+        catalog.set("Type", Object::Name(b"Catalog".to_vec()));
+
+        let mut pages_dict = lopdf::Dictionary::new();
+        pages_dict.set("Type", Object::Name(b"Pages".to_vec()));
+        pages_dict.set("Count", Object::Integer(all_pages.len() as i64));
+        pages_dict.set("Kids", Object::Array(all_pages));
+
+        target.set_object(pages_id, Object::Dictionary(pages_dict));
+        catalog.set("Pages", Object::Reference(pages_id));
+        target.add_object(Object::Dictionary(catalog));
+
+        target
+            .save(&output_path)
+            .map_err(|e| PdfError::IoError(e.to_string()))?;
+        Ok(vec![output_path])
+    }
+
+    pub fn get_form_fields(&mut self, path: &str) -> PdfResult<Vec<FormField>> {
+        let doc = self
+            .pdfium
+            .load_pdf_from_file(path, None)
+            .map_err(|e| PdfError::OpenFailed(e.to_string()))?;
+
+        let mut fields = Vec::new();
+        if let Some(form) = doc.form() {
+            for (idx, field) in form.fields().iter().enumerate() {
+                fields.push(FormField {
+                    name: field.name().unwrap_or_else(|| format!("Field {}", idx)),
+                    value: field.value().unwrap_or_default(),
+                    field_type: format!("{:?}", field.field_type()),
+                    page: 0, // Simplified
+                });
+            }
+        }
+        Ok(fields)
     }
 
     pub fn fill_form(
-        _path: &str,
-        _updates: Vec<FormField>,
-        _output_path: String,
+        &mut self,
+        path: &str,
+        updates: Vec<FormField>,
+        output_path: String,
     ) -> PdfResult<String> {
-        Err(PdfError::EngineError(
-            "Form filling not yet implemented for this version".into(),
-        ))
+        let doc = self
+            .pdfium
+            .load_pdf_from_file(path, None)
+            .map_err(|e| PdfError::OpenFailed(e.to_string()))?;
+
+        if let Some(mut form) = doc.form() {
+            for update in updates {
+                if let Some(mut field) = form.fields().iter().find(|f| f.name() == Some(update.name.clone())) {
+                    let _ = field.set_value(&update.value);
+                }
+            }
+        }
+
+        doc.save_to_file(&output_path)
+            .map_err(|e| PdfError::IoError(e.to_string()))?;
+        Ok(output_path)
     }
 
     pub fn print_document(path: &str) -> PdfResult<()> {

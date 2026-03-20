@@ -103,6 +103,10 @@ pub fn spawn_engine_thread(cache_size: u64, max_memory_mb: u64) -> EngineState {
                     let res = crate::pdf_engine::DocumentStore::merge_documents(paths, out);
                     let _ = tx.send(res);
                 }
+                PdfCommand::Split(path, pages, out, tx) => {
+                    let res = crate::pdf_engine::DocumentStore::split_pdf(&path, pages, out);
+                    let _ = tx.send(res);
+                }
                 PdfCommand::GetFormFields(path, tx) => {
                     let res = crate::pdf_engine::DocumentStore::get_form_fields(&path);
                     let _ = tx.send(res);

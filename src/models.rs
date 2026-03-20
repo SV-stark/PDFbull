@@ -50,6 +50,18 @@ impl PartialEq<&str> for PdfError {
 
 pub type PdfResult<T> = Result<T, PdfError>;
 
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct DocumentMetadata {
+    pub title: Option<String>,
+    pub author: Option<String>,
+    pub subject: Option<String>,
+    pub keywords: Option<String>,
+    pub creator: Option<String>,
+    pub producer: Option<String>,
+    pub creation_date: Option<String>,
+    pub modification_date: Option<String>,
+}
+
 #[derive(Debug, Clone)]
 pub struct OpenResult {
     pub id: DocumentId,
@@ -58,6 +70,7 @@ pub struct OpenResult {
     pub max_width: f32,
     pub outline: Vec<crate::pdf_engine::Bookmark>,
     pub links: Vec<Hyperlink>,
+    pub metadata: DocumentMetadata,
 }
 
 #[derive(Debug, Clone)]
@@ -259,6 +272,7 @@ pub struct DocumentTab {
     pub bookmarks: Vec<PageBookmark>,
     pub annotations: Vec<Annotation>,
     pub links: Vec<Hyperlink>,
+    pub metadata: DocumentMetadata,
     pub view_state: TabViewState,
 }
 
@@ -300,6 +314,7 @@ impl DocumentTab {
             bookmarks: Vec::new(),
             annotations: Vec::new(),
             links: Vec::new(),
+            metadata: DocumentMetadata::default(),
             view_state: TabViewState::default(),
         }
     }

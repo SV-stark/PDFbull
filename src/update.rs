@@ -65,9 +65,10 @@ pub fn handle_message(app: &mut PdfBullApp, message: Message) -> Task<Message> {
         | Message::ToggleSidebar
         | Message::ToggleFormsSidebar
         | Message::ToggleFullscreen
-        | Message::ToggleKeyboardHelp
+        Message::ToggleKeyboardHelp
         | Message::RotateClockwise
         | Message::RotateCounterClockwise
+        | Message::ToggleMetadata
         | Message::ClearRecentFiles => handle_app_message(app, message),
         Message::AddBookmark | Message::RemoveBookmark(_) | Message::JumpToBookmark(_) => {
             handle_bookmark_message(app, message)

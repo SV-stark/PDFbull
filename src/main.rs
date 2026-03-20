@@ -10,6 +10,7 @@ pub mod storage;
 pub mod ui;
 pub mod ui_document;
 pub mod ui_keyboard_help;
+pub mod ui_metadata;
 pub mod ui_settings;
 pub mod ui_welcome;
 pub mod update;
