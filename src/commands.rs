@@ -36,7 +36,7 @@ pub enum PdfCommand {
         String,
         oneshot::Sender<PdfResult<Vec<Annotation>>>,
     ),
-    ExportImage(DocumentId, i32, f32, String, oneshot::Sender<PdfResult<()>>),
+    ExportImage(DocumentId, i32, f32, oneshot::Sender<PdfResult<Vec<u8>>>),
     ExportImages(
         DocumentId,
         Vec<i32>,

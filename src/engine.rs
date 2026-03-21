@@ -75,36 +75,36 @@ pub fn spawn_engine_thread(cache_size: u64, max_memory_mb: u64) -> EngineState {
                     let _ = tx.send(res);
                 }
                 PdfCommand::SaveAnnotations(doc_id, annotations, tx) => {
-                    let res = store.save_annotations(doc_id, &annotations);
+                    let res = store.save_annotations(doc_id, &annotations, None);
                     let _ = tx.send(res);
                 }
-                PdfCommand::ExportImage(doc_id, page_num, scale, out, tx) => {
-                    let res = store.export_page_as_image(doc_id, page_num, scale, &out);
+                PdfCommand::ExportImage(doc_id, page_num, scale, tx) => {
+                    let res = store.export_page_as_image(doc_id, page_num, scale);
                     let _ = tx.send(res);
                 }
                 PdfCommand::ExportImages(doc_id, pages, scale, out_dir, tx) => {
                     let mut paths = Vec::new();
                     for page_num in pages {
                         let out_path = format!("{}/page_{}.png", out_dir, page_num);
-                        if store
-                            .export_page_as_image(doc_id, page_num, scale, &out_path)
-                            .is_ok()
-                        {
-                            paths.push(out_path);
+                        if let Ok(buf) = store.export_page_as_image(doc_id, page_num, scale) {
+                            let optimized = oxipng::optimize_from_memory(&buf, &oxipng::Options::default()).unwrap_or(buf);
+                            if std::fs::write(&out_path, optimized).is_ok() {
+                                paths.push(out_path);
+                            }
                         }
                     }
                     let _ = tx.send(Ok(paths));
                 }
-                PdfCommand::ExportPdf(doc_id, _path, annotations, tx) => {
-                    let res = store.save_annotations(doc_id, &annotations);
+                PdfCommand::ExportPdf(doc_id, path, annotations, tx) => {
+                    let res = store.save_annotations(doc_id, &annotations, Some(path));
                     let _ = tx.send(res);
                 }
                 PdfCommand::Merge(paths, out, tx) => {
-                    let res = crate::pdf_engine::DocumentStore::merge_documents(paths, out);
+                    let res = store.merge_documents(paths, out);
                     let _ = tx.send(res);
                 }
                 PdfCommand::Split(path, pages, out, tx) => {
-                    let res = crate::pdf_engine::DocumentStore::split_pdf(&path, pages, out);
+                    let res = store.split_pdf(&path, pages, out);
                     let _ = tx.send(res);
                 }
                 PdfCommand::GetFormFields(path, tx) => {

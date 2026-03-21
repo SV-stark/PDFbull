@@ -36,7 +36,6 @@ impl Weighter<RenderKey, crate::models::RenderResult> for RenderWeighter {
 
 pub struct RenderCache {
     cache: Cache<RenderKey, crate::models::RenderResult, RenderWeighter>,
-    scale_index: HashMap<(DocumentId, usize), RenderKey>,
 }
 
 impl RenderCache {
@@ -51,7 +50,6 @@ impl RenderCache {
                 },
                 RenderWeighter,
             ),
-            scale_index: HashMap::new(),
         }
     }
 
@@ -61,17 +59,11 @@ impl RenderCache {
 
     pub fn put(
         &mut self,
-        doc_id: DocumentId,
-        page_num: usize,
+        _doc_id: DocumentId,
+        _page_num: usize,
         key: RenderKey,
         result: crate::models::RenderResult,
     ) {
-        let page_key = (doc_id, page_num);
-        if let Some(old_key) = self.scale_index.insert(page_key, key.clone()) {
-            if old_key != key {
-                self.cache.remove(&old_key);
-            }
-        }
         self.cache.insert(key, result);
     }
 }
@@ -181,15 +173,16 @@ impl<'a> DocumentStore<'a> {
         }
 
         let outline = self.get_outline_internal(&doc);
+        let pdf_metadata = doc.metadata();
         let metadata = crate::models::DocumentMetadata {
-            title: None,
-            author: None,
-            subject: None,
-            keywords: None,
-            creator: None,
-            producer: None,
-            creation_date: None,
-            modification_date: None,
+            title: pdf_metadata.get(PdfDocumentMetadataTagType::Title).map(|t| t.value().to_string()),
+            author: pdf_metadata.get(PdfDocumentMetadataTagType::Author).map(|t| t.value().to_string()),
+            subject: pdf_metadata.get(PdfDocumentMetadataTagType::Subject).map(|t| t.value().to_string()),
+            keywords: pdf_metadata.get(PdfDocumentMetadataTagType::Keywords).map(|t| t.value().to_string()),
+            creator: pdf_metadata.get(PdfDocumentMetadataTagType::Creator).map(|t| t.value().to_string()),
+            producer: pdf_metadata.get(PdfDocumentMetadataTagType::Producer).map(|t| t.value().to_string()),
+            creation_date: pdf_metadata.get(PdfDocumentMetadataTagType::CreationDate).map(|t| t.value().to_string()),
+            modification_date: pdf_metadata.get(PdfDocumentMetadataTagType::ModificationDate).map(|t| t.value().to_string()),
         };
 
         let state = DocumentState { doc };
@@ -282,13 +275,12 @@ impl<'a> DocumentStore<'a> {
         let w = bitmap.width() as u32;
         let h = bitmap.height() as u32;
 
-        let mut result_data = bitmap.as_rgba_bytes().to_vec();
-
-        if options.filter != RenderFilter::None && options.filter != RenderFilter::Grayscale {
-            Self::apply_filter_in_place(&mut result_data, options.filter);
-        }
-
         let (final_w, final_h, final_data) = if options.auto_crop {
+            let mut result_data = bitmap.as_rgba_bytes().to_vec();
+            if options.filter != RenderFilter::None && options.filter != RenderFilter::Grayscale {
+                Self::apply_filter_in_place(&mut result_data, options.filter);
+            }
+
             if let Some((x1, y1, x2, y2)) = Self::detect_content_bbox_parallel(&result_data, w, h) {
                 let crop_w = (x2 - x1) + 1;
                 let crop_h = (y2 - y1) + 1;
@@ -302,8 +294,12 @@ impl<'a> DocumentStore<'a> {
             } else {
                 (w, h, result_data)
             }
-        } else {
+        } else if options.filter != RenderFilter::None && options.filter != RenderFilter::Grayscale {
+            let mut result_data = bitmap.as_rgba_bytes().to_vec();
+            Self::apply_filter_in_place(&mut result_data, options.filter);
             (w, h, result_data)
+        } else {
+            (w, h, bitmap.as_rgba_bytes().to_vec())
         };
 
         let result = crate::models::RenderResult {
@@ -411,6 +407,7 @@ impl<'a> DocumentStore<'a> {
         &mut self,
         doc_id: DocumentId,
         annotations: &[Annotation],
+        output_path: Option<String>,
     ) -> PdfResult<String> {
         let pdf_path = self
             .paths
@@ -428,10 +425,13 @@ impl<'a> DocumentStore<'a> {
                 .map_err(|_| PdfError::PageNotFound(ann.page))?;
             let page_height = page.height().value;
             let objects = page.objects_mut();
+            
+            // PDF coordinates start from bottom-left. 
+            // UI coordinates start from top-left.
             let rect = PdfRect::new(
-                PdfPoints::new(page_height - ann.y),
-                PdfPoints::new(ann.x),
                 PdfPoints::new(page_height - (ann.y + ann.height)),
+                PdfPoints::new(ann.x),
+                PdfPoints::new(page_height - ann.y),
                 PdfPoints::new(ann.x + ann.width),
             );
 
@@ -530,10 +530,10 @@ impl<'a> DocumentStore<'a> {
                 }
             }
         }
-        let output_path = pdf_path.replace(".pdf", "_annotated.pdf");
-        doc.save_to_file(&output_path)
+        let final_path = output_path.unwrap_or_else(|| pdf_path.replace(".pdf", "_annotated.pdf"));
+        doc.save_to_file(&final_path)
             .map_err(|e| PdfError::IoError(e.to_string()))?;
-        Ok(output_path)
+        Ok(final_path)
     }
 
     pub fn export_page_as_image(
@@ -541,8 +541,7 @@ impl<'a> DocumentStore<'a> {
         doc_id: DocumentId,
         page_num: i32,
         scale: f32,
-        output_path: &str,
-    ) -> PdfResult<()> {
+    ) -> PdfResult<Vec<u8>> {
         let state = self
             .documents
             .get(&doc_id)
@@ -575,10 +574,7 @@ impl<'a> DocumentStore<'a> {
             .encode(&image)
             .map_err(|e| PdfError::RenderFailed(format!("{:?}", e)))?;
 
-        let optimized =
-            oxipng::optimize_from_memory(&out_buf, &oxipng::Options::default()).unwrap_or(out_buf);
-        std::fs::write(output_path, optimized).map_err(|e| PdfError::IoError(e.to_string()))?;
-        Ok(())
+        Ok(out_buf)
     }
 
     pub fn get_outline_internal(&self, doc: &PdfDocument) -> Vec<Bookmark> {
@@ -636,35 +632,44 @@ impl<'a> DocumentStore<'a> {
         width: u32,
         height: u32,
     ) -> Option<(u32, u32, u32, u32)> {
-        let active_pixels: Vec<(u32, u32)> = data
+        let bbox = data
             .par_chunks_exact(4)
             .enumerate()
-            .filter_map(|(idx, pixel)| {
-                if pixel[0] <= 245 || pixel[1] <= 245 || pixel[2] <= 245 {
-                    Some(((idx as u32) % width, (idx as u32) / width))
-                } else {
-                    None
-                }
-            })
-            .collect();
-        if active_pixels.is_empty() {
-            return None;
-        }
-        let (min_x, max_x) = (
-            active_pixels.iter().map(|p| p.0).min().unwrap(),
-            active_pixels.iter().map(|p| p.0).max().unwrap(),
-        );
-        let (min_y, max_y) = (
-            active_pixels.iter().map(|p| p.1).min().unwrap(),
-            active_pixels.iter().map(|p| p.1).max().unwrap(),
-        );
-        let m = 10;
-        Some((
-            min_x.saturating_sub(m),
-            min_y.saturating_sub(m),
-            (max_x + m).min(width.saturating_sub(1)),
-            (max_y + m).min(height.saturating_sub(1)),
-        ))
+            .fold(
+                || None::<(u32, u32, u32, u32)>,
+                |acc, (idx, pixel)| {
+                    if pixel[0] <= 245 || pixel[1] <= 245 || pixel[2] <= 245 {
+                        let x = (idx as u32) % width;
+                        let y = (idx as u32) / width;
+                        if let Some((min_x, min_y, max_x, max_y)) = acc {
+                            Some((min_x.min(x), min_y.min(y), max_x.max(x), max_y.max(y)))
+                        } else {
+                            Some((x, y, x, y))
+                        }
+                    } else {
+                        acc
+                    }
+                },
+            )
+            .reduce(
+                || None,
+                |a, b| match (a, b) {
+                    (Some(a), Some(b)) => Some((a.0.min(b.0), a.1.min(b.1), a.2.max(b.2), a.3.max(b.3))),
+                    (Some(a), None) => Some(a),
+                    (None, Some(b)) => Some(b),
+                    (None, None) => None,
+                },
+            );
+
+        bbox.map(|(min_x, min_y, max_x, max_y)| {
+            let m = 10;
+            (
+                min_x.saturating_sub(m),
+                min_y.saturating_sub(m),
+                (max_x + m).min(width.saturating_sub(1)),
+                (max_y + m).min(height.saturating_sub(1)),
+            )
+        })
     }
 
     pub fn apply_filter_in_place(data: &mut [u8], filter: RenderFilter) {
@@ -710,33 +715,130 @@ impl<'a> DocumentStore<'a> {
         data
     }
 
-    pub fn merge_documents(_paths: Vec<String>, output_path: String) -> PdfResult<String> {
+    pub fn merge_documents(&self, paths: Vec<String>, output_path: String) -> PdfResult<String> {
+        let mut dest = self
+            .pdfium
+            .create_new_pdf()
+            .map_err(|e| PdfError::EngineError(e.to_string()))?;
+
+        for path in paths {
+            let src = self
+                .pdfium
+                .load_pdf_from_file(&path, None)
+                .map_err(|e| PdfError::OpenFailed(e.to_string()))?;
+
+            let count = src.pages().len();
+            if count > 0 {
+                let dest_index = dest.pages().len();
+                dest.pages_mut()
+                    .copy_page_range_from_document(&src, 0..=(count - 1), dest_index)
+                    .map_err(|e| PdfError::EngineError(e.to_string()))?;
+            }
+        }
+
+        dest.save_to_file(&output_path)
+            .map_err(|e| PdfError::IoError(e.to_string()))?;
         Ok(output_path)
     }
 
     pub fn split_pdf(
-        _path: &str,
-        _page_indices: Vec<usize>,
-        output_path: String,
+        &self,
+        path: &str,
+        page_indices: Vec<usize>,
+        output_dir: String,
     ) -> PdfResult<Vec<String>> {
-        Ok(vec![output_path])
-    }
-
-    pub fn get_form_fields(&mut self, path: &str) -> PdfResult<Vec<FormField>> {
-        let _doc = self
+        let src = self
             .pdfium
             .load_pdf_from_file(path, None)
             .map_err(|e| PdfError::OpenFailed(e.to_string()))?;
 
-        Ok(Vec::new())
+        let mut created_paths = Vec::new();
+
+        for &page_idx in &page_indices {
+            let mut dest = self
+                .pdfium
+                .create_new_pdf()
+                .map_err(|e| PdfError::EngineError(e.to_string()))?;
+
+            dest.pages_mut()
+                .copy_page_range_from_document(&src, (page_idx as u16)..=(page_idx as u16), 0)
+                .map_err(|e| PdfError::EngineError(e.to_string()))?;
+
+            let filename = std::path::Path::new(path)
+                .file_stem()
+                .and_then(|s| s.to_str())
+                .unwrap_or("document");
+
+            let out_path = format!("{}/{}_page_{}.pdf", output_dir, filename, page_idx + 1);
+            dest.save_to_file(&out_path)
+                .map_err(|e| PdfError::IoError(e.to_string()))?;
+            created_paths.push(out_path);
+        }
+
+        Ok(created_paths)
+    }
+
+    pub fn get_form_fields(&mut self, path: &str) -> PdfResult<Vec<FormField>> {
+        // Try to find the document in our store first
+        if let Some(doc_id) = self.paths.iter().find(|(_, p)| *p == path).map(|(id, _)| *id) {
+            let doc = &self.documents.get(&doc_id).unwrap().doc;
+            return Ok(self.extract_form_fields_internal(doc));
+        } else {
+            // Load temporarily if not open
+            let doc = self.pdfium.load_pdf_from_file(path, None)
+                .map_err(|e| PdfError::OpenFailed(e.to_string()))?;
+            return Ok(self.extract_form_fields_internal(&doc));
+        };
+    }
+
+    fn extract_form_fields_internal(&self, doc: &PdfDocument) -> Vec<FormField> {
+        let mut fields = Vec::new();
+        for (idx, page) in doc.pages().iter().enumerate() {
+            for annotation in page.annotations().iter() {
+                if let Some(form_field) = annotation.as_form_field() {
+                    let name = form_field.name().unwrap_or_default();
+                    let value = if let Some(text_field) = form_field.as_text_field() {
+                        text_field.value().unwrap_or_default()
+                    } else {
+                        "".to_string()
+                    };
+                    fields.push(FormField {
+                        name,
+                        value,
+                        field_type: format!("{:?}", form_field.field_type()),
+                        page: idx,
+                    });
+                }
+            }
+        }
+        fields
     }
 
     pub fn fill_form(
         &mut self,
-        _path: &str,
-        _updates: Vec<FormField>,
+        path: &str,
+        updates: Vec<FormField>,
         output_path: String,
     ) -> PdfResult<String> {
+        let doc = self.pdfium.load_pdf_from_file(path, None)
+            .map_err(|e| PdfError::OpenFailed(e.to_string()))?;
+        
+        for mut page in doc.pages().iter() {
+            let annotations = page.annotations_mut();
+            for mut annotation in annotations.iter() {
+                if let Some(form_field) = annotation.as_form_field_mut() {
+                    if let Some(update) = updates.iter().find(|f| f.name == form_field.name().unwrap_or_default()) {
+                        if let Some(text_field) = form_field.as_text_field_mut() {
+                            let _ = text_field.set_value(&update.value);
+                        }
+                    }
+                }
+            }
+        }
+
+        doc.save_to_file(&output_path)
+            .map_err(|e| PdfError::IoError(e.to_string()))?;
+            
         Ok(output_path)
     }
 

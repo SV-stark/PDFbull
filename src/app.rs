@@ -63,6 +63,7 @@ pub struct PdfBullApp {
     pub rendering_count: usize,
     pub rendering_set: std::collections::HashSet<RenderTarget>,
     pub modifiers: iced::keyboard::Modifiers,
+    pub last_session_save: std::time::Instant,
 }
 
 impl Default for PdfBullApp {
@@ -90,6 +91,7 @@ impl Default for PdfBullApp {
             rendering_count: 0,
             rendering_set: std::collections::HashSet::new(),
             modifiers: iced::keyboard::Modifiers::default(),
+            last_session_save: std::time::Instant::now(),
         }
     }
 }
@@ -103,10 +105,19 @@ impl PdfBullApp {
         self.tabs.get_mut(self.active_tab)
     }
 
-    pub fn save_session(&self) {
+    pub fn save_session(&mut self) {
         if !self.settings.restore_session {
             return;
         }
+
+        if self.last_session_save.elapsed() < std::time::Duration::from_secs(5) {
+            return;
+        }
+
+        self.save_session_and_recent();
+    }
+
+    pub fn save_session_and_recent(&mut self) {
         let session = crate::models::SessionData {
             open_tabs: self
                 .tabs
@@ -116,10 +127,27 @@ impl PdfBullApp {
             active_tab: self.active_tab,
         };
         crate::storage::save_session(&session);
+        crate::storage::save_recent_files(&self.recent_files);
+        self.last_session_save = std::time::Instant::now();
     }
 
     pub fn add_recent_file(&mut self, path: &std::path::Path) {
-        crate::storage::add_recent_file(&mut self.recent_files, path);
+        let path_str = path.to_string_lossy().to_string();
+        self.recent_files.retain(|f| f.path != path_str);
+
+        let new_file = RecentFile {
+            path: path_str,
+            name: path
+                .file_name()
+                .map(|n| n.to_string_lossy().to_string())
+                .unwrap_or_default(),
+            last_opened: time::OffsetDateTime::now_utc().unix_timestamp() as u64,
+        };
+
+        self.recent_files.insert(0, new_file);
+        if self.recent_files.len() > 20 {
+            self.recent_files.truncate(20);
+        }
     }
 
     pub fn render_visible_pages(&mut self) -> Task<Message> {
@@ -159,15 +187,20 @@ impl PdfBullApp {
             None => return Task::none(),
         };
 
-        let quality = self.settings.render_quality;
         let mut tasks = Vec::new();
+        let quality = self.settings.render_quality;
+
+        let rendered_pages = {
+            let tab = self.current_tab().unwrap();
+            tab.view_state.rendered_pages.iter().map(|(&p, &(s, _))| (p, s)).collect::<std::collections::HashMap<usize, f32>>()
+        };
+
         for page_idx in visible_pages {
             let target = RenderTarget::Page(page_idx);
 
-            let is_rendered = self
-                .current_tab()
-                .and_then(|t| t.view_state.rendered_pages.get(&page_idx))
-                .is_some_and(|(s, _)| (s - zoom).abs() < 0.001);
+            let is_rendered = rendered_pages.get(&page_idx)
+                .is_some_and(|&s| (s - zoom).abs() < 0.001);
+            
             if is_rendered || self.rendering_set.contains(&target) {
                 continue;
             }
@@ -181,6 +214,7 @@ impl PdfBullApp {
             };
 
             self.rendering_set.insert(target);
+            self.rendering_count += 1;
             let tx = cmd_tx.clone();
             let doc_id_cloned = doc_id;
             let current_scale = options.scale;
@@ -204,11 +238,14 @@ impl PdfBullApp {
         }
 
         if self.show_sidebar {
+            let rendered_thumbnails = {
+                let tab = self.current_tab().unwrap();
+                tab.view_state.thumbnails.keys().copied().collect::<std::collections::HashSet<usize>>()
+            };
+
             for page_idx in visible_thumbnails {
                 let target = RenderTarget::Thumbnail(page_idx);
-                let is_thumb_rendered = self
-                    .current_tab()
-                    .is_some_and(|t| t.view_state.thumbnails.contains_key(&page_idx));
+                let is_thumb_rendered = rendered_thumbnails.contains(&page_idx);
 
                 if is_thumb_rendered || self.rendering_set.contains(&target) {
                     continue;
@@ -236,6 +273,10 @@ impl PdfBullApp {
                     |(page_idx, scale, res)| Message::ThumbnailRendered(page_idx, scale, res),
                 ));
             }
+        }
+
+        if tasks.is_empty() {
+            return Task::none();
         }
 
         Task::batch(tasks)

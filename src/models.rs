@@ -371,7 +371,15 @@ impl DocumentTab {
         let mut visible = std::collections::HashSet::new();
         let start_idx = (self.view_state.sidebar_viewport_y / crate::ui::theme::THUMBNAIL_HEIGHT)
             .max(0.0) as usize;
-        let end_idx = (start_idx + 30).min(self.total_pages);
+        
+        let v_height = if self.view_state.viewport_height > 0.0 {
+            self.view_state.viewport_height
+        } else {
+            1000.0
+        };
+        let visible_count = (v_height / crate::ui::theme::THUMBNAIL_HEIGHT).ceil() as usize + 5;
+        let end_idx = (start_idx + visible_count).min(self.total_pages);
+        
         for i in start_idx..end_idx {
             visible.insert(i);
         }
@@ -379,62 +387,29 @@ impl DocumentTab {
     }
 
     pub fn cleanup_distant_pages(&mut self) {
-        let visible = self.get_visible_pages();
-        let pages_to_keep: std::collections::HashSet<usize> = visible
-            .iter()
-            .flat_map(|&p| {
-                let start = p.saturating_sub(crate::ui::theme::VIEWPORT_BUFFER);
-                let end = (p + crate::ui::theme::VIEWPORT_BUFFER).min(self.total_pages);
-                start..end
-            })
-            .collect();
+        let (start, end) = self.view_state.visible_range;
+        let buffer = crate::ui::theme::VIEWPORT_BUFFER;
+        let keep_start = start.saturating_sub(buffer);
+        let keep_end = (end + buffer).min(self.total_pages);
 
         let current_zoom = self.zoom;
-        let to_remove_pages: Vec<usize> = self
-            .view_state
-            .rendered_pages
-            .iter()
-            .filter(|(&p, (scale, _))| {
-                if pages_to_keep.contains(&p) {
-                    (scale - current_zoom).abs() > 1.0
-                } else {
-                    true
-                }
-            })
-            .map(|(&p, _)| p)
-            .collect();
+        self.view_state.rendered_pages.retain(|&p, (scale, _)| {
+            if p >= keep_start && p < keep_end {
+                (*scale - current_zoom).abs() <= 1.0
+            } else {
+                false
+            }
+        });
 
-        for p in to_remove_pages {
-            self.view_state.rendered_pages.remove(&p);
-        }
+        let thumb_start_idx = (self.view_state.sidebar_viewport_y / crate::ui::theme::THUMBNAIL_HEIGHT)
+            .max(0.0) as usize;
+        let thumb_keep_start = thumb_start_idx.saturating_sub(15);
+        let thumb_keep_end = thumb_start_idx.saturating_add(45).min(self.total_pages);
 
-        let visible_thumbs = self.get_visible_thumbnails();
-        let thumb_start = visible_thumbs
-            .iter()
-            .min()
-            .copied()
-            .unwrap_or(0)
-            .saturating_sub(15);
-        let thumb_end = visible_thumbs
-            .iter()
-            .max()
-            .copied()
-            .unwrap_or(0)
-            .saturating_add(15);
-        let thumbs_to_keep: std::collections::HashSet<usize> =
-            (thumb_start..=thumb_end.min(self.total_pages.saturating_sub(1))).collect();
-
-        let to_remove_thumbs: Vec<usize> = self
-            .view_state
-            .thumbnails
-            .keys()
-            .copied()
-            .filter(|p| !thumbs_to_keep.contains(p))
-            .collect();
-
-        for p in to_remove_thumbs {
-            self.view_state.thumbnails.remove(&p);
-        }
+        self.view_state.thumbnails.retain(|&p, _| {
+            p >= thumb_keep_start && p < thumb_keep_end
+        });
+        
         self.view_state.last_cleanup_time = std::time::Instant::now();
     }
 

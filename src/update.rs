@@ -656,7 +656,6 @@ fn handle_search_message(app: &mut PdfBullApp, message: Message) -> Task<Message
             let cmd_tx = engine.cmd_tx.clone();
             Task::perform(
                 async move {
-                    tokio::time::sleep(tokio::time::Duration::from_millis(300)).await;
                     let (resp_tx, resp_rx) = oneshot::channel();
                     if let Err(e) =
                         cmd_tx.send(crate::commands::PdfCommand::Search(doc_id, query, resp_tx))
@@ -981,13 +980,13 @@ fn handle_tab_message(app: &mut PdfBullApp, message: Message) -> Task<Message> {
 
                 return Task::perform(
                     async move {
-                        use native_dialog::{MessageDialog, MessageType};
-                        let yes = MessageDialog::new()
-                            .set_type(MessageType::Info)
+                        let yes = rfd::AsyncMessageDialog::new()
+                            .set_level(rfd::MessageLevel::Info)
                             .set_title("File Modified Externally")
-                            .set_text(&format!("The file '{}' has been modified by another program.\n\nWould you like to reload it?", file_name))
-                            .show_confirm()
-                            .unwrap_or(false);
+                            .set_description(&format!("The file '{}' has been modified by another program.\n\nWould you like to reload it?", file_name))
+                            .set_buttons(rfd::MessageButtons::YesNo)
+                            .show()
+                            .await == rfd::MessageDialogResult::Yes;
 
                         if yes {
                             Some(Message::ReloadDocument(path_clone))
@@ -1339,20 +1338,36 @@ fn handle_export_message(app: &mut PdfBullApp, message: Message) -> Task<Message
 
                     match file {
                         Some(f) => {
-                            let path = f.path().to_string_lossy().to_string();
+                            let path = f.path().to_path_buf();
                             let (resp_tx, resp_rx) = tokio::sync::oneshot::channel();
                             if let Err(e) = cmd_tx.send(PdfCommand::ExportImage(
                                 doc_id,
                                 page,
                                 zoom,
-                                path.clone(),
                                 resp_tx,
                             )) {
                                 tracing::error!("Failed to send ExportImage command: {}", e);
                                 return Err(crate::models::PdfError::from("Engine died"));
                             }
                             match resp_rx.await {
-                                Ok(Ok(())) => Ok(path),
+                                Ok(Ok(buf)) => {
+                                    tokio::task::spawn_blocking(move || {
+                                        let optimized = oxipng::optimize_from_memory(
+                                            &buf,
+                                            &oxipng::Options::default(),
+                                        )
+                                        .unwrap_or(buf);
+                                        std::fs::write(&path, optimized).map_err(|e| {
+                                            crate::models::PdfError::from(format!(
+                                                "Failed to write file: {}",
+                                                e
+                                            ))
+                                        })?;
+                                        Ok(path.to_string_lossy().to_string())
+                                    })
+                                    .await
+                                    .map_err(|e| crate::models::PdfError::from(e.to_string()))?
+                                }
                                 Ok(Err(e)) => Err(e),
                                 Err(_) => Err(crate::models::PdfError::from("Engine died")),
                             }
@@ -1510,6 +1525,49 @@ fn handle_export_message(app: &mut PdfBullApp, message: Message) -> Task<Message
             match res {
                 Ok(p) => app.status_message = Some(format!("Merged PDF saved to: {}", p)),
                 Err(e) => app.status_message = Some(format!("Merge failed: {}", e)),
+            }
+            Task::none()
+        }
+        Message::SplitPDF(pages) => {
+            let tab = match app.current_tab() {
+                Some(t) => t,
+                None => return Task::none(),
+            };
+            let path = tab.path.to_string_lossy().to_string();
+            let engine = match &app.engine {
+                Some(e) => e,
+                None => return Task::none(),
+            };
+            let cmd_tx = engine.cmd_tx.clone();
+            Task::perform(
+                async move {
+                    let folder = rfd::AsyncFileDialog::new()
+                        .set_title("Select Output Folder for Split Pages")
+                        .pick_folder()
+                        .await;
+                    if let Some(f) = folder {
+                        let out_dir = f.path().to_string_lossy().to_string();
+                        let (tx, rx) = tokio::sync::oneshot::channel();
+                        let _ = cmd_tx.send(PdfCommand::Split(path, pages, out_dir, tx));
+                        match rx.await {
+                            Ok(res) => res,
+                            Err(_) => Err(crate::models::PdfError::from("Engine died")),
+                        }
+                    } else {
+                        Err(crate::models::PdfError::from("Cancelled"))
+                    }
+                },
+                Message::PDFSplit,
+            )
+        }
+        Message::PDFSplit(res) => {
+            match res {
+                Ok(paths) => app.status_message = Some(format!("Split into {} files", paths.len())),
+                Err(e) => {
+                    if e != "Cancelled" {
+                        app.status_message = Some(format!("Split failed: {}", e));
+                    }
+                }
             }
             Task::none()
         }
@@ -1693,20 +1751,20 @@ fn handle_misc_message(app: &mut PdfBullApp, message: Message) -> Task<Message> 
                 iced::Event::Window(iced::window::Event::CloseRequested) => {
                     let has_dirty = app.tabs.iter().any(|t| !t.annotations.is_empty());
                     if has_dirty {
-                        use native_dialog::{MessageDialog, MessageType};
-                        let yes = MessageDialog::new()
-                            .set_type(MessageType::Warning)
-                            .set_title("Unsaved Annotations")
-                            .set_text("You have annotations that haven't been saved to a PDF.\n\nQuitting will lose them. Are you sure you want to quit?")
-                            .show_confirm()
-                            .unwrap_or(false);
-
-                        if yes {
-                            return iced::exit();
-                        } else {
-                            return Task::none();
-                        }
+                        return Task::perform(
+                            async move {
+                                rfd::AsyncMessageDialog::new()
+                                    .set_level(rfd::MessageLevel::Warning)
+                                    .set_title("Unsaved Annotations")
+                                    .set_description("You have annotations that haven't been saved to a PDF.\n\nQuitting will lose them. Are you sure you want to quit?")
+                                    .set_buttons(rfd::MessageButtons::YesNo)
+                                    .show()
+                                    .await == rfd::MessageDialogResult::Yes
+                            },
+                            |yes| if yes { Message::ForceQuit } else { Message::ClearStatus }
+                        );
                     } else {
+                        app.save_session_and_recent();
                         return iced::exit();
                     }
                 }
@@ -1792,7 +1850,10 @@ fn handle_misc_message(app: &mut PdfBullApp, message: Message) -> Task<Message> 
             }
             Task::none()
         }
-        Message::ForceQuit => iced::exit(),
+        Message::ForceQuit => {
+            app.save_session_and_recent();
+            iced::exit()
+        }
         _ => Task::none(),
     }
 }
