@@ -371,7 +371,7 @@ impl DocumentTab {
         let mut visible = std::collections::HashSet::new();
         let start_idx = (self.view_state.sidebar_viewport_y / crate::ui::theme::THUMBNAIL_HEIGHT)
             .max(0.0) as usize;
-        
+
         let v_height = if self.view_state.viewport_height > 0.0 {
             self.view_state.viewport_height
         } else {
@@ -379,7 +379,7 @@ impl DocumentTab {
         };
         let visible_count = (v_height / crate::ui::theme::THUMBNAIL_HEIGHT).ceil() as usize + 5;
         let end_idx = (start_idx + visible_count).min(self.total_pages);
-        
+
         for i in start_idx..end_idx {
             visible.insert(i);
         }
@@ -401,15 +401,16 @@ impl DocumentTab {
             }
         });
 
-        let thumb_start_idx = (self.view_state.sidebar_viewport_y / crate::ui::theme::THUMBNAIL_HEIGHT)
+        let thumb_start_idx = (self.view_state.sidebar_viewport_y
+            / crate::ui::theme::THUMBNAIL_HEIGHT)
             .max(0.0) as usize;
         let thumb_keep_start = thumb_start_idx.saturating_sub(15);
         let thumb_keep_end = thumb_start_idx.saturating_add(45).min(self.total_pages);
 
-        self.view_state.thumbnails.retain(|&p, _| {
-            p >= thumb_keep_start && p < thumb_keep_end
-        });
-        
+        self.view_state
+            .thumbnails
+            .retain(|&p, _| p >= thumb_keep_start && p < thumb_keep_end);
+
         self.view_state.last_cleanup_time = std::time::Instant::now();
     }
 

@@ -87,7 +87,9 @@ pub fn spawn_engine_thread(cache_size: u64, max_memory_mb: u64) -> EngineState {
                     for page_num in pages {
                         let out_path = format!("{}/page_{}.png", out_dir, page_num);
                         if let Ok(buf) = store.export_page_as_image(doc_id, page_num, scale) {
-                            let optimized = oxipng::optimize_from_memory(&buf, &oxipng::Options::default()).unwrap_or(buf);
+                            let optimized =
+                                oxipng::optimize_from_memory(&buf, &oxipng::Options::default())
+                                    .unwrap_or(buf);
                             if std::fs::write(&out_path, optimized).is_ok() {
                                 paths.push(out_path);
                             }

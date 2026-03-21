@@ -192,15 +192,20 @@ impl PdfBullApp {
 
         let rendered_pages = {
             let tab = self.current_tab().unwrap();
-            tab.view_state.rendered_pages.iter().map(|(&p, &(s, _))| (p, s)).collect::<std::collections::HashMap<usize, f32>>()
+            tab.view_state
+                .rendered_pages
+                .iter()
+                .map(|(&p, &(s, _))| (p, s))
+                .collect::<std::collections::HashMap<usize, f32>>()
         };
 
         for page_idx in visible_pages {
             let target = RenderTarget::Page(page_idx);
 
-            let is_rendered = rendered_pages.get(&page_idx)
+            let is_rendered = rendered_pages
+                .get(&page_idx)
                 .is_some_and(|&s| (s - zoom).abs() < 0.001);
-            
+
             if is_rendered || self.rendering_set.contains(&target) {
                 continue;
             }
@@ -240,7 +245,11 @@ impl PdfBullApp {
         if self.show_sidebar {
             let rendered_thumbnails = {
                 let tab = self.current_tab().unwrap();
-                tab.view_state.thumbnails.keys().copied().collect::<std::collections::HashSet<usize>>()
+                tab.view_state
+                    .thumbnails
+                    .keys()
+                    .copied()
+                    .collect::<std::collections::HashSet<usize>>()
             };
 
             for page_idx in visible_thumbnails {
