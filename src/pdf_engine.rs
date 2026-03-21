@@ -175,14 +175,30 @@ impl<'a> DocumentStore<'a> {
         let outline = self.get_outline_internal(&doc);
         let pdf_metadata = doc.metadata();
         let metadata = crate::models::DocumentMetadata {
-            title: pdf_metadata.get(PdfDocumentMetadataTagType::Title).map(|t| t.value().to_string()),
-            author: pdf_metadata.get(PdfDocumentMetadataTagType::Author).map(|t| t.value().to_string()),
-            subject: pdf_metadata.get(PdfDocumentMetadataTagType::Subject).map(|t| t.value().to_string()),
-            keywords: pdf_metadata.get(PdfDocumentMetadataTagType::Keywords).map(|t| t.value().to_string()),
-            creator: pdf_metadata.get(PdfDocumentMetadataTagType::Creator).map(|t| t.value().to_string()),
-            producer: pdf_metadata.get(PdfDocumentMetadataTagType::Producer).map(|t| t.value().to_string()),
-            creation_date: pdf_metadata.get(PdfDocumentMetadataTagType::CreationDate).map(|t| t.value().to_string()),
-            modification_date: pdf_metadata.get(PdfDocumentMetadataTagType::ModificationDate).map(|t| t.value().to_string()),
+            title: pdf_metadata
+                .get(PdfDocumentMetadataTagType::Title)
+                .map(|t| t.value().to_string()),
+            author: pdf_metadata
+                .get(PdfDocumentMetadataTagType::Author)
+                .map(|t| t.value().to_string()),
+            subject: pdf_metadata
+                .get(PdfDocumentMetadataTagType::Subject)
+                .map(|t| t.value().to_string()),
+            keywords: pdf_metadata
+                .get(PdfDocumentMetadataTagType::Keywords)
+                .map(|t| t.value().to_string()),
+            creator: pdf_metadata
+                .get(PdfDocumentMetadataTagType::Creator)
+                .map(|t| t.value().to_string()),
+            producer: pdf_metadata
+                .get(PdfDocumentMetadataTagType::Producer)
+                .map(|t| t.value().to_string()),
+            creation_date: pdf_metadata
+                .get(PdfDocumentMetadataTagType::CreationDate)
+                .map(|t| t.value().to_string()),
+            modification_date: pdf_metadata
+                .get(PdfDocumentMetadataTagType::ModificationDate)
+                .map(|t| t.value().to_string()),
         };
 
         let state = DocumentState { doc };
@@ -294,7 +310,8 @@ impl<'a> DocumentStore<'a> {
             } else {
                 (w, h, result_data)
             }
-        } else if options.filter != RenderFilter::None && options.filter != RenderFilter::Grayscale {
+        } else if options.filter != RenderFilter::None && options.filter != RenderFilter::Grayscale
+        {
             let mut result_data = bitmap.as_rgba_bytes().to_vec();
             Self::apply_filter_in_place(&mut result_data, options.filter);
             (w, h, result_data)
@@ -425,8 +442,8 @@ impl<'a> DocumentStore<'a> {
                 .map_err(|_| PdfError::PageNotFound(ann.page))?;
             let page_height = page.height().value;
             let objects = page.objects_mut();
-            
-            // PDF coordinates start from bottom-left. 
+
+            // PDF coordinates start from bottom-left.
             // UI coordinates start from top-left.
             let rect = PdfRect::new(
                 PdfPoints::new(page_height - (ann.y + ann.height)),
@@ -654,7 +671,9 @@ impl<'a> DocumentStore<'a> {
             .reduce(
                 || None,
                 |a, b| match (a, b) {
-                    (Some(a), Some(b)) => Some((a.0.min(b.0), a.1.min(b.1), a.2.max(b.2), a.3.max(b.3))),
+                    (Some(a), Some(b)) => {
+                        Some((a.0.min(b.0), a.1.min(b.1), a.2.max(b.2), a.3.max(b.3)))
+                    }
                     (Some(a), None) => Some(a),
                     (None, Some(b)) => Some(b),
                     (None, None) => None,
@@ -780,15 +799,22 @@ impl<'a> DocumentStore<'a> {
 
     pub fn get_form_fields(&mut self, path: &str) -> PdfResult<Vec<FormField>> {
         // Try to find the document in our store first
-        if let Some(doc_id) = self.paths.iter().find(|(_, p)| *p == path).map(|(id, _)| *id) {
+        if let Some(doc_id) = self
+            .paths
+            .iter()
+            .find(|(_, p)| *p == path)
+            .map(|(id, _)| *id)
+        {
             let doc = &self.documents.get(&doc_id).unwrap().doc;
-            return Ok(self.extract_form_fields_internal(doc));
+            Ok(self.extract_form_fields_internal(doc))
         } else {
             // Load temporarily if not open
-            let doc = self.pdfium.load_pdf_from_file(path, None)
+            let doc = self
+                .pdfium
+                .load_pdf_from_file(path, None)
                 .map_err(|e| PdfError::OpenFailed(e.to_string()))?;
-            return Ok(self.extract_form_fields_internal(&doc));
-        };
+            Ok(self.extract_form_fields_internal(&doc))
+        }
     }
 
     fn extract_form_fields_internal(&self, doc: &PdfDocument) -> Vec<FormField> {
@@ -820,14 +846,19 @@ impl<'a> DocumentStore<'a> {
         updates: Vec<FormField>,
         output_path: String,
     ) -> PdfResult<String> {
-        let doc = self.pdfium.load_pdf_from_file(path, None)
+        let doc = self
+            .pdfium
+            .load_pdf_from_file(path, None)
             .map_err(|e| PdfError::OpenFailed(e.to_string()))?;
-        
+
         for mut page in doc.pages().iter() {
             let annotations = page.annotations_mut();
             for mut annotation in annotations.iter() {
                 if let Some(form_field) = annotation.as_form_field_mut() {
-                    if let Some(update) = updates.iter().find(|f| f.name == form_field.name().unwrap_or_default()) {
+                    if let Some(update) = updates
+                        .iter()
+                        .find(|f| f.name == form_field.name().unwrap_or_default())
+                    {
                         if let Some(text_field) = form_field.as_text_field_mut() {
                             let _ = text_field.set_value(&update.value);
                         }
@@ -838,7 +869,7 @@ impl<'a> DocumentStore<'a> {
 
         doc.save_to_file(&output_path)
             .map_err(|e| PdfError::IoError(e.to_string()))?;
-            
+
         Ok(output_path)
     }
 

@@ -983,7 +983,7 @@ fn handle_tab_message(app: &mut PdfBullApp, message: Message) -> Task<Message> {
                         let yes = rfd::AsyncMessageDialog::new()
                             .set_level(rfd::MessageLevel::Info)
                             .set_title("File Modified Externally")
-                            .set_description(&format!("The file '{}' has been modified by another program.\n\nWould you like to reload it?", file_name))
+                            .set_description(format!("The file '{}' has been modified by another program.\n\nWould you like to reload it?", file_name))
                             .set_buttons(rfd::MessageButtons::YesNo)
                             .show()
                             .await == rfd::MessageDialogResult::Yes;
@@ -1340,34 +1340,29 @@ fn handle_export_message(app: &mut PdfBullApp, message: Message) -> Task<Message
                         Some(f) => {
                             let path = f.path().to_path_buf();
                             let (resp_tx, resp_rx) = tokio::sync::oneshot::channel();
-                            if let Err(e) = cmd_tx.send(PdfCommand::ExportImage(
-                                doc_id,
-                                page,
-                                zoom,
-                                resp_tx,
-                            )) {
+                            if let Err(e) =
+                                cmd_tx.send(PdfCommand::ExportImage(doc_id, page, zoom, resp_tx))
+                            {
                                 tracing::error!("Failed to send ExportImage command: {}", e);
                                 return Err(crate::models::PdfError::from("Engine died"));
                             }
                             match resp_rx.await {
-                                Ok(Ok(buf)) => {
-                                    tokio::task::spawn_blocking(move || {
-                                        let optimized = oxipng::optimize_from_memory(
-                                            &buf,
-                                            &oxipng::Options::default(),
-                                        )
-                                        .unwrap_or(buf);
-                                        std::fs::write(&path, optimized).map_err(|e| {
-                                            crate::models::PdfError::from(format!(
-                                                "Failed to write file: {}",
-                                                e
-                                            ))
-                                        })?;
-                                        Ok(path.to_string_lossy().to_string())
-                                    })
-                                    .await
-                                    .map_err(|e| crate::models::PdfError::from(e.to_string()))?
-                                }
+                                Ok(Ok(buf)) => tokio::task::spawn_blocking(move || {
+                                    let optimized = oxipng::optimize_from_memory(
+                                        &buf,
+                                        &oxipng::Options::default(),
+                                    )
+                                    .unwrap_or(buf);
+                                    std::fs::write(&path, optimized).map_err(|e| {
+                                        crate::models::PdfError::from(format!(
+                                            "Failed to write file: {}",
+                                            e
+                                        ))
+                                    })?;
+                                    Ok(path.to_string_lossy().to_string())
+                                })
+                                .await
+                                .map_err(|e| crate::models::PdfError::from(e.to_string()))?,
                                 Ok(Err(e)) => Err(e),
                                 Err(_) => Err(crate::models::PdfError::from("Engine died")),
                             }
@@ -1761,7 +1756,13 @@ fn handle_misc_message(app: &mut PdfBullApp, message: Message) -> Task<Message> 
                                     .show()
                                     .await == rfd::MessageDialogResult::Yes
                             },
-                            |yes| if yes { Message::ForceQuit } else { Message::ClearStatus }
+                            |yes| {
+                                if yes {
+                                    Message::ForceQuit
+                                } else {
+                                    Message::ClearStatus
+                                }
+                            },
                         );
                     } else {
                         app.save_session_and_recent();
