@@ -7,7 +7,6 @@ use iced::widget::image as iced_image;
 use iced::widget::scrollable;
 use iced::Task;
 use std::path::PathBuf;
-use std::sync::Arc;
 use tokio::sync::oneshot;
 
 fn scroll_to_page(tab: &crate::models::DocumentTab, page: usize) -> Task<Message> {
@@ -64,7 +63,7 @@ pub fn handle_message(app: &mut PdfBullApp, message: Message) -> Task<Message> {
         | Message::ToggleSidebar
         | Message::ToggleFormsSidebar
         | Message::ToggleFullscreen
-        Message::ToggleKeyboardHelp
+        | Message::ToggleKeyboardHelp
         | Message::RotateClockwise
         | Message::RotateCounterClockwise
         | Message::ToggleMetadata
@@ -113,7 +112,10 @@ pub fn handle_message(app: &mut PdfBullApp, message: Message) -> Task<Message> {
         | Message::PrevSearchResult
         | Message::ClearSearch => handle_search_message(app, message),
         Message::ExtractText
+        | Message::ExtractTextToClipboard
         | Message::TextExtracted(_)
+        | Message::CopyToClipboard(_)
+        | Message::CopyImageToClipboard
         | Message::ExportImage
         | Message::ImageExported(_)
         | Message::ExportImages
@@ -123,6 +125,8 @@ pub fn handle_message(app: &mut PdfBullApp, message: Message) -> Task<Message> {
         | Message::WatermarkDone(_)
         | Message::MergeDocuments(_)
         | Message::DocumentsMerged(_)
+        | Message::SplitPDF(_)
+        | Message::PDFSplit(_)
         | Message::LoadFormFields
         | Message::FormFieldsLoaded(_)
         | Message::FormFieldChanged(_, _)
@@ -526,6 +530,7 @@ fn handle_render_message(app: &mut PdfBullApp, message: Message) -> Task<Message
                         doc_id, page_idx, options, resp_tx,
                     )) {
                         tracing::error!("Failed to send Render command: {}", e);
+
                         return Err(crate::models::PdfError::from("Engine died"));
                     }
                     resp_rx
@@ -968,8 +973,12 @@ fn handle_tab_message(app: &mut PdfBullApp, message: Message) -> Task<Message> {
         Message::DocumentModifiedExternally(path) => {
             if app.tabs.iter().any(|t| t.path == path) {
                 let path_clone = path.clone();
-                let file_name = path.file_name().unwrap_or_default().to_string_lossy().to_string();
-                
+                let file_name = path
+                    .file_name()
+                    .unwrap_or_default()
+                    .to_string_lossy()
+                    .to_string();
+
                 return Task::perform(
                     async move {
                         use native_dialog::{MessageDialog, MessageType};
@@ -979,14 +988,14 @@ fn handle_tab_message(app: &mut PdfBullApp, message: Message) -> Task<Message> {
                             .set_text(&format!("The file '{}' has been modified by another program.\n\nWould you like to reload it?", file_name))
                             .show_confirm()
                             .unwrap_or(false);
-                        
+
                         if yes {
                             Some(Message::ReloadDocument(path_clone))
                         } else {
                             None
                         }
                     },
-                    |m| m.unwrap_or(Message::ClearStatus)
+                    |m| m.unwrap_or(Message::ClearStatus),
                 );
             }
             Task::none()
@@ -997,23 +1006,27 @@ fn handle_tab_message(app: &mut PdfBullApp, message: Message) -> Task<Message> {
                 if let Some(engine) = &app.engine {
                     let cmd_tx = engine.cmd_tx.clone();
                     let _ = cmd_tx.send(crate::commands::PdfCommand::Close(doc_id));
-                    
+
                     let new_tab = DocumentTab::new(path.clone());
                     let new_doc_id = new_tab.id;
                     app.tabs[idx] = new_tab;
                     app.active_tab = idx;
-                    
+
                     let path_s = path.to_string_lossy().to_string();
                     return Task::perform(
                         async move {
                             let (resp_tx, resp_rx) = tokio::sync::oneshot::channel();
-                            if let Err(e) = cmd_tx.send(crate::commands::PdfCommand::Open(path_s, new_doc_id, resp_tx)) {
+                            if let Err(e) = cmd_tx.send(crate::commands::PdfCommand::Open(
+                                path_s, new_doc_id, resp_tx,
+                            )) {
                                 tracing::error!("Failed to send Open command: {}", e);
                                 return Err(crate::models::PdfError::from("Engine died"));
                             }
-                            resp_rx.await.unwrap_or(Err(crate::models::PdfError::from("Engine died")))
+                            resp_rx
+                                .await
+                                .unwrap_or(Err(crate::models::PdfError::from("Engine died")))
                         },
-                        Message::DocumentOpened
+                        Message::DocumentOpened,
                     );
                 }
             }
@@ -1194,9 +1207,7 @@ fn handle_export_message(app: &mut PdfBullApp, message: Message) -> Task<Message
             Task::perform(
                 async move {
                     let (resp_tx, resp_rx) = tokio::sync::oneshot::channel();
-                    if let Err(e) =
-                        cmd_tx.send(PdfCommand::ExtractText(doc_id, page, resp_tx))
-                    {
+                    if let Err(e) = cmd_tx.send(PdfCommand::ExtractText(doc_id, page, resp_tx)) {
                         tracing::error!("Failed to send ExtractText command: {}", e);
                         return Err(crate::models::PdfError::from("Engine died"));
                     }
@@ -1209,7 +1220,7 @@ fn handle_export_message(app: &mut PdfBullApp, message: Message) -> Task<Message
                 |res| match res {
                     Ok(text) => Message::CopyToClipboard(text),
                     Err(e) => Message::Error(format!("Extraction failed: {}", e)),
-                }
+                },
             )
         }
         Message::CopyToClipboard(text) => {
@@ -1253,20 +1264,23 @@ fn handle_export_message(app: &mut PdfBullApp, message: Message) -> Task<Message
                         auto_crop,
                         quality,
                     };
-                    if let Err(e) = cmd_tx.send(crate::commands::PdfCommand::Render(
+                    if let Err(_e) = cmd_tx.send(crate::commands::PdfCommand::Render(
                         doc_id, page, options, resp_tx,
                     )) {
                         return Err(crate::models::PdfError::from("Engine died"));
                     }
                     match resp_rx.await {
                         Ok(Ok(res)) => {
-                            let mut clipboard = arboard::Clipboard::new().map_err(|e| crate::models::PdfError::from(e.to_string()))?;
+                            let mut clipboard = arboard::Clipboard::new()
+                                .map_err(|e| crate::models::PdfError::from(e.to_string()))?;
                             let image_data = arboard::ImageData {
                                 width: res.width as usize,
                                 height: res.height as usize,
                                 bytes: std::borrow::Cow::Borrowed(&res.data),
                             };
-                            clipboard.set_image(image_data).map_err(|e| crate::models::PdfError::from(e.to_string()))?;
+                            clipboard
+                                .set_image(image_data)
+                                .map_err(|e| crate::models::PdfError::from(e.to_string()))?;
                             Ok(())
                         }
                         Ok(Err(e)) => Err(e),
@@ -1276,7 +1290,7 @@ fn handle_export_message(app: &mut PdfBullApp, message: Message) -> Task<Message
                 |res| match res {
                     Ok(_) => Message::ClearStatus, // We can set a message, but ClearStatus is safe
                     Err(e) => Message::Error(format!("Copy image failed: {}", e)),
-                }
+                },
             )
         }
         Message::TextExtracted(result) => {

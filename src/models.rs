@@ -2,7 +2,6 @@ use crate::pdf_engine::RenderFilter;
 use iced::widget::image as iced_image;
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
-use std::sync::Arc;
 use thiserror::Error;
 
 #[derive(Error, Debug, Clone, PartialEq)]
@@ -410,8 +409,18 @@ impl DocumentTab {
         }
 
         let visible_thumbs = self.get_visible_thumbnails();
-        let thumb_start = visible_thumbs.iter().min().copied().unwrap_or(0).saturating_sub(15);
-        let thumb_end = visible_thumbs.iter().max().copied().unwrap_or(0).saturating_add(15);
+        let thumb_start = visible_thumbs
+            .iter()
+            .min()
+            .copied()
+            .unwrap_or(0)
+            .saturating_sub(15);
+        let thumb_end = visible_thumbs
+            .iter()
+            .max()
+            .copied()
+            .unwrap_or(0)
+            .saturating_add(15);
         let thumbs_to_keep: std::collections::HashSet<usize> =
             (thumb_start..=thumb_end.min(self.total_pages.saturating_sub(1))).collect();
 

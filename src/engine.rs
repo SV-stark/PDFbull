@@ -108,11 +108,11 @@ pub fn spawn_engine_thread(cache_size: u64, max_memory_mb: u64) -> EngineState {
                     let _ = tx.send(res);
                 }
                 PdfCommand::GetFormFields(path, tx) => {
-                    let res = crate::pdf_engine::DocumentStore::get_form_fields(&path);
+                    let res = store.get_form_fields(&path);
                     let _ = tx.send(res);
                 }
                 PdfCommand::FillForm(path, fields, out, tx) => {
-                    let res = crate::pdf_engine::DocumentStore::fill_form(&path, fields, out);
+                    let res = store.fill_form(&path, fields, out);
                     let _ = tx.send(res);
                 }
                 PdfCommand::PrintPdf(path, tx) => {

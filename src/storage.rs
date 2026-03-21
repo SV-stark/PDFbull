@@ -2,14 +2,14 @@ use crate::models::{AppSettings, AppTheme, RecentFile, SessionData};
 use std::fs;
 use std::io::{self, Write};
 use std::path::PathBuf;
-use time::{Duration, OffsetDateTime};
+use time::OffsetDateTime;
 
 pub fn time_ago(unix_secs: u64) -> String {
     if let Ok(past) = OffsetDateTime::from_unix_timestamp(unix_secs as i64) {
         let now = OffsetDateTime::now_utc();
         let diff = now - past;
         let secs = diff.whole_seconds();
-        
+
         if secs < 60 {
             "just now".into()
         } else if secs < 3600 {
@@ -33,8 +33,10 @@ pub fn time_ago(unix_secs: u64) -> String {
             if d < 30 {
                 format!("{} days ago", d)
             } else {
-                let format = time::format_description::parse("[month repr:short] [day], [year]").unwrap();
-                past.format(&format).unwrap_or_else(|_| "unknown".to_string())
+                let format =
+                    time::format_description::parse("[month repr:short] [day], [year]").unwrap();
+                past.format(&format)
+                    .unwrap_or_else(|_| "unknown".to_string())
             }
         }
     } else {
@@ -52,11 +54,16 @@ pub fn get_config_dir() -> PathBuf {
         .unwrap_or_else(|| PathBuf::from(".").join("pdfbull"));
 
     if old_dir.exists() && !new_dir.exists() {
-        if let Err(e) = fs::create_dir_all(&new_dir.parent().unwrap_or(&new_dir)) {
+        if let Err(e) = fs::create_dir_all(new_dir.parent().unwrap_or(&new_dir)) {
             tracing::warn!("Failed to create parent dir for migration: {}", e);
         }
         if let Err(e) = fs::rename(&old_dir, &new_dir) {
-            tracing::warn!("Failed to migrate old config from {:?} to {:?}: {}", old_dir, new_dir, e);
+            tracing::warn!(
+                "Failed to migrate old config from {:?} to {:?}: {}",
+                old_dir,
+                new_dir,
+                e
+            );
         } else {
             tracing::info!("Migrated config from {:?} to {:?}", old_dir, new_dir);
         }

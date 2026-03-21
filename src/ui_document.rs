@@ -159,7 +159,7 @@ fn render_toolbar(app: &PdfBullApp) -> Element<'_, crate::message::Message> {
             text(if tab.auto_crop { "ON" } else { "OFF" })
                 .size(11)
                 .font(INTER_BOLD)
-                .align_x(iced::alignment::Horizontal::Center)
+                .align_x(iced::alignment::Horizontal::Center),
         )
         .on_press(crate::message::Message::ToggleAutoCrop)
         .style(move |_, _| {
@@ -167,14 +167,20 @@ fn render_toolbar(app: &PdfBullApp) -> Element<'_, crate::message::Message> {
                 iced::widget::button::Style {
                     background: Some(theme::COLOR_ACCENT.into()),
                     text_color: Color::WHITE,
-                    border: Border { radius: 4.0.into(), ..Default::default() },
+                    border: Border {
+                        radius: 4.0.into(),
+                        ..Default::default()
+                    },
                     ..Default::default()
                 }
             } else {
                 iced::widget::button::Style {
                     background: Some(Color::from_rgb8(60, 60, 65).into()),
                     text_color: Color::WHITE,
-                    border: Border { radius: 4.0.into(), ..Default::default() },
+                    border: Border {
+                        radius: 4.0.into(),
+                        ..Default::default()
+                    },
                     ..Default::default()
                 }
             }
@@ -188,6 +194,65 @@ fn render_toolbar(app: &PdfBullApp) -> Element<'_, crate::message::Message> {
             .on_press(crate::message::Message::SplitPDF(vec![tab.current_page]))
             .style(iced::widget::button::text),
         "Split",
+    );
+
+    let forms_btn = stacked_tool(
+        tooltip(
+            button(text(icons::FORMS).size(16).font(LUCIDE))
+                .on_press(crate::message::Message::ToggleFormsSidebar)
+                .style(iced::widget::button::text),
+            "Toggle Form Fields",
+            tooltip::Position::Bottom,
+        ),
+        "Forms",
+    );
+
+    let bookmark_btn = stacked_tool(
+        tooltip(
+            button(text(icons::BOOKMARK).size(16).font(LUCIDE))
+                .on_press(crate::message::Message::AddBookmark)
+                .style(iced::widget::button::text),
+            "Add Bookmark",
+            tooltip::Position::Bottom,
+        ),
+        "Bookmark",
+    );
+
+    let highlight_btn = stacked_tool(
+        tooltip(
+            button(text(icons::HIGHLIGHT).size(16).font(LUCIDE))
+                .on_press(crate::message::Message::SetAnnotationMode(Some(
+                    PendingAnnotationKind::Highlight,
+                )))
+                .style(iced::widget::button::text),
+            "Highlight Text",
+            tooltip::Position::Bottom,
+        ),
+        "Highlight",
+    );
+
+    let rectangle_btn = stacked_tool(
+        tooltip(
+            button(text(icons::RECTANGLE).size(16).font(LUCIDE))
+                .on_press(crate::message::Message::SetAnnotationMode(Some(
+                    PendingAnnotationKind::Rectangle,
+                )))
+                .style(iced::widget::button::text),
+            "Draw Rectangle",
+            tooltip::Position::Bottom,
+        ),
+        "Rectangle",
+    );
+
+    let save_anns_btn = stacked_tool(
+        tooltip(
+            button(text(icons::SAVE).size(16).font(LUCIDE))
+                .on_press(crate::message::Message::SaveAnnotations)
+                .style(iced::widget::button::text),
+            "Save Annotations",
+            tooltip::Position::Bottom,
+        ),
+        "Save",
     );
 
     let right_tools = column![

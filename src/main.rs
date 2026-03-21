@@ -22,7 +22,7 @@ pub fn main() -> iced::Result {
     tracing_subscriber::fmt()
         .with_env_filter(tracing_subscriber::EnvFilter::from_default_env())
         .init();
-    
+
     human_panic::setup_panic!();
 
     let icon = iced::window::icon::from_file_data(include_bytes!("../PDFbull.png"), None).ok();
