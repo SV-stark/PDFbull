@@ -71,7 +71,7 @@ pub enum Message {
     ToggleMetadata,
     LoadFormFields,
     FormFieldsLoaded(PdfResult<Vec<crate::models::FormField>>),
-    FormFieldChanged(String, String),
+    FormFieldChanged(String, crate::models::FormFieldVariant),
     FillForm(Vec<crate::models::FormField>),
     FormFilled(PdfResult<String>),
     ExportImage,

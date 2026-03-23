@@ -1,4 +1,7 @@
+pub mod sidebar;
+pub mod tabs;
 pub mod theme;
+pub mod toolbar;
 
 use crate::app::PdfBullApp;
 use crate::ui_document::document_view;

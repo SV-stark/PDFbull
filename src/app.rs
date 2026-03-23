@@ -32,6 +32,7 @@ pub mod icons {
     pub const MERGE: &str = "\u{e0dc}";
     pub const FORMS: &str = "\u{e2a8}";
     pub const PRINT: &str = "\u{e13f}";
+    pub const BLOCK: &str = "\u{e021}";
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]

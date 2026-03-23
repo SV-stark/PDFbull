@@ -52,6 +52,11 @@ pub fn handle_annotation_message(app: &mut PdfBullApp, message: Message) -> Task
                                     fill: false,
                                 }
                             }
+                            crate::models::PendingAnnotationKind::Redact => {
+                                crate::models::AnnotationStyle::Redact {
+                                    color: "#000000".to_string(),
+                                }
+                            }
                         };
 
                         let ann = crate::models::Annotation {

@@ -449,9 +449,9 @@ pub fn handle_export_message(app: &mut PdfBullApp, message: Message) -> Task<Mes
             }
             Task::none()
         }
-        Message::FormFieldChanged(name, value) => {
+        Message::FormFieldChanged(name, variant) => {
             if let Some(field) = app.form_fields.iter_mut().find(|f| f.name == name) {
-                field.value = value;
+                field.variant = variant;
             }
             Task::none()
         }

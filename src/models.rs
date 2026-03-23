@@ -61,6 +61,15 @@ pub struct DocumentMetadata {
     pub modification_date: Option<String>,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SignatureInfo {
+    pub name: String,
+    pub reason: Option<String>,
+    pub location: Option<String>,
+    pub date: Option<String>,
+    pub is_valid: bool,
+}
+
 #[derive(Debug, Clone)]
 pub struct OpenResult {
     pub id: DocumentId,
@@ -70,6 +79,7 @@ pub struct OpenResult {
     pub outline: Vec<crate::pdf_engine::Bookmark>,
     pub links: Vec<Hyperlink>,
     pub metadata: DocumentMetadata,
+    pub signatures: Vec<SignatureInfo>,
 }
 
 #[derive(Debug, Clone)]
@@ -184,6 +194,9 @@ pub enum AnnotationStyle {
         thickness: f32,
         fill: bool,
     },
+    Redact {
+        color: String,
+    },
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -207,13 +220,31 @@ pub enum UndoableAction {
 pub enum PendingAnnotationKind {
     Highlight,
     Rectangle,
+    Redact,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub enum FormFieldVariant {
+    Text {
+        value: String,
+    },
+    Checkbox {
+        is_checked: bool,
+    },
+    RadioButton {
+        is_selected: bool,
+        group_name: Option<String>,
+    },
+    ComboBox {
+        options: Vec<String>,
+        selected_index: Option<usize>,
+    },
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct FormField {
     pub name: String,
-    pub value: String,
-    pub field_type: String,
+    pub variant: FormFieldVariant,
     pub page: usize,
 }
 
@@ -271,6 +302,7 @@ pub struct DocumentTab {
     pub bookmarks: Vec<PageBookmark>,
     pub annotations: Vec<Annotation>,
     pub links: Vec<Hyperlink>,
+    pub signatures: Vec<SignatureInfo>,
     pub metadata: DocumentMetadata,
     pub view_state: TabViewState,
 }
@@ -313,6 +345,7 @@ impl DocumentTab {
             bookmarks: Vec::new(),
             annotations: Vec::new(),
             links: Vec::new(),
+            signatures: Vec::new(),
             metadata: DocumentMetadata::default(),
             view_state: TabViewState::default(),
         }

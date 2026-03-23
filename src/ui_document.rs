@@ -1,371 +1,13 @@
 use crate::app::PdfBullApp;
 use crate::app::{icons, INTER_BOLD, INTER_REGULAR, LUCIDE};
 use crate::models::{AnnotationStyle, DocumentTab, PendingAnnotationKind};
-use crate::pdf_engine::RenderFilter;
 use crate::ui::theme::{self, hex_to_rgb};
 use iced::widget::{
-    button, column, container, mouse_area, row, scrollable, text, text_input, tooltip, Space, Stack,
+    button, column, container, mouse_area, row, scrollable, text, text_input, Space, Stack,
 };
-use iced::{Alignment, Border, Color, Element, Length, Padding, Shadow, Vector};
+use iced::{Alignment, Color, Element, Length, Padding};
 
-fn stacked_tool<'a>(
-    top: impl Into<Element<'a, crate::message::Message>>,
-    label: &'a str,
-) -> Element<'a, crate::message::Message> {
-    column![
-        top.into(),
-        text(label)
-            .font(INTER_REGULAR)
-            .style(|_theme| iced::widget::text::Style {
-                color: Some(theme::COLOR_TEXT_DIM),
-            })
-    ]
-    .spacing(4)
-    .align_x(Alignment::Center)
-    .into()
-}
-
-fn filter_btn_custom(
-    label: &'static str,
-    f: RenderFilter,
-    active: RenderFilter,
-) -> iced::widget::Button<'static, crate::message::Message> {
-    let btn = button(
-        text(label)
-            .size(11)
-            .font(INTER_BOLD)
-            .align_x(iced::alignment::Horizontal::Center),
-    );
-    if f == active {
-        btn.style(|_theme, _| iced::widget::button::Style {
-            background: Some(Color::from_rgb8(150, 220, 220).into()),
-            text_color: Color::BLACK,
-            border: iced::Border {
-                radius: 4.0.into(),
-                ..Default::default()
-            },
-            ..Default::default()
-        })
-    } else {
-        btn.style(|_theme, _status| iced::widget::button::Style {
-            background: Some(Color::from_rgb8(60, 60, 65).into()),
-            text_color: Color::WHITE,
-            border: iced::Border {
-                radius: 4.0.into(),
-                ..Default::default()
-            },
-            ..Default::default()
-        })
-    }
-    .on_press(crate::message::Message::SetFilter(f))
-}
-
-fn render_toolbar(app: &PdfBullApp) -> Element<'_, crate::message::Message> {
-    let Some(tab) = app.current_tab() else {
-        return container(row![]).into();
-    };
-
-    let open_btn = stacked_tool(
-        tooltip(
-            button(text(icons::OPEN).size(16).font(LUCIDE))
-                .on_press(crate::message::Message::OpenDocument)
-                .style(iced::widget::button::text),
-            "Open another PDF",
-            tooltip::Position::Bottom,
-        ),
-        "Open",
-    );
-
-    let sidebar_btn = stacked_tool(
-        tooltip(
-            button(text(icons::SIDEBAR).size(16).font(LUCIDE))
-                .on_press(crate::message::Message::ToggleSidebar)
-                .style(iced::widget::button::text),
-            "Toggle Sidebar (Ctrl+B)",
-            tooltip::Position::Bottom,
-        ),
-        "Sidebar",
-    );
-
-    let zoom_controls = stacked_tool(
-        container(
-            row![
-                button(text(icons::ZOOM_OUT).size(14).font(LUCIDE))
-                    .on_press(crate::message::Message::ZoomOut)
-                    .style(|_theme, _status| iced::widget::button::Style {
-                        text_color: Color::WHITE,
-                        ..Default::default()
-                    }),
-                text(format!("{}%", (tab.zoom * 100.0) as u32))
-                    .size(13)
-                    .font(INTER_BOLD)
-                    .style(|_theme| iced::widget::text::Style {
-                        color: Some(Color::WHITE)
-                    }),
-                button(text(icons::ZOOM_IN).size(14).font(LUCIDE))
-                    .on_press(crate::message::Message::ZoomIn)
-                    .style(|_theme, _status| iced::widget::button::Style {
-                        text_color: Color::WHITE,
-                        ..Default::default()
-                    }),
-            ]
-            .spacing(12)
-            .align_y(Alignment::Center),
-        )
-        .padding([4, 10])
-        .style(|_theme| iced::widget::container::Style {
-            background: Some(Color::from_rgb8(30, 31, 34).into()),
-            border: iced::Border {
-                radius: 20.0.into(),
-                ..Default::default()
-            },
-            ..Default::default()
-        }),
-        "Zoom",
-    );
-
-    let rotate_btn = stacked_tool(
-        tooltip(
-            button(text(icons::ROTATE).size(16).font(LUCIDE))
-                .on_press(crate::message::Message::RotateClockwise)
-                .style(iced::widget::button::text),
-            "Rotate 90° clockwise",
-            tooltip::Position::Bottom,
-        ),
-        "Rotate",
-    );
-
-    let crop_filters = stacked_tool(
-        column![
-            row![
-                filter_btn_custom("None", RenderFilter::None, tab.render_filter),
-                filter_btn_custom("Gray", RenderFilter::Grayscale, tab.render_filter),
-                filter_btn_custom("Inv", RenderFilter::Inverted, tab.render_filter),
-            ]
-            .spacing(2),
-            row![
-                filter_btn_custom("Eco", RenderFilter::Eco, tab.render_filter),
-                filter_btn_custom("B&W", RenderFilter::BlackWhite, tab.render_filter),
-                filter_btn_custom("Light", RenderFilter::Lighten, tab.render_filter),
-            ]
-            .spacing(2),
-        ]
-        .spacing(2),
-        "Filters",
-    );
-
-    let autocrop_btn = stacked_tool(
-        button(
-            text(if tab.auto_crop { "ON" } else { "OFF" })
-                .size(11)
-                .font(INTER_BOLD)
-                .align_x(iced::alignment::Horizontal::Center),
-        )
-        .on_press(crate::message::Message::ToggleAutoCrop)
-        .style(move |_, _| {
-            if tab.auto_crop {
-                iced::widget::button::Style {
-                    background: Some(theme::COLOR_ACCENT.into()),
-                    text_color: Color::WHITE,
-                    border: Border {
-                        radius: 4.0.into(),
-                        ..Default::default()
-                    },
-                    ..Default::default()
-                }
-            } else {
-                iced::widget::button::Style {
-                    background: Some(Color::from_rgb8(60, 60, 65).into()),
-                    text_color: Color::WHITE,
-                    border: Border {
-                        radius: 4.0.into(),
-                        ..Default::default()
-                    },
-                    ..Default::default()
-                }
-            }
-        })
-        .padding([4, 8]),
-        "Auto-Crop",
-    );
-
-    let split_btn = stacked_tool(
-        button(text("Split").size(11).font(INTER_BOLD))
-            .on_press(crate::message::Message::SplitPDF(vec![tab.current_page]))
-            .style(iced::widget::button::text),
-        "Split",
-    );
-
-    let forms_btn = stacked_tool(
-        tooltip(
-            button(text(icons::FORMS).size(16).font(LUCIDE))
-                .on_press(crate::message::Message::ToggleFormsSidebar)
-                .style(iced::widget::button::text),
-            "Toggle Form Fields",
-            tooltip::Position::Bottom,
-        ),
-        "Forms",
-    );
-
-    let bookmark_btn = stacked_tool(
-        tooltip(
-            button(text(icons::BOOKMARK).size(16).font(LUCIDE))
-                .on_press(crate::message::Message::AddBookmark)
-                .style(iced::widget::button::text),
-            "Add Bookmark",
-            tooltip::Position::Bottom,
-        ),
-        "Bookmark",
-    );
-
-    let highlight_btn = stacked_tool(
-        tooltip(
-            button(text(icons::HIGHLIGHT).size(16).font(LUCIDE))
-                .on_press(crate::message::Message::SetAnnotationMode(Some(
-                    PendingAnnotationKind::Highlight,
-                )))
-                .style(iced::widget::button::text),
-            "Highlight Text",
-            tooltip::Position::Bottom,
-        ),
-        "Highlight",
-    );
-
-    let rectangle_btn = stacked_tool(
-        tooltip(
-            button(text(icons::RECTANGLE).size(16).font(LUCIDE))
-                .on_press(crate::message::Message::SetAnnotationMode(Some(
-                    PendingAnnotationKind::Rectangle,
-                )))
-                .style(iced::widget::button::text),
-            "Draw Rectangle",
-            tooltip::Position::Bottom,
-        ),
-        "Rectangle",
-    );
-
-    let save_anns_btn = stacked_tool(
-        tooltip(
-            button(text(icons::SAVE).size(16).font(LUCIDE))
-                .on_press(crate::message::Message::SaveAnnotations)
-                .style(iced::widget::button::text),
-            "Save Annotations",
-            tooltip::Position::Bottom,
-        ),
-        "Save",
-    );
-
-    let right_tools = column![
-        row![
-            button(text("Info").size(12).font(INTER_BOLD))
-                .on_press(crate::message::Message::ToggleMetadata)
-                .style(iced::widget::button::text),
-            button(text(icons::HELP).size(16).font(LUCIDE))
-                .on_press(crate::message::Message::ToggleKeyboardHelp)
-                .style(iced::widget::button::text),
-            button(text(icons::SETTINGS).size(16).font(LUCIDE))
-                .on_press(crate::message::Message::OpenSettings)
-                .style(iced::widget::button::text),
-        ]
-        .spacing(8)
-        .align_y(Alignment::Center),
-        row![
-            button(
-                row![
-                    text(icons::COPY).size(12).font(LUCIDE),
-                    text("Text").size(11).font(INTER_REGULAR),
-                ]
-                .spacing(4)
-                .align_y(Alignment::Center)
-            )
-            .on_press(crate::message::Message::ExtractTextToClipboard)
-            .style(iced::widget::button::text),
-            button(
-                row![
-                    text(icons::COPY).size(12).font(LUCIDE),
-                    text("Image").size(11).font(INTER_REGULAR),
-                ]
-                .spacing(4)
-                .align_y(Alignment::Center)
-            )
-            .on_press(crate::message::Message::CopyImageToClipboard)
-            .style(iced::widget::button::text),
-        ]
-        .spacing(8)
-        .align_y(Alignment::Center),
-        button(
-            row![
-                text(icons::EXPORT).size(12).font(LUCIDE),
-                text("Export").size(11).font(INTER_REGULAR),
-            ]
-            .spacing(4)
-            .align_y(Alignment::Center)
-        )
-        .on_press(crate::message::Message::ExportImage)
-        .style(iced::widget::button::text),
-        button(
-            row![
-                text(icons::PRINT).size(12).font(LUCIDE),
-                text("Print").size(11).font(INTER_REGULAR),
-            ]
-            .spacing(4)
-            .align_y(Alignment::Center)
-        )
-        .on_press(crate::message::Message::Print)
-        .style(iced::widget::button::text),
-    ]
-    .spacing(2)
-    .align_x(Alignment::Center);
-
-    container(
-        row![
-            open_btn,
-            Space::new(15, 0),
-            sidebar_btn,
-            Space::new(25, 0),
-            zoom_controls,
-            Space::new(20, 0),
-            rotate_btn,
-            Space::new(20, 0),
-            crop_filters,
-            Space::new(10, 0),
-            autocrop_btn,
-            Space::new(Length::Fill, 0),
-            split_btn,
-            Space::new(15, 0),
-            forms_btn,
-            Space::new(15, 0),
-            bookmark_btn,
-            Space::new(15, 0),
-            highlight_btn,
-            Space::new(15, 0),
-            rectangle_btn,
-            Space::new(20, 0),
-            save_anns_btn,
-            Space::new(20, 0),
-            right_tools,
-        ]
-        .spacing(5)
-        .align_y(Alignment::Center),
-    )
-    .width(Length::Fill)
-    .padding(Padding {
-        top: 8.0,
-        right: 15.0,
-        bottom: 8.0,
-        left: 15.0,
-    })
-    .style(|_theme| iced::widget::container::Style {
-        background: Some(Color::from_rgb8(43, 45, 49).into()),
-        shadow: Shadow {
-            color: Color::from_rgba(0.0, 0.0, 0.0, 0.2),
-            offset: Vector::new(0.0, 2.0),
-            blur_radius: 8.0,
-        },
-        ..Default::default()
-    })
-    .into()
-}
+use crate::ui::{sidebar, tabs, toolbar};
 
 fn render_page_nav(app: &PdfBullApp) -> Element<'_, crate::message::Message> {
     let Some(tab) = app.current_tab() else {
@@ -516,293 +158,6 @@ fn render_page_nav(app: &PdfBullApp) -> Element<'_, crate::message::Message> {
     .into()
 }
 
-fn section_title<'a>(label: &'a str) -> Element<'a, crate::message::Message> {
-    container(
-        text(label)
-            .size(14)
-            .font(INTER_BOLD)
-            .style(|_| iced::widget::text::Style {
-                color: Some(Color::from_rgb(0.2, 0.4, 0.6)),
-            }),
-    )
-    .padding([5, 0])
-    .into()
-}
-
-fn render_sidebar(app: &PdfBullApp) -> Element<'_, crate::message::Message> {
-    let Some(tab) = app.current_tab() else {
-        return container(column![]).into();
-    };
-
-    let mut sidebar_col = column![]
-        .spacing(10)
-        .padding(5)
-        .width(Length::Fixed(theme::SIDEBAR_WIDTH));
-
-    if !tab.outline.is_empty() {
-        let mut outline_col = column![section_title("Outline")];
-        for bookmark in &tab.outline {
-            outline_col = outline_col.push(
-                button(text(&bookmark.title))
-                    .on_press(crate::message::Message::JumpToPage(
-                        bookmark.page_index as usize,
-                    ))
-                    .width(Length::Fill),
-            );
-        }
-        sidebar_col = sidebar_col.push(container(outline_col.spacing(5)).padding(10));
-    }
-
-    if !tab.bookmarks.is_empty() {
-        let mut bookmarks_col = column![section_title("Bookmarks")];
-        for (idx, bookmark) in tab.bookmarks.iter().enumerate() {
-            bookmarks_col = bookmarks_col.push(row![
-                button(text(&bookmark.label))
-                    .on_press(crate::message::Message::JumpToBookmark(idx))
-                    .width(Length::Fill),
-                button("×").on_press(crate::message::Message::RemoveBookmark(idx))
-            ]);
-        }
-        sidebar_col = sidebar_col.push(container(bookmarks_col.spacing(5)).padding(10));
-    }
-
-    if !tab.annotations.is_empty() {
-        let mut annotations_col = column![section_title("Annotations")];
-        for (idx, ann) in tab.annotations.iter().enumerate() {
-            let label = match &ann.style {
-                AnnotationStyle::Highlight { .. } => {
-                    format!("Highlight P{}", ann.page + 1)
-                }
-                AnnotationStyle::Rectangle { .. } => {
-                    format!("Rect P{}", ann.page + 1)
-                }
-                AnnotationStyle::Text { text, .. } => {
-                    format!("Text: {}", &text[..text.len().min(20)])
-                }
-            };
-            annotations_col = annotations_col.push(row![
-                button(text(label))
-                    .on_press(crate::message::Message::JumpToPage(ann.page))
-                    .width(Length::Fill),
-                button("×").on_press(crate::message::Message::DeleteAnnotation(idx))
-            ]);
-        }
-        sidebar_col = sidebar_col.push(container(annotations_col.spacing(5)).padding(10));
-    }
-
-    sidebar_col = sidebar_col.push(
-        container(
-            text(format!("Pages ({})", tab.total_pages))
-                .size(14)
-                .font(INTER_BOLD)
-                .style(|_| iced::widget::text::Style {
-                    color: Some(Color::from_rgb(0.2, 0.4, 0.6)),
-                }),
-        )
-        .padding([5, 0]),
-    );
-
-    let start_idx = (tab.view_state.sidebar_viewport_y / theme::THUMBNAIL_HEIGHT).max(0.0) as usize;
-    let end_idx = (start_idx + 30).min(tab.total_pages);
-
-    if start_idx > 0 {
-        sidebar_col = sidebar_col.push(Space::new(0, start_idx as f32 * theme::THUMBNAIL_HEIGHT));
-    }
-
-    for page_idx in start_idx..end_idx {
-        if let Some(handle) = tab.view_state.thumbnails.get(&page_idx) {
-            let img = iced::widget::Image::new(handle.clone())
-                .width(Length::Fixed(theme::THUMBNAIL_WIDTH));
-            sidebar_col = sidebar_col
-                .push(button(img).on_press(crate::message::Message::JumpToPage(page_idx)));
-        } else {
-            sidebar_col = sidebar_col.push(
-                button(text(format!("Page {}", page_idx + 1)).font(INTER_REGULAR))
-                    .on_press(crate::message::Message::JumpToPage(page_idx))
-                    .width(Length::Fixed(theme::THUMBNAIL_WIDTH)),
-            );
-        }
-    }
-
-    let remaining = tab.total_pages.saturating_sub(end_idx);
-    if remaining > 0 {
-        sidebar_col = sidebar_col.push(Space::new(0, remaining as f32 * theme::THUMBNAIL_HEIGHT));
-    }
-
-    scrollable(sidebar_col)
-        .id(scrollable::Id::new("sidebar_scroll"))
-        .on_scroll(|viewport| {
-            crate::message::Message::SidebarViewportChanged(viewport.absolute_offset().y)
-        })
-        .width(Length::Fixed(theme::SIDEBAR_WIDTH))
-        .into()
-}
-
-fn render_forms_sidebar(app: &PdfBullApp) -> Element<'_, crate::message::Message> {
-    let mut fields_col = column![
-        section_title("Interactive Form"),
-        text("Fill out the fields below and save as a new PDF.")
-            .size(12)
-            .style(|_| iced::widget::text::Style {
-                color: Some(theme::COLOR_TEXT_DIM)
-            }),
-        Space::new(0, 10),
-    ]
-    .spacing(10)
-    .padding(15);
-
-    if app.form_fields.is_empty() {
-        fields_col =
-            fields_col.push(text("No interactive fields found in this document.").size(13));
-    } else {
-        for field in &app.form_fields {
-            fields_col = fields_col.push(
-                column![
-                    text(&field.name).size(12).font(INTER_BOLD),
-                    text_input("Value...", &field.value)
-                        .on_input({
-                            let name = field.name.clone();
-                            move |val| crate::message::Message::FormFieldChanged(name.clone(), val)
-                        })
-                        .padding(8)
-                ]
-                .spacing(4),
-            );
-        }
-
-        fields_col = fields_col.push(
-            button(text("Save Filled Form").font(INTER_BOLD))
-                .on_press(crate::message::Message::FillForm(app.form_fields.clone()))
-                .width(Length::Fill)
-                .padding(10)
-                .style(|_, _| iced::widget::button::Style {
-                    background: Some(theme::COLOR_ACCENT.into()),
-                    text_color: Color::WHITE,
-                    border: Border {
-                        radius: 8.0.into(),
-                        ..Default::default()
-                    },
-                    ..Default::default()
-                }),
-        );
-    }
-
-    container(scrollable(fields_col))
-        .width(Length::Fixed(250.0))
-        .style(|_| iced::widget::container::Style {
-            background: Some(Color::from_rgb8(35, 36, 40).into()),
-            border: Border {
-                width: 1.0,
-                color: Color::from_rgb8(50, 52, 56),
-                ..Default::default()
-            },
-            ..Default::default()
-        })
-        .into()
-}
-
-fn render_tabs(app: &PdfBullApp) -> Element<'_, crate::message::Message> {
-    let mut tabs = row![];
-    for (i, t) in app.tabs.iter().enumerate() {
-        let is_active = i == app.active_tab;
-
-        let display_name = if t.name.chars().count() > 20 {
-            format!("{}…", t.name.chars().take(18).collect::<String>())
-        } else {
-            t.name.clone()
-        };
-
-        let tab_bg = if is_active {
-            Color::from_rgb8(43, 45, 49)
-        } else {
-            Color::from_rgb8(30, 31, 34)
-        };
-
-        let text_color = if is_active {
-            Color::WHITE
-        } else {
-            Color::from_rgb8(150, 150, 150)
-        };
-
-        let tab_content = row![
-            text(icons::OPEN).size(14).font(LUCIDE),
-            Space::new(6, 0),
-            text(display_name)
-                .size(13)
-                .font(if is_active { INTER_BOLD } else { INTER_REGULAR })
-                .style(move |_theme| iced::widget::text::Style {
-                    color: Some(text_color)
-                }),
-            Space::new(10, 0),
-            button(
-                text(icons::CLOSE)
-                    .size(12)
-                    .font(LUCIDE)
-                    .style(move |_theme| iced::widget::text::Style {
-                        color: Some(text_color)
-                    })
-            )
-            .on_press(crate::message::Message::CloseTab(i))
-            .style(iced::widget::button::text)
-            .padding(2)
-        ]
-        .align_y(Alignment::Center);
-
-        tabs = tabs.push(
-            container(tab_content)
-                .padding(Padding {
-                    top: 6.0,
-                    right: 12.0,
-                    bottom: 6.0,
-                    left: 12.0,
-                })
-                .style(move |_theme| iced::widget::container::Style {
-                    background: Some(tab_bg.into()),
-                    border: iced::Border {
-                        radius: iced::border::Radius {
-                            top_left: 8.0,
-                            top_right: 8.0,
-                            bottom_left: 0.0,
-                            bottom_right: 0.0,
-                        },
-                        width: if is_active { 0.0 } else { 1.0 },
-                        color: Color::from_rgb8(20, 20, 20),
-                    },
-                    ..Default::default()
-                }),
-        );
-        tabs = tabs.push(Space::new(2, 0));
-    }
-
-    let add_button =
-        button(
-            text(icons::PLUS)
-                .size(16)
-                .font(LUCIDE)
-                .style(|_theme| iced::widget::text::Style {
-                    color: Some(Color::WHITE),
-                }),
-        )
-        .padding([4, 10])
-        .on_press(crate::message::Message::OpenDocument)
-        .style(iced::widget::button::text);
-
-    let tab_bar_bg = container(row![tabs, add_button].align_y(Alignment::End))
-        .width(Length::Fill)
-        .padding(Padding {
-            top: 6.0,
-            right: 5.0,
-            bottom: 0.0,
-            left: 10.0,
-        })
-        .style(|_theme| iced::widget::container::Style {
-            background: Some(Color::from_rgb8(25, 26, 28).into()),
-            ..Default::default()
-        });
-
-    tab_bar_bg.into()
-}
-
 fn render_annotations<'a>(
     page_idx: usize,
     tab: &'a DocumentTab,
@@ -858,6 +213,16 @@ fn render_annotations<'a>(
                             .font(INTER_REGULAR)
                             .color(Color::from_rgb(r, g, b)),
                     )
+                }
+                AnnotationStyle::Redact { color } => {
+                    let (r, g, b) = hex_to_rgb(color);
+                    container(Space::new(0, 0))
+                        .width(Length::Fixed(ann.width * zoom))
+                        .height(Length::Fixed(ann.height * zoom))
+                        .style(move |_| iced::widget::container::Style {
+                            background: Some(Color::from_rgb(r, g, b).into()),
+                            ..Default::default()
+                        })
                 }
             };
 
@@ -957,11 +322,12 @@ fn render_active_drag<'a>(
             let preview_bg = match drag.kind {
                 PendingAnnotationKind::Highlight => Color::from_rgba(1.0, 1.0, 0.0, 0.4),
                 PendingAnnotationKind::Rectangle => Color::from_rgba(1.0, 0.0, 0.0, 0.2),
+                PendingAnnotationKind::Redact => Color::from_rgba(0.0, 0.0, 0.0, 0.8),
             };
 
             let preview_border = match drag.kind {
                 PendingAnnotationKind::Highlight => iced::Border::default(),
-                PendingAnnotationKind::Rectangle => iced::Border {
+                PendingAnnotationKind::Rectangle | PendingAnnotationKind::Redact => iced::Border {
                     color: Color::from_rgb(1.0, 0.0, 0.0),
                     width: 2.0 * zoom,
                     radius: 0.0.into(),
@@ -1125,13 +491,13 @@ pub fn document_view(app: &PdfBullApp) -> Element<'_, crate::message::Message> {
     let mut content_row = row![];
 
     if app.show_sidebar && !app.is_fullscreen {
-        content_row = content_row.push(render_sidebar(app));
+        content_row = content_row.push(sidebar::render(app));
     }
 
     content_row = content_row.push(render_pdf_content(app));
 
     if app.show_forms_sidebar && !app.is_fullscreen {
-        content_row = content_row.push(render_forms_sidebar(app));
+        content_row = content_row.push(sidebar::render_forms(app));
     }
 
     let content: Element<crate::message::Message> = if tab.total_pages == 0 {
@@ -1173,8 +539,8 @@ pub fn document_view(app: &PdfBullApp) -> Element<'_, crate::message::Message> {
         .into()
     } else {
         column![
-            render_tabs(app),
-            render_toolbar(app),
+            tabs::render(app),
+            toolbar::render(app),
             render_page_nav(app),
             content
         ]

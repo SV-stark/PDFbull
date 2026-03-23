@@ -73,6 +73,7 @@ pub fn handle_tab_message(app: &mut PdfBullApp, message: Message) -> Task<Messag
                 let width = res.max_width;
                 let outline = res.outline;
                 let links = res.links;
+                let signatures = res.signatures;
 
                 let default_zoom = app.settings.default_zoom;
                 let default_filter = app.settings.default_filter;
@@ -88,6 +89,7 @@ pub fn handle_tab_message(app: &mut PdfBullApp, message: Message) -> Task<Messag
                     tab.page_width = width;
                     tab.outline = outline;
                     tab.links = links;
+                    tab.signatures = signatures;
                     tab.view_state.is_loading = false;
                     tab.zoom = default_zoom;
                     tab.render_filter = default_filter;

@@ -1,6 +1,6 @@
 use crate::models::{
-    Annotation, AnnotationStyle, DocumentId, FormField, Hyperlink, PdfError, PdfResult,
-    SearchResultItem,
+    Annotation, AnnotationStyle, DocumentId, FormField, FormFieldVariant, Hyperlink, PdfError,
+    PdfResult, SearchResultItem,
 };
 use lopdf::{Document, Object, ObjectId};
 use pdfium_render::prelude::*;
@@ -173,6 +173,7 @@ impl<'a> DocumentStore<'a> {
         }
 
         let outline = self.get_outline_internal(&doc);
+        let signatures = self.extract_signatures_internal(&doc);
         let pdf_metadata = doc.metadata();
         let metadata = crate::models::DocumentMetadata {
             title: pdf_metadata
@@ -213,6 +214,7 @@ impl<'a> DocumentStore<'a> {
             outline,
             links: all_links,
             metadata,
+            signatures,
         })
     }
 
@@ -545,6 +547,24 @@ impl<'a> DocumentStore<'a> {
                         ))
                         .map_err(|e| PdfError::RenderFailed(e.to_string()))?;
                 }
+                AnnotationStyle::Redact { color } => {
+                    let (r, g, b) = hex_to_rgb(color);
+                    // For now, we simulate redaction by adding a solid rectangle.
+                    // A pro app would use the actual redaction annotations and call apply_redactions().
+                    let _ = objects
+                        .create_path_object_rect(
+                            rect,
+                            None,
+                            None,
+                            Some(PdfColor::new(
+                                (r * 255.0) as u8,
+                                (g * 255.0) as u8,
+                                (b * 255.0) as u8,
+                                255, // Solid
+                            )),
+                        )
+                        .map_err(|e| PdfError::RenderFailed(e.to_string()))?;
+                }
             }
         }
         let final_path = output_path.unwrap_or_else(|| pdf_path.replace(".pdf", "_annotated.pdf"));
@@ -823,21 +843,52 @@ impl<'a> DocumentStore<'a> {
             for annotation in page.annotations().iter() {
                 if let Some(form_field) = annotation.as_form_field() {
                     let name = form_field.name().unwrap_or_default();
-                    let value = if let Some(text_field) = form_field.as_text_field() {
-                        text_field.value().unwrap_or_default()
-                    } else {
-                        "".to_string()
+                    let variant = match form_field.field_type() {
+                        PdfFormFieldType::Text => FormFieldVariant::Text {
+                            value: form_field
+                                .as_text_field()
+                                .and_then(|f| f.value())
+                                .unwrap_or_default(),
+                        },
+                        PdfFormFieldType::Checkbox => FormFieldVariant::Checkbox {
+                            is_checked: form_field
+                                .as_checkbox_field()
+                                .map(|f| f.is_checked().unwrap_or(false))
+                                .unwrap_or(false),
+                        },
+                        PdfFormFieldType::RadioButton => FormFieldVariant::RadioButton {
+                            is_selected: form_field
+                                .as_radio_button_field()
+                                .map(|f| f.is_checked().unwrap_or(false))
+                                .unwrap_or(false),
+                            group_name: None,
+                        },
+                        PdfFormFieldType::ComboBox | PdfFormFieldType::ListBox => {
+                            FormFieldVariant::ComboBox {
+                                options: Vec::new(),
+                                selected_index: None,
+                            }
+                        }
+                        _ => FormFieldVariant::Text {
+                            value: "".to_string(),
+                        },
                     };
                     fields.push(FormField {
                         name,
-                        value,
-                        field_type: format!("{:?}", form_field.field_type()),
+                        variant,
                         page: idx,
                     });
                 }
             }
         }
         fields
+    }
+
+    fn extract_signatures_internal(&self, _doc: &PdfDocument) -> Vec<crate::models::SignatureInfo> {
+        // Real signature verification requires complex cryptographic logic.
+        // For now, we'll return a placeholder to show the UI integration.
+        // In a production app, we would use pdfium's signature API or a crate like `openssl`
+        Vec::new()
     }
 
     pub fn fill_form(
@@ -859,8 +910,27 @@ impl<'a> DocumentStore<'a> {
                         .iter()
                         .find(|f| f.name == form_field.name().unwrap_or_default())
                     {
-                        if let Some(text_field) = form_field.as_text_field_mut() {
-                            let _ = text_field.set_value(&update.value);
+                        match &update.variant {
+                            FormFieldVariant::Text { value } => {
+                                if let Some(text_field) = form_field.as_text_field_mut() {
+                                    let _ = text_field.set_value(value);
+                                }
+                            }
+                            FormFieldVariant::Checkbox { is_checked } => {
+                                if let Some(cb) = form_field.as_checkbox_field_mut() {
+                                    let _ = cb.set_checked(*is_checked);
+                                }
+                            }
+                            FormFieldVariant::RadioButton { is_selected, .. } => {
+                                if *is_selected {
+                                    if let Some(rb) = form_field.as_radio_button_field_mut() {
+                                        let _ = rb.set_checked();
+                                    }
+                                }
+                            }
+                            FormFieldVariant::ComboBox { .. } => {
+                                // TODO: Verify ComboBox/ChoiceField mutation API in pdfium-render
+                            }
                         }
                     }
                 }
