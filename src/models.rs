@@ -4,7 +4,7 @@ use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 use thiserror::Error;
 
-#[derive(Error, Debug, Clone, PartialEq)]
+#[derive(Error, Debug, Clone, PartialEq, Eq)]
 pub enum PdfError {
     #[error("Failed to open document: {0}")]
     OpenFailed(String),
@@ -24,24 +24,24 @@ pub enum PdfError {
 
 impl From<&str> for PdfError {
     fn from(s: &str) -> Self {
-        PdfError::EngineError(s.to_string())
+        Self::EngineError(s.to_string())
     }
 }
 
 impl From<String> for PdfError {
     fn from(s: String) -> Self {
-        PdfError::EngineError(s)
+        Self::EngineError(s)
     }
 }
 
 impl PartialEq<&str> for PdfError {
     fn eq(&self, other: &&str) -> bool {
         match self {
-            PdfError::EngineError(s) => s == *other,
-            PdfError::OpenFailed(s) => s == *other,
-            PdfError::RenderFailed(s) => s == *other,
-            PdfError::IoError(s) => s == *other,
-            PdfError::SearchError(s) => s == *other,
+            Self::EngineError(s)
+            | Self::OpenFailed(s)
+            | Self::RenderFailed(s)
+            | Self::IoError(s)
+            | Self::SearchError(s) => s == *other,
             _ => false,
         }
     }
@@ -100,7 +100,7 @@ pub struct Hyperlink {
 #[derive(Default, Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct DocumentId(pub u64);
 
-#[derive(Default, Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[derive(Default, Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub enum AppTheme {
     #[default]
     System,

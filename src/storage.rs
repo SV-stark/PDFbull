@@ -17,21 +17,21 @@ pub fn time_ago(unix_secs: u64) -> String {
             if m == 1 {
                 "1 min ago".into()
             } else {
-                format!("{} mins ago", m)
+                format!("{m} mins ago")
             }
         } else if secs < 86400 {
             let h = secs / 3600;
             if h == 1 {
                 "1 hour ago".into()
             } else {
-                format!("{} hours ago", h)
+                format!("{h} hours ago")
             }
-        } else if secs < 172800 {
+        } else if secs < 172_800 {
             "yesterday".into()
         } else {
             let d = secs / 86400;
             if d < 30 {
-                format!("{} days ago", d)
+                format!("{d} days ago")
             } else {
                 let format =
                     time::format_description::parse("[month repr:short] [day], [year]").unwrap();
@@ -119,7 +119,7 @@ pub fn load_settings() -> AppSettings {
 pub fn save_settings(settings: &AppSettings) {
     let dir = get_config_dir();
     if let Err(e) = fs::create_dir_all(&dir) {
-        eprintln!("Failed to create config directory: {}", e);
+        eprintln!("Failed to create config directory: {e}");
         return;
     }
     let path = dir.join("settings.json");
@@ -135,9 +135,8 @@ pub fn load_recent_files() -> Vec<RecentFile> {
     if let Ok(data) = fs::read_to_string(&path) {
         if let Ok(files) = serde_json::from_str(&data) {
             return files;
-        } else {
-            tracing::warn!("Corrupted recent_files.json, using empty list");
         }
+        tracing::warn!("Corrupted recent_files.json, using empty list");
     }
     Vec::new()
 }

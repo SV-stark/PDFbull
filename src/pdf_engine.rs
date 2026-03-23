@@ -589,7 +589,7 @@ impl<'a> DocumentStore<'a> {
         let mut encoder = PngEncoder::new();
         let out_buf = encoder
             .encode(&image)
-            .map_err(|e| PdfError::RenderFailed(format!("{:?}", e)))?;
+            .map_err(|e| PdfError::RenderFailed(format!("{e:?}")))?;
 
         Ok(out_buf)
     }

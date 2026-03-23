@@ -10,7 +10,7 @@ fn main() {
         res.set_icon("PDFbull.ico");
 
         if let Err(e) = res.compile() {
-            println!("cargo:warning=Failed to compile Windows resources: {}", e);
+            println!("cargo:warning=Failed to compile Windows resources: {e}");
         }
     }
 }

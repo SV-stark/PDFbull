@@ -97,6 +97,7 @@ impl Default for PdfBullApp {
 }
 
 impl PdfBullApp {
+    #[must_use]
     pub fn current_tab(&self) -> Option<&DocumentTab> {
         self.tabs.get(self.active_tab)
     }
@@ -161,9 +162,8 @@ impl PdfBullApp {
             auto_crop,
             page_width,
         ) = {
-            let tab = match self.current_tab_mut() {
-                Some(t) => t,
-                None => return Task::none(),
+            let Some(tab) = self.current_tab_mut() else {
+                return Task::none();
             };
             tab.update_visible_range();
             (
@@ -232,10 +232,7 @@ impl PdfBullApp {
                         options,
                         resp_tx,
                     ));
-                    let res = match resp_rx.await {
-                        Ok(result) => result,
-                        Err(_) => Err("Engine died".into()),
-                    };
+                    let res = resp_rx.await.unwrap_or_else(|_| Err("Engine died".into()));
                     (page_idx, current_scale, res)
                 },
                 |(page_idx, scale, res)| Message::PageRendered(page_idx, scale, res),
@@ -311,7 +308,7 @@ impl PdfBullApp {
                             .show()
                             .await;
                     },
-                    |_| Message::ClearStatus,
+                    |()| Message::ClearStatus,
                 ));
             }
 
@@ -320,7 +317,7 @@ impl PdfBullApp {
                     let duration = if msg_clone.len() > 60 { 8 } else { 5 };
                     tokio::time::sleep(tokio::time::Duration::from_secs(duration)).await;
                 },
-                |_| Message::ClearStatus,
+                |()| Message::ClearStatus,
             ));
 
             Task::batch(tasks)
@@ -329,6 +326,7 @@ impl PdfBullApp {
         }
     }
 
+    #[must_use]
     pub fn view(&self) -> Element<'_, Message> {
         ui::view(self)
     }
@@ -348,7 +346,7 @@ impl PdfBullApp {
                 use notify_debouncer_mini::{new_debouncer, notify::RecursiveMode};
                 let (tx, mut rx) = tokio::sync::mpsc::channel(10);
 
-                let mut debouncer = match new_debouncer(
+                let Ok(mut debouncer) = new_debouncer(
                     std::time::Duration::from_secs(1),
                     move |res: Result<Vec<notify_debouncer_mini::DebouncedEvent>, _>| {
                         if let Ok(events) = res {
@@ -357,9 +355,8 @@ impl PdfBullApp {
                             }
                         }
                     },
-                ) {
-                    Ok(d) => d,
-                    Err(_) => return,
+                ) else {
+                    return;
                 };
 
                 let watcher = debouncer.watcher();

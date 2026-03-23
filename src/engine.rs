@@ -10,26 +10,25 @@ pub struct EngineState {
     pub active_workers: Arc<std::sync::atomic::AtomicUsize>,
 }
 
+#[must_use]
 pub fn spawn_engine_thread(cache_size: u64, max_memory_mb: u64) -> EngineState {
     let (cmd_tx, mut cmd_rx) = mpsc::unbounded_channel::<PdfCommand>();
     let active_workers = Arc::new(std::sync::atomic::AtomicUsize::new(0));
-    let workers_count = active_workers.clone();
 
     let render_cache: SharedRenderCache = create_render_cache(cache_size, max_memory_mb);
 
     std::thread::spawn(move || {
-        let pdfium = match Pdfium::bind_to_system_library() {
-            Ok(p) => Pdfium::new(p),
-            Err(_) => {
-                tracing::error!(
-                    "Failed to bind to Pdfium system library. Attempting local search..."
-                );
-                match Pdfium::bind_to_library(Pdfium::pdfium_platform_library_name_at_path("./")) {
-                    Ok(p) => Pdfium::new(p),
-                    Err(e) => {
-                        tracing::error!("CRITICAL: Could not find Pdfium: {}", e);
-                        return;
-                    }
+        let pdfium = if let Ok(p) = Pdfium::bind_to_system_library() {
+            Pdfium::new(p)
+        } else {
+            tracing::error!(
+                "Failed to bind to Pdfium system library. Attempting local search..."
+            );
+            match Pdfium::bind_to_library(Pdfium::pdfium_platform_library_name_at_path("./")) {
+                Ok(p) => Pdfium::new(p),
+                Err(e) => {
+                    tracing::error!("CRITICAL: Could not find Pdfium: {e}");
+                    return;
                 }
             }
         };
@@ -37,7 +36,7 @@ pub fn spawn_engine_thread(cache_size: u64, max_memory_mb: u64) -> EngineState {
         let mut store = match DocumentStore::new(&pdfium, render_cache.clone()) {
             Ok(s) => s,
             Err(e) => {
-                tracing::error!("Failed to initialize DocumentStore: {}", e);
+                tracing::error!("Failed to initialize DocumentStore: {e}");
                 return;
             }
         };
@@ -85,7 +84,7 @@ pub fn spawn_engine_thread(cache_size: u64, max_memory_mb: u64) -> EngineState {
                 PdfCommand::ExportImages(doc_id, pages, scale, out_dir, tx) => {
                     let mut paths = Vec::new();
                     for page_num in pages {
-                        let out_path = format!("{}/page_{}.png", out_dir, page_num);
+                        let out_path = format!("{out_dir}/page_{page_num}.png");
                         if let Ok(buf) = store.export_page_as_image(doc_id, page_num, scale) {
                             let optimized =
                                 oxipng::optimize_from_memory(&buf, &oxipng::Options::default())
@@ -133,6 +132,6 @@ pub fn spawn_engine_thread(cache_size: u64, max_memory_mb: u64) -> EngineState {
 
     EngineState {
         cmd_tx,
-        active_workers: workers_count,
+        active_workers,
     }
 }
