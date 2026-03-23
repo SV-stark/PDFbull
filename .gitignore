@@ -49,3 +49,4 @@ packages/**/incremental/
 agents.md
 .desloppify/
 nul
+.aider*
