@@ -41,12 +41,14 @@ notify-debouncer-mini = "0.4"
 interprocess = "1.2.1"
 windows = { version = "0.62.2", features = ["Win32_UI_Shell", "Win32_System_Com", "Win32_Foundation"] }
 crossbeam-channel = "0.5.15"
+insta = { version = "1.46.3", features = ["redactions"] }
 
 [build-dependencies]
 winresource = "0.1"
 
 [dev-dependencies]
 divan = "0.1.14"
+sha2 = "0.10.9"
 
 [[bench]]
 name = "render_bench"

@@ -1,0 +1,9 @@
+---
+source: tests/visual_regression.rs
+expression: "(result.width, result.height, hash)"
+---
+(
+    595,
+    841,
+    "0592f7c006210c2dd11832553549803871e665e8fbe3d91f292f414b16427e73",
+)
