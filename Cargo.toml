@@ -10,7 +10,7 @@ repository = "https://github.com/SV-stark/PDFbull"
 
 [dependencies]
 iced = { version = "0.13", features = ["image", "svg", "canvas", "tokio", "advanced"] }
-pdfium-render = "0.8"
+pdfium-render = { version = "0.8", features = ["thread_safe"] }
 tokio = { version = "1.0", features = ["full"] }
 rfd = "0.14"
 native-dialog = "0.7"
@@ -40,6 +40,7 @@ notify = "6.1"
 notify-debouncer-mini = "0.4"
 interprocess = "1.2.1"
 windows = { version = "0.62.2", features = ["Win32_UI_Shell", "Win32_System_Com", "Win32_Foundation"] }
+crossbeam-channel = "0.5.15"
 
 [build-dependencies]
 winresource = "0.1"
