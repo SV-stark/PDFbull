@@ -256,9 +256,9 @@ pub fn handle_tab_message(app: &mut PdfBullApp, message: Message) -> Task<Messag
                                 tracing::error!("Failed to send Open command: {e}");
                                 return Err(crate::models::PdfError::from("Engine died"));
                             }
-                            resp_rx
-                                .await
-                                .unwrap_or_else(|_| Err(crate::models::PdfError::from("Engine died")))
+                            resp_rx.await.unwrap_or_else(|_| {
+                                Err(crate::models::PdfError::from("Engine died"))
+                            })
                         },
                         Message::DocumentOpened,
                     );

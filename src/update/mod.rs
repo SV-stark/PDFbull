@@ -1,12 +1,12 @@
+pub mod annotations;
 pub mod app;
 pub mod bookmarks;
-pub mod annotations;
+pub mod export;
+pub mod misc;
+pub mod navigation;
 pub mod render;
 pub mod search;
 pub mod tabs;
-pub mod navigation;
-pub mod export;
-pub mod misc;
 
 use crate::app::PdfBullApp;
 use crate::message::Message;

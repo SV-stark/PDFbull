@@ -1,7 +1,7 @@
 use crate::app::PdfBullApp;
 use crate::message::Message;
-use iced::Task;
 use crate::update::scroll_to_page;
+use iced::Task;
 
 pub fn handle_bookmark_message(app: &mut PdfBullApp, message: Message) -> Task<Message> {
     match message {

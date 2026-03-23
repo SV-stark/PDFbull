@@ -1,9 +1,9 @@
 use crate::app::PdfBullApp;
 use crate::message::Message;
 use crate::models::SearchResult;
+use crate::update::scroll_to_page;
 use iced::Task;
 use tokio::sync::oneshot;
-use crate::update::scroll_to_page;
 
 pub fn handle_search_message(app: &mut PdfBullApp, message: Message) -> Task<Message> {
     match message {

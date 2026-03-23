@@ -9,7 +9,7 @@ fn main() -> iced::Result {
     human_panic::setup_panic!();
 
     let args: Vec<String> = std::env::args().collect();
-    
+
     // Feature 10: Deep Windows Integration (Single Instance Mode)
     if let Ok(is_secondary) = platform::ensure_single_instance(&args) {
         if is_secondary {
@@ -17,7 +17,6 @@ fn main() -> iced::Result {
             return Ok(());
         }
     }
-
 
     let icon = iced::window::icon::from_file_data(include_bytes!("../PDFbull.png"), None).ok();
 

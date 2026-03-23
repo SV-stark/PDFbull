@@ -1,6 +1,6 @@
 use crate::app::PdfBullApp;
-use crate::message::Message;
 use crate::commands::PdfCommand;
+use crate::message::Message;
 use iced::Task;
 
 pub fn handle_export_message(app: &mut PdfBullApp, message: Message) -> Task<Message> {

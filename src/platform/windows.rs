@@ -1,9 +1,7 @@
 use interprocess::local_socket::{LocalSocketListener, LocalSocketStream, NameTypeSupport};
 use std::io::{BufRead, BufReader, Write};
 use windows::Win32::System::Com::{CoInitializeEx, COINIT_MULTITHREADED};
-use windows::Win32::UI::Shell::{
-    IApplicationDocumentLists, ApplicationDocumentLists,
-};
+use windows::Win32::UI::Shell::{ApplicationDocumentLists, IApplicationDocumentLists};
 
 const PIPE_NAME: &str = "pdfbull-single-instance-pipe.sock";
 
@@ -38,7 +36,7 @@ pub fn ensure_single_instance(args: &[String]) -> Result<bool, Box<dyn std::erro
                     if reader.read_line(&mut buffer).is_ok() {
                         let incoming_args: Vec<String> =
                             buffer.trim().split('\x00').map(|s| s.to_string()).collect();
-                        
+
                         tracing::info!("Received args from another instance: {:?}", incoming_args);
                     }
                 }

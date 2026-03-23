@@ -21,9 +21,7 @@ pub fn spawn_engine_thread(cache_size: u64, max_memory_mb: u64) -> EngineState {
         let pdfium = if let Ok(p) = Pdfium::bind_to_system_library() {
             Pdfium::new(p)
         } else {
-            tracing::error!(
-                "Failed to bind to Pdfium system library. Attempting local search..."
-            );
+            tracing::error!("Failed to bind to Pdfium system library. Attempting local search...");
             match Pdfium::bind_to_library(Pdfium::pdfium_platform_library_name_at_path("./")) {
                 Ok(p) => Pdfium::new(p),
                 Err(e) => {
