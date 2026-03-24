@@ -21,6 +21,10 @@ test-visual:
 lint:
     cargo clippy --workspace -- -D warnings
 
+# Run spell-check
+spell-check:
+    typos
+
 # Format all code
 fmt:
     cargo fmt

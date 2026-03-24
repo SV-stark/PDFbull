@@ -355,6 +355,35 @@ fn render_active_drag<'a>(
     vec![]
 }
 
+fn render_accessibility_layer<'a>(
+    page_idx: usize,
+    tab: &'a DocumentTab,
+    zoom: f32,
+) -> Vec<Element<'a, crate::message::Message>> {
+    tab.view_state
+        .text_layers
+        .get(&page_idx)
+        .map(|items| {
+            items
+                .iter()
+                .map(|item| {
+                    container(text(item.text.clone()).size(item.height * zoom).style(|_| {
+                        iced::widget::text::Style {
+                            color: Some(Color::TRANSPARENT),
+                        }
+                    }))
+                    .padding(Padding {
+                        top: item.y * zoom,
+                        left: item.x * zoom,
+                        ..Default::default()
+                    })
+                    .into()
+                })
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
 fn render_page_canvas<'a>(
     page_idx: usize,
     tab: &'a DocumentTab,
@@ -372,6 +401,9 @@ fn render_page_canvas<'a>(
 
         let mut page_stack = Stack::new().push(img);
 
+        for el in render_accessibility_layer(page_idx, tab, zoom) {
+            page_stack = page_stack.push(el);
+        }
         for el in render_annotations(page_idx, tab, zoom) {
             page_stack = page_stack.push(el);
         }

@@ -38,7 +38,7 @@ bytes = "1.5"
 human-panic = "2.0"
 notify = "6.1"
 notify-debouncer-mini = "0.4"
-interprocess = "1.2.1"
+interprocess = { version = "2", features = ["tokio"] }
 windows = { version = "0.62.2", features = ["Win32_UI_Shell", "Win32_System_Com", "Win32_Foundation"] }
 crossbeam-channel = "0.5.15"
 insta = { version = "1.46.3", features = ["redactions"] }

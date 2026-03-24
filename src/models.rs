@@ -82,11 +82,21 @@ pub struct OpenResult {
     pub signatures: Vec<SignatureInfo>,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TextItem {
+    pub text: String,
+    pub x: f32,
+    pub y: f32,
+    pub width: f32,
+    pub height: f32,
+}
+
 #[derive(Debug, Clone)]
 pub struct RenderResult {
     pub width: u32,
     pub height: u32,
     pub data: bytes::Bytes,
+    pub text_items: Vec<TextItem>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -259,6 +269,7 @@ pub struct AnnotationDrag {
 pub struct TabViewState {
     pub rendered_pages: std::collections::HashMap<usize, (f32, iced_image::Handle)>,
     pub thumbnails: std::collections::HashMap<usize, iced_image::Handle>,
+    pub text_layers: std::collections::HashMap<usize, Vec<TextItem>>,
     pub viewport_y: f32,
     pub viewport_height: f32,
     pub sidebar_viewport_y: f32,
@@ -272,6 +283,7 @@ impl Default for TabViewState {
         Self {
             rendered_pages: std::collections::HashMap::new(),
             thumbnails: std::collections::HashMap::new(),
+            text_layers: std::collections::HashMap::new(),
             viewport_y: 0.0,
             viewport_height: 800.0,
             sidebar_viewport_y: 0.0,

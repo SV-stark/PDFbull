@@ -123,6 +123,9 @@ pub fn handle_render_message(app: &mut PdfBullApp, message: Message) -> Task<Mes
                                 iced_image::Handle::from_rgba(width, height, pixel_data),
                             ),
                         );
+                        tab.view_state
+                            .text_layers
+                            .insert(page_idx, res.text_items.clone());
                     }
                     Err(e) => {
                         tracing::error!("Render error: {e}");

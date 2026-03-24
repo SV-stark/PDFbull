@@ -8,7 +8,6 @@ use quick_cache::{sync::Cache, Weighter};
 use rayon::prelude::*;
 use std::collections::HashMap;
 use std::sync::Arc;
-use std::sync::Mutex;
 use zune_image::codecs::png::PngEncoder;
 use zune_image::image::Image;
 use zune_image::traits::EncoderTrait;
@@ -58,9 +57,7 @@ impl RenderCache {
     }
 
     pub fn put(
-        &mut self,
-        _doc_id: DocumentId,
-        _page_num: usize,
+        &self,
         key: RenderKey,
         result: crate::models::RenderResult,
     ) {
@@ -68,7 +65,7 @@ impl RenderCache {
     }
 }
 
-pub type SharedRenderCache = Arc<Mutex<RenderCache>>;
+pub type SharedRenderCache = Arc<RenderCache>;
 
 #[derive(Clone, Copy, Debug, PartialEq, serde::Serialize, serde::Deserialize, Hash, Eq)]
 pub enum RenderQuality {
@@ -240,11 +237,7 @@ impl<'a> DocumentStore<'a> {
         };
 
         {
-            let cache = self
-                .render_cache
-                .lock()
-                .map_err(|e| PdfError::EngineError(e.to_string()))?;
-            if let Some(cached) = cache.get(&cache_key) {
+            if let Some(cached) = self.render_cache.get(&cache_key) {
                 return Ok(cached);
             }
         }
@@ -321,19 +314,69 @@ impl<'a> DocumentStore<'a> {
             (w, h, bitmap.as_rgba_bytes().to_vec())
         };
 
+        let mut text_items = Vec::new();
+        if let Ok(text_page) = page.text() {
+            let mut current_word = String::new();
+            let mut word_rect: Option<PdfRect> = None;
+
+            for char_obj in text_page.chars().iter() {
+                let Some(c) = char_obj.unicode_string() else {
+                    continue;
+                };
+                let Ok(bounds) = char_obj.loose_bounds() else {
+                    continue;
+                };
+
+                if c.trim().is_empty() {
+                    if !current_word.is_empty() {
+                        if let Some(rect) = word_rect {
+                            text_items.push(crate::models::TextItem {
+                                text: current_word.clone(),
+                                x: rect.left().value,
+                                y: page.height().value - rect.top().value,
+                                width: (rect.right().value - rect.left().value).abs(),
+                                height: (rect.top().value - rect.bottom().value).abs(),
+                            });
+                        }
+                        current_word.clear();
+                        word_rect = None;
+                    }
+                } else {
+                    current_word.push_str(&c);
+                    if let Some(rect) = word_rect {
+                        word_rect = Some(PdfRect::new(
+                            rect.bottom().min(bounds.bottom()),
+                            rect.left().min(bounds.left()),
+                            rect.top().max(bounds.top()),
+                            rect.right().max(bounds.right()),
+                        ));
+                    } else {
+                        word_rect = Some(bounds);
+                    }
+                }
+            }
+            // Push last word
+            if !current_word.is_empty() {
+                if let Some(rect) = word_rect {
+                    text_items.push(crate::models::TextItem {
+                        text: current_word,
+                        x: rect.left().value,
+                        y: page.height().value - rect.top().value,
+                        width: (rect.right().value - rect.left().value).abs(),
+                        height: (rect.top().value - rect.bottom().value).abs(),
+                    });
+                }
+            }
+        }
+
         let result = crate::models::RenderResult {
             width: final_w,
             height: final_h,
             data: bytes::Bytes::from(final_data),
+            text_items,
         };
 
-        {
-            let mut cache = self
-                .render_cache
-                .lock()
-                .map_err(|e| PdfError::EngineError(e.to_string()))?;
-            cache.put(doc_id, page_num, cache_key, result.clone());
-        }
+        self.render_cache.put(cache_key, result.clone());
         Ok(result)
     }
 
@@ -354,11 +397,7 @@ impl<'a> DocumentStore<'a> {
         };
 
         {
-            let cache = self
-                .render_cache
-                .lock()
-                .map_err(|e| PdfError::EngineError(e.to_string()))?;
-            if let Some(cached) = cache.get(&cache_key) {
+            if let Some(cached) = self.render_cache.get(&cache_key) {
                 return Ok(cached);
             }
         }
@@ -394,15 +433,10 @@ impl<'a> DocumentStore<'a> {
             width: w,
             height: h,
             data: bytes::Bytes::from(result_data),
+            text_items: Vec::new(),
         };
 
-        {
-            let mut cache = self
-                .render_cache
-                .lock()
-                .map_err(|e| PdfError::EngineError(e.to_string()))?;
-            cache.put(doc_id, page_num, cache_key, result.clone());
-        }
+        self.render_cache.put(cache_key, result.clone());
         Ok(result)
     }
 
@@ -1026,10 +1060,10 @@ impl<'a> DocumentStore<'a> {
 
 pub fn create_render_cache(cache_size: u64, max_memory_mb: u64) -> SharedRenderCache {
     let mb = (max_memory_mb * 1024 * 1024) as usize;
-    Arc::new(Mutex::new(RenderCache::new(
+    Arc::new(RenderCache::new(
         cache_size as usize,
         if mb == 0 { 512 * 1024 * 1024 } else { mb },
-    )))
+    ))
 }
 
 #[derive(Clone, Debug)]

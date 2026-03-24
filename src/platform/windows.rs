@@ -1,4 +1,4 @@
-use interprocess::local_socket::{LocalSocketListener, LocalSocketStream, NameTypeSupport};
+use interprocess::local_socket::{traits::Listener, LocalSocketListener, LocalSocketStream, ToNsName};
 use std::io::{BufRead, BufReader, Write};
 use windows::Win32::System::Com::{CoInitializeEx, COINIT_MULTITHREADED};
 use windows::Win32::UI::Shell::{ApplicationDocumentLists, IApplicationDocumentLists};
@@ -8,11 +8,7 @@ const PIPE_NAME: &str = "pdfbull-single-instance-pipe.sock";
 /// Checks if another instance is running. If it is, sends our arguments to it and returns true.
 /// If not, it sets up a listener and returns false.
 pub fn ensure_single_instance(args: &[String]) -> Result<bool, Box<dyn std::error::Error>> {
-    let name = if NameTypeSupport::query() == NameTypeSupport::OnlyPaths {
-        format!("/tmp/{PIPE_NAME}")
-    } else {
-        format!("@{PIPE_NAME}")
-    };
+    let name = PIPE_NAME.to_ns_name::<interprocess::local_socket::traits::GenericFilePath>()?;
 
     // Try to connect to an existing instance
     if let Ok(mut stream) = LocalSocketStream::connect(name.clone()) {
