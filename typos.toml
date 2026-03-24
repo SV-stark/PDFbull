@@ -1,0 +1,14 @@
+[files]
+extend-exclude = [
+    "src/assets/fonts/*.ttf",
+    "clippy_results.jsonl",
+    "licenses/*",
+    "target/*",
+    "*.ico",
+    "*.png"
+]
+
+[default]
+extend-ignore-re = [
+    "horizonal"
+]
