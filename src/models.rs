@@ -325,11 +325,11 @@ pub static NEXT_DOC_ID: AtomicU64 = AtomicU64::new(1);
 pub static NEXT_ANN_ID: AtomicU64 = AtomicU64::new(1);
 
 pub fn next_doc_id() -> DocumentId {
-    DocumentId(NEXT_DOC_ID.fetch_add(1, Ordering::SeqCst))
+    DocumentId(NEXT_DOC_ID.fetch_add(1, Ordering::Relaxed))
 }
 
 pub fn next_annotation_id() -> u64 {
-    NEXT_ANN_ID.fetch_add(1, Ordering::SeqCst)
+    NEXT_ANN_ID.fetch_add(1, Ordering::Relaxed)
 }
 
 impl DocumentTab {

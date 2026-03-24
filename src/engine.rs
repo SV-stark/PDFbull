@@ -31,13 +31,7 @@ pub fn spawn_engine_thread(cache_size: u64, max_memory_mb: u64) -> EngineState {
             }
         };
 
-        let mut store = match DocumentStore::new(&pdfium, render_cache.clone()) {
-            Ok(s) => s,
-            Err(e) => {
-                tracing::error!("Failed to initialize DocumentStore: {e}");
-                return;
-            }
-        };
+        let mut store = DocumentStore::new(&pdfium, render_cache.clone());
 
         while let Some(cmd) = cmd_rx.blocking_recv() {
             match cmd {

@@ -134,22 +134,7 @@ impl PdfBullApp {
     }
 
     pub fn add_recent_file(&mut self, path: &std::path::Path) {
-        let path_str = path.to_string_lossy().to_string();
-        self.recent_files.retain(|f| f.path != path_str);
-
-        let new_file = RecentFile {
-            path: path_str,
-            name: path
-                .file_name()
-                .map(|n| n.to_string_lossy().to_string())
-                .unwrap_or_default(),
-            last_opened: time::OffsetDateTime::now_utc().unix_timestamp() as u64,
-        };
-
-        self.recent_files.insert(0, new_file);
-        if self.recent_files.len() > 20 {
-            self.recent_files.truncate(20);
-        }
+        crate::storage::add_recent_file(&mut self.recent_files, path);
     }
 
     pub fn render_visible_pages(&mut self) -> Task<Message> {
@@ -192,7 +177,9 @@ impl PdfBullApp {
         let quality = self.settings.render_quality;
 
         let rendered_pages = {
-            let tab = self.current_tab().unwrap();
+            let Some(tab) = self.current_tab() else {
+                return Task::none();
+            };
             tab.view_state
                 .rendered_pages
                 .iter()
@@ -242,7 +229,9 @@ impl PdfBullApp {
 
         if self.show_sidebar {
             let rendered_thumbnails = {
-                let tab = self.current_tab().unwrap();
+                let Some(tab) = self.current_tab() else {
+                    return Task::none();
+                };
                 tab.view_state
                     .thumbnails
                     .keys()

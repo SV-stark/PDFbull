@@ -141,7 +141,7 @@ pub fn load_recent_files() -> Vec<RecentFile> {
     Vec::new()
 }
 
-pub fn save_recent_files(recent_files: &Vec<RecentFile>) {
+pub fn save_recent_files(recent_files: &[RecentFile]) {
     let dir = get_config_dir();
     if let Err(e) = fs::create_dir_all(&dir) {
         tracing::error!("Failed to create config directory: {}", e);

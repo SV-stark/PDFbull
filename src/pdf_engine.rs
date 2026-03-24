@@ -14,6 +14,14 @@ use zune_image::traits::EncoderTrait;
 
 use crate::ui::theme::hex_to_rgb;
 
+const MAX_RENDER_DIM: i32 = 2500;
+const WHITE_THRESHOLD: u8 = 245;
+const BBOX_MARGIN: u32 = 10;
+const NO_SHADOW_THRESHOLD: u8 = 230;
+const PAGE_RENDER_EXTRAS: f32 = 1.5;
+const THUMB_BUFFER_BEHIND: usize = 15;
+const THUMB_BUFFER_AHEAD: usize = 45;
+
 #[derive(Hash, Eq, PartialEq, Clone, Debug)]
 pub struct RenderKey {
     pub doc_id: DocumentId,
@@ -96,23 +104,21 @@ pub struct RenderOptions {
 
 pub struct DocumentStore<'a> {
     pdfium: &'a Pdfium,
-    documents: HashMap<DocumentId, DocumentState<'a>>,
+    documents: HashMap<DocumentId, PdfDocument<'a>>,
     paths: HashMap<DocumentId, String>,
     render_cache: SharedRenderCache,
 }
 
-struct DocumentState<'a> {
-    doc: PdfDocument<'a>,
-}
+// DocumentState wrapper removed as it was a single-field struct.
 
 impl<'a> DocumentStore<'a> {
-    pub fn new(pdfium: &'a Pdfium, cache: SharedRenderCache) -> PdfResult<Self> {
-        Ok(Self {
+    pub fn new(pdfium: &'a Pdfium, cache: SharedRenderCache) -> Self {
+        Self {
             pdfium,
             documents: HashMap::new(),
             paths: HashMap::new(),
             render_cache: cache,
-        })
+        }
     }
 
     pub fn open_document(
@@ -199,8 +205,7 @@ impl<'a> DocumentStore<'a> {
                 .map(|t| t.value().to_string()),
         };
 
-        let state = DocumentState { doc };
-        self.documents.insert(doc_id, state);
+        self.documents.insert(doc_id, doc);
         self.paths.insert(doc_id, path.to_string());
 
         Ok(crate::models::OpenResult {
@@ -220,34 +225,40 @@ impl<'a> DocumentStore<'a> {
         self.paths.remove(&doc_id);
     }
 
-    pub fn render_page(
+    fn render_page_internal(
         &mut self,
         doc_id: DocumentId,
         page_num: usize,
         options: RenderOptions,
+        is_thumbnail: bool,
     ) -> PdfResult<crate::models::RenderResult> {
         let rounded_scale = (options.scale * 100.0).round() as u32;
         let cache_key = RenderKey {
             doc_id,
             page_num,
             scale: rounded_scale,
-            filter: options.filter,
-            auto_crop: options.auto_crop,
-            quality: options.quality,
+            filter: if is_thumbnail {
+                RenderFilter::None
+            } else {
+                options.filter
+            },
+            auto_crop: if is_thumbnail { false } else { options.auto_crop },
+            quality: if is_thumbnail {
+                RenderQuality::Low
+            } else {
+                options.quality
+            },
         };
 
-        {
-            if let Some(cached) = self.render_cache.get(&cache_key) {
-                return Ok(cached);
-            }
+        if let Some(cached) = self.render_cache.get(&cache_key) {
+            return Ok(cached);
         }
 
-        let state = self
+        let doc = self
             .documents
             .get(&doc_id)
             .ok_or_else(|| PdfError::EngineError("Document not found".to_string()))?;
-        let page = state
-            .doc
+        let page = doc
             .pages()
             .get(page_num as u16)
             .map_err(|_| PdfError::PageNotFound(page_num))?;
@@ -255,9 +266,8 @@ impl<'a> DocumentStore<'a> {
         let mut target_w = (page.width().value * options.scale) as i32;
         let mut target_h = (page.height().value * options.scale) as i32;
 
-        let max_dim = 2500;
-        if target_w > max_dim || target_h > max_dim {
-            let scale_factor = max_dim as f32 / (target_w.max(target_h) as f32);
+        if !is_thumbnail && (target_w > MAX_RENDER_DIM || target_h > MAX_RENDER_DIM) {
+            let scale_factor = MAX_RENDER_DIM as f32 / (target_w.max(target_h) as f32);
             target_w = (target_w as f32 * scale_factor) as i32;
             target_h = (target_h as f32 * scale_factor) as i32;
         }
@@ -265,6 +275,7 @@ impl<'a> DocumentStore<'a> {
         let mut render_config = PdfRenderConfig::new()
             .set_target_width(target_w)
             .set_maximum_height(target_h)
+            .use_lcd_text_rendering(!is_thumbnail)
             .rotate(
                 match options.rotation {
                     90 => PdfPageRenderRotation::Degrees90,
@@ -273,10 +284,11 @@ impl<'a> DocumentStore<'a> {
                     _ => PdfPageRenderRotation::None,
                 },
                 false,
-            )
-            .use_lcd_text_rendering(true);
+            );
 
-        if options.filter == RenderFilter::Grayscale {
+        if is_thumbnail {
+            render_config = render_config.clear_before_rendering(true);
+        } else if options.filter == RenderFilter::Grayscale {
             render_config = render_config.use_grayscale_rendering(true);
         }
 
@@ -286,10 +298,10 @@ impl<'a> DocumentStore<'a> {
         let w = bitmap.width() as u32;
         let h = bitmap.height() as u32;
 
-        let (final_w, final_h, final_data) = if options.auto_crop {
+        let (final_w, final_h, final_data) = if !is_thumbnail && options.auto_crop {
             let mut result_data = bitmap.as_rgba_bytes().to_vec();
             if options.filter != RenderFilter::None && options.filter != RenderFilter::Grayscale {
-                Self::apply_filter_in_place(&mut result_data, options.filter);
+                Self::apply_filter(&mut result_data, options.filter);
             }
 
             if let Some((x1, y1, x2, y2)) = Self::detect_content_bbox_parallel(&result_data, w, h) {
@@ -305,66 +317,69 @@ impl<'a> DocumentStore<'a> {
             } else {
                 (w, h, result_data)
             }
-        } else if options.filter != RenderFilter::None && options.filter != RenderFilter::Grayscale
+        } else if !is_thumbnail
+            && options.filter != RenderFilter::None
+            && options.filter != RenderFilter::Grayscale
         {
             let mut result_data = bitmap.as_rgba_bytes().to_vec();
-            Self::apply_filter_in_place(&mut result_data, options.filter);
+            Self::apply_filter(&mut result_data, options.filter);
             (w, h, result_data)
         } else {
             (w, h, bitmap.as_rgba_bytes().to_vec())
         };
 
         let mut text_items = Vec::new();
-        if let Ok(text_page) = page.text() {
-            let mut current_word = String::new();
-            let mut word_rect: Option<PdfRect> = None;
+        if !is_thumbnail {
+            if let Ok(text_page) = page.text() {
+                let mut current_word = String::new();
+                let mut word_rect: Option<PdfRect> = None;
 
-            for char_obj in text_page.chars().iter() {
-                let Some(c) = char_obj.unicode_string() else {
-                    continue;
-                };
-                let Ok(bounds) = char_obj.loose_bounds() else {
-                    continue;
-                };
+                for char_obj in text_page.chars().iter() {
+                    let Some(c) = char_obj.unicode_string() else {
+                        continue;
+                    };
+                    let Ok(bounds) = char_obj.loose_bounds() else {
+                        continue;
+                    };
 
-                if c.trim().is_empty() {
-                    if !current_word.is_empty() {
-                        if let Some(rect) = word_rect {
-                            text_items.push(crate::models::TextItem {
-                                text: current_word.clone(),
-                                x: rect.left().value,
-                                y: page.height().value - rect.top().value,
-                                width: (rect.right().value - rect.left().value).abs(),
-                                height: (rect.top().value - rect.bottom().value).abs(),
-                            });
+                    if c.trim().is_empty() {
+                        if !current_word.is_empty() {
+                            if let Some(rect) = word_rect {
+                                text_items.push(crate::models::TextItem {
+                                    text: current_word.clone(),
+                                    x: rect.left().value,
+                                    y: page.height().value - rect.top().value,
+                                    width: (rect.right().value - rect.left().value).abs(),
+                                    height: (rect.top().value - rect.bottom().value).abs(),
+                                });
+                            }
+                            current_word.clear();
+                            word_rect = None;
                         }
-                        current_word.clear();
-                        word_rect = None;
-                    }
-                } else {
-                    current_word.push_str(&c);
-                    if let Some(rect) = word_rect {
-                        word_rect = Some(PdfRect::new(
-                            rect.bottom().min(bounds.bottom()),
-                            rect.left().min(bounds.left()),
-                            rect.top().max(bounds.top()),
-                            rect.right().max(bounds.right()),
-                        ));
                     } else {
-                        word_rect = Some(bounds);
+                        current_word.push_str(&c);
+                        if let Some(rect) = word_rect {
+                            word_rect = Some(PdfRect::new(
+                                rect.bottom().min(bounds.bottom()),
+                                rect.left().min(bounds.left()),
+                                rect.top().max(bounds.top()),
+                                rect.right().max(bounds.right()),
+                            ));
+                        } else {
+                            word_rect = Some(bounds);
+                        }
                     }
                 }
-            }
-            // Push last word
-            if !current_word.is_empty() {
-                if let Some(rect) = word_rect {
-                    text_items.push(crate::models::TextItem {
-                        text: current_word,
-                        x: rect.left().value,
-                        y: page.height().value - rect.top().value,
-                        width: (rect.right().value - rect.left().value).abs(),
-                        height: (rect.top().value - rect.bottom().value).abs(),
-                    });
+                if !current_word.is_empty() {
+                    if let Some(rect) = word_rect {
+                        text_items.push(crate::models::TextItem {
+                            text: current_word,
+                            x: rect.left().value,
+                            y: page.height().value - rect.top().value,
+                            width: (rect.right().value - rect.left().value).abs(),
+                            height: (rect.top().value - rect.bottom().value).abs(),
+                        });
+                    }
                 }
             }
         }
@@ -380,73 +395,30 @@ impl<'a> DocumentStore<'a> {
         Ok(result)
     }
 
+    pub fn render_page(
+        &mut self,
+        doc_id: DocumentId,
+        page_num: usize,
+        options: RenderOptions,
+    ) -> PdfResult<crate::models::RenderResult> {
+        self.render_page_internal(doc_id, page_num, options, false)
+    }
+
     pub fn render_thumbnail(
         &mut self,
         doc_id: DocumentId,
         page_num: usize,
         options: RenderOptions,
     ) -> PdfResult<crate::models::RenderResult> {
-        let rounded_scale = (options.scale * 100.0).round() as u32;
-        let cache_key = RenderKey {
-            doc_id,
-            page_num,
-            scale: rounded_scale,
-            filter: RenderFilter::None,
-            auto_crop: false,
-            quality: RenderQuality::Low,
-        };
-
-        {
-            if let Some(cached) = self.render_cache.get(&cache_key) {
-                return Ok(cached);
-            }
-        }
-
-        let state = self
-            .documents
-            .get(&doc_id)
-            .ok_or_else(|| PdfError::EngineError("Document not found".to_string()))?;
-        let page = state
-            .doc
-            .pages()
-            .get(page_num as u16)
-            .map_err(|_| PdfError::PageNotFound(page_num))?;
-
-        let target_w = (page.width().value * options.scale) as i32;
-        let target_h = (page.height().value * options.scale) as i32;
-
-        let render_config = PdfRenderConfig::new()
-            .set_target_width(target_w)
-            .set_maximum_height(target_h)
-            .use_lcd_text_rendering(false)
-            .clear_before_rendering(true);
-
-        let bitmap = page
-            .render_with_config(&render_config)
-            .map_err(|e| PdfError::RenderFailed(e.to_string()))?;
-
-        let w = bitmap.width() as u32;
-        let h = bitmap.height() as u32;
-        let result_data = bitmap.as_rgba_bytes().to_vec();
-
-        let result = crate::models::RenderResult {
-            width: w,
-            height: h,
-            data: bytes::Bytes::from(result_data),
-            text_items: Vec::new(),
-        };
-
-        self.render_cache.put(cache_key, result.clone());
-        Ok(result)
+        self.render_page_internal(doc_id, page_num, options, true)
     }
 
     pub fn extract_text(&self, doc_id: DocumentId, page_num: i32) -> PdfResult<String> {
-        let state = self
+        let doc = self
             .documents
             .get(&doc_id)
             .ok_or_else(|| PdfError::EngineError("Document not found".to_string()))?;
-        let page = state
-            .doc
+        let page = doc
             .pages()
             .get(page_num as u16)
             .map_err(|_| PdfError::PageNotFound(page_num as usize))?;
@@ -466,11 +438,34 @@ impl<'a> DocumentStore<'a> {
             .paths
             .get(&doc_id)
             .ok_or_else(|| PdfError::EngineError("Document path not found".to_string()))?;
-        let state = self
+        let doc = self
             .documents
             .get_mut(&doc_id)
             .ok_or_else(|| PdfError::EngineError("Document not found".to_string()))?;
-        let doc = &mut state.doc;
+
+        // Move font lookup outside the loop
+        let font_handle = font_kit::source::SystemSource::new()
+            .select_best_match(
+                &[font_kit::family_name::FamilyName::SansSerif],
+                &font_kit::properties::Properties::new(),
+            )
+            .ok();
+
+        let annotation_font = if let Some(handle) = font_handle {
+            if let Ok(font_data) = handle.load() {
+                if let Some(data) = font_data.copy_font_data() {
+                    let _ = doc.fonts_mut().load_type1_from_bytes(&data, false);
+                    doc.fonts_mut().helvetica()
+                } else {
+                    doc.fonts_mut().helvetica()
+                }
+            } else {
+                doc.fonts_mut().helvetica()
+            }
+        } else {
+            doc.fonts_mut().helvetica()
+        };
+
         for ann in annotations {
             let mut page = doc
                 .pages()
@@ -491,7 +486,7 @@ impl<'a> DocumentStore<'a> {
             match &ann.style {
                 AnnotationStyle::Highlight { color } => {
                     let (r, g, b) = hex_to_rgb(color);
-                    let _ = objects
+                    objects
                         .create_path_object_rect(
                             rect,
                             None,
@@ -521,7 +516,7 @@ impl<'a> DocumentStore<'a> {
                     } else {
                         None
                     };
-                    let _ = objects
+                    objects
                         .create_path_object_rect(
                             rect,
                             Some(PdfColor::new(
@@ -540,28 +535,7 @@ impl<'a> DocumentStore<'a> {
                     color,
                     font_size,
                 } => {
-                    let (r, g, b) = hex_to_rgb(color);
-                    let font_handle = font_kit::source::SystemSource::new()
-                        .select_best_match(
-                            &[font_kit::family_name::FamilyName::SansSerif],
-                            &font_kit::properties::Properties::new(),
-                        )
-                        .ok();
-
-                    let font = if let Some(handle) = font_handle {
-                        if let Ok(font_data) = handle.load() {
-                            if let Some(data) = font_data.copy_font_data() {
-                                let _ = doc.fonts_mut().load_type1_from_bytes(&data, false);
-                                doc.fonts_mut().helvetica()
-                            } else {
-                                doc.fonts_mut().helvetica()
-                            }
-                        } else {
-                            doc.fonts_mut().helvetica()
-                        }
-                    } else {
-                        doc.fonts_mut().helvetica()
-                    };
+                    let font = annotation_font;
 
                     let mut text_obj = objects
                         .create_text_object(
@@ -585,7 +559,7 @@ impl<'a> DocumentStore<'a> {
                     let (r, g, b) = hex_to_rgb(color);
                     // For now, we simulate redaction by adding a solid rectangle.
                     // A pro app would use the actual redaction annotations and call apply_redactions().
-                    let _ = objects
+                    objects
                         .create_path_object_rect(
                             rect,
                             None,
@@ -601,7 +575,16 @@ impl<'a> DocumentStore<'a> {
                 }
             }
         }
-        let final_path = output_path.unwrap_or_else(|| pdf_path.replace(".pdf", "_annotated.pdf"));
+        let pdf_path_buf = std::path::Path::new(pdf_path);
+        let final_path = output_path.unwrap_or_else(|| {
+            let mut p = pdf_path_buf.to_path_buf();
+            let stem = p
+                .file_stem()
+                .map(|s| s.to_string_lossy())
+                .unwrap_or_default();
+            p.set_file_name(format!("{}_annotated.pdf", stem));
+            p.to_string_lossy().to_string()
+        });
         doc.save_to_file(&final_path)
             .map_err(|e| PdfError::IoError(e.to_string()))?;
         Ok(final_path)
@@ -613,12 +596,11 @@ impl<'a> DocumentStore<'a> {
         page_num: i32,
         scale: f32,
     ) -> PdfResult<Vec<u8>> {
-        let state = self
+        let doc = self
             .documents
             .get(&doc_id)
             .ok_or_else(|| PdfError::EngineError("Document not found".to_string()))?;
-        let page = state
-            .doc
+        let page = doc
             .pages()
             .get(page_num as u16)
             .map_err(|_| PdfError::PageNotFound(page_num as usize))?;
@@ -664,12 +646,12 @@ impl<'a> DocumentStore<'a> {
     }
 
     pub fn search(&self, doc_id: DocumentId, query: &str) -> PdfResult<Vec<SearchResultItem>> {
-        let state = self
+        let doc = self
             .documents
             .get(&doc_id)
             .ok_or_else(|| PdfError::EngineError("Document not found".to_string()))?;
         let mut results = Vec::new();
-        for (page_idx, page) in state.doc.pages().iter().enumerate() {
+        for (page_idx, page) in doc.pages().iter().enumerate() {
             if let Ok(text) = page.text() {
                 if let Ok(searcher) = text.search(query, &PdfSearchOptions::new()) {
                     for segments in searcher.iter(PdfSearchDirection::SearchForward) {
@@ -709,7 +691,10 @@ impl<'a> DocumentStore<'a> {
             .fold(
                 || None::<(u32, u32, u32, u32)>,
                 |acc, (idx, pixel)| {
-                    if pixel[0] <= 245 || pixel[1] <= 245 || pixel[2] <= 245 {
+                    if pixel[0] <= WHITE_THRESHOLD
+                        || pixel[1] <= WHITE_THRESHOLD
+                        || pixel[2] <= WHITE_THRESHOLD
+                    {
                         let x = (idx as u32) % width;
                         let y = (idx as u32) / width;
                         if let Some((min_x, min_y, max_x, max_y)) = acc {
@@ -735,17 +720,16 @@ impl<'a> DocumentStore<'a> {
             );
 
         bbox.map(|(min_x, min_y, max_x, max_y)| {
-            let m = 10;
             (
-                min_x.saturating_sub(m),
-                min_y.saturating_sub(m),
-                (max_x + m).min(width.saturating_sub(1)),
-                (max_y + m).min(height.saturating_sub(1)),
+                min_x.saturating_sub(BBOX_MARGIN),
+                min_y.saturating_sub(BBOX_MARGIN),
+                (max_x + BBOX_MARGIN).min(width.saturating_sub(1)),
+                (max_y + BBOX_MARGIN).min(height.saturating_sub(1)),
             )
         })
     }
 
-    pub fn apply_filter_in_place(data: &mut [u8], filter: RenderFilter) {
+    pub fn apply_filter(data: &mut [u8], filter: RenderFilter) {
         data.par_chunks_exact_mut(4).for_each(|pixel| match filter {
             RenderFilter::Inverted => {
                 pixel[0] = 255 - pixel[0];
@@ -773,7 +757,10 @@ impl<'a> DocumentStore<'a> {
                 pixel[2] = pixel[2].saturating_add(20);
             }
             RenderFilter::NoShadow => {
-                if pixel[0] > 230 && pixel[1] > 230 && pixel[2] > 230 {
+                if pixel[0] > NO_SHADOW_THRESHOLD
+                    && pixel[1] > NO_SHADOW_THRESHOLD
+                    && pixel[2] > NO_SHADOW_THRESHOLD
+                {
                     pixel[0] = 255;
                     pixel[1] = 255;
                     pixel[2] = 255;
@@ -783,10 +770,7 @@ impl<'a> DocumentStore<'a> {
         });
     }
 
-    pub fn apply_filter_parallel(mut data: Vec<u8>, filter: RenderFilter) -> Vec<u8> {
-        Self::apply_filter_in_place(&mut data, filter);
-        data
-    }
+    // apply_filter_parallel removed as it was just a misleading wrapper.
 
     pub fn merge_documents(&self, paths: Vec<String>, output_path: String) -> PdfResult<String> {
         let mut dest = self
@@ -852,14 +836,13 @@ impl<'a> DocumentStore<'a> {
     }
 
     pub fn get_form_fields(&mut self, path: &str) -> PdfResult<Vec<FormField>> {
-        // Try to find the document in our store first
         if let Some(doc_id) = self
             .paths
             .iter()
             .find(|(_, p)| *p == path)
             .map(|(id, _)| *id)
         {
-            let doc = &self.documents.get(&doc_id).unwrap().doc;
+            let doc = self.documents.get(&doc_id).unwrap();
             Ok(self.extract_form_fields_internal(doc))
         } else {
             // Load temporarily if not open
