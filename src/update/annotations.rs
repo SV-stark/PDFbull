@@ -163,7 +163,7 @@ pub fn handle_annotation_message(app: &mut PdfBullApp, message: Message) -> Task
                     match resp_rx.await {
                         Ok(Ok(path)) => Ok(path),
                         Ok(Err(e)) => Err(e),
-                        Err(_) => Err(crate::models::PdfError::from("Engine died")),
+                        Err(_) => Err(crate::models::PdfError::EngineDied),
                     }
                 },
                 Message::AnnotationsSaved,

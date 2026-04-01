@@ -1,5 +1,5 @@
 use crate::models::{
-    Annotation, AnnotationStyle, DocumentId, FormField, FormFieldVariant, Hyperlink, PdfError,
+    Annotation, AnnotationStyle, DocumentId, EngineErrorKind, FormField, FormFieldVariant, Hyperlink, PdfError,
     PdfResult, SearchResultItem,
 };
 use lopdf::{Document, Object, ObjectId};
@@ -257,7 +257,7 @@ impl<'a> DocumentStore<'a> {
         let doc = self
             .documents
             .get(&doc_id)
-            .ok_or_else(|| PdfError::EngineError("Document not found".to_string()))?;
+            .ok_or_else(|| PdfError::EngineError(EngineErrorKind::DocumentNotFound))?;
         let page = doc
             .pages()
             .get(page_num as u16)
@@ -417,7 +417,7 @@ impl<'a> DocumentStore<'a> {
         let doc = self
             .documents
             .get(&doc_id)
-            .ok_or_else(|| PdfError::EngineError("Document not found".to_string()))?;
+            .ok_or_else(|| PdfError::EngineError(EngineErrorKind::DocumentNotFound))?;
         let page = doc
             .pages()
             .get(page_num as u16)
@@ -437,11 +437,11 @@ impl<'a> DocumentStore<'a> {
         let pdf_path = self
             .paths
             .get(&doc_id)
-            .ok_or_else(|| PdfError::EngineError("Document path not found".to_string()))?;
+            .ok_or_else(|| PdfError::EngineError(EngineErrorKind::DocumentPathNotFound))?;
         let doc = self
             .documents
             .get_mut(&doc_id)
-            .ok_or_else(|| PdfError::EngineError("Document not found".to_string()))?;
+            .ok_or_else(|| PdfError::EngineError(EngineErrorKind::DocumentNotFound))?;
 
         // Move font lookup outside the loop
         let font_handle = font_kit::source::SystemSource::new()
@@ -599,7 +599,7 @@ impl<'a> DocumentStore<'a> {
         let doc = self
             .documents
             .get(&doc_id)
-            .ok_or_else(|| PdfError::EngineError("Document not found".to_string()))?;
+            .ok_or_else(|| PdfError::EngineError(EngineErrorKind::DocumentNotFound))?;
         let page = doc
             .pages()
             .get(page_num as u16)
@@ -649,7 +649,7 @@ impl<'a> DocumentStore<'a> {
         let doc = self
             .documents
             .get(&doc_id)
-            .ok_or_else(|| PdfError::EngineError("Document not found".to_string()))?;
+            .ok_or_else(|| PdfError::EngineError(EngineErrorKind::DocumentNotFound))?;
         let mut results = Vec::new();
         for (page_idx, page) in doc.pages().iter().enumerate() {
             if let Ok(text) = page.text() {

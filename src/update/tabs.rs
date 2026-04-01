@@ -158,11 +158,11 @@ pub fn handle_tab_message(app: &mut PdfBullApp, message: Message) -> Task<Messag
                             cmd_tx.send(crate::commands::PdfCommand::Open(path_s, doc_id, resp_tx))
                         {
                             tracing::error!("Failed to send Open command: {e}");
-                            return Err(crate::models::PdfError::from("Engine died"));
+                            return Err(crate::models::PdfError::EngineDied);
                         }
                         resp_rx
                             .await
-                            .unwrap_or_else(|_| Err(crate::models::PdfError::from("Engine died")))
+                            .unwrap_or_else(|_| Err(crate::models::PdfError::EngineDied))
                     },
                     Message::DocumentOpened,
                 );
@@ -256,10 +256,10 @@ pub fn handle_tab_message(app: &mut PdfBullApp, message: Message) -> Task<Messag
                                 path_s, new_doc_id, resp_tx,
                             )) {
                                 tracing::error!("Failed to send Open command: {e}");
-                                return Err(crate::models::PdfError::from("Engine died"));
+                                return Err(crate::models::PdfError::EngineDied);
                             }
                             resp_rx.await.unwrap_or_else(|_| {
-                                Err(crate::models::PdfError::from("Engine died"))
+                                Err(crate::models::PdfError::EngineDied)
                             })
                         },
                         Message::DocumentOpened,

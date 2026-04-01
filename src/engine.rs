@@ -74,15 +74,25 @@ pub fn spawn_engine_thread(cache_size: u64, max_memory_mb: u64) -> EngineState {
                     let _ = tx.send(res);
                 }
                 PdfCommand::ExportImages(doc_id, pages, scale, out_dir, tx) => {
+                    let out_path = std::path::Path::new(&out_dir);
+                    if !out_path.is_dir() {
+                        let _ = tx.send(Err(crate::models::PdfError::IoError(
+                            "Output directory does not exist".into(),
+                        )));
+                        continue;
+                    }
                     let mut paths = Vec::new();
                     for page_num in pages {
-                        let out_path = format!("{out_dir}/page_{page_num}.png");
+                        let safe_name = format!("page_{page_num}.png");
+                        let out_file = out_path.join(&safe_name);
                         if let Ok(buf) = store.export_page_as_image(doc_id, page_num, scale) {
                             let optimized =
                                 oxipng::optimize_from_memory(&buf, &oxipng::Options::default())
                                     .unwrap_or(buf);
-                            if std::fs::write(&out_path, optimized).is_ok() {
-                                paths.push(out_path);
+                            if std::fs::write(&out_file, optimized).is_ok() {
+                                if let Some(path_str) = out_file.to_str() {
+                                    paths.push(path_str.to_string());
+                                }
                             }
                         }
                     }

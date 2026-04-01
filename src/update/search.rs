@@ -33,12 +33,9 @@ pub fn handle_search_message(app: &mut PdfBullApp, message: Message) -> Task<Mes
                 return Task::none();
             }
 
-            let Some(tab) = app.current_tab_mut() else {
+            let Some(tab) = app.current_tab() else {
                 return Task::none();
             };
-
-            tab.search_results.clear();
-            tab.current_search_index = 0;
 
             let doc_id = tab.id;
 
@@ -54,11 +51,11 @@ pub fn handle_search_message(app: &mut PdfBullApp, message: Message) -> Task<Mes
                         cmd_tx.send(crate::commands::PdfCommand::Search(doc_id, query, resp_tx))
                     {
                         tracing::error!("Failed to send Search command: {e}");
-                        return Err(crate::models::PdfError::from("Engine died"));
+                        return Err(crate::models::PdfError::EngineDied);
                     }
                     match resp_rx.await {
                         Ok(res) => res,
-                        Err(_) => Err(crate::models::PdfError::from("Engine died")),
+                        Err(_) => Err(crate::models::PdfError::ChannelClosed),
                     }
                 },
                 move |result| Message::SearchResult(doc_id, result),
@@ -71,14 +68,7 @@ pub fn handle_search_message(app: &mut PdfBullApp, message: Message) -> Task<Mes
                         if tab.id == received_doc_id {
                             tab.search_results = results
                                 .into_iter()
-                                .map(|item| SearchResult {
-                                    page: item.page_index,
-                                    text: item.text,
-                                    y_position: item.y,
-                                    x: item.x,
-                                    width: item.width,
-                                    height: item.height,
-                                })
+                                .map(SearchResult::from_search_result_item)
                                 .collect();
                             tab.current_search_index = 0;
 

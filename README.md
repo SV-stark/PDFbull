@@ -22,7 +22,7 @@ PDFbull is built from the ground up for speed, leveraging modern Rust ecosystem 
 - **Native UI with Iced**: A lightweight, cross-platform UI toolkit written entirely in Rust, producing native code without any web dependencies.
 - **Zero-Copy Rendering**: Pages are processed in native Rust memory space and rendered directly to the UI buffer, bypassing unnecessary data copying.
 - **Parallel Processing**: Powered by **Rayon**, heavy computational tasks like rendering and search are parallelized across all available CPU cores.
-- **Smart Caching**: Powered by **Moka**, a high-performance, concurrent cache library, ensuring instant access to recently viewed pages.
+- **Smart Caching**: Powered by **quick_cache**, a lightweight, concurrent cache library with custom weighters, ensuring instant access to recently viewed pages.
 - **Async I/O with Tokio**: Ensuring the UI never freezes, even when loading 1GB+ documents.
 - **Efficient RAM Management**: Consistently outperforms industry standards.
 
@@ -83,7 +83,7 @@ PDFbull is built from the ground up for speed, leveraging modern Rust ecosystem 
 - **Language**: [Rust](https://www.rust-lang.org/)
 - **Concurrency**: [Tokio](https://tokio.rs/) (Async Runtime) & [Rayon](https://github.com/rayon-rs/rayon) (Data Parallelism)
 - **PDF Engine**: [PDFium](https://pdfium.googlesource.com/pdfium/) via [pdfium-render](https://crates.io/crates/pdfium-render)
-- **Caching**: [Moka](https://github.com/moka-rs/moka)
+- **Caching**: [quick_cache](https://github.com/arthurprs/quick-cache)
 - **File Dialogs**: [rfd](https://github.com/Empson/rye) (Native file dialogs)
 
 ---

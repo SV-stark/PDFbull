@@ -34,7 +34,7 @@ pub fn handle_export_message(app: &mut PdfBullApp, message: Message) -> Task<Mes
                                 cmd_tx.send(PdfCommand::ExtractText(doc_id, page, resp_tx))
                             {
                                 tracing::error!("Failed to send ExtractText command: {e}");
-                                return Err(crate::models::PdfError::from("Engine died"));
+                                return Err(crate::models::PdfError::EngineDied);
                             }
                             match resp_rx.await {
                                 Ok(Ok(text)) => {
@@ -47,7 +47,7 @@ pub fn handle_export_message(app: &mut PdfBullApp, message: Message) -> Task<Mes
                                     }
                                 }
                                 Ok(Err(e)) => Err(e),
-                                Err(_) => Err(crate::models::PdfError::from("Engine died")),
+                                Err(_) => Err(crate::models::PdfError::EngineDied),
                             }
                         }
                         None => Err(crate::models::PdfError::from("Cancelled")),
@@ -74,12 +74,12 @@ pub fn handle_export_message(app: &mut PdfBullApp, message: Message) -> Task<Mes
                     let (resp_tx, resp_rx) = tokio::sync::oneshot::channel();
                     if let Err(e) = cmd_tx.send(PdfCommand::ExtractText(doc_id, page, resp_tx)) {
                         tracing::error!("Failed to send ExtractText command: {e}");
-                        return Err(crate::models::PdfError::from("Engine died"));
+                        return Err(crate::models::PdfError::EngineDied);
                     }
                     match resp_rx.await {
                         Ok(Ok(text)) => Ok(text),
                         Ok(Err(e)) => Err(e),
-                        Err(_) => Err(crate::models::PdfError::from("Engine died")),
+                        Err(_) => Err(crate::models::PdfError::EngineDied),
                     }
                 },
                 |res| match res {
@@ -129,7 +129,7 @@ pub fn handle_export_message(app: &mut PdfBullApp, message: Message) -> Task<Mes
                     if let Err(_e) = cmd_tx.send(crate::commands::PdfCommand::Render(
                         doc_id, page, options, resp_tx,
                     )) {
-                        return Err(crate::models::PdfError::from("Engine died"));
+                        return Err(crate::models::PdfError::EngineDied);
                     }
                     match resp_rx.await {
                         Ok(Ok(res)) => {
@@ -146,7 +146,7 @@ pub fn handle_export_message(app: &mut PdfBullApp, message: Message) -> Task<Mes
                             Ok(())
                         }
                         Ok(Err(e)) => Err(e),
-                        Err(_) => Err(crate::models::PdfError::from("Engine died")),
+                        Err(_) => Err(crate::models::PdfError::EngineDied),
                     }
                 },
                 |res| match res {
@@ -205,7 +205,7 @@ pub fn handle_export_message(app: &mut PdfBullApp, message: Message) -> Task<Mes
                                 cmd_tx.send(PdfCommand::ExportImage(doc_id, page, zoom, resp_tx))
                             {
                                 tracing::error!("Failed to send ExportImage command: {e}");
-                                return Err(crate::models::PdfError::from("Engine died"));
+                                return Err(crate::models::PdfError::EngineDied);
                             }
                             match resp_rx.await {
                                 Ok(Ok(buf)) => tokio::task::spawn_blocking(move || {
@@ -224,7 +224,7 @@ pub fn handle_export_message(app: &mut PdfBullApp, message: Message) -> Task<Mes
                                 .await
                                 .map_err(|e| crate::models::PdfError::from(e.to_string()))?,
                                 Ok(Err(e)) => Err(e),
-                                Err(_) => Err(crate::models::PdfError::from("Engine died")),
+                                Err(_) => Err(crate::models::PdfError::EngineDied),
                             }
                         }
                         None => Err(crate::models::PdfError::from("Cancelled")),
@@ -401,7 +401,7 @@ pub fn handle_export_message(app: &mut PdfBullApp, message: Message) -> Task<Mes
                         let _ = cmd_tx.send(PdfCommand::Split(path, pages, out_dir, tx));
                         match rx.await {
                             Ok(res) => res,
-                            Err(_) => Err(crate::models::PdfError::from("Engine died")),
+                            Err(_) => Err(crate::models::PdfError::EngineDied),
                         }
                     } else {
                         Err(crate::models::PdfError::from("Cancelled"))
@@ -514,7 +514,7 @@ pub fn handle_export_message(app: &mut PdfBullApp, message: Message) -> Task<Mes
                     let _ = cmd_tx.send(PdfCommand::PrintPdf(path, tx));
                     match rx.await {
                         Ok(res) => res,
-                        Err(_) => Err(crate::models::PdfError::from("Engine died")),
+                        Err(_) => Err(crate::models::PdfError::EngineDied),
                     }
                 },
                 Message::PrintDone,
@@ -553,7 +553,7 @@ pub fn handle_export_message(app: &mut PdfBullApp, message: Message) -> Task<Mes
                             match rx.await {
                                 Ok(Ok(path)) => Ok(path),
                                 Ok(Err(e)) => Err(e),
-                                Err(_) => Err(crate::models::PdfError::from("Engine died")),
+                                Err(_) => Err(crate::models::PdfError::EngineDied),
                             }
                         }
                         None => Err(crate::models::PdfError::from("Cancelled")),

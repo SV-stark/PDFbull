@@ -96,11 +96,11 @@ pub fn handle_render_message(app: &mut PdfBullApp, message: Message) -> Task<Mes
                     )) {
                         tracing::error!("Failed to send Render command: {e}");
 
-                        return Err(crate::models::PdfError::from("Engine died"));
+                        return Err(crate::models::PdfError::EngineDied);
                     }
                     resp_rx
                         .await
-                        .unwrap_or(Err(crate::models::PdfError::from("Channel closed")))
+                        .unwrap_or(Err(crate::models::PdfError::ChannelClosed))
                 },
                 move |res| Message::PageRendered(page_idx, zoom, res),
             )

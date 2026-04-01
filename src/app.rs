@@ -220,7 +220,7 @@ impl PdfBullApp {
                         options,
                         resp_tx,
                     ));
-                    let res = resp_rx.await.unwrap_or_else(|_| Err("Engine died".into()));
+                    let res = resp_rx.await.unwrap_or_else(|_| Err(crate::models::PdfError::EngineDied));
                     (page_idx, current_scale, res)
                 },
                 |(page_idx, scale, res)| Message::PageRendered(page_idx, scale, res),
@@ -262,7 +262,7 @@ impl PdfBullApp {
                         ));
                         let res = match resp_rx.await {
                             Ok(result) => result,
-                            Err(_) => Err("Engine died".into()),
+                            Err(_) => Err(crate::models::PdfError::EngineDied),
                         };
                         (page_idx, thumb_zoom, res)
                     },
@@ -331,27 +331,35 @@ impl PdfBullApp {
         }
 
         let watch_sub = iced::Subscription::run_with_id(
-            paths.clone(),
+            ("file-watch", paths.clone()),
             iced::stream::channel(10, move |mut output| async move {
-                use notify_debouncer_mini::{new_debouncer, notify::RecursiveMode};
+                use notify_debouncer_full::{new_debouncer, notify::RecursiveMode};
+                use std::time::Duration;
+
                 let (tx, mut rx) = tokio::sync::mpsc::channel(10);
 
-                let Ok(mut debouncer) = new_debouncer(
-                    std::time::Duration::from_secs(1),
-                    move |res: Result<Vec<notify_debouncer_mini::DebouncedEvent>, _>| {
+                let mut debouncer = match new_debouncer(
+                    Duration::from_secs(1),
+                    None,
+                    move |res: notify_debouncer_full::DebounceEventResult| {
                         if let Ok(events) = res {
                             for event in events {
-                                let _ = tx.blocking_send(event.path);
+                                for path in event.paths {
+                                    let _ = tx.blocking_send(path);
+                                }
                             }
                         }
                     },
-                ) else {
-                    return;
+                ) {
+                    Ok(d) => d,
+                    Err(e) => {
+                        tracing::error!("Failed to create file watcher: {e}");
+                        return;
+                    }
                 };
 
-                let watcher = debouncer.watcher();
                 for path in &paths {
-                    let _ = watcher.watch(path, RecursiveMode::NonRecursive);
+                    let _ = debouncer.watch(path, RecursiveMode::NonRecursive);
                 }
 
                 while let Some(path) = rx.recv().await {

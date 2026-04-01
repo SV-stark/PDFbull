@@ -13,35 +13,63 @@ pub enum PdfError {
     #[error("Render failed: {0}")]
     RenderFailed(String),
     #[error("Engine error: {0}")]
-    EngineError(String),
+    EngineError(EngineErrorKind),
     #[error("IO error: {0}")]
     IoError(String),
     #[error("Search failed: {0}")]
     SearchError(String),
     #[error("Invalid path")]
     InvalidPath,
+    #[error("Engine died")]
+    EngineDied,
+    #[error("Channel closed")]
+    ChannelClosed,
+    #[error("Cancelled")]
+    Cancelled,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum EngineErrorKind {
+    DocumentNotFound,
+    DocumentPathNotFound,
+    PdfiumError(String),
+    Generic(String),
+}
+
+impl std::fmt::Display for EngineErrorKind {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::DocumentNotFound => write!(f, "Document not found"),
+            Self::DocumentPathNotFound => write!(f, "Document path not found"),
+            Self::PdfiumError(e) => write!(f, "PDFium error: {e}"),
+            Self::Generic(e) => write!(f, "{e}"),
+        }
+    }
 }
 
 impl From<&str> for PdfError {
     fn from(s: &str) -> Self {
-        Self::EngineError(s.to_string())
+        Self::EngineError(EngineErrorKind::Generic(s.to_string()))
     }
 }
 
 impl From<String> for PdfError {
     fn from(s: String) -> Self {
-        Self::EngineError(s)
+        Self::EngineError(EngineErrorKind::Generic(s))
     }
 }
 
 impl PartialEq<&str> for PdfError {
     fn eq(&self, other: &&str) -> bool {
         match self {
-            Self::EngineError(s)
+            Self::EngineError(EngineErrorKind::Generic(s))
             | Self::OpenFailed(s)
             | Self::RenderFailed(s)
             | Self::IoError(s)
             | Self::SearchError(s) => s == *other,
+            Self::EngineDied => *other == "Engine died",
+            Self::ChannelClosed => *other == "Channel closed",
+            Self::Cancelled => *other == "Cancelled",
             _ => false,
         }
     }
@@ -100,13 +128,26 @@ pub struct RenderResult {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct SearchResultItem {
-    pub page_index: usize,
+pub struct SearchResult {
+    pub page: usize,
     pub text: String,
-    pub y: f32,
+    pub y_position: f32,
     pub x: f32,
     pub width: f32,
     pub height: f32,
+}
+
+impl SearchResult {
+    pub fn from_search_result_item(item: crate::models::SearchResultItem) -> Self {
+        Self {
+            page: item.page_index,
+            text: item.text,
+            y_position: item.y,
+            x: item.x,
+            width: item.width,
+            height: item.height,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
