@@ -280,15 +280,13 @@ pub fn handle_export_message(app: &mut PdfBullApp, message: Message) -> Task<Mes
                                 resp_tx,
                             )) {
                                 tracing::error!("Failed to send ExportImages command: {e}");
-                                return Err(crate::models::PdfError::EngineError(
-                                    "Engine died".into(),
-                                ));
+                                return Err(crate::models::PdfError::EngineDied);
                             }
                             match resp_rx.await {
                                 Ok(Ok(paths)) => Ok(paths.join(", ")),
                                 Ok(Err(e)) => Err(e),
                                 Err(_) => {
-                                    Err(crate::models::PdfError::EngineError("Engine died".into()))
+                                    Err(crate::models::PdfError::EngineDied)
                                 }
                             }
                         }
@@ -432,11 +430,9 @@ pub fn handle_export_message(app: &mut PdfBullApp, message: Message) -> Task<Mes
                     let (tx, rx) = tokio::sync::oneshot::channel();
                     cmd_tx
                         .send(PdfCommand::GetFormFields(path, tx))
-                        .map_err(|_| crate::models::PdfError::EngineError("Engine died".into()))?;
+                        .map_err(|_| crate::models::PdfError::EngineDied)?;
                     rx.await.map_err(|_| {
-                        crate::models::PdfError::EngineError(
-                            "Engine response channel closed".into(),
-                        )
+                        crate::models::PdfError::ChannelClosed
                     })?
                 },
                 Message::FormFieldsLoaded,
@@ -478,12 +474,10 @@ pub fn handle_export_message(app: &mut PdfBullApp, message: Message) -> Task<Mes
                                 tx,
                             ))
                             .map_err(|_| {
-                                crate::models::PdfError::EngineError("Engine died".into())
+                                crate::models::PdfError::EngineDied
                             })?;
                         rx.await.map_err(|_| {
-                            crate::models::PdfError::EngineError(
-                                "Engine response channel closed".into(),
-                            )
+                            crate::models::PdfError::ChannelClosed
                         })?
                     } else {
                         Err(crate::models::PdfError::OpenFailed("Cancelled".into()))
