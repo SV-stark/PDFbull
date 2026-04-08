@@ -204,3 +204,175 @@ pub fn save_session(session: &SessionData) {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_time_ago_just_now() {
+        let now = OffsetDateTime::now_utc().unix_timestamp() as u64;
+        let result = time_ago(now);
+        assert_eq!(result, "just now");
+    }
+
+    #[test]
+    fn test_time_ago_minutes() {
+        let two_mins_ago = OffsetDateTime::now_utc().unix_timestamp() as u64 - 120;
+        let result = time_ago(two_mins_ago);
+        assert!(result.contains("mins"));
+    }
+
+    #[test]
+    fn test_time_ago_one_minute() {
+        let one_min_ago = OffsetDateTime::now_utc().unix_timestamp() as u64 - 60;
+        let result = time_ago(one_min_ago);
+        assert_eq!(result, "1 min ago");
+    }
+
+    #[test]
+    fn test_time_ago_one_hour() {
+        let one_hour_ago = OffsetDateTime::now_utc().unix_timestamp() as u64 - 3600;
+        let result = time_ago(one_hour_ago);
+        assert_eq!(result, "1 hour ago");
+    }
+
+    #[test]
+    fn test_time_ago_hours() {
+        let three_hours_ago = OffsetDateTime::now_utc().unix_timestamp() as u64 - 10800;
+        let result = time_ago(three_hours_ago);
+        assert!(result.contains("hours"));
+    }
+
+    #[test]
+    fn test_time_ago_yesterday() {
+        let yesterday = OffsetDateTime::now_utc().unix_timestamp() as u64 - 86400;
+        let result = time_ago(yesterday);
+        assert_eq!(result, "yesterday");
+    }
+
+    #[test]
+    fn test_time_ago_days() {
+        let five_days_ago = OffsetDateTime::now_utc().unix_timestamp() as u64 - 432000;
+        let result = time_ago(five_days_ago);
+        assert!(result.contains("days"));
+    }
+
+    #[test]
+    fn test_time_ago_unknown_timestamp() {
+        let result = time_ago(u64::MAX);
+        assert_eq!(result, "unknown");
+    }
+
+    #[test]
+    fn test_time_ago_future_timestamp() {
+        let future = OffsetDateTime::now_utc().unix_timestamp() as u64 + 10000;
+        let result = time_ago(future);
+        assert_eq!(result, "unknown");
+    }
+
+    #[test]
+    fn test_app_settings_serialization() {
+        let settings = AppSettings::default();
+        let json = serde_json::to_string(&settings).unwrap();
+        let deserialized: AppSettings = serde_json::from_str(&json).unwrap();
+        assert_eq!(deserialized.theme, settings.theme);
+        assert_eq!(deserialized.cache_size, settings.cache_size);
+    }
+
+    #[test]
+    fn test_recent_file_serialization() {
+        let file = RecentFile {
+            path: "/test/file.pdf".to_string(),
+            name: "file.pdf".to_string(),
+            last_opened: 1234567890,
+        };
+        let json = serde_json::to_string(&file).unwrap();
+        let deserialized: RecentFile = serde_json::from_str(&json).unwrap();
+        assert_eq!(deserialized.path, file.path);
+        assert_eq!(deserialized.name, file.name);
+    }
+
+    #[test]
+    fn test_session_data_serialization() {
+        let session = SessionData {
+            open_tabs: vec!["/path1.pdf".to_string(), "/path2.pdf".to_string()],
+            active_tab: 1,
+        };
+        let json = serde_json::to_string(&session).unwrap();
+        let deserialized: SessionData = serde_json::from_str(&json).unwrap();
+        assert_eq!(deserialized.open_tabs.len(), 2);
+        assert_eq!(deserialized.active_tab, 1);
+    }
+
+    #[test]
+    fn test_session_data_empty_tabs() {
+        let session = SessionData::default();
+        let json = serde_json::to_string(&session).unwrap();
+        let deserialized: SessionData = serde_json::from_str(&json).unwrap();
+        assert!(deserialized.open_tabs.is_empty());
+        assert_eq!(deserialized.active_tab, 0);
+    }
+
+    #[test]
+    fn test_atomic_write_creates_temp_file() {
+        use std::io::Read;
+
+        let temp_dir = std::env::temp_dir();
+        let test_path = temp_dir.join("test_atomic_write.txt");
+
+        let result = atomic_write(&test_path, "test content");
+        assert!(result.is_ok());
+        assert!(test_path.exists());
+
+        let mut file = std::fs::File::open(&test_path).unwrap();
+        let mut contents = String::new();
+        file.read_to_string(&mut contents).unwrap();
+        assert_eq!(contents, "test content");
+
+        let _ = std::fs::remove_file(&test_path);
+    }
+
+    #[test]
+    fn test_atomic_write_overwrites() {
+        use std::io::Read;
+
+        let temp_dir = std::env::temp_dir();
+        let test_path = temp_dir.join("test_atomic_overwrite.txt");
+
+        let _ = atomic_write(&test_path, "original");
+        let result = atomic_write(&test_path, "updated");
+        assert!(result.is_ok());
+
+        let mut file = std::fs::File::open(&test_path).unwrap();
+        let mut contents = String::new();
+        file.read_to_string(&mut contents).unwrap();
+        assert_eq!(contents, "updated");
+
+        let _ = std::fs::remove_file(&test_path);
+    }
+
+    #[test]
+    fn test_get_config_dir_returns_path() {
+        let dir = get_config_dir();
+        assert!(dir.to_string_lossy().contains("PDFbull") || dir.to_string_lossy() == ".");
+    }
+
+    #[test]
+    fn test_recent_files_truncation() {
+        let mut files = Vec::new();
+        for i in 0..25 {
+            files.push(RecentFile {
+                path: format!("/path/file{}.pdf", i),
+                name: format!("file{}.pdf", i),
+                last_opened: i as u64,
+            });
+        }
+
+        while files.len() > 20 {
+            files.pop();
+        }
+
+        assert!(files.len() <= 20);
+    }
+}

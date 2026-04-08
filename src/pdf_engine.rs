@@ -64,11 +64,7 @@ impl RenderCache {
         self.cache.get(key)
     }
 
-    pub fn put(
-        &self,
-        key: RenderKey,
-        result: crate::models::RenderResult,
-    ) {
+    pub fn put(&self, key: RenderKey, result: crate::models::RenderResult) {
         self.cache.insert(key, result);
     }
 }
@@ -242,7 +238,11 @@ impl<'a> DocumentStore<'a> {
             } else {
                 options.filter
             },
-            auto_crop: if is_thumbnail { false } else { options.auto_crop },
+            auto_crop: if is_thumbnail {
+                false
+            } else {
+                options.auto_crop
+            },
             quality: if is_thumbnail {
                 RenderQuality::Low
             } else {
@@ -536,6 +536,7 @@ impl<'a> DocumentStore<'a> {
                     font_size,
                 } => {
                     let font = annotation_font;
+                    let (r, g, b) = hex_to_rgb(color);
 
                     let mut text_obj = objects
                         .create_text_object(
@@ -1053,4 +1054,440 @@ pub fn create_render_cache(cache_size: u64, max_memory_mb: u64) -> SharedRenderC
 pub struct Bookmark {
     pub title: String,
     pub page_index: u16,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_render_key_equality() {
+        let doc_id = DocumentId(1);
+        let key1 = RenderKey {
+            doc_id,
+            page_num: 0,
+            scale: 100,
+            filter: RenderFilter::None,
+            auto_crop: false,
+            quality: RenderQuality::Medium,
+        };
+        let key2 = RenderKey {
+            doc_id,
+            page_num: 0,
+            scale: 100,
+            filter: RenderFilter::None,
+            auto_crop: false,
+            quality: RenderQuality::Medium,
+        };
+        assert_eq!(key1, key2);
+    }
+
+    #[test]
+    fn test_render_key_different_pages() {
+        let doc_id = DocumentId(1);
+        let key1 = RenderKey {
+            doc_id,
+            page_num: 0,
+            scale: 100,
+            filter: RenderFilter::None,
+            auto_crop: false,
+            quality: RenderQuality::Medium,
+        };
+        let key2 = RenderKey {
+            doc_id,
+            page_num: 1,
+            scale: 100,
+            filter: RenderFilter::None,
+            auto_crop: false,
+            quality: RenderQuality::Medium,
+        };
+        assert_ne!(key1, key2);
+    }
+
+    #[test]
+    fn test_render_key_different_scales() {
+        let doc_id = DocumentId(1);
+        let key1 = RenderKey {
+            doc_id,
+            page_num: 0,
+            scale: 100,
+            filter: RenderFilter::None,
+            auto_crop: false,
+            quality: RenderQuality::Medium,
+        };
+        let key2 = RenderKey {
+            doc_id,
+            page_num: 0,
+            scale: 200,
+            filter: RenderFilter::None,
+            auto_crop: false,
+            quality: RenderQuality::Medium,
+        };
+        assert_ne!(key1, key2);
+    }
+
+    #[test]
+    fn test_render_key_different_documents() {
+        let key1 = RenderKey {
+            doc_id: DocumentId(1),
+            page_num: 0,
+            scale: 100,
+            filter: RenderFilter::None,
+            auto_crop: false,
+            quality: RenderQuality::Medium,
+        };
+        let key2 = RenderKey {
+            doc_id: DocumentId(2),
+            page_num: 0,
+            scale: 100,
+            filter: RenderFilter::None,
+            auto_crop: false,
+            quality: RenderQuality::Medium,
+        };
+        assert_ne!(key1, key2);
+    }
+
+    #[test]
+    fn test_render_key_with_filters() {
+        let doc_id = DocumentId(1);
+        let key_grayscale = RenderKey {
+            doc_id,
+            page_num: 0,
+            scale: 100,
+            filter: RenderFilter::Grayscale,
+            auto_crop: false,
+            quality: RenderQuality::Medium,
+        };
+        let key_inverted = RenderKey {
+            doc_id,
+            page_num: 0,
+            scale: 100,
+            filter: RenderFilter::Inverted,
+            auto_crop: false,
+            quality: RenderQuality::Medium,
+        };
+        assert_ne!(key_grayscale, key_inverted);
+    }
+
+    #[test]
+    fn test_render_cache_creation() {
+        let cache = RenderCache::new(10, 100);
+        assert_eq!(
+            cache.get(&RenderKey {
+                doc_id: DocumentId(1),
+                page_num: 0,
+                scale: 100,
+                filter: RenderFilter::None,
+                auto_crop: false,
+                quality: RenderQuality::Medium,
+            }),
+            None
+        );
+    }
+
+    #[test]
+    fn test_render_cache_insert_and_get() {
+        let cache = RenderCache::new(10, 100);
+        let key = RenderKey {
+            doc_id: DocumentId(1),
+            page_num: 0,
+            scale: 100,
+            filter: RenderFilter::None,
+            auto_crop: false,
+            quality: RenderQuality::Medium,
+        };
+        let result = crate::models::RenderResult {
+            width: 100,
+            height: 100,
+            data: bytes::Bytes::from(vec![0u8; 100]),
+            text_items: vec![],
+        };
+        cache.put(key.clone(), result.clone());
+        let cached = cache.get(&key);
+        assert!(cached.is_some());
+        assert_eq!(cached.unwrap().width, 100);
+    }
+
+    #[test]
+    fn test_render_cache_overwrite() {
+        let cache = RenderCache::new(10, 100);
+        let key = RenderKey {
+            doc_id: DocumentId(1),
+            page_num: 0,
+            scale: 100,
+            filter: RenderFilter::None,
+            auto_crop: false,
+            quality: RenderQuality::Medium,
+        };
+        let result1 = crate::models::RenderResult {
+            width: 100,
+            height: 100,
+            data: bytes::Bytes::from(vec![0u8; 100]),
+            text_items: vec![],
+        };
+        let result2 = crate::models::RenderResult {
+            width: 200,
+            height: 200,
+            data: bytes::Bytes::from(vec![0u8; 200]),
+            text_items: vec![],
+        };
+        cache.put(key.clone(), result1);
+        cache.put(key.clone(), result2);
+        let cached = cache.get(&key);
+        assert_eq!(cached.unwrap().width, 200);
+    }
+
+    #[test]
+    fn test_render_cache_different_keys() {
+        let cache = RenderCache::new(10, 100);
+        let key1 = RenderKey {
+            doc_id: DocumentId(1),
+            page_num: 0,
+            scale: 100,
+            filter: RenderFilter::None,
+            auto_crop: false,
+            quality: RenderQuality::Medium,
+        };
+        let key2 = RenderKey {
+            doc_id: DocumentId(1),
+            page_num: 1,
+            scale: 100,
+            filter: RenderFilter::None,
+            auto_crop: false,
+            quality: RenderQuality::Medium,
+        };
+        let result1 = crate::models::RenderResult {
+            width: 100,
+            height: 100,
+            data: bytes::Bytes::from(vec![0u8; 100]),
+            text_items: vec![],
+        };
+        let result2 = crate::models::RenderResult {
+            width: 200,
+            height: 200,
+            data: bytes::Bytes::from(vec![0u8; 200]),
+            text_items: vec![],
+        };
+        cache.put(key1.clone(), result1);
+        cache.put(key2.clone(), result2);
+        assert_eq!(cache.get(&key1).unwrap().width, 100);
+        assert_eq!(cache.get(&key2).unwrap().width, 200);
+    }
+
+    #[test]
+    fn test_apply_filter_inverted() {
+        let mut data = vec![100, 150, 200, 255, 50, 75, 100, 255];
+        DocumentStore::apply_filter(&mut data, RenderFilter::Inverted);
+        assert_eq!(data[0], 155);
+        assert_eq!(data[1], 105);
+        assert_eq!(data[2], 55);
+    }
+
+    #[test]
+    fn test_apply_filter_eco_bright() {
+        let mut data = vec![250, 250, 250, 255];
+        DocumentStore::apply_filter(&mut data, RenderFilter::Eco);
+        assert_eq!(data[0], 255);
+        assert_eq!(data[1], 255);
+        assert_eq!(data[2], 255);
+    }
+
+    #[test]
+    fn test_apply_filter_eco_dark() {
+        let mut data = vec![100, 100, 100, 255];
+        DocumentStore::apply_filter(&mut data, RenderFilter::Eco);
+        assert_eq!(data[0], 100);
+        assert_eq!(data[1], 100);
+        assert_eq!(data[2], 100);
+    }
+
+    #[test]
+    fn test_apply_filter_black_white_high() {
+        let mut data = vec![200, 200, 200, 255];
+        DocumentStore::apply_filter(&mut data, RenderFilter::BlackWhite);
+        assert_eq!(data[0], 255);
+        assert_eq!(data[1], 255);
+        assert_eq!(data[2], 255);
+    }
+
+    #[test]
+    fn test_apply_filter_black_white_low() {
+        let mut data = vec![50, 50, 50, 255];
+        DocumentStore::apply_filter(&mut data, RenderFilter::BlackWhite);
+        assert_eq!(data[0], 0);
+        assert_eq!(data[1], 0);
+        assert_eq!(data[2], 0);
+    }
+
+    #[test]
+    fn test_apply_filter_lighten() {
+        let mut data = vec![100, 100, 100, 255, 230, 230, 230, 255];
+        DocumentStore::apply_filter(&mut data, RenderFilter::Lighten);
+        assert_eq!(data[0], 120);
+        assert_eq!(data[1], 120);
+        assert_eq!(data[2], 120);
+        assert_eq!(data[4], 250);
+    }
+
+    #[test]
+    fn test_apply_filter_lighten_saturation() {
+        let mut data = vec![245, 245, 245, 255];
+        DocumentStore::apply_filter(&mut data, RenderFilter::Lighten);
+        assert_eq!(data[0], 255);
+        assert_eq!(data[1], 255);
+        assert_eq!(data[2], 255);
+    }
+
+    #[test]
+    fn test_apply_filter_no_shadow_bright() {
+        let mut data = vec![235, 235, 235, 255];
+        DocumentStore::apply_filter(&mut data, RenderFilter::NoShadow);
+        assert_eq!(data[0], 255);
+        assert_eq!(data[1], 255);
+        assert_eq!(data[2], 255);
+    }
+
+    #[test]
+    fn test_apply_filter_no_shadow_dark() {
+        let mut data = vec![100, 100, 100, 255];
+        DocumentStore::apply_filter(&mut data, RenderFilter::NoShadow);
+        assert_eq!(data[0], 100);
+        assert_eq!(data[1], 100);
+        assert_eq!(data[2], 100);
+    }
+
+    #[test]
+    fn test_apply_filter_grayscale_does_nothing() {
+        let mut data = vec![100, 150, 200, 255];
+        DocumentStore::apply_filter(&mut data, RenderFilter::Grayscale);
+        assert_eq!(data[0], 100);
+        assert_eq!(data[1], 150);
+        assert_eq!(data[2], 200);
+    }
+
+    #[test]
+    fn test_apply_filter_none_does_nothing() {
+        let mut data = vec![100, 150, 200, 255];
+        DocumentStore::apply_filter(&mut data, RenderFilter::None);
+        assert_eq!(data[0], 100);
+        assert_eq!(data[1], 150);
+        assert_eq!(data[2], 200);
+    }
+
+    #[test]
+    fn test_apply_filter_large_buffer() {
+        let mut data = vec![0u8; 10000];
+        for i in 0..2500 {
+            data[i * 4] = 100;
+            data[i * 4 + 1] = 150;
+            data[i * 4 + 2] = 200;
+            data[i * 4 + 3] = 255;
+        }
+        DocumentStore::apply_filter(&mut data, RenderFilter::Inverted);
+        for i in 0..2500 {
+            assert_eq!(data[i * 4], 155);
+            assert_eq!(data[i * 4 + 1], 105);
+            assert_eq!(data[i * 4 + 2], 55);
+        }
+    }
+
+    #[test]
+    fn test_detect_content_bbox_parallel_empty() {
+        let data = vec![255u8; 40];
+        let result = DocumentStore::detect_content_bbox_parallel(&data, 10, 10);
+        assert!(result.is_none());
+    }
+
+    #[test]
+    fn test_detect_content_bbox_parallel_full() {
+        let mut data = vec![255u8; 40];
+        data[0] = 100;
+        data[4] = 100;
+        let result = DocumentStore::detect_content_bbox_parallel(&data, 10, 10);
+        assert!(result.is_some());
+        let (min_x, min_y, max_x, max_y) = result.unwrap();
+        assert!(min_x <= max_x);
+        assert!(min_y <= max_y);
+    }
+
+    #[test]
+    fn test_detect_content_bbox_parallel_with_margin() {
+        let mut data = vec![255u8; 40];
+        data[0] = 100;
+        let result = DocumentStore::detect_content_bbox_parallel(&data, 10, 10);
+        assert!(result.is_some());
+        let (min_x, min_y, max_x, max_y) = result.unwrap();
+        assert!(min_x <= 10);
+        assert!(min_y <= 10);
+        assert!(max_x >= 0);
+        assert!(max_y >= 0);
+    }
+
+    #[test]
+    fn test_create_render_cache_defaults() {
+        let cache = create_render_cache(10, 0);
+        assert!(cache
+            .get(&RenderKey {
+                doc_id: DocumentId(1),
+                page_num: 0,
+                scale: 100,
+                filter: RenderFilter::None,
+                auto_crop: false,
+                quality: RenderQuality::Medium,
+            })
+            .is_none());
+    }
+
+    #[test]
+    fn test_render_options_default() {
+        let options = RenderOptions {
+            scale: 1.0,
+            rotation: 0,
+            filter: RenderFilter::None,
+            auto_crop: false,
+            quality: RenderQuality::Medium,
+        };
+        assert_eq!(options.scale, 1.0);
+        assert_eq!(options.rotation, 0);
+    }
+
+    #[test]
+    fn test_render_quality_serialization() {
+        let json_low = serde_json::to_string(&RenderQuality::Low).unwrap();
+        let json_medium = serde_json::to_string(&RenderQuality::Medium).unwrap();
+        let json_high = serde_json::to_string(&RenderQuality::High).unwrap();
+        assert_eq!(json_low, "\"Low\"");
+        assert_eq!(json_medium, "\"Medium\"");
+        assert_eq!(json_high, "\"High\"");
+    }
+
+    #[test]
+    fn test_render_filter_serialization() {
+        let json_none = serde_json::to_string(&RenderFilter::None).unwrap();
+        let json_grayscale = serde_json::to_string(&RenderFilter::Grayscale).unwrap();
+        let json_inverted = serde_json::to_string(&RenderFilter::Inverted).unwrap();
+        assert_eq!(json_none, "\"None\"");
+        assert_eq!(json_grayscale, "\"Grayscale\"");
+        assert_eq!(json_inverted, "\"Inverted\"");
+    }
+
+    #[test]
+    fn test_render_quality_deserialization() {
+        let low: RenderQuality = serde_json::from_str("\"Low\"").unwrap();
+        let medium: RenderQuality = serde_json::from_str("\"Medium\"").unwrap();
+        let high: RenderQuality = serde_json::from_str("\"High\"").unwrap();
+        assert_eq!(low, RenderQuality::Low);
+        assert_eq!(medium, RenderQuality::Medium);
+        assert_eq!(high, RenderQuality::High);
+    }
+
+    #[test]
+    fn test_render_filter_deserialization() {
+        let none: RenderFilter = serde_json::from_str("\"None\"").unwrap();
+        let grayscale: RenderFilter = serde_json::from_str("\"Grayscale\"").unwrap();
+        let inverted: RenderFilter = serde_json::from_str("\"Inverted\"").unwrap();
+        assert_eq!(none, RenderFilter::None);
+        assert_eq!(grayscale, RenderFilter::Grayscale);
+        assert_eq!(inverted, RenderFilter::Inverted);
+    }
 }

@@ -504,3 +504,544 @@ impl DocumentTab {
         self.view_state.last_cleanup_time.elapsed().as_secs() >= 5
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::path::PathBuf;
+
+    #[test]
+    fn test_document_id_new_increments() {
+        NEXT_DOC_ID.store(1, std::sync::atomic::Ordering::SeqCst);
+        let id1 = next_doc_id();
+        let id2 = next_doc_id();
+        assert_eq!(id1.0, 1);
+        assert_eq!(id2.0, 2);
+    }
+
+    #[test]
+    fn test_document_id_equality() {
+        let id1 = DocumentId(1);
+        let id2 = DocumentId(1);
+        let id3 = DocumentId(2);
+        assert_eq!(id1, id2);
+        assert_ne!(id1, id3);
+    }
+
+    #[test]
+    fn test_document_id_default() {
+        let id = DocumentId::default();
+        assert_eq!(id.0, 0);
+    }
+
+    #[test]
+    fn test_document_id_copy() {
+        let id1 = DocumentId(42);
+        let id2 = id1;
+        assert_eq!(id1, id2);
+    }
+
+    #[test]
+    fn test_document_id_clone() {
+        let id1 = DocumentId(42);
+        let id2 = id1.clone();
+        assert_eq!(id1, id2);
+    }
+
+    #[test]
+    fn test_document_id_hash() {
+        use std::collections::HashSet;
+        let mut set = HashSet::new();
+        set.insert(DocumentId(1));
+        set.insert(DocumentId(2));
+        set.insert(DocumentId(1));
+        assert_eq!(set.len(), 2);
+    }
+
+    #[test]
+    fn test_annotation_id_new_increments() {
+        NEXT_ANN_ID.store(1, std::sync::atomic::Ordering::SeqCst);
+        let id1 = next_annotation_id();
+        let id2 = next_annotation_id();
+        assert_eq!(id1, 1);
+        assert_eq!(id2, 2);
+    }
+
+    #[test]
+    fn test_app_settings_default() {
+        let settings = AppSettings::default();
+        assert_eq!(settings.theme, AppTheme::System);
+        assert_eq!(settings.cache_size, 100);
+        assert_eq!(settings.max_cache_memory, 512);
+        assert_eq!(
+            settings.render_quality,
+            crate::pdf_engine::RenderQuality::Medium
+        );
+        assert_eq!(settings.default_filter, RenderFilter::None);
+        assert_eq!(settings.accent_color, "#3b82f6");
+        assert!(settings.restore_session);
+        assert!(settings.remember_last_file);
+        assert_eq!(settings.default_zoom, 1.0);
+        assert!(settings.auto_save);
+    }
+
+    #[test]
+    fn test_document_metadata_default() {
+        let metadata = DocumentMetadata::default();
+        assert!(metadata.title.is_none());
+        assert!(metadata.author.is_none());
+        assert!(metadata.subject.is_none());
+        assert!(metadata.keywords.is_none());
+        assert!(metadata.creator.is_none());
+        assert!(metadata.producer.is_none());
+        assert!(metadata.creation_date.is_none());
+        assert!(metadata.modification_date.is_none());
+    }
+
+    #[test]
+    fn test_session_data_default() {
+        let session = SessionData::default();
+        assert!(session.open_tabs.is_empty());
+        assert_eq!(session.active_tab, 0);
+    }
+
+    #[test]
+    fn test_document_tab_new() {
+        let path = PathBuf::from("/test/document.pdf");
+        let tab = DocumentTab::new(path.clone());
+        assert_eq!(tab.path, path);
+        assert_eq!(tab.name, "document.pdf");
+        assert_eq!(tab.total_pages, 0);
+        assert_eq!(tab.current_page, 0);
+        assert_eq!(tab.zoom, 1.0);
+        assert_eq!(tab.rotation, 0);
+        assert_eq!(tab.render_filter, RenderFilter::None);
+        assert!(!tab.auto_crop);
+        assert!(tab.page_heights.is_empty());
+        assert!(tab.search_results.is_empty());
+        assert_eq!(tab.current_search_index, 0);
+        assert!(tab.undo_stack.is_empty());
+        assert!(tab.redo_stack.is_empty());
+        assert!(tab.bookmarks.is_empty());
+        assert!(tab.annotations.is_empty());
+    }
+
+    #[test]
+    fn test_document_tab_new_unknown_path() {
+        let tab = DocumentTab::new(PathBuf::new());
+        assert_eq!(tab.name, "Unknown");
+    }
+
+    #[test]
+    fn test_tab_view_state_default() {
+        let state = TabViewState::default();
+        assert_eq!(state.viewport_y, 0.0);
+        assert_eq!(state.viewport_height, 800.0);
+        assert_eq!(state.sidebar_viewport_y, 0.0);
+        assert_eq!(state.visible_range, (0, 1));
+        assert!(!state.is_loading);
+    }
+
+    #[test]
+    fn test_update_visible_range_empty_pages() {
+        let mut tab = DocumentTab::new(PathBuf::from("/test/doc.pdf"));
+        tab.page_heights = vec![];
+        tab.update_visible_range();
+        assert_eq!(tab.view_state.visible_range, (0, 0));
+    }
+
+    #[test]
+    fn test_update_visible_range_single_page() {
+        let mut tab = DocumentTab::new(PathBuf::from("/test/doc.pdf"));
+        tab.page_heights = vec![1000.0];
+        tab.view_state.viewport_height = 800.0;
+        tab.view_state.viewport_y = 0.0;
+        tab.zoom = 1.0;
+        tab.update_visible_range();
+        assert_eq!(tab.view_state.visible_range, (0, 1));
+    }
+
+    #[test]
+    fn test_update_visible_range_with_zoom() {
+        let mut tab = DocumentTab::new(PathBuf::from("/test/doc.pdf"));
+        tab.page_heights = vec![1000.0, 1000.0, 1000.0];
+        tab.view_state.viewport_height = 800.0;
+        tab.view_state.viewport_y = 0.0;
+        tab.zoom = 2.0;
+        tab.update_visible_range();
+        assert!(tab.view_state.visible_range.1 >= 1);
+    }
+
+    #[test]
+    fn test_get_visible_pages() {
+        let mut tab = DocumentTab::new(PathBuf::from("/test/doc.pdf"));
+        tab.page_heights = vec![100.0; 10];
+        tab.view_state.visible_range = (2, 5);
+        let visible = tab.get_visible_pages();
+        assert!(visible.contains(&2));
+        assert!(visible.contains(&3));
+        assert!(visible.contains(&4));
+        assert!(!visible.contains(&1));
+        assert!(!visible.contains(&5));
+    }
+
+    #[test]
+    fn test_get_visible_pages_empty_range() {
+        let mut tab = DocumentTab::new(PathBuf::from("/test/doc.pdf"));
+        tab.page_heights = vec![100.0; 10];
+        tab.view_state.visible_range = (5, 5);
+        let visible = tab.get_visible_pages();
+        assert!(visible.is_empty());
+    }
+
+    #[test]
+    fn test_cleanup_distant_pages_removes_distant() {
+        let mut tab = DocumentTab::new(PathBuf::from("/test/doc.pdf"));
+        tab.total_pages = 20;
+        tab.page_heights = vec![100.0; 20];
+        tab.view_state.visible_range = (5, 8);
+        tab.view_state.rendered_pages = std::collections::HashMap::new();
+        tab.view_state.thumbnails = std::collections::HashMap::new();
+
+        for i in 0..20 {
+            tab.view_state
+                .rendered_pages
+                .insert(i, (1.0, iced::widget::image::Handle::from_memory(vec![])));
+        }
+
+        tab.zoom = 1.0;
+        tab.cleanup_distant_pages();
+
+        for i in 0..20 {
+            let kept = tab.view_state.rendered_pages.contains_key(&i);
+            if i >= 3 && i <= 10 {
+                assert!(kept, "Page {} should be kept", i);
+            }
+        }
+    }
+
+    #[test]
+    fn test_cleanup_distant_pages_keeps_zoom_mismatch() {
+        let mut tab = DocumentTab::new(PathBuf::from("/test/doc.pdf"));
+        tab.total_pages = 10;
+        tab.page_heights = vec![100.0; 10];
+        tab.view_state.visible_range = (5, 7);
+        tab.view_state.rendered_pages = std::collections::HashMap::new();
+        tab.view_state.thumbnails = std::collections::HashMap::new();
+
+        tab.view_state
+            .rendered_pages
+            .insert(5, (2.0, iced::widget::image::Handle::from_memory(vec![])));
+        tab.view_state
+            .rendered_pages
+            .insert(6, (1.0, iced::widget::image::Handle::from_memory(vec![])));
+
+        tab.zoom = 1.0;
+        tab.cleanup_distant_pages();
+
+        assert!(tab.view_state.rendered_pages.contains_key(&6));
+        assert!(!tab.view_state.rendered_pages.contains_key(&5));
+    }
+
+    #[test]
+    fn test_needs_periodic_cleanup_immediate() {
+        let tab = DocumentTab::new(PathBuf::from("/test/doc.pdf"));
+        assert!(tab.needs_periodic_cleanup());
+    }
+
+    #[test]
+    fn test_annotation_serialization() {
+        let ann = Annotation {
+            id: 1,
+            page: 0,
+            style: AnnotationStyle::Highlight {
+                color: "#FFFF00".to_string(),
+            },
+            x: 10.0,
+            y: 20.0,
+            width: 100.0,
+            height: 50.0,
+        };
+        let json = serde_json::to_string(&ann).unwrap();
+        assert!(json.contains("\"Highlight\""));
+        assert!(json.contains("\"page\":0"));
+    }
+
+    #[test]
+    fn test_annotation_rectangle_serialization() {
+        let ann = Annotation {
+            id: 2,
+            page: 1,
+            style: AnnotationStyle::Rectangle {
+                color: "#FF0000".to_string(),
+                thickness: 2.0,
+                fill: true,
+            },
+            x: 0.0,
+            y: 0.0,
+            width: 200.0,
+            height: 100.0,
+        };
+        let json = serde_json::to_string(&ann).unwrap();
+        let deserialized: Annotation = serde_json::from_str(&json).unwrap();
+        match deserialized.style {
+            AnnotationStyle::Rectangle {
+                thickness, fill, ..
+            } => {
+                assert_eq!(thickness, 2.0);
+                assert!(fill);
+            }
+            _ => panic!("Expected Rectangle style"),
+        }
+    }
+
+    #[test]
+    fn test_annotation_text_serialization() {
+        let ann = Annotation {
+            id: 3,
+            page: 2,
+            style: AnnotationStyle::Text {
+                text: "Hello".to_string(),
+                color: "#0000FF".to_string(),
+                font_size: 12,
+            },
+            x: 50.0,
+            y: 100.0,
+            width: 100.0,
+            height: 20.0,
+        };
+        let json = serde_json::to_string(&ann).unwrap();
+        let deserialized: Annotation = serde_json::from_str(&json).unwrap();
+        match deserialized.style {
+            AnnotationStyle::Text {
+                text, font_size, ..
+            } => {
+                assert_eq!(text, "Hello");
+                assert_eq!(font_size, 12);
+            }
+            _ => panic!("Expected Text style"),
+        }
+    }
+
+    #[test]
+    fn test_annotation_redact_serialization() {
+        let ann = Annotation {
+            id: 4,
+            page: 0,
+            style: AnnotationStyle::Redact {
+                color: "#000000".to_string(),
+            },
+            x: 0.0,
+            y: 0.0,
+            width: 50.0,
+            height: 50.0,
+        };
+        let json = serde_json::to_string(&ann).unwrap();
+        let deserialized: Annotation = serde_json::from_str(&json).unwrap();
+        match deserialized.style {
+            AnnotationStyle::Redact { .. } => {}
+            _ => panic!("Expected Redact style"),
+        }
+    }
+
+    #[test]
+    fn test_hyperlink_serialization() {
+        let link = Hyperlink {
+            page: 0,
+            bounds: (10.0, 20.0, 100.0, 50.0),
+            url: Some("https://example.com".to_string()),
+            destination_page: None,
+        };
+        let json = serde_json::to_string(&link).unwrap();
+        let deserialized: Hyperlink = serde_json::from_str(&json).unwrap();
+        assert_eq!(deserialized.url, Some("https://example.com".to_string()));
+        assert!(deserialized.destination_page.is_none());
+    }
+
+    #[test]
+    fn test_hyperlink_with_destination() {
+        let link = Hyperlink {
+            page: 0,
+            bounds: (0.0, 0.0, 50.0, 50.0),
+            url: None,
+            destination_page: Some(5),
+        };
+        let json = serde_json::to_string(&link).unwrap();
+        let deserialized: Hyperlink = serde_json::from_str(&json).unwrap();
+        assert!(deserialized.url.is_none());
+        assert_eq!(deserialized.destination_page, Some(5));
+    }
+
+    #[test]
+    fn test_search_result_item_serialization() {
+        let item = SearchResultItem {
+            page_index: 3,
+            text: "test result".to_string(),
+            y: 100.0,
+            x: 50.0,
+            width: 200.0,
+            height: 20.0,
+        };
+        let json = serde_json::to_string(&item).unwrap();
+        let deserialized: SearchResultItem = serde_json::from_str(&json).unwrap();
+        assert_eq!(deserialized.page_index, 3);
+        assert_eq!(deserialized.text, "test result");
+    }
+
+    #[test]
+    fn test_text_item_serialization() {
+        let item = TextItem {
+            text: "Hello World".to_string(),
+            x: 10.0,
+            y: 20.0,
+            width: 100.0,
+            height: 15.0,
+        };
+        let json = serde_json::to_string(&item).unwrap();
+        let deserialized: TextItem = serde_json::from_str(&json).unwrap();
+        assert_eq!(deserialized.text, "Hello World");
+        assert_eq!(deserialized.x, 10.0);
+    }
+
+    #[test]
+    fn test_recent_file_serialization() {
+        let file = RecentFile {
+            path: "/path/to/file.pdf".to_string(),
+            name: "file.pdf".to_string(),
+            last_opened: 1234567890,
+        };
+        let json = serde_json::to_string(&file).unwrap();
+        let deserialized: RecentFile = serde_json::from_str(&json).unwrap();
+        assert_eq!(deserialized.path, "/path/to/file.pdf");
+        assert_eq!(deserialized.name, "file.pdf");
+    }
+
+    #[test]
+    fn test_page_bookmark_serialization() {
+        let bookmark = PageBookmark {
+            page: 5,
+            label: "Chapter 1".to_string(),
+            created_at: 1234567890,
+        };
+        let json = serde_json::to_string(&bookmark).unwrap();
+        let deserialized: PageBookmark = serde_json::from_str(&json).unwrap();
+        assert_eq!(deserialized.page, 5);
+        assert_eq!(deserialized.label, "Chapter 1");
+    }
+
+    #[test]
+    fn test_form_field_text_serialization() {
+        let field = FormField {
+            name: "Name".to_string(),
+            variant: FormFieldVariant::Text {
+                value: "John".to_string(),
+            },
+            page: 0,
+        };
+        let json = serde_json::to_string(&field).unwrap();
+        let deserialized: FormField = serde_json::from_str(&json).unwrap();
+        match deserialized.variant {
+            FormFieldVariant::Text { value } => assert_eq!(value, "John"),
+            _ => panic!("Expected Text variant"),
+        }
+    }
+
+    #[test]
+    fn test_form_field_checkbox_serialization() {
+        let field = FormField {
+            name: "Agree".to_string(),
+            variant: FormFieldVariant::Checkbox { is_checked: true },
+            page: 1,
+        };
+        let json = serde_json::to_string(&field).unwrap();
+        let deserialized: FormField = serde_json::from_str(&json).unwrap();
+        match deserialized.variant {
+            FormFieldVariant::Checkbox { is_checked } => assert!(is_checked),
+            _ => panic!("Expected Checkbox variant"),
+        }
+    }
+
+    #[test]
+    fn test_app_theme_serialization() {
+        let system = AppTheme::System;
+        let light = AppTheme::Light;
+        let dark = AppTheme::Dark;
+
+        assert_eq!(serde_json::to_string(&system).unwrap(), "\"System\"");
+        assert_eq!(serde_json::to_string(&light).unwrap(), "\"Light\"");
+        assert_eq!(serde_json::to_string(&dark).unwrap(), "\"Dark\"");
+
+        let system_back: AppTheme = serde_json::from_str("\"System\"").unwrap();
+        let light_back: AppTheme = serde_json::from_str("\"Light\"").unwrap();
+        let dark_back: AppTheme = serde_json::from_str("\"Dark\"").unwrap();
+
+        assert_eq!(system_back, AppTheme::System);
+        assert_eq!(light_back, AppTheme::Light);
+        assert_eq!(dark_back, AppTheme::Dark);
+    }
+
+    #[test]
+    fn test_render_result_clone() {
+        let result = RenderResult {
+            width: 100,
+            height: 200,
+            data: bytes::Bytes::from(vec![1, 2, 3, 4]),
+            text_items: vec![TextItem {
+                text: "test".to_string(),
+                x: 0.0,
+                y: 0.0,
+                width: 10.0,
+                height: 10.0,
+            }],
+        };
+        let cloned = result.clone();
+        assert_eq!(cloned.width, 100);
+        assert_eq!(cloned.height, 200);
+        assert_eq!(cloned.text_items.len(), 1);
+    }
+
+    #[test]
+    fn test_signature_info_default() {
+        let sig = SignatureInfo {
+            name: "Test".to_string(),
+            reason: Some("Testing".to_string()),
+            location: None,
+            date: None,
+            is_valid: true,
+        };
+        assert_eq!(sig.name, "Test");
+        assert!(sig.is_valid);
+        assert!(sig.location.is_none());
+    }
+
+    #[test]
+    fn test_open_result_clone() {
+        let result = OpenResult {
+            id: DocumentId(1),
+            page_count: 10,
+            page_heights: vec![100.0; 10],
+            max_width: 800.0,
+            outline: vec![],
+            links: vec![],
+            metadata: DocumentMetadata::default(),
+            signatures: vec![],
+        };
+        let cloned = result.clone();
+        assert_eq!(cloned.page_count, 10);
+        assert_eq!(cloned.max_width, 800.0);
+    }
+
+    #[test]
+    fn test_search_result_clone() {
+        let result = SearchResult {
+            page: 0,
+            text: "found".to_string(),
+            y_position: 100.0,
+            x: 50.0,
+            width: 200.0,
+            height: 20.0,
+        };
+        let cloned = result.clone();
+        assert_eq!(cloned.text, "found");
+    }
+}
