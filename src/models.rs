@@ -36,6 +36,18 @@ pub enum EngineErrorKind {
     Generic(String),
 }
 
+impl From<&str> for EngineErrorKind {
+    fn from(s: &str) -> Self {
+        Self::Generic(s.to_string())
+    }
+}
+
+impl From<String> for EngineErrorKind {
+    fn from(s: String) -> Self {
+        Self::Generic(s)
+    }
+}
+
 impl std::fmt::Display for EngineErrorKind {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
@@ -138,7 +150,7 @@ pub struct SearchResult {
 }
 
 impl SearchResult {
-    pub fn from_search_result_item(item: crate::models::SearchResultItem) -> Self {
+    pub fn from_search_result_item(item: SearchResultItem) -> Self {
         Self {
             page: item.page_index,
             text: item.text,
@@ -221,10 +233,10 @@ pub struct PageBookmark {
 }
 
 #[derive(Debug, Clone)]
-pub struct SearchResult {
-    pub page: usize,
+pub struct SearchResultItem {
+    pub page_index: usize,
     pub text: String,
-    pub y_position: f32,
+    pub y: f32,
     pub x: f32,
     pub width: f32,
     pub height: f32,

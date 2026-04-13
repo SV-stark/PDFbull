@@ -36,6 +36,7 @@ pub enum Message {
     ClearRecentFiles,
     CloseTab(usize),
     SwitchTab(usize),
+    TabReordered(Vec<usize>),
     NextPage,
     PrevPage,
     ZoomOut,

@@ -22,9 +22,9 @@ pub fn scroll_to_page(tab: &crate::models::DocumentTab, page: usize) -> Task<Mes
         .take(page)
         .map(|h| (h + crate::ui::theme::PAGE_SPACING) * tab.zoom)
         .sum();
-    scrollable::scroll_to(
-        scrollable::Id::new("pdf_scroll"),
-        scrollable::AbsoluteOffset {
+    iced::widget::operation::scroll_to(
+        "pdf_scroll",
+        iced::widget::scrollable::AbsoluteOffset {
             x: 0.0,
             y: y_offset,
         },
@@ -38,9 +38,10 @@ pub fn handle_message(app: &mut PdfBullApp, message: Message) -> Task<Message> {
         app.recent_files = storage::load_recent_files();
         let session = storage::load_session();
         if app.settings.theme == AppTheme::System {
-            match dark_light::detect() {
-                dark_light::Mode::Dark => app.settings.theme = AppTheme::Dark,
-                _ => app.settings.theme = AppTheme::Light,
+            if let Ok(dark_light::Mode::Dark) = dark_light::detect() {
+                app.settings.theme = AppTheme::Dark;
+            } else {
+                app.settings.theme = AppTheme::Light;
             }
         }
         if app.settings.restore_session {
@@ -101,6 +102,7 @@ pub fn handle_message(app: &mut PdfBullApp, message: Message) -> Task<Message> {
         | Message::OpenRecentFile(_)
         | Message::CloseTab(_)
         | Message::SwitchTab(_)
+        | Message::TabReordered(_)
         | Message::DocumentModifiedExternally(_)
         | Message::ReloadDocument(_) => tabs::handle_tab_message(app, message),
         Message::NextPage

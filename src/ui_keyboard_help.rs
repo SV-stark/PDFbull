@@ -10,7 +10,7 @@ pub fn keyboard_help_view(_app: &crate::app::PdfBullApp) -> Element<'_, crate::m
             .style(|_| iced::widget::text::Style {
                 color: Some(Color::WHITE)
             }),
-        Space::new(0, 24),
+        Space::new().height(24),
         shortcut_section(
             "Navigation",
             vec![
@@ -41,7 +41,7 @@ pub fn keyboard_help_view(_app: &crate::app::PdfBullApp) -> Element<'_, crate::m
                 ("Ctrl + W", "Close Tab"),
             ]
         ),
-        Space::new(0, 20),
+        Space::new().height(20),
         text("Press ? or F1 to close this help")
             .size(13)
             .font(INTER_REGULAR)
@@ -56,7 +56,7 @@ pub fn keyboard_help_view(_app: &crate::app::PdfBullApp) -> Element<'_, crate::m
     container(
         container(column![
             row![
-                Space::new(Length::Fill, 0),
+                Space::new().width(Length::Fill),
                 button(text("Close").font(INTER_BOLD).size(14))
                     .on_press(crate::message::Message::ToggleKeyboardHelp)
                     .style(iced::widget::button::text)
@@ -77,6 +77,7 @@ pub fn keyboard_help_view(_app: &crate::app::PdfBullApp) -> Element<'_, crate::m
                 blur_radius: 30.0,
             },
             text_color: None,
+            ..Default::default()
         }),
     )
     .width(Length::Fill)
@@ -101,7 +102,7 @@ fn shortcut_section<'a>(
             .style(|_| iced::widget::text::Style {
                 color: Some(Color::from_rgb8(150, 220, 220))
             }),
-        Space::new(0, 10),
+        Space::new().height(10),
     ]
     .spacing(8);
 
@@ -130,5 +131,6 @@ fn shortcut_section<'a>(
         );
     }
 
-    col.push(Space::new(0, 20)).into()
+    col.push(Space::new().height(20)).into()
+
 }

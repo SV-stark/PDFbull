@@ -206,6 +206,38 @@ pub fn handle_tab_message(app: &mut PdfBullApp, message: Message) -> Task<Messag
             }
             Task::none()
         }
+        Message::TabReordered(new_order) => {
+            let active_tab_id = app.tabs.get(app.active_tab).map(|t| t.id);
+            let mut old_tabs = std::mem::take(&mut app.tabs);
+            let mut temp_tabs: Vec<Option<crate::models::DocumentTab>> =
+                old_tabs.into_iter().map(Some).collect();
+
+            let mut reordered_tabs = Vec::with_capacity(temp_tabs.len());
+            for idx in new_order {
+                if idx < temp_tabs.len() {
+                    if let Some(tab) = temp_tabs[idx].take() {
+                        reordered_tabs.push(tab);
+                    }
+                }
+            }
+
+            // Clean up any remaining
+            for tab in temp_tabs.into_iter().flatten() {
+                reordered_tabs.push(tab);
+            }
+
+            app.tabs = reordered_tabs;
+
+            if let Some(id) = active_tab_id {
+                if let Some(new_idx) = app.tabs.iter().position(|t| t.id == id) {
+                    app.active_tab = new_idx;
+                }
+            }
+
+            app.save_session();
+            Task::none()
+        }
+
         Message::DocumentModifiedExternally(path) => {
             if app.tabs.iter().any(|t| t.path == path) {
                 let path_clone = path.clone();

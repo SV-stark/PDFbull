@@ -777,7 +777,7 @@ impl<'a> DocumentStore<'a> {
         let mut dest = self
             .pdfium
             .create_new_pdf()
-            .map_err(|e| PdfError::EngineError(e.to_string()))?;
+            .map_err(|e| PdfError::EngineError(e.to_string().into()))?;
 
         for path in paths {
             let src = self
@@ -790,7 +790,7 @@ impl<'a> DocumentStore<'a> {
                 let dest_index = dest.pages().len();
                 dest.pages_mut()
                     .copy_page_range_from_document(&src, 0..=(count - 1), dest_index)
-                    .map_err(|e| PdfError::EngineError(e.to_string()))?;
+                    .map_err(|e| PdfError::EngineError(e.to_string().into()))?;
             }
         }
 
@@ -816,11 +816,11 @@ impl<'a> DocumentStore<'a> {
             let mut dest = self
                 .pdfium
                 .create_new_pdf()
-                .map_err(|e| PdfError::EngineError(e.to_string()))?;
+                .map_err(|e| PdfError::EngineError(e.to_string().into()))?;
 
             dest.pages_mut()
                 .copy_page_range_from_document(&src, (page_idx as u16)..=(page_idx as u16), 0)
-                .map_err(|e| PdfError::EngineError(e.to_string()))?;
+                .map_err(|e| PdfError::EngineError(e.to_string().into()))?;
 
             let filename = std::path::Path::new(path)
                 .file_stem()

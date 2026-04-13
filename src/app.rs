@@ -330,9 +330,9 @@ impl PdfBullApp {
             return events;
         }
 
-        let watch_sub = iced::Subscription::run_with_id(
+        let watch_sub = iced::Subscription::run_with(
             ("file-watch", paths.clone()),
-            iced::stream::channel(10, move |mut output| async move {
+            |(_id, paths)| iced::stream::channel(10, move |mut output: iced::futures::channel::mpsc::Sender<Message>| async move {
                 use notify_debouncer_full::{new_debouncer, notify::RecursiveMode};
                 use std::time::Duration;
 
@@ -358,7 +358,7 @@ impl PdfBullApp {
                     }
                 };
 
-                for path in &paths {
+                for path in paths {
                     let _ = debouncer.watch(path, RecursiveMode::NonRecursive);
                 }
 

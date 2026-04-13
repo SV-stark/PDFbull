@@ -14,14 +14,14 @@ pub fn metadata_view(app: &PdfBullApp) -> Element<'_, Message> {
     let mut info_col = column![
         row![
             text("Document Information").size(24).font(INTER_BOLD),
-            Space::with_width(Length::Fill),
+            Space::new().width(Length::Fill),
             button(text("Close").size(14).font(INTER_REGULAR))
                 .on_press(Message::ToggleMetadata)
                 .padding([6, 12])
                 .style(iced::widget::button::text),
         ]
         .align_y(Alignment::Center),
-        Space::with_height(20),
+        Space::new().height(20),
     ]
     .spacing(10);
 
@@ -52,7 +52,7 @@ pub fn metadata_view(app: &PdfBullApp) -> Element<'_, Message> {
                         color: Some(Color::from_rgb(0.5, 0.5, 0.5)),
                     }),
                 text(value).size(16).font(INTER_REGULAR),
-                Space::with_height(10),
+                Space::new().height(10),
             ]
             .spacing(4),
         );
@@ -71,7 +71,7 @@ pub fn metadata_view(app: &PdfBullApp) -> Element<'_, Message> {
                     color: Some(Color::from_rgb(0.5, 0.5, 0.5)),
                 }),
             text(path_str).size(16).font(INTER_REGULAR),
-            Space::with_height(10),
+            Space::new().height(10),
         ]
         .spacing(4),
     );
@@ -85,7 +85,7 @@ pub fn metadata_view(app: &PdfBullApp) -> Element<'_, Message> {
                     color: Some(Color::from_rgb(0.5, 0.5, 0.5)),
                 }),
             text(page_count_str).size(16).font(INTER_REGULAR),
-            Space::with_height(10),
+            Space::new().height(10),
         ]
         .spacing(4),
     );

@@ -142,7 +142,7 @@ pub fn render(app: &PdfBullApp) -> Element<'_, crate::message::Message> {
     let end_idx = (start_idx + 30).min(tab.total_pages);
 
     if start_idx > 0 {
-        sidebar_col = sidebar_col.push(Space::new(0, start_idx as f32 * theme::THUMBNAIL_HEIGHT));
+        sidebar_col = sidebar_col.push(Space::new().height(start_idx as f32 * theme::THUMBNAIL_HEIGHT));
     }
 
     for page_idx in start_idx..end_idx {
@@ -162,11 +162,11 @@ pub fn render(app: &PdfBullApp) -> Element<'_, crate::message::Message> {
 
     let remaining = tab.total_pages.saturating_sub(end_idx);
     if remaining > 0 {
-        sidebar_col = sidebar_col.push(Space::new(0, remaining as f32 * theme::THUMBNAIL_HEIGHT));
+        sidebar_col = sidebar_col.push(Space::new().height(remaining as f32 * theme::THUMBNAIL_HEIGHT));
     }
 
     scrollable(sidebar_col)
-        .id(scrollable::Id::new("sidebar_scroll"))
+        .id("sidebar_scroll")
         .on_scroll(|viewport| {
             crate::message::Message::SidebarViewportChanged(viewport.absolute_offset().y)
         })
@@ -182,7 +182,7 @@ pub fn render_forms(app: &PdfBullApp) -> Element<'_, crate::message::Message> {
             .style(|_| iced::widget::text::Style {
                 color: Some(theme::COLOR_TEXT_DIM)
             }),
-        Space::new(0, 10),
+        Space::new().height(10),
     ]
     .spacing(10)
     .padding(15);

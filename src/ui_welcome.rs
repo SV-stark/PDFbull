@@ -21,6 +21,7 @@ fn custom_card<'a>(
                 blur_radius: 12.0,
             },
             text_color: None,
+            ..Default::default()
         })
         .into()
 }
@@ -53,7 +54,7 @@ fn quick_action_card<'a>(
                     color: Some(Color::from_rgb8(160, 160, 170))
                 })
                 .align_x(Alignment::Center),
-            Space::new(0, 12),
+            Space::new().height(12),
             button(text(action_label).size(14).font(INTER_BOLD).style(|_| {
                 iced::widget::text::Style {
                     color: Some(Color::WHITE),
@@ -116,7 +117,7 @@ pub fn welcome_view(app: &crate::app::PdfBullApp) -> Element<'_, crate::message:
                     text(file.path.clone()).font(INTER_REGULAR),
                     iced::widget::tooltip::Position::Bottom
                 ),
-                Space::new(Length::Fill, 0),
+                Space::new().width(Length::Fill),
                 text(storage::time_ago(file.last_opened))
                     .size(11)
                     .font(INTER_REGULAR)
@@ -158,7 +159,7 @@ pub fn welcome_view(app: &crate::app::PdfBullApp) -> Element<'_, crate::message:
                     .style(|_theme| iced::widget::text::Style {
                         color: Some(Color::WHITE)
                     }),
-                Space::new(Length::Fill, 0),
+                Space::new().width(Length::Fill),
                 button(
                     text("Clear All")
                         .size(12)
@@ -172,7 +173,7 @@ pub fn welcome_view(app: &crate::app::PdfBullApp) -> Element<'_, crate::message:
                 .style(iced::widget::button::text)
             ]
             .align_y(Alignment::Center),
-            Space::new(0, 12),
+            Space::new().height(12),
             files,
         ])
     } else {
@@ -206,7 +207,7 @@ pub fn welcome_view(app: &crate::app::PdfBullApp) -> Element<'_, crate::message:
     let open_card = custom_card(column![
         row![
             logo,
-            Space::new(24, 0),
+            Space::new().width(24),
             column![
                 text("Welcome to PDFbull")
                     .size(28)
@@ -223,7 +224,7 @@ pub fn welcome_view(app: &crate::app::PdfBullApp) -> Element<'_, crate::message:
             ]
         ]
         .align_y(Alignment::Center),
-        Space::new(0, 24),
+        Space::new().height(24),
         actions,
     ]);
 
@@ -245,7 +246,7 @@ pub fn welcome_view(app: &crate::app::PdfBullApp) -> Element<'_, crate::message:
                     .style(|_theme| iced::widget::text::Style {
                         color: Some(Color::from_rgb8(180, 180, 180))
                     }),
-                Space::new(Length::Fill, 0),
+                Space::new().width(Length::Fill),
                 button(
                     row![
                         text(icons::SETTINGS).font(LUCIDE).size(16),
@@ -263,9 +264,9 @@ pub fn welcome_view(app: &crate::app::PdfBullApp) -> Element<'_, crate::message:
             scrollable(
                 column![
                     open_card,
-                    Space::new(0, 24),
+                    Space::new().height(24),
                     recent_section,
-                    Space::new(0, 40),
+                    Space::new().height(40),
                 ]
                 .width(Length::Fixed(720.0))
                 .align_x(Alignment::Center)

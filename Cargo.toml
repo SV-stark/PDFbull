@@ -3,13 +3,14 @@ name = "pdfbull"
 version = "0.2.0"
 description = "A lightweight PDF reader"
 authors = ["SV-stark"]
-edition = "2021"
+edition = "2024"
 license = "MIT"
 homepage = "https://github.com/SV-stark/PDFbull"
 repository = "https://github.com/SV-stark/PDFbull"
 
 [dependencies]
-iced = { version = "0.13", features = ["image", "svg", "canvas", "tokio", "advanced"] }
+iced = { version = "0.14", features = ["image", "svg", "canvas", "tokio", "advanced"] }
+iced_draggable_tabs = "0.1"
 pdfium-render = { version = "0.8", features = ["thread_safe"] }
 tokio = { version = "1.0", features = ["full"] }
 rfd = "0.14"
@@ -20,7 +21,7 @@ serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 directories = "5"
 rayon = "1.10"
-dark-light = "1.1"
+dark-light = "2.0"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 open = "5"

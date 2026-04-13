@@ -46,7 +46,7 @@ fn render_page_nav(app: &PdfBullApp) -> Element<'_, crate::message::Message> {
 
     container(
         row![
-            Space::new(Length::Fill, 0),
+            Space::new().width(Length::Fill),
             button(text(icons::PREV).size(14).font(LUCIDE))
                 .on_press(crate::message::Message::PrevPage)
                 .style(|_theme, _status| iced::widget::button::Style {
@@ -106,9 +106,9 @@ fn render_page_nav(app: &PdfBullApp) -> Element<'_, crate::message::Message> {
                     ..Default::default()
                 })
                 .padding([6, 12]),
-            Space::new(Length::Fill, 0),
+            Space::new().width(Length::Fill),
             loading_indicator,
-            Space::new(15, 0),
+            Space::new().width(15),
             container(
                 row![
                     text(icons::SEARCH).font(LUCIDE).size(14).style(|_| {
@@ -170,7 +170,7 @@ fn render_annotations<'a>(
             let ann_overlay = match &ann.style {
                 AnnotationStyle::Highlight { color } => {
                     let (r, g, b) = hex_to_rgb(color);
-                    container(Space::new(0, 0))
+                    container(Space::new())
                         .width(Length::Fixed(ann.width * zoom))
                         .height(Length::Fixed(ann.height * zoom))
                         .style(move |_| iced::widget::container::Style {
@@ -184,7 +184,7 @@ fn render_annotations<'a>(
                     fill,
                 } => {
                     let (r, g, b) = hex_to_rgb(color);
-                    container(Space::new(0, 0))
+                    container(Space::new())
                         .width(Length::Fixed(ann.width * zoom))
                         .height(Length::Fixed(ann.height * zoom))
                         .style(move |_| iced::widget::container::Style {
@@ -248,7 +248,7 @@ fn render_hyperlinks<'a>(
         .map(|link| {
             let (lx, ly, lw, lh) = link.bounds;
             let overlay = mouse_area(
-                container(Space::new(0, 0))
+                container(Space::new())
                     .width(Length::Fixed(lw * zoom))
                     .height(Length::Fixed(lh * zoom))
                     .style(|_| iced::widget::container::Style::default()),
@@ -289,7 +289,7 @@ fn render_search_highlights<'a>(
             };
 
             container(
-                Space::new(0, 0)
+                Space::new()
                     .width(Length::Fixed(result.width * zoom))
                     .height(Length::Fixed(result.height * zoom)),
             )
@@ -335,7 +335,7 @@ fn render_active_drag<'a>(
             };
 
             return vec![container(
-                Space::new(0, 0)
+                Space::new()
                     .width(Length::Fixed(w * zoom))
                     .height(Length::Fixed(h * zoom)),
             )
@@ -475,7 +475,7 @@ fn render_pdf_content(app: &PdfBullApp) -> Element<'_, crate::message::Message> 
             .sum();
         let y_above = (y_above - scaled_spacing).max(0.0);
         if y_above > 0.0 {
-            pdf_column = pdf_column.push(Space::new(0, y_above));
+            pdf_column = pdf_column.push(Space::new().height(y_above));
         }
     }
 
@@ -492,7 +492,7 @@ fn render_pdf_content(app: &PdfBullApp) -> Element<'_, crate::message::Message> 
             .sum();
         let y_below = (y_below - scaled_spacing).max(0.0);
         if y_below > 0.0 {
-            pdf_column = pdf_column.push(Space::new(0, y_below));
+            pdf_column = pdf_column.push(Space::new().height(y_below));
         }
     }
 
@@ -501,7 +501,7 @@ fn render_pdf_content(app: &PdfBullApp) -> Element<'_, crate::message::Message> 
             .width(Length::Fill)
             .center_x(Length::Fill),
     )
-    .id(scrollable::Id::new("pdf_scroll"))
+    .id("pdf_scroll")
     .on_scroll(|viewport| {
         crate::message::Message::ViewportChanged(
             viewport.absolute_offset().y,

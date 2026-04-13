@@ -8,7 +8,7 @@ fn custom_card<'a>(
     header: impl Into<Element<'a, crate::message::Message>>,
     body: impl Into<Element<'a, crate::message::Message>>,
 ) -> Element<'a, crate::message::Message> {
-    container(column![header.into(), Space::new(0, 15), body.into()])
+    container(column![header.into(), Space::new().height(15), body.into()])
         .padding(20)
         .width(Length::Fill)
         .style(|_theme| iced::widget::container::Style {
@@ -24,6 +24,7 @@ fn custom_card<'a>(
                 blur_radius: 12.0,
             },
             text_color: None,
+            ..Default::default()
         })
         .into()
 }
@@ -206,7 +207,7 @@ pub fn settings_view(app: &crate::app::PdfBullApp) -> Element<'_, crate::message
             .style(|_theme| iced::widget::text::Style {
                 color: Some(Color::WHITE)
             }),
-        Space::new(10, 0),
+        Space::new().width(10),
         text(format!("{}%", (app.settings.default_zoom * 100.0) as i32))
             .font(INTER_BOLD)
             .style(|_theme| {
@@ -214,13 +215,13 @@ pub fn settings_view(app: &crate::app::PdfBullApp) -> Element<'_, crate::message
                     color: Some(Color::from_rgb8(180, 180, 180)),
                 }
             }),
-        Space::new(Length::Fill, 0),
+        Space::new().width(Length::Fill),
         action_btn("-", {
             let mut s = app.settings.clone();
             s.default_zoom = (s.default_zoom - 0.1).max(0.25);
             crate::message::Message::SaveSettings(s)
         }),
-        Space::new(10, 0),
+        Space::new().width(10),
         action_btn("+", {
             let mut s = app.settings.clone();
             s.default_zoom = (s.default_zoom + 0.1).min(5.0);
@@ -237,13 +238,13 @@ pub fn settings_view(app: &crate::app::PdfBullApp) -> Element<'_, crate::message
                     color: Some(Color::WHITE),
                 }
             }),
-        Space::new(Length::Fill, 0),
+        Space::new().width(Length::Fill),
         action_btn("-", {
             let mut s = app.settings.clone();
             s.cache_size = s.cache_size.saturating_sub(10).max(10);
             crate::message::Message::SaveSettings(s)
         }),
-        Space::new(10, 0),
+        Space::new().width(10),
         action_btn("+", {
             let mut s = app.settings.clone();
             s.cache_size = (s.cache_size + 10).min(200);
@@ -312,7 +313,7 @@ pub fn settings_view(app: &crate::app::PdfBullApp) -> Element<'_, crate::message
                             color: Some(Color::from_rgb8(180, 180, 180))
                         }),
                 ],
-                Space::new(Length::Fill, 0),
+                Space::new().width(Length::Fill),
                 button(text("Close").size(16).font(INTER_BOLD).style(|_theme| {
                     iced::widget::text::Style {
                         color: Some(Color::WHITE),
@@ -325,13 +326,13 @@ pub fn settings_view(app: &crate::app::PdfBullApp) -> Element<'_, crate::message
             .align_y(Alignment::Center)
             .padding(20),
             appearance_card,
-            Space::new(0, 20),
+            Space::new().height(20),
             performance_card,
-            Space::new(0, 20),
+            Space::new().height(20),
             defaults_card,
-            Space::new(0, 20),
+            Space::new().height(20),
             behavior_card,
-            Space::new(0, 40),
+            Space::new().height(40),
         ]
         .padding(30)
         .width(Length::Fixed(640.0))
