@@ -10,7 +10,7 @@ fn test_sidebar_toggle() {
     // Check if sidebar is hidden initially
     let at = std::time::Instant::now();
     let sidebar_width: f32 = app.sidebar_animation.interpolate_with(|v| v, at);
-    let sidebar_width = sidebar_width * 280.0; 
+    let sidebar_width = sidebar_width * 280.0;
     assert!(sidebar_width < 0.1);
 
     // Toggle sidebar
