@@ -15,7 +15,7 @@ pub const COLOR_ACCENT: Color = Color::from_rgb(0.23, 0.51, 0.96);
 pub const COLOR_TEXT_DIM: Color = Color::from_rgb(0.58, 0.58, 0.62);
 
 pub fn hex_to_rgb(hex: &str) -> (f32, f32, f32) {
-    let hex = hex.trim_start_matches('#');
+    let hex = hex.trim().trim_start_matches('#');
     if hex.len() != 6 {
         return (0.0, 0.0, 0.0);
     }

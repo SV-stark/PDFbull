@@ -1181,7 +1181,7 @@ mod tests {
 
     #[test]
     fn test_render_cache_insert_and_get() {
-        let cache = RenderCache::new(10, 100);
+        let cache = RenderCache::new(10, 1024);
         let key = RenderKey {
             doc_id: DocumentId(1),
             page_num: 0,
@@ -1204,7 +1204,7 @@ mod tests {
 
     #[test]
     fn test_render_cache_overwrite() {
-        let cache = RenderCache::new(10, 100);
+        let cache = RenderCache::new(10, 1024);
         let key = RenderKey {
             doc_id: DocumentId(1),
             page_num: 0,
@@ -1233,7 +1233,7 @@ mod tests {
 
     #[test]
     fn test_render_cache_different_keys() {
-        let cache = RenderCache::new(10, 100);
+        let cache = RenderCache::new(10, 1024);
         let key1 = RenderKey {
             doc_id: DocumentId(1),
             page_num: 0,

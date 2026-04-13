@@ -1,7 +1,5 @@
 use pdfbull::app::PdfBullApp;
 use pdfbull::message::Message;
-use pdfbull::pdf_engine::{DocumentStore, create_render_cache};
-use pdfium_render::prelude::*;
 
 #[test]
 fn test_sidebar_toggle() {
@@ -14,7 +12,7 @@ fn test_sidebar_toggle() {
     assert!(sidebar_width < 0.1);
 
     // Toggle sidebar
-    app.update(Message::ToggleSidebar);
+    let _ = app.update(Message::ToggleSidebar);
 
     // In a headless test, we can check if the internal state updated
     assert!(app.show_sidebar);

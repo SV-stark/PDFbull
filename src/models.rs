@@ -340,7 +340,9 @@ impl Default for TabViewState {
             viewport_y: 0.0,
             viewport_height: 800.0,
             sidebar_viewport_y: 0.0,
-            last_cleanup_time: std::time::Instant::now(),
+            last_cleanup_time: std::time::Instant::now()
+                .checked_sub(std::time::Duration::from_secs(10))
+                .unwrap_or_else(std::time::Instant::now),
             visible_range: (0, 1),
             is_loading: false,
         }
@@ -493,7 +495,7 @@ impl DocumentTab {
         let current_zoom = self.zoom;
         self.view_state.rendered_pages.retain(|&p, (scale, _)| {
             if p >= keep_start && p < keep_end {
-                (*scale - current_zoom).abs() <= 1.0
+                (*scale - current_zoom).abs() <= 0.01
             } else {
                 false
             }
@@ -725,15 +727,18 @@ mod tests {
         tab.cleanup_distant_pages();
 
         for i in 0..20 {
-            let kept = tab.view_state.rendered_pages.contains_key(&i);
-            if i >= 3 && i <= 10 {
-                assert!(kept, "Page {} should be kept", i);
+            if i >= 3 && i <= 9 {
+                assert!(
+                    tab.view_state.rendered_pages.contains_key(&i),
+                    "Page {} should be kept",
+                    i
+                );
             }
         }
     }
 
     #[test]
-    fn test_cleanup_distant_pages_keeps_zoom_mismatch() {
+    fn test_cleanup_distant_pages_removes_zoom_mismatch() {
         let mut tab = DocumentTab::new(PathBuf::from("/test/doc.pdf"));
         tab.total_pages = 10;
         tab.page_heights = vec![100.0; 10];

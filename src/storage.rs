@@ -10,6 +10,10 @@ pub fn time_ago(unix_secs: u64) -> String {
         let diff = now - past;
         let secs = diff.whole_seconds();
 
+        if secs < 0 || unix_secs == u64::MAX {
+            return "unknown".into();
+        }
+
         if secs < 60 {
             "just now".into()
         } else if secs < 3600 {

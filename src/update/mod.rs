@@ -56,6 +56,7 @@ pub fn handle_message(app: &mut PdfBullApp, message: Message) -> Task<Message> {
                     async move { Message::SwitchTab(target_tab) },
                     |m| m,
                 ));
+                tasks.push(app.update(message));
                 return Task::batch(tasks);
             }
         }
