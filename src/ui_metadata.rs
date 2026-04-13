@@ -21,59 +21,68 @@ pub fn metadata_view(app: &PdfBullApp) -> Element<'_, Message> {
     ]
     .align_y(Alignment::Center);
 
-    let fields: Vec<(&str, String)> = vec![
-        ("Title", meta.title.as_deref().unwrap_or("N/A").to_string()),
+    let fields: Vec<(String, String)> = vec![
         (
-            "Author",
+            "Title".to_string(),
+            meta.title.as_deref().unwrap_or("N/A").to_string(),
+        ),
+        (
+            "Author".to_string(),
             meta.author.as_deref().unwrap_or("N/A").to_string(),
         ),
         (
-            "Subject",
+            "Subject".to_string(),
             meta.subject.as_deref().unwrap_or("N/A").to_string(),
         ),
         (
-            "Keywords",
+            "Keywords".to_string(),
             meta.keywords.as_deref().unwrap_or("N/A").to_string(),
         ),
         (
-            "Creator",
+            "Creator".to_string(),
             meta.creator.as_deref().unwrap_or("N/A").to_string(),
         ),
         (
-            "Producer",
+            "Producer".to_string(),
             meta.producer.as_deref().unwrap_or("N/A").to_string(),
         ),
         (
-            "Creation Date",
+            "Creation Date".to_string(),
             meta.creation_date.as_deref().unwrap_or("N/A").to_string(),
         ),
         (
-            "Modification Date",
+            "Modification Date".to_string(),
             meta.modification_date
                 .as_deref()
                 .unwrap_or("N/A")
                 .to_string(),
         ),
-        ("File Path", tab.path.to_string_lossy().into_owned()),
-        ("Page Count", tab.total_pages.to_string()),
+        (
+            "File Path".to_string(),
+            tab.path.to_string_lossy().into_owned(),
+        ),
+        ("Page Count".to_string(), tab.total_pages.to_string()),
     ];
 
     let meta_table = iced::widget::table(
         [
-            iced::widget::table::column("Property").view(|(label, _): &(&str, String)| {
-                text(*label)
-                    .size(14)
-                    .font(INTER_BOLD)
-                    .style(|_| iced::widget::text::Style {
-                        color: Some(Color::from_rgb(0.5, 0.5, 0.5)),
-                    })
-                    .into()
-            }),
-            iced::widget::table::column("Value").view(|(_, value): &(&str, String)| {
-                text(value.clone()).size(16).font(INTER_REGULAR).into()
+            iced::widget::table::column(
+                "Property",
+                |row: (String, String)| -> Element<'_, Message> {
+                    text(row.0.clone())
+                        .size(14)
+                        .font(INTER_BOLD)
+                        .style(|_| iced::widget::text::Style {
+                            color: Some(Color::from_rgb(0.5, 0.5, 0.5)),
+                        })
+                        .into()
+                },
+            ),
+            iced::widget::table::column("Value", |row: (String, String)| -> Element<'_, Message> {
+                text(row.1.clone()).size(16).font(INTER_REGULAR).into()
             }),
         ],
-        &fields,
+        fields,
     );
 
     container(scrollable(

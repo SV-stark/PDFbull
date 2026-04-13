@@ -20,23 +20,28 @@ fn main() -> iced::Result {
 
     let icon = iced::window::icon::from_file_data(include_bytes!("../PDFbull.png"), None).ok();
 
-    iced::application("PDFbull", app::PdfBullApp::update, app::PdfBullApp::view)
-        .font(include_bytes!("../src/assets/fonts/Inter-Regular.ttf"))
-        .font(include_bytes!("../src/assets/fonts/Inter-Bold.ttf"))
-        .font(include_bytes!("../src/assets/fonts/lucide.ttf"))
-        .font(include_bytes!("../src/assets/fonts/Phosphor.ttf"))
-        .theme(|app| {
-            match app.settings.theme {
-                pdfbull::models::AppTheme::Light => iced::Theme::Light,
-                pdfbull::models::AppTheme::Dark => iced::Theme::Dark,
-                pdfbull::models::AppTheme::System => iced::Theme::Light, // Will be resolved to light/dark in app init
-            }
-        })
-        .subscription(app::PdfBullApp::subscription)
-        .window(iced::window::Settings {
-            icon,
-            exit_on_close_request: false,
-            ..Default::default()
-        })
-        .run()
+    iced::application(
+        app::PdfBullApp::default,
+        app::PdfBullApp::update,
+        app::PdfBullApp::view,
+    )
+    .title("PDFbull")
+    .font(include_bytes!("../src/assets/fonts/Inter-Regular.ttf"))
+    .font(include_bytes!("../src/assets/fonts/Inter-Bold.ttf"))
+    .font(include_bytes!("../src/assets/fonts/lucide.ttf"))
+    .font(include_bytes!("../src/assets/fonts/Phosphor.ttf"))
+    .theme(|app: &app::PdfBullApp| {
+        match app.settings.theme {
+            pdfbull::models::AppTheme::Light => iced::Theme::Light,
+            pdfbull::models::AppTheme::Dark => iced::Theme::Dark,
+            pdfbull::models::AppTheme::System => iced::Theme::Light, // Will be resolved to light/dark in app init
+        }
+    })
+    .subscription(app::PdfBullApp::subscription)
+    .window(iced::window::Settings {
+        icon,
+        exit_on_close_request: false,
+        ..Default::default()
+    })
+    .run()
 }

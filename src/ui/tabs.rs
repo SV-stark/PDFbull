@@ -4,11 +4,31 @@ use iced::widget::{button, container, row, text};
 use iced::{Alignment, Color, Element, Length, Padding};
 use iced_draggable_tabs::DraggableTabs;
 
+thread_local! {
+    static TAB_NAMES: std::cell::RefCell<Vec<String>> = std::cell::RefCell::new(Vec::new());
+    static TAB_REFS: std::cell::RefCell<Vec<&'static str>> = std::cell::RefCell::new(Vec::new());
+}
+
 pub fn render(app: &PdfBullApp) -> Element<'_, crate::message::Message> {
-    let name_refs: Vec<&str> = app.tabs.iter().map(|t| t.name.as_str()).collect();
+    let name_refs_slice: &'static [&'static str] = TAB_NAMES.with(|names_cell| {
+        TAB_REFS.with(|refs_cell| {
+            let mut names = names_cell.borrow_mut();
+            let mut refs = refs_cell.borrow_mut();
+            *names = app.tabs.iter().map(|t| t.name.clone()).collect();
+
+            *refs = names
+                .iter()
+                .map(|s| unsafe { std::mem::transmute::<&str, &'static str>(s.as_str()) })
+                .collect();
+
+            unsafe {
+                std::mem::transmute::<&[&'static str], &'static [&'static str]>(refs.as_slice())
+            }
+        })
+    });
 
     let tabs = DraggableTabs::new(
-        &name_refs,
+        name_refs_slice,
         app.active_tab,
         crate::message::Message::SwitchTab,
         crate::message::Message::TabReordered,
