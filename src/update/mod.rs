@@ -12,7 +12,6 @@ use crate::app::PdfBullApp;
 use crate::message::Message;
 use crate::models::AppTheme;
 use crate::storage;
-use iced::widget::scrollable;
 use iced::Task;
 
 pub fn scroll_to_page(tab: &crate::models::DocumentTab, page: usize) -> Task<Message> {
@@ -44,20 +43,20 @@ pub fn handle_message(app: &mut PdfBullApp, message: Message) -> Task<Message> {
                 app.settings.theme = AppTheme::Light;
             }
         }
-        if app.settings.restore_session {
-            if let Some(mut session_data) = session {
-                let target_tab = session_data.active_tab;
-                let mut tasks = Vec::new();
-                for path in session_data.open_tabs.drain(..) {
-                    tasks.push(app.update(Message::OpenFile(path.into())));
-                }
-                if !tasks.is_empty() {
-                    tasks.push(Task::perform(
-                        async move { Message::SwitchTab(target_tab) },
-                        |m| m,
-                    ));
-                    return Task::batch(tasks);
-                }
+        if app.settings.restore_session
+            && let Some(mut session_data) = session
+        {
+            let target_tab = session_data.active_tab;
+            let mut tasks = Vec::new();
+            for path in session_data.open_tabs.drain(..) {
+                tasks.push(app.update(Message::OpenFile(path.into())));
+            }
+            if !tasks.is_empty() {
+                tasks.push(Task::perform(
+                    async move { Message::SwitchTab(target_tab) },
+                    |m| m,
+                ));
+                return Task::batch(tasks);
             }
         }
     }

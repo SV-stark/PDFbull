@@ -1,7 +1,7 @@
 use crate::app::PdfBullApp;
 use crate::message::Message;
-use iced::widget::image as iced_image;
 use iced::Task;
+use iced::widget::image as iced_image;
 
 pub fn handle_render_message(app: &mut PdfBullApp, message: Message) -> Task<Message> {
     match message {

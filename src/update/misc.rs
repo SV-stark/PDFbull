@@ -82,10 +82,10 @@ pub fn handle_misc_message(app: &mut PdfBullApp, message: Message) -> Task<Messa
                                 }
                             }
                             "s" if modifiers.command() => {
-                                return app.update(Message::SaveAnnotations)
+                                return app.update(Message::SaveAnnotations);
                             }
                             "z" if modifiers.command() && modifiers.shift() => {
-                                return app.update(Message::Redo)
+                                return app.update(Message::Redo);
                             }
                             "z" if modifiers.command() => return app.update(Message::Undo),
                             "y" if modifiers.command() => return app.update(Message::Redo),
@@ -99,10 +99,10 @@ pub fn handle_misc_message(app: &mut PdfBullApp, message: Message) -> Task<Messa
                                 }
                             }
                             "b" if modifiers.command() => {
-                                return app.update(Message::ToggleSidebar)
+                                return app.update(Message::ToggleSidebar);
                             }
                             "?" if modifiers.shift() => {
-                                return app.update(Message::ToggleKeyboardHelp)
+                                return app.update(Message::ToggleKeyboardHelp);
                             }
                             _ => {}
                         },

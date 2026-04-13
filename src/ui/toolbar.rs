@@ -1,9 +1,9 @@
 use crate::app::PdfBullApp;
-use crate::app::{icons, INTER_BOLD, INTER_REGULAR, LUCIDE};
+use crate::app::{INTER_BOLD, INTER_REGULAR, LUCIDE, icons};
 use crate::models::PendingAnnotationKind;
 use crate::pdf_engine::RenderFilter;
 use crate::ui::theme;
-use iced::widget::{button, column, container, row, text, tooltip, Space};
+use iced::widget::{Space, button, column, container, row, text, tooltip};
 use iced::{Alignment, Border, Color, Element, Length, Padding, Shadow, Vector};
 
 pub fn render(app: &PdfBullApp) -> Element<'_, crate::message::Message> {

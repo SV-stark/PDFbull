@@ -1,5 +1,5 @@
 use crate::commands::PdfCommand;
-use crate::pdf_engine::{create_render_cache, DocumentStore, SharedRenderCache};
+use crate::pdf_engine::{DocumentStore, SharedRenderCache, create_render_cache};
 use pdfium_render::prelude::*;
 use std::sync::Arc;
 use tokio::sync::mpsc;

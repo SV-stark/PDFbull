@@ -1,4 +1,4 @@
-use windows::Win32::System::Com::{CoInitializeEx, COINIT_MULTITHREADED};
+use windows::Win32::System::Com::{COINIT_MULTITHREADED, CoInitializeEx};
 use windows::Win32::UI::Shell::{ApplicationDocumentLists, IApplicationDocumentLists};
 
 pub fn ensure_single_instance(_args: &[String]) -> Result<bool, Box<dyn std::error::Error>> {

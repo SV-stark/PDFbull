@@ -4,7 +4,8 @@ use crate::models::{AppSettings, DocumentTab, RecentFile};
 use crate::ui;
 use crate::update::handle_message;
 use iced::futures::SinkExt;
-use iced::{Element, Font, Task};
+use iced::{Element, Font, Task, animation};
+use std::time::Instant;
 
 pub const INTER_REGULAR: Font = Font::with_name("Inter Regular");
 pub const INTER_BOLD: Font = Font::with_name("Inter Bold");
@@ -64,7 +65,8 @@ pub struct PdfBullApp {
     pub rendering_count: usize,
     pub rendering_set: std::collections::HashSet<RenderTarget>,
     pub modifiers: iced::keyboard::Modifiers,
-    pub last_session_save: std::time::Instant,
+    pub last_session_save: Instant,
+    pub sidebar_animation: animation::Animation<f32>,
 }
 
 impl Default for PdfBullApp {
@@ -92,7 +94,8 @@ impl Default for PdfBullApp {
             rendering_count: 0,
             rendering_set: std::collections::HashSet::new(),
             modifiers: iced::keyboard::Modifiers::default(),
-            last_session_save: std::time::Instant::now(),
+            last_session_save: Instant::now(),
+            sidebar_animation: animation::Animation::new(0.0),
         }
     }
 }
@@ -220,7 +223,9 @@ impl PdfBullApp {
                         options,
                         resp_tx,
                     ));
-                    let res = resp_rx.await.unwrap_or_else(|_| Err(crate::models::PdfError::EngineDied));
+                    let res = resp_rx
+                        .await
+                        .unwrap_or_else(|_| Err(crate::models::PdfError::EngineDied));
                     (page_idx, current_scale, res)
                 },
                 |(page_idx, scale, res)| Message::PageRendered(page_idx, scale, res),
@@ -330,43 +335,51 @@ impl PdfBullApp {
             return events;
         }
 
-        let watch_sub = iced::Subscription::run_with(
-            ("file-watch", paths.clone()),
-            |(_id, paths)| iced::stream::channel(10, move |mut output: iced::futures::channel::mpsc::Sender<Message>| async move {
-                use notify_debouncer_full::{new_debouncer, notify::RecursiveMode};
-                use std::time::Duration;
+        let watch_sub =
+            iced::Subscription::run_with(("file-watch", paths.clone()), |(_id, paths)| {
+                let paths = paths.clone();
+                iced::stream::channel(
+                    10,
+                    move |mut output: iced::futures::channel::mpsc::Sender<Message>| {
+                        let paths = paths.clone();
+                        async move {
+                            use notify_debouncer_full::{new_debouncer, notify::RecursiveMode};
+                            use std::time::Duration;
 
-                let (tx, mut rx) = tokio::sync::mpsc::channel(10);
+                            let (tx, mut rx) = tokio::sync::mpsc::channel(10);
 
-                let mut debouncer = match new_debouncer(
-                    Duration::from_secs(1),
-                    None,
-                    move |res: notify_debouncer_full::DebounceEventResult| {
-                        if let Ok(events) = res {
-                            for event in events {
-                                for path in event.paths {
-                                    let _ = tx.blocking_send(path);
+                            let mut debouncer = match new_debouncer(
+                                Duration::from_secs(1),
+                                None,
+                                move |res: notify_debouncer_full::DebounceEventResult| {
+                                    if let Ok(events) = res {
+                                        for event in events {
+                                            for path in &event.paths {
+                                                let _ = tx.blocking_send(path.clone());
+                                            }
+                                        }
+                                    }
+                                },
+                            ) {
+                                Ok(d) => d,
+                                Err(e) => {
+                                    tracing::error!("Failed to create file watcher: {e}");
+                                    return;
                                 }
+                            };
+
+                            for path in paths {
+                                let _ = debouncer.watch(path, RecursiveMode::NonRecursive);
+                            }
+
+                            while let Some(path) = rx.recv().await {
+                                let _ =
+                                    output.send(Message::DocumentModifiedExternally(path)).await;
                             }
                         }
                     },
-                ) {
-                    Ok(d) => d,
-                    Err(e) => {
-                        tracing::error!("Failed to create file watcher: {e}");
-                        return;
-                    }
-                };
-
-                for path in paths {
-                    let _ = debouncer.watch(path, RecursiveMode::NonRecursive);
-                }
-
-                while let Some(path) = rx.recv().await {
-                    let _ = output.send(Message::DocumentModifiedExternally(path)).await;
-                }
-            }),
-        );
+                )
+            });
 
         iced::Subscription::batch(vec![events, watch_sub])
     }

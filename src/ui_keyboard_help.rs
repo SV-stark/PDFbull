@@ -1,5 +1,5 @@
 use crate::app::{INTER_BOLD, INTER_REGULAR};
-use iced::widget::{button, column, container, row, scrollable, text, Space};
+use iced::widget::{Space, button, column, container, row, scrollable, text};
 use iced::{Alignment, Color, Element, Length, Shadow, Vector};
 
 pub fn keyboard_help_view(_app: &crate::app::PdfBullApp) -> Element<'_, crate::message::Message> {
@@ -132,5 +132,4 @@ fn shortcut_section<'a>(
     }
 
     col.push(Space::new().height(20)).into()
-
 }

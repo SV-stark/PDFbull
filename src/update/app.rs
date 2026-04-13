@@ -26,6 +26,9 @@ pub fn handle_app_message(app: &mut PdfBullApp, message: Message) -> Task<Messag
         }
         Message::ToggleSidebar => {
             app.show_sidebar = !app.show_sidebar;
+            let target = if app.show_sidebar { 280.0 } else { 0.0 };
+            app.sidebar_animation
+                .go_mut(target, std::time::Instant::now());
             Task::none()
         }
         Message::ToggleFormsSidebar => {

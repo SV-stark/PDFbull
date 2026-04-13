@@ -42,14 +42,15 @@ notify-debouncer-full = "0.7"
 interprocess = { version = "2", features = ["tokio"] }
 windows = { version = "0.62.2", features = ["Win32_UI_Shell", "Win32_System_Com", "Win32_Foundation"] }
 crossbeam-channel = "0.5.15"
+
+[dev-dependencies]
+iced_test = "0.14"
 insta = { version = "1.46.3", features = ["redactions"] }
+divan = "0.1.14"
+sha2 = "0.10.9"
 
 [build-dependencies]
 winresource = "0.1"
-
-[dev-dependencies]
-divan = "0.1.14"
-sha2 = "0.10.9"
 
 [[bench]]
 name = "render_bench"

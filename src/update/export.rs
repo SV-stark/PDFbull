@@ -285,9 +285,7 @@ pub fn handle_export_message(app: &mut PdfBullApp, message: Message) -> Task<Mes
                             match resp_rx.await {
                                 Ok(Ok(paths)) => Ok(paths.join(", ")),
                                 Ok(Err(e)) => Err(e),
-                                Err(_) => {
-                                    Err(crate::models::PdfError::EngineDied)
-                                }
+                                Err(_) => Err(crate::models::PdfError::EngineDied),
                             }
                         }
                         None => Err(crate::models::PdfError::OpenFailed("Cancelled".into())),
@@ -431,9 +429,8 @@ pub fn handle_export_message(app: &mut PdfBullApp, message: Message) -> Task<Mes
                     cmd_tx
                         .send(PdfCommand::GetFormFields(path, tx))
                         .map_err(|_| crate::models::PdfError::EngineDied)?;
-                    rx.await.map_err(|_| {
-                        crate::models::PdfError::ChannelClosed
-                    })?
+                    rx.await
+                        .map_err(|_| crate::models::PdfError::ChannelClosed)?
                 },
                 Message::FormFieldsLoaded,
             )
@@ -473,12 +470,9 @@ pub fn handle_export_message(app: &mut PdfBullApp, message: Message) -> Task<Mes
                                 f.path().to_string_lossy().to_string(),
                                 tx,
                             ))
-                            .map_err(|_| {
-                                crate::models::PdfError::EngineDied
-                            })?;
-                        rx.await.map_err(|_| {
-                            crate::models::PdfError::ChannelClosed
-                        })?
+                            .map_err(|_| crate::models::PdfError::EngineDied)?;
+                        rx.await
+                            .map_err(|_| crate::models::PdfError::ChannelClosed)?
                     } else {
                         Err(crate::models::PdfError::OpenFailed("Cancelled".into()))
                     }

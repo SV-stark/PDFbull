@@ -29,105 +29,105 @@ pub fn handle_annotation_message(app: &mut PdfBullApp, message: Message) -> Task
             Task::none()
         }
         Message::AnnotationDragEnd => {
-            if let Some(drag) = app.annotation_drag.take() {
-                if let Some(tab) = app.current_tab_mut() {
-                    let zoom = tab.zoom;
-                    let min_x = drag.start.0.min(drag.current.0);
-                    let min_y = drag.start.1.min(drag.current.1);
-                    let w = (drag.start.0 - drag.current.0).abs();
-                    let h = (drag.start.1 - drag.current.1).abs();
+            if let Some(drag) = app.annotation_drag.take()
+                && let Some(tab) = app.current_tab_mut()
+            {
+                let zoom = tab.zoom;
+                let min_x = drag.start.0.min(drag.current.0);
+                let min_y = drag.start.1.min(drag.current.1);
+                let w = (drag.start.0 - drag.current.0).abs();
+                let h = (drag.start.1 - drag.current.1).abs();
 
-                    if (w / zoom) > 5.0 && (h / zoom) > 5.0 {
-                        let id = crate::models::next_annotation_id();
-                        let style = match drag.kind {
-                            crate::models::PendingAnnotationKind::Highlight => {
-                                crate::models::AnnotationStyle::Highlight {
-                                    color: "#FFFF00".to_string(),
-                                }
+                if (w / zoom) > 5.0 && (h / zoom) > 5.0 {
+                    let id = crate::models::next_annotation_id();
+                    let style = match drag.kind {
+                        crate::models::PendingAnnotationKind::Highlight => {
+                            crate::models::AnnotationStyle::Highlight {
+                                color: "#FFFF00".to_string(),
                             }
-                            crate::models::PendingAnnotationKind::Rectangle => {
-                                crate::models::AnnotationStyle::Rectangle {
-                                    color: "#FF0000".to_string(),
-                                    thickness: 2.0,
-                                    fill: false,
-                                }
+                        }
+                        crate::models::PendingAnnotationKind::Rectangle => {
+                            crate::models::AnnotationStyle::Rectangle {
+                                color: "#FF0000".to_string(),
+                                thickness: 2.0,
+                                fill: false,
                             }
-                            crate::models::PendingAnnotationKind::Redact => {
-                                crate::models::AnnotationStyle::Redact {
-                                    color: "#000000".to_string(),
-                                }
+                        }
+                        crate::models::PendingAnnotationKind::Redact => {
+                            crate::models::AnnotationStyle::Redact {
+                                color: "#000000".to_string(),
                             }
-                        };
+                        }
+                    };
 
-                        let ann = crate::models::Annotation {
-                            id,
-                            page: drag.page,
-                            style,
-                            x: min_x / zoom,
-                            y: min_y / zoom,
-                            width: w / zoom,
-                            height: h / zoom,
-                        };
+                    let ann = crate::models::Annotation {
+                        id,
+                        page: drag.page,
+                        style,
+                        x: min_x / zoom,
+                        y: min_y / zoom,
+                        width: w / zoom,
+                        height: h / zoom,
+                    };
 
-                        tab.undo_stack
-                            .push(crate::models::UndoableAction::AddAnnotation(ann.clone()));
-                        tab.redo_stack.clear();
-                        tab.annotations.push(ann);
-                    }
+                    tab.undo_stack
+                        .push(crate::models::UndoableAction::AddAnnotation(ann.clone()));
+                    tab.redo_stack.clear();
+                    tab.annotations.push(ann);
                 }
             }
             Task::none()
         }
         Message::DeleteAnnotation(idx) => {
-            if let Some(tab) = app.current_tab_mut() {
-                if idx < tab.annotations.len() {
-                    let ann = tab.annotations.remove(idx);
-                    tab.undo_stack
-                        .push(crate::models::UndoableAction::DeleteAnnotation(idx, ann));
-                    tab.redo_stack.clear();
-                }
+            if let Some(tab) = app.current_tab_mut()
+                && idx < tab.annotations.len()
+            {
+                let ann = tab.annotations.remove(idx);
+                tab.undo_stack
+                    .push(crate::models::UndoableAction::DeleteAnnotation(idx, ann));
+                tab.redo_stack.clear();
             }
             Task::none()
         }
         Message::Undo => {
-            if let Some(tab) = app.current_tab_mut() {
-                if let Some(action) = tab.undo_stack.pop() {
-                    match action {
-                        crate::models::UndoableAction::AddAnnotation(ann) => {
-                            tab.redo_stack
-                                .push(crate::models::UndoableAction::AddAnnotation(ann.clone()));
-                            tab.annotations.retain(|a| a.id != ann.id);
-                        }
-                        crate::models::UndoableAction::DeleteAnnotation(idx, ann) => {
-                            tab.redo_stack
-                                .push(crate::models::UndoableAction::DeleteAnnotation(
-                                    idx,
-                                    ann.clone(),
-                                ));
-                            tab.annotations.insert(idx.min(tab.annotations.len()), ann);
-                        }
+            if let Some(tab) = app.current_tab_mut()
+                && let Some(action) = tab.undo_stack.pop()
+            {
+                match action {
+                    crate::models::UndoableAction::AddAnnotation(ann) => {
+                        tab.redo_stack
+                            .push(crate::models::UndoableAction::AddAnnotation(ann.clone()));
+                        tab.annotations.retain(|a| a.id != ann.id);
+                    }
+                    crate::models::UndoableAction::DeleteAnnotation(idx, ann) => {
+                        tab.redo_stack
+                            .push(crate::models::UndoableAction::DeleteAnnotation(
+                                idx,
+                                ann.clone(),
+                            ));
+                        tab.annotations.insert(idx.min(tab.annotations.len()), ann);
                     }
                 }
             }
             Task::none()
         }
         Message::Redo => {
-            if let Some(tab) = app.current_tab_mut() {
-                if let Some(action) = tab.redo_stack.pop() {
-                    match action {
-                        crate::models::UndoableAction::AddAnnotation(ann) => {
-                            tab.undo_stack
-                                .push(crate::models::UndoableAction::AddAnnotation(ann.clone()));
-                            tab.annotations.push(ann);
-                        }
-                        crate::models::UndoableAction::DeleteAnnotation(idx, ann) => {
-                            tab.undo_stack
-                                .push(crate::models::UndoableAction::DeleteAnnotation(
-                                    idx,
-                                    ann.clone(),
-                                ));
-                            tab.annotations.retain(|a| a.id != ann.id);
-                        }
+            if let Some(tab) = app.current_tab_mut()
+                && let Some(action) = tab.redo_stack.pop()
+            {
+                match action {
+                    crate::models::UndoableAction::AddAnnotation(ann) => {
+                        tab.undo_stack
+                            .push(crate::models::UndoableAction::AddAnnotation(ann.clone()));
+                        tab.annotations.push(ann);
+                    }
+                    crate::models::UndoableAction::DeleteAnnotation(idx, ann) => {
+                        tab.undo_stack
+                            .push(crate::models::UndoableAction::DeleteAnnotation(
+                                idx,
+                                ann.clone(),
+                            ));
+                        tab.annotations.retain(|a| a.id != ann.id);
                     }
                 }
             }

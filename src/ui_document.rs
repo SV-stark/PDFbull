@@ -1,9 +1,9 @@
 use crate::app::PdfBullApp;
-use crate::app::{icons, INTER_BOLD, INTER_REGULAR, LUCIDE};
+use crate::app::{INTER_BOLD, INTER_REGULAR, LUCIDE, icons};
 use crate::models::{AnnotationStyle, DocumentTab, PendingAnnotationKind};
 use crate::ui::theme::{self, hex_to_rgb};
 use iced::widget::{
-    button, column, container, mouse_area, row, scrollable, text, text_input, Space, Stack,
+    Space, Stack, button, column, container, mouse_area, row, scrollable, text, text_input,
 };
 use iced::{Alignment, Color, Element, Length, Padding};
 
@@ -216,7 +216,7 @@ fn render_annotations<'a>(
                 }
                 AnnotationStyle::Redact { color } => {
                     let (r, g, b) = hex_to_rgb(color);
-                    container(Space::new(0, 0))
+                    container(Space::new())
                         .width(Length::Fixed(ann.width * zoom))
                         .height(Length::Fixed(ann.height * zoom))
                         .style(move |_| iced::widget::container::Style {
@@ -312,29 +312,31 @@ fn render_active_drag<'a>(
     zoom: f32,
     app: &'a PdfBullApp,
 ) -> Vec<Element<'a, crate::message::Message>> {
-    if let Some(drag) = &app.annotation_drag {
-        if drag.page == page_idx {
-            let min_x = drag.start.0.min(drag.current.0);
-            let min_y = drag.start.1.min(drag.current.1);
-            let w = (drag.start.0 - drag.current.0).abs();
-            let h = (drag.start.1 - drag.current.1).abs();
+    if let Some(drag) = &app.annotation_drag
+        && drag.page == page_idx
+    {
+        let min_x = drag.start.0.min(drag.current.0);
+        let min_y = drag.start.1.min(drag.current.1);
+        let w = (drag.start.0 - drag.current.0).abs();
+        let h = (drag.start.1 - drag.current.1).abs();
 
-            let preview_bg = match drag.kind {
-                PendingAnnotationKind::Highlight => Color::from_rgba(1.0, 1.0, 0.0, 0.4),
-                PendingAnnotationKind::Rectangle => Color::from_rgba(1.0, 0.0, 0.0, 0.2),
-                PendingAnnotationKind::Redact => Color::from_rgba(0.0, 0.0, 0.0, 0.8),
-            };
+        let preview_bg = match drag.kind {
+            PendingAnnotationKind::Highlight => Color::from_rgba(1.0, 1.0, 0.0, 0.4),
+            PendingAnnotationKind::Rectangle => Color::from_rgba(1.0, 0.0, 0.0, 0.2),
+            PendingAnnotationKind::Redact => Color::from_rgba(0.0, 0.0, 0.0, 0.8),
+        };
 
-            let preview_border = match drag.kind {
-                PendingAnnotationKind::Highlight => iced::Border::default(),
-                PendingAnnotationKind::Rectangle | PendingAnnotationKind::Redact => iced::Border {
-                    color: Color::from_rgb(1.0, 0.0, 0.0),
-                    width: 2.0 * zoom,
-                    radius: 0.0.into(),
-                },
-            };
+        let preview_border = match drag.kind {
+            PendingAnnotationKind::Highlight => iced::Border::default(),
+            PendingAnnotationKind::Rectangle | PendingAnnotationKind::Redact => iced::Border {
+                color: Color::from_rgb(1.0, 0.0, 0.0),
+                width: 2.0 * zoom,
+                radius: 0.0.into(),
+            },
+        };
 
-            return vec![container(
+        return vec![
+            container(
                 Space::new()
                     .width(Length::Fixed(w * zoom))
                     .height(Length::Fixed(h * zoom)),
@@ -349,8 +351,8 @@ fn render_active_drag<'a>(
                 left: min_x * zoom,
                 ..Default::default()
             })
-            .into()];
-        }
+            .into(),
+        ];
     }
     vec![]
 }
@@ -502,6 +504,7 @@ fn render_pdf_content(app: &PdfBullApp) -> Element<'_, crate::message::Message> 
             .center_x(Length::Fill),
     )
     .id("pdf_scroll")
+    .auto_scroll(true)
     .on_scroll(|viewport| {
         crate::message::Message::ViewportChanged(
             viewport.absolute_offset().y,
@@ -522,8 +525,16 @@ pub fn document_view(app: &PdfBullApp) -> Element<'_, crate::message::Message> {
 
     let mut content_row = row![];
 
-    if app.show_sidebar && !app.is_fullscreen {
-        content_row = content_row.push(sidebar::render(app));
+    let sidebar_width = app
+        .sidebar_animation
+        .interpolate_with(|v| v, std::time::Instant::now());
+
+    if sidebar_width > 0.1 && !app.is_fullscreen {
+        content_row = content_row.push(
+            container(sidebar::render(app))
+                .width(Length::Fixed(sidebar_width))
+                .clip(true),
+        );
     }
 
     content_row = content_row.push(render_pdf_content(app));

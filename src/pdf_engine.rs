@@ -1,10 +1,10 @@
 use crate::models::{
-    Annotation, AnnotationStyle, DocumentId, EngineErrorKind, FormField, FormFieldVariant, Hyperlink, PdfError,
-    PdfResult, SearchResultItem,
+    Annotation, AnnotationStyle, DocumentId, EngineErrorKind, FormField, FormFieldVariant,
+    Hyperlink, PdfError, PdfResult, SearchResultItem,
 };
 use lopdf::{Document, Object, ObjectId};
 use pdfium_render::prelude::*;
-use quick_cache::{sync::Cache, Weighter};
+use quick_cache::{Weighter, sync::Cache};
 use rayon::prelude::*;
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -1426,16 +1426,18 @@ mod tests {
     #[test]
     fn test_create_render_cache_defaults() {
         let cache = create_render_cache(10, 0);
-        assert!(cache
-            .get(&RenderKey {
-                doc_id: DocumentId(1),
-                page_num: 0,
-                scale: 100,
-                filter: RenderFilter::None,
-                auto_crop: false,
-                quality: RenderQuality::Medium,
-            })
-            .is_none());
+        assert!(
+            cache
+                .get(&RenderKey {
+                    doc_id: DocumentId(1),
+                    page_num: 0,
+                    scale: 100,
+                    filter: RenderFilter::None,
+                    auto_crop: false,
+                    quality: RenderQuality::Medium,
+                })
+                .is_none()
+        );
     }
 
     #[test]

@@ -208,7 +208,7 @@ pub fn handle_tab_message(app: &mut PdfBullApp, message: Message) -> Task<Messag
         }
         Message::TabReordered(new_order) => {
             let active_tab_id = app.tabs.get(app.active_tab).map(|t| t.id);
-            let mut old_tabs = std::mem::take(&mut app.tabs);
+            let old_tabs = std::mem::take(&mut app.tabs);
             let mut temp_tabs: Vec<Option<crate::models::DocumentTab>> =
                 old_tabs.into_iter().map(Some).collect();
 
@@ -290,9 +290,9 @@ pub fn handle_tab_message(app: &mut PdfBullApp, message: Message) -> Task<Messag
                                 tracing::error!("Failed to send Open command: {e}");
                                 return Err(crate::models::PdfError::EngineDied);
                             }
-                            resp_rx.await.unwrap_or_else(|_| {
-                                Err(crate::models::PdfError::EngineDied)
-                            })
+                            resp_rx
+                                .await
+                                .unwrap_or_else(|_| Err(crate::models::PdfError::EngineDied))
                         },
                         Message::DocumentOpened,
                     );

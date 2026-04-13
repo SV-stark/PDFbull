@@ -3,7 +3,7 @@ use crate::app::{INTER_BOLD, INTER_REGULAR};
 use crate::models::{AnnotationStyle, FormFieldVariant};
 use crate::ui::theme;
 use iced::widget::{
-    button, checkbox, column, container, pick_list, radio, row, scrollable, text, text_input, Space,
+    Space, button, checkbox, column, container, pick_list, radio, row, scrollable, text, text_input,
 };
 use iced::{Border, Color, Element, Length};
 
@@ -142,7 +142,8 @@ pub fn render(app: &PdfBullApp) -> Element<'_, crate::message::Message> {
     let end_idx = (start_idx + 30).min(tab.total_pages);
 
     if start_idx > 0 {
-        sidebar_col = sidebar_col.push(Space::new().height(start_idx as f32 * theme::THUMBNAIL_HEIGHT));
+        sidebar_col =
+            sidebar_col.push(Space::new().height(start_idx as f32 * theme::THUMBNAIL_HEIGHT));
     }
 
     for page_idx in start_idx..end_idx {
@@ -162,7 +163,8 @@ pub fn render(app: &PdfBullApp) -> Element<'_, crate::message::Message> {
 
     let remaining = tab.total_pages.saturating_sub(end_idx);
     if remaining > 0 {
-        sidebar_col = sidebar_col.push(Space::new().height(remaining as f32 * theme::THUMBNAIL_HEIGHT));
+        sidebar_col =
+            sidebar_col.push(Space::new().height(remaining as f32 * theme::THUMBNAIL_HEIGHT));
     }
 
     scrollable(sidebar_col)
@@ -205,7 +207,7 @@ pub fn render_forms(app: &PdfBullApp) -> Element<'_, crate::message::Message> {
                     })
                     .padding(8)
                     .into(),
-                FormFieldVariant::Checkbox { is_checked } => checkbox("", *is_checked)
+                FormFieldVariant::Checkbox { is_checked } => checkbox(*is_checked)
                     .on_toggle({
                         let name = field.name.clone();
                         move |val| {

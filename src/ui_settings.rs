@@ -1,7 +1,7 @@
 use crate::app::{INTER_BOLD, INTER_REGULAR};
 use crate::models::AppTheme;
 use crate::pdf_engine::{RenderFilter, RenderQuality};
-use iced::widget::{button, column, container, image, row, scrollable, text, Space};
+use iced::widget::{Space, button, column, container, image, row, scrollable, text};
 use iced::{Alignment, Border, Color, Element, Length, Shadow, Vector};
 
 fn custom_card<'a>(

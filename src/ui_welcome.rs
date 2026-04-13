@@ -1,6 +1,6 @@
-use crate::app::{icons, INTER_BOLD, INTER_REGULAR, LUCIDE};
+use crate::app::{INTER_BOLD, INTER_REGULAR, LUCIDE, icons};
 use crate::storage;
-use iced::widget::{button, column, container, image, row, scrollable, text, Space};
+use iced::widget::{Space, button, column, container, image, row, scrollable, text};
 use iced::{Alignment, Border, Color, Element, Length, Shadow, Vector};
 
 fn custom_card<'a>(
@@ -97,9 +97,7 @@ fn quick_action_card<'a>(
 
 pub fn welcome_view(app: &crate::app::PdfBullApp) -> Element<'_, crate::message::Message> {
     let recent_section: Element<'_, crate::message::Message> = if !app.recent_files.is_empty() {
-        let mut files: iced::widget::Column<'_, crate::message::Message> =
-            iced::widget::Column::new().spacing(4);
-        for file in &app.recent_files {
+        let files = iced::widget::grid(app.recent_files.iter().map(|file| {
             let file_row = row![
                 text(icons::OPEN)
                     .size(16)
@@ -128,28 +126,29 @@ pub fn welcome_view(app: &crate::app::PdfBullApp) -> Element<'_, crate::message:
             .spacing(12)
             .align_y(iced::Alignment::Center);
 
-            files = files.push(
-                button(file_row)
-                    .on_press(crate::message::Message::OpenRecentFile(file.clone()))
-                    .width(Length::Fill)
-                    .padding(8)
-                    .style(|_theme: &iced::Theme, status| {
-                        let bg = if status == iced::widget::button::Status::Hovered {
-                            Some(Color::from_rgb8(60, 62, 66).into())
-                        } else {
-                            None
-                        };
-                        iced::widget::button::Style {
-                            background: bg,
-                            border: Border {
-                                radius: 8.0.into(),
-                                ..Default::default()
-                            },
+            button(file_row)
+                .on_press(crate::message::Message::OpenRecentFile(file.clone()))
+                .width(Length::Fill)
+                .padding(8)
+                .style(|_theme: &iced::Theme, status| {
+                    let bg = if status == iced::widget::button::Status::Hovered {
+                        Some(Color::from_rgb8(60, 62, 66).into())
+                    } else {
+                        None
+                    };
+                    iced::widget::button::Style {
+                        background: bg,
+                        border: Border {
+                            radius: 8.0.into(),
                             ..Default::default()
-                        }
-                    }),
-            );
-        }
+                        },
+                        ..Default::default()
+                    }
+                })
+                .into()
+        }))
+        .columns(2)
+        .spacing(12);
 
         custom_card(column![
             row![
