@@ -21,10 +21,10 @@ pub fn handle_bookmark_message(app: &mut PdfBullApp, message: Message) -> Task<M
             Task::none()
         }
         Message::RemoveBookmark(idx) => {
-            if let Some(tab) = app.current_tab_mut() {
-                if idx < tab.bookmarks.len() {
-                    tab.bookmarks.remove(idx);
-                }
+            if let Some(tab) = app.current_tab_mut()
+                && idx < tab.bookmarks.len()
+            {
+                tab.bookmarks.remove(idx);
             }
             Task::none()
         }

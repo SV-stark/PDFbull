@@ -96,7 +96,9 @@ fn quick_action_card<'a>(
 }
 
 pub fn welcome_view(app: &crate::app::PdfBullApp) -> Element<'_, crate::message::Message> {
-    let recent_section: Element<'_, crate::message::Message> = if !app.recent_files.is_empty() {
+    let recent_section: Element<'_, crate::message::Message> = if app.recent_files.is_empty() {
+        column![].into()
+    } else {
         let files = iced::widget::grid(app.recent_files.iter().map(|file| {
             let file_row = row![
                 text(icons::OPEN)
@@ -175,8 +177,6 @@ pub fn welcome_view(app: &crate::app::PdfBullApp) -> Element<'_, crate::message:
             Space::new().height(12),
             files,
         ])
-    } else {
-        column![].into()
     };
 
     let actions = row![

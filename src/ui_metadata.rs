@@ -4,9 +4,8 @@ use iced::widget::{Space, button, column, container, row, scrollable, text};
 use iced::{Alignment, Color, Element, Length};
 
 pub fn metadata_view(app: &PdfBullApp) -> Element<'_, Message> {
-    let tab = match app.current_tab() {
-        Some(t) => t,
-        None => return container(text("No document open")).into(),
+    let Some(tab) = app.current_tab() else {
+        return container(text("No document open")).into();
     };
 
     let meta = &tab.metadata;
@@ -69,7 +68,7 @@ pub fn metadata_view(app: &PdfBullApp) -> Element<'_, Message> {
             iced::widget::table::column(
                 "Property",
                 |row: (String, String)| -> Element<'_, Message> {
-                    text(row.0.clone())
+                    text(row.0)
                         .size(14)
                         .font(INTER_BOLD)
                         .style(|_| iced::widget::text::Style {
@@ -79,7 +78,7 @@ pub fn metadata_view(app: &PdfBullApp) -> Element<'_, Message> {
                 },
             ),
             iced::widget::table::column("Value", |row: (String, String)| -> Element<'_, Message> {
-                text(row.1.clone()).size(16).font(INTER_REGULAR).into()
+                text(row.1).size(16).font(INTER_REGULAR).into()
             }),
         ],
         fields,

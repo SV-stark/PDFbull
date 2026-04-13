@@ -37,7 +37,7 @@ pub fn handle_message(app: &mut PdfBullApp, message: Message) -> Task<Message> {
         app.recent_files = storage::load_recent_files();
         let session = storage::load_session();
         if app.settings.theme == AppTheme::System {
-            if let Ok(dark_light::Mode::Dark) = dark_light::detect() {
+            if matches!(dark_light::detect(), Ok(dark_light::Mode::Dark)) {
                 app.settings.theme = AppTheme::Dark;
             } else {
                 app.settings.theme = AppTheme::Light;

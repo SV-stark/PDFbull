@@ -64,17 +64,17 @@ pub fn handle_search_message(app: &mut PdfBullApp, message: Message) -> Task<Mes
         Message::SearchResult(received_doc_id, result) => {
             match result {
                 Ok(results) => {
-                    if let Some(tab) = app.current_tab_mut() {
-                        if tab.id == received_doc_id {
-                            tab.search_results = results
-                                .into_iter()
-                                .map(SearchResult::from_search_result_item)
-                                .collect();
-                            tab.current_search_index = 0;
+                    if let Some(tab) = app.current_tab_mut()
+                        && tab.id == received_doc_id
+                    {
+                        tab.search_results = results
+                            .into_iter()
+                            .map(SearchResult::from_search_result_item)
+                            .collect();
+                        tab.current_search_index = 0;
 
-                            if !tab.search_results.is_empty() && tab.current_search_index == 0 {
-                                tab.current_page = tab.search_results[0].page;
-                            }
+                        if !tab.search_results.is_empty() && tab.current_search_index == 0 {
+                            tab.current_page = tab.search_results[0].page;
                         }
                     }
                 }
@@ -117,7 +117,9 @@ pub fn handle_search_message(app: &mut PdfBullApp, message: Message) -> Task<Mes
         }
         Message::PrevSearchResult => {
             let prev_page = if let Some(tab) = app.current_tab_mut() {
-                if !tab.search_results.is_empty() {
+                if tab.search_results.is_empty() {
+                    None
+                } else {
                     tab.current_search_index = if tab.current_search_index == 0 {
                         tab.search_results.len() - 1
                     } else {
@@ -125,8 +127,6 @@ pub fn handle_search_message(app: &mut PdfBullApp, message: Message) -> Task<Mes
                     };
                     tab.current_page = tab.search_results[tab.current_search_index].page;
                     Some(tab.current_page)
-                } else {
-                    None
                 }
             } else {
                 None

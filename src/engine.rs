@@ -89,10 +89,10 @@ pub fn spawn_engine_thread(cache_size: u64, max_memory_mb: u64) -> EngineState {
                             let optimized =
                                 oxipng::optimize_from_memory(&buf, &oxipng::Options::default())
                                     .unwrap_or(buf);
-                            if std::fs::write(&out_file, optimized).is_ok() {
-                                if let Some(path_str) = out_file.to_str() {
-                                    paths.push(path_str.to_string());
-                                }
+                            if std::fs::write(&out_file, optimized).is_ok()
+                                && let Some(path_str) = out_file.to_str()
+                            {
+                                paths.push(path_str.to_string());
                             }
                         }
                     }

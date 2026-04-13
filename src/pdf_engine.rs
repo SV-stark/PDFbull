@@ -18,9 +18,6 @@ const MAX_RENDER_DIM: i32 = 2500;
 const WHITE_THRESHOLD: u8 = 245;
 const BBOX_MARGIN: u32 = 10;
 const NO_SHADOW_THRESHOLD: u8 = 230;
-const PAGE_RENDER_EXTRAS: f32 = 1.5;
-const THUMB_BUFFER_BEHIND: usize = 15;
-const THUMB_BUFFER_AHEAD: usize = 45;
 
 #[derive(Hash, Eq, PartialEq, Clone, Debug)]
 pub struct RenderKey {
@@ -222,7 +219,7 @@ impl<'a> DocumentStore<'a> {
     }
 
     fn render_page_internal(
-        &mut self,
+        &self,
         doc_id: DocumentId,
         page_num: usize,
         options: RenderOptions,
@@ -257,7 +254,7 @@ impl<'a> DocumentStore<'a> {
         let doc = self
             .documents
             .get(&doc_id)
-            .ok_or_else(|| PdfError::EngineError(EngineErrorKind::DocumentNotFound))?;
+            .ok_or(PdfError::EngineError(EngineErrorKind::DocumentNotFound))?;
         let page = doc
             .pages()
             .get(page_num as u16)
@@ -329,58 +326,56 @@ impl<'a> DocumentStore<'a> {
         };
 
         let mut text_items = Vec::new();
-        if !is_thumbnail {
-            if let Ok(text_page) = page.text() {
-                let mut current_word = String::new();
-                let mut word_rect: Option<PdfRect> = None;
+        if !is_thumbnail && let Ok(text_page) = page.text() {
+            let mut current_word = String::new();
+            let mut word_rect: Option<PdfRect> = None;
 
-                for char_obj in text_page.chars().iter() {
-                    let Some(c) = char_obj.unicode_string() else {
-                        continue;
-                    };
-                    let Ok(bounds) = char_obj.loose_bounds() else {
-                        continue;
-                    };
+            for char_obj in text_page.chars().iter() {
+                let Some(c) = char_obj.unicode_string() else {
+                    continue;
+                };
+                let Ok(bounds) = char_obj.loose_bounds() else {
+                    continue;
+                };
 
-                    if c.trim().is_empty() {
-                        if !current_word.is_empty() {
-                            if let Some(rect) = word_rect {
-                                text_items.push(crate::models::TextItem {
-                                    text: current_word.clone(),
-                                    x: rect.left().value,
-                                    y: page.height().value - rect.top().value,
-                                    width: (rect.right().value - rect.left().value).abs(),
-                                    height: (rect.top().value - rect.bottom().value).abs(),
-                                });
-                            }
-                            current_word.clear();
-                            word_rect = None;
-                        }
-                    } else {
-                        current_word.push_str(&c);
+                if c.trim().is_empty() {
+                    if !current_word.is_empty() {
                         if let Some(rect) = word_rect {
-                            word_rect = Some(PdfRect::new(
-                                rect.bottom().min(bounds.bottom()),
-                                rect.left().min(bounds.left()),
-                                rect.top().max(bounds.top()),
-                                rect.right().max(bounds.right()),
-                            ));
-                        } else {
-                            word_rect = Some(bounds);
+                            text_items.push(crate::models::TextItem {
+                                text: current_word.clone(),
+                                x: rect.left().value,
+                                y: page.height().value - rect.top().value,
+                                width: (rect.right().value - rect.left().value).abs(),
+                                height: (rect.top().value - rect.bottom().value).abs(),
+                            });
                         }
+                        current_word.clear();
+                        word_rect = None;
                     }
-                }
-                if !current_word.is_empty() {
+                } else {
+                    current_word.push_str(&c);
                     if let Some(rect) = word_rect {
-                        text_items.push(crate::models::TextItem {
-                            text: current_word,
-                            x: rect.left().value,
-                            y: page.height().value - rect.top().value,
-                            width: (rect.right().value - rect.left().value).abs(),
-                            height: (rect.top().value - rect.bottom().value).abs(),
-                        });
+                        word_rect = Some(PdfRect::new(
+                            rect.bottom().min(bounds.bottom()),
+                            rect.left().min(bounds.left()),
+                            rect.top().max(bounds.top()),
+                            rect.right().max(bounds.right()),
+                        ));
+                    } else {
+                        word_rect = Some(bounds);
                     }
                 }
+            }
+            if !current_word.is_empty()
+                && let Some(rect) = word_rect
+            {
+                text_items.push(crate::models::TextItem {
+                    text: current_word,
+                    x: rect.left().value,
+                    y: page.height().value - rect.top().value,
+                    width: (rect.right().value - rect.left().value).abs(),
+                    height: (rect.top().value - rect.bottom().value).abs(),
+                });
             }
         }
 
@@ -417,7 +412,7 @@ impl<'a> DocumentStore<'a> {
         let doc = self
             .documents
             .get(&doc_id)
-            .ok_or_else(|| PdfError::EngineError(EngineErrorKind::DocumentNotFound))?;
+            .ok_or(PdfError::EngineError(EngineErrorKind::DocumentNotFound))?;
         let page = doc
             .pages()
             .get(page_num as u16)
@@ -437,11 +432,11 @@ impl<'a> DocumentStore<'a> {
         let pdf_path = self
             .paths
             .get(&doc_id)
-            .ok_or_else(|| PdfError::EngineError(EngineErrorKind::DocumentPathNotFound))?;
+            .ok_or(PdfError::EngineError(EngineErrorKind::DocumentPathNotFound))?;
         let doc = self
             .documents
             .get_mut(&doc_id)
-            .ok_or_else(|| PdfError::EngineError(EngineErrorKind::DocumentNotFound))?;
+            .ok_or(PdfError::EngineError(EngineErrorKind::DocumentNotFound))?;
 
         // Move font lookup outside the loop
         let font_handle = font_kit::source::SystemSource::new()
@@ -583,7 +578,7 @@ impl<'a> DocumentStore<'a> {
                 .file_stem()
                 .map(|s| s.to_string_lossy())
                 .unwrap_or_default();
-            p.set_file_name(format!("{}_annotated.pdf", stem));
+            p.set_file_name(format!("{stem}_annotated.pdf"));
             p.to_string_lossy().to_string()
         });
         doc.save_to_file(&final_path)
@@ -600,7 +595,7 @@ impl<'a> DocumentStore<'a> {
         let doc = self
             .documents
             .get(&doc_id)
-            .ok_or_else(|| PdfError::EngineError(EngineErrorKind::DocumentNotFound))?;
+            .ok_or(PdfError::EngineError(EngineErrorKind::DocumentNotFound))?;
         let page = doc
             .pages()
             .get(page_num as u16)
@@ -650,30 +645,30 @@ impl<'a> DocumentStore<'a> {
         let doc = self
             .documents
             .get(&doc_id)
-            .ok_or_else(|| PdfError::EngineError(EngineErrorKind::DocumentNotFound))?;
+            .ok_or(PdfError::EngineError(EngineErrorKind::DocumentNotFound))?;
         let mut results = Vec::new();
         for (page_idx, page) in doc.pages().iter().enumerate() {
-            if let Ok(text) = page.text() {
-                if let Ok(searcher) = text.search(query, &PdfSearchOptions::new()) {
-                    for segments in searcher.iter(PdfSearchDirection::SearchForward) {
-                        let mut text_all = String::new();
-                        let mut first_rect = None;
-                        for segment in segments.iter() {
-                            if first_rect.is_none() {
-                                first_rect = Some(segment.bounds());
-                            }
-                            text_all.push_str(&segment.text());
+            if let Ok(text) = page.text()
+                && let Ok(searcher) = text.search(query, &PdfSearchOptions::new())
+            {
+                for segments in searcher.iter(PdfSearchDirection::SearchForward) {
+                    let mut text_all = String::new();
+                    let mut first_rect = None;
+                    for segment in segments.iter() {
+                        if first_rect.is_none() {
+                            first_rect = Some(segment.bounds());
                         }
-                        if let Some(rect) = first_rect {
-                            results.push(SearchResultItem {
-                                page_index: page_idx,
-                                text: text_all,
-                                y: rect.bottom().value,
-                                x: rect.left().value,
-                                width: rect.width().value,
-                                height: rect.height().value,
-                            });
-                        }
+                        text_all.push_str(&segment.text());
+                    }
+                    if let Some(rect) = first_rect {
+                        results.push(SearchResultItem {
+                            page_index: page_idx,
+                            text: text_all,
+                            y: rect.bottom().value,
+                            x: rect.left().value,
+                            width: rect.width().value,
+                            height: rect.height().value,
+                        });
                     }
                 }
             }
@@ -865,7 +860,7 @@ impl<'a> DocumentStore<'a> {
                         PdfFormFieldType::Text => FormFieldVariant::Text {
                             value: form_field
                                 .as_text_field()
-                                .and_then(|f| f.value())
+                                .and_then(pdfium_render::prelude::PdfFormTextField::value)
                                 .unwrap_or_default(),
                         },
                         PdfFormFieldType::Checkbox => FormFieldVariant::Checkbox {
@@ -902,7 +897,10 @@ impl<'a> DocumentStore<'a> {
         fields
     }
 
-    fn extract_signatures_internal(&self, _doc: &PdfDocument) -> Vec<crate::models::SignatureInfo> {
+    const fn extract_signatures_internal(
+        &self,
+        _doc: &PdfDocument,
+    ) -> Vec<crate::models::SignatureInfo> {
         // Real signature verification requires complex cryptographic logic.
         // For now, we'll return a placeholder to show the UI integration.
         // In a production app, we would use pdfium's signature API or a crate like `openssl`
@@ -923,32 +921,30 @@ impl<'a> DocumentStore<'a> {
         for mut page in doc.pages().iter() {
             let annotations = page.annotations_mut();
             for mut annotation in annotations.iter() {
-                if let Some(form_field) = annotation.as_form_field_mut() {
-                    if let Some(update) = updates
+                if let Some(form_field) = annotation.as_form_field_mut()
+                    && let Some(update) = updates
                         .iter()
                         .find(|f| f.name == form_field.name().unwrap_or_default())
-                    {
-                        match &update.variant {
-                            FormFieldVariant::Text { value } => {
-                                if let Some(text_field) = form_field.as_text_field_mut() {
-                                    let _ = text_field.set_value(value);
-                                }
+                {
+                    match &update.variant {
+                        FormFieldVariant::Text { value } => {
+                            if let Some(text_field) = form_field.as_text_field_mut() {
+                                let _ = text_field.set_value(value);
                             }
-                            FormFieldVariant::Checkbox { is_checked } => {
-                                if let Some(cb) = form_field.as_checkbox_field_mut() {
-                                    let _ = cb.set_checked(*is_checked);
-                                }
+                        }
+                        FormFieldVariant::Checkbox { is_checked } => {
+                            if let Some(cb) = form_field.as_checkbox_field_mut() {
+                                let _ = cb.set_checked(*is_checked);
                             }
-                            FormFieldVariant::RadioButton { is_selected, .. } => {
-                                if *is_selected {
-                                    if let Some(rb) = form_field.as_radio_button_field_mut() {
-                                        let _ = rb.set_checked();
-                                    }
-                                }
+                        }
+                        FormFieldVariant::RadioButton { is_selected, .. } => {
+                            if *is_selected && let Some(rb) = form_field.as_radio_button_field_mut()
+                            {
+                                let _ = rb.set_checked();
                             }
-                            FormFieldVariant::ComboBox { .. } => {
-                                // TODO: Verify ComboBox/ChoiceField mutation API in pdfium-render
-                            }
+                        }
+                        FormFieldVariant::ComboBox { .. } => {
+                            // TODO: Verify ComboBox/ChoiceField mutation API in pdfium-render
                         }
                     }
                 }
@@ -965,7 +961,7 @@ impl<'a> DocumentStore<'a> {
         use winprint::printer::{FilePrinter, PdfiumPrinter, PrinterDevice};
 
         let device = PrinterDevice::all()
-            .map_err(|e| PdfError::IoError(format!("Failed to list printers: {}", e)))?
+            .map_err(|e| PdfError::IoError(format!("Failed to list printers: {e}")))?
             .into_iter()
             .next()
             .ok_or_else(|| PdfError::IoError("No printers found".into()))?;
@@ -973,7 +969,7 @@ impl<'a> DocumentStore<'a> {
         let printer = PdfiumPrinter::new(device);
         printer
             .print(std::path::Path::new(path), Default::default())
-            .map_err(|e| PdfError::IoError(format!("Print failed: {}", e)))?;
+            .map_err(|e| PdfError::IoError(format!("Print failed: {e}")))?;
         Ok(())
     }
 
@@ -1003,10 +999,8 @@ impl<'a> DocumentStore<'a> {
             .replace('\\', "\\\\")
             .replace('(', "\\(")
             .replace(')', "\\)");
-        let content = format!(
-            "BT /F1 48 Tf 0.7 0.7 0.7 rg 0.5 Tm 200 400 Td 45 Tz ({}) Tj ET\n",
-            escaped
-        );
+        let content =
+            format!("BT /F1 48 Tf 0.7 0.7 0.7 rg 0.5 Tm 200 400 Td 45 Tz ({escaped}) Tj ET\n");
         let watermark_stream = lopdf::Stream::new(lopdf::Dictionary::new(), content.into_bytes());
 
         for &page_id in &pages {

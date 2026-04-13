@@ -335,51 +335,49 @@ impl PdfBullApp {
             return events;
         }
 
-        let watch_sub =
-            iced::Subscription::run_with(("file-watch", paths.clone()), |(_id, paths)| {
-                let paths = paths.clone();
-                iced::stream::channel(
-                    10,
-                    move |mut output: iced::futures::channel::mpsc::Sender<Message>| {
-                        let paths = paths.clone();
-                        async move {
-                            use notify_debouncer_full::{new_debouncer, notify::RecursiveMode};
-                            use std::time::Duration;
+        let watch_sub = iced::Subscription::run_with(("file-watch", paths), |(_id, paths)| {
+            let paths = paths.clone();
+            iced::stream::channel(
+                10,
+                move |mut output: iced::futures::channel::mpsc::Sender<Message>| {
+                    let paths = paths.clone();
+                    async move {
+                        use notify_debouncer_full::{new_debouncer, notify::RecursiveMode};
+                        use std::time::Duration;
 
-                            let (tx, mut rx) = tokio::sync::mpsc::channel(10);
+                        let (tx, mut rx) = tokio::sync::mpsc::channel(10);
 
-                            let mut debouncer = match new_debouncer(
-                                Duration::from_secs(1),
-                                None,
-                                move |res: notify_debouncer_full::DebounceEventResult| {
-                                    if let Ok(events) = res {
-                                        for event in events {
-                                            for path in &event.paths {
-                                                let _ = tx.blocking_send(path.clone());
-                                            }
+                        let mut debouncer = match new_debouncer(
+                            Duration::from_secs(1),
+                            None,
+                            move |res: notify_debouncer_full::DebounceEventResult| {
+                                if let Ok(events) = res {
+                                    for event in events {
+                                        for path in &event.paths {
+                                            let _ = tx.blocking_send(path.clone());
                                         }
                                     }
-                                },
-                            ) {
-                                Ok(d) => d,
-                                Err(e) => {
-                                    tracing::error!("Failed to create file watcher: {e}");
-                                    return;
                                 }
-                            };
-
-                            for path in paths {
-                                let _ = debouncer.watch(path, RecursiveMode::NonRecursive);
+                            },
+                        ) {
+                            Ok(d) => d,
+                            Err(e) => {
+                                tracing::error!("Failed to create file watcher: {e}");
+                                return;
                             }
+                        };
 
-                            while let Some(path) = rx.recv().await {
-                                let _ =
-                                    output.send(Message::DocumentModifiedExternally(path)).await;
-                            }
+                        for path in paths {
+                            let _ = debouncer.watch(path, RecursiveMode::NonRecursive);
                         }
-                    },
-                )
-            });
+
+                        while let Some(path) = rx.recv().await {
+                            let _ = output.send(Message::DocumentModifiedExternally(path)).await;
+                        }
+                    }
+                },
+            )
+        });
 
         iced::Subscription::batch(vec![events, watch_sub])
     }

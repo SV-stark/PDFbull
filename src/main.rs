@@ -11,11 +11,11 @@ fn main() -> iced::Result {
     let args: Vec<String> = std::env::args().collect();
 
     // Feature 10: Deep Windows Integration (Single Instance Mode)
-    if let Ok(is_secondary) = platform::ensure_single_instance(&args) {
-        if is_secondary {
-            tracing::info!("Sent arguments to main instance. Exiting.");
-            return Ok(());
-        }
+    if let Ok(is_secondary) = platform::ensure_single_instance(&args)
+        && is_secondary
+    {
+        tracing::info!("Sent arguments to main instance. Exiting.");
+        return Ok(());
     }
 
     let icon = iced::window::icon::from_file_data(include_bytes!("../PDFbull.png"), None).ok();
@@ -32,9 +32,10 @@ fn main() -> iced::Result {
     .font(include_bytes!("../src/assets/fonts/Phosphor.ttf"))
     .theme(|app: &app::PdfBullApp| {
         match app.settings.theme {
-            pdfbull::models::AppTheme::Light => iced::Theme::Light,
             pdfbull::models::AppTheme::Dark => iced::Theme::Dark,
-            pdfbull::models::AppTheme::System => iced::Theme::Light, // Will be resolved to light/dark in app init
+            pdfbull::models::AppTheme::Light | pdfbull::models::AppTheme::System => {
+                iced::Theme::Light
+            } // Will be resolved to light/dark in app init
         }
     })
     .subscription(app::PdfBullApp::subscription)

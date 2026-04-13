@@ -223,7 +223,7 @@ pub fn render_forms(app: &PdfBullApp) -> Element<'_, crate::message::Message> {
                         let name = field.name.clone();
                         move |_| {
                             crate::message::Message::FormFieldChanged(
-                                name.clone(),
+                                name,
                                 FormFieldVariant::RadioButton {
                                     is_selected: true,
                                     group_name: None,

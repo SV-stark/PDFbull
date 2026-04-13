@@ -95,23 +95,23 @@ pub fn handle_tab_message(app: &mut PdfBullApp, message: Message) -> Task<Messag
                     tab.render_filter = default_filter;
                 }
 
-                if let Some(path_str) = pdf_path {
-                    if let Some(engine) = &app.engine {
-                        let cmd_tx = engine.cmd_tx.clone();
-                        return Task::perform(
-                            async move {
-                                let (resp_tx, resp_rx) = tokio::sync::oneshot::channel();
-                                let _ = cmd_tx.send(crate::commands::PdfCommand::LoadAnnotations(
-                                    doc_id, path_str, resp_tx,
-                                ));
-                                match resp_rx.await {
-                                    Ok(Ok(annotations)) => (doc_id, annotations),
-                                    Ok(Err(_)) | Err(_) => (doc_id, Vec::new()),
-                                }
-                            },
-                            |(doc_id, annotations)| Message::AnnotationsLoaded(doc_id, annotations),
-                        );
-                    }
+                if let Some(path_str) = pdf_path
+                    && let Some(engine) = &app.engine
+                {
+                    let cmd_tx = engine.cmd_tx.clone();
+                    return Task::perform(
+                        async move {
+                            let (resp_tx, resp_rx) = tokio::sync::oneshot::channel();
+                            let _ = cmd_tx.send(crate::commands::PdfCommand::LoadAnnotations(
+                                doc_id, path_str, resp_tx,
+                            ));
+                            match resp_rx.await {
+                                Ok(Ok(annotations)) => (doc_id, annotations),
+                                Ok(Err(_)) | Err(_) => (doc_id, Vec::new()),
+                            }
+                        },
+                        |(doc_id, annotations)| Message::AnnotationsLoaded(doc_id, annotations),
+                    );
                 }
                 app.save_session();
                 app.render_visible_pages()
@@ -162,7 +162,7 @@ pub fn handle_tab_message(app: &mut PdfBullApp, message: Message) -> Task<Messag
                         }
                         resp_rx
                             .await
-                            .unwrap_or_else(|_| Err(crate::models::PdfError::EngineDied))
+                            .unwrap_or(Err(crate::models::PdfError::EngineDied))
                     },
                     Message::DocumentOpened,
                 );
@@ -214,10 +214,10 @@ pub fn handle_tab_message(app: &mut PdfBullApp, message: Message) -> Task<Messag
 
             let mut reordered_tabs = Vec::with_capacity(temp_tabs.len());
             for idx in new_order {
-                if idx < temp_tabs.len() {
-                    if let Some(tab) = temp_tabs[idx].take() {
-                        reordered_tabs.push(tab);
-                    }
+                if idx < temp_tabs.len()
+                    && let Some(tab) = temp_tabs[idx].take()
+                {
+                    reordered_tabs.push(tab);
                 }
             }
 
@@ -228,10 +228,10 @@ pub fn handle_tab_message(app: &mut PdfBullApp, message: Message) -> Task<Messag
 
             app.tabs = reordered_tabs;
 
-            if let Some(id) = active_tab_id {
-                if let Some(new_idx) = app.tabs.iter().position(|t| t.id == id) {
-                    app.active_tab = new_idx;
-                }
+            if let Some(id) = active_tab_id
+                && let Some(new_idx) = app.tabs.iter().position(|t| t.id == id)
+            {
+                app.active_tab = new_idx;
             }
 
             app.save_session();
@@ -292,7 +292,7 @@ pub fn handle_tab_message(app: &mut PdfBullApp, message: Message) -> Task<Messag
                             }
                             resp_rx
                                 .await
-                                .unwrap_or_else(|_| Err(crate::models::PdfError::EngineDied))
+                                .unwrap_or(Err(crate::models::PdfError::EngineDied))
                         },
                         Message::DocumentOpened,
                     );

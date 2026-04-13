@@ -5,8 +5,8 @@ use iced::{Alignment, Color, Element, Length, Padding};
 use iced_draggable_tabs::DraggableTabs;
 
 thread_local! {
-    static TAB_NAMES: std::cell::RefCell<Vec<String>> = std::cell::RefCell::new(Vec::new());
-    static TAB_REFS: std::cell::RefCell<Vec<&'static str>> = std::cell::RefCell::new(Vec::new());
+    static TAB_NAMES: std::cell::RefCell<Vec<String>> = const { std::cell::RefCell::new(Vec::new()) };
+    static TAB_REFS: std::cell::RefCell<Vec<&'static str>> = const { std::cell::RefCell::new(Vec::new()) };
 }
 
 pub fn render(app: &PdfBullApp) -> Element<'_, crate::message::Message> {

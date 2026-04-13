@@ -6,11 +6,11 @@ use iced::widget::image as iced_image;
 pub fn handle_render_message(app: &mut PdfBullApp, message: Message) -> Task<Message> {
     match message {
         Message::SetFilter(filter) => {
-            if let Some(tab) = app.current_tab_mut() {
-                if tab.render_filter != filter {
-                    tab.render_filter = filter;
-                    tab.view_state.rendered_pages.clear();
-                }
+            if let Some(tab) = app.current_tab_mut()
+                && tab.render_filter != filter
+            {
+                tab.render_filter = filter;
+                tab.view_state.rendered_pages.clear();
             }
             app.render_visible_pages()
         }
@@ -123,9 +123,7 @@ pub fn handle_render_message(app: &mut PdfBullApp, message: Message) -> Task<Mes
                                 iced_image::Handle::from_rgba(width, height, pixel_data),
                             ),
                         );
-                        tab.view_state
-                            .text_layers
-                            .insert(page_idx, res.text_items.clone());
+                        tab.view_state.text_layers.insert(page_idx, res.text_items);
                     }
                     Err(e) => {
                         tracing::error!("Render error: {e}");

@@ -94,21 +94,21 @@ pub fn load_settings() -> AppSettings {
             settings = loaded;
         } else {
             tracing::warn!("Corrupted settings.json, using defaults");
-            if let Ok(value) = serde_json::from_str::<serde_json::Value>(&data) {
-                if let Some(obj) = value.as_object() {
-                    if let Some(theme) = obj.get("theme").and_then(|v| v.as_str()) {
-                        settings.theme = match theme {
-                            "Light" => AppTheme::Light,
-                            "Dark" => AppTheme::Dark,
-                            _ => AppTheme::System,
-                        };
-                    }
-                    if let Some(v) = obj.get("auto_save").and_then(|v| v.as_bool()) {
-                        settings.auto_save = v;
-                    }
-                    if let Some(v) = obj.get("default_zoom").and_then(|v| v.as_f64()) {
-                        settings.default_zoom = v as f32;
-                    }
+            if let Ok(value) = serde_json::from_str::<serde_json::Value>(&data)
+                && let Some(obj) = value.as_object()
+            {
+                if let Some(theme) = obj.get("theme").and_then(|v| v.as_str()) {
+                    settings.theme = match theme {
+                        "Light" => AppTheme::Light,
+                        "Dark" => AppTheme::Dark,
+                        _ => AppTheme::System,
+                    };
+                }
+                if let Some(v) = obj.get("auto_save").and_then(serde_json::Value::as_bool) {
+                    settings.auto_save = v;
+                }
+                if let Some(v) = obj.get("default_zoom").and_then(serde_json::Value::as_f64) {
+                    settings.default_zoom = v as f32;
                 }
             }
         }
@@ -123,10 +123,10 @@ pub fn save_settings(settings: &AppSettings) {
         return;
     }
     let path = dir.join("settings.json");
-    if let Ok(data) = serde_json::to_string_pretty(settings) {
-        if let Err(e) = atomic_write(&path, &data) {
-            tracing::error!("Failed to save settings: {}", e);
-        }
+    if let Ok(data) = serde_json::to_string_pretty(settings)
+        && let Err(e) = atomic_write(&path, &data)
+    {
+        tracing::error!("Failed to save settings: {}", e);
     }
 }
 
@@ -148,10 +148,10 @@ pub fn save_recent_files(recent_files: &[RecentFile]) {
         return;
     }
     let path = dir.join("recent_files.json");
-    if let Ok(data) = serde_json::to_string_pretty(recent_files) {
-        if let Err(e) = atomic_write(&path, &data) {
-            tracing::error!("Failed to save recent files: {}", e);
-        }
+    if let Ok(data) = serde_json::to_string_pretty(recent_files)
+        && let Err(e) = atomic_write(&path, &data)
+    {
+        tracing::error!("Failed to save recent files: {}", e);
     }
 }
 
@@ -198,10 +198,10 @@ pub fn save_session(session: &SessionData) {
     }
     let path = dir.join("session.json");
 
-    if let Ok(data) = serde_json::to_string_pretty(session) {
-        if let Err(e) = atomic_write(&path, &data) {
-            tracing::error!("Failed to save session: {}", e);
-        }
+    if let Ok(data) = serde_json::to_string_pretty(session)
+        && let Err(e) = atomic_write(&path, &data)
+    {
+        tracing::error!("Failed to save session: {}", e);
     }
 }
 
