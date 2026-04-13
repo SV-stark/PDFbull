@@ -14,7 +14,7 @@ fn test_render_stability() {
     let pdfium = Pdfium::new(bindings);
 
     let cache = pdfbull::pdf_engine::create_render_cache(10, 100);
-    let mut store = DocumentStore::new(&pdfium, cache).expect("Failed to create DocumentStore");
+    let mut store = DocumentStore::new(&pdfium, cache);
 
     // Create a dummy PDF in memory via pdfium
     let mut doc = pdfium.create_new_pdf().unwrap();

@@ -1,18 +1,16 @@
-use iced_test::simulator;
 use pdfbull::app::PdfBullApp;
 use pdfbull::message::Message;
+use pdfbull::pdf_engine::{DocumentStore, create_render_cache};
+use pdfium_render::prelude::*;
 
 #[test]
 fn test_sidebar_toggle() {
     let mut app = PdfBullApp::default();
 
-    // Simulate initial view
-    let mut ui = simulator(app.view());
-
-    // Check if sidebar is hidden initially (assuming 0 width at start)
-    let sidebar_width = app
-        .sidebar_animation
-        .interpolate(0.0, 280.0, std::time::Instant::now());
+    // Check if sidebar is hidden initially
+    let at = std::time::Instant::now();
+    let sidebar_width: f32 = app.sidebar_animation.interpolate_with(|v| v, at);
+    let sidebar_width = sidebar_width * 280.0; 
     assert!(sidebar_width < 0.1);
 
     // Toggle sidebar
@@ -21,6 +19,15 @@ fn test_sidebar_toggle() {
     // In a headless test, we can check if the internal state updated
     assert!(app.show_sidebar);
 
-    // Note: Animation interpolation depends on time,
-    // in a real test we'd mock Instant or wait.
+    // After toggling, the animation value will start changing on next frame
+    // but here we just check the boolean state.
+}
+
+#[test]
+fn test_ui_initial_state() {
+    let app = PdfBullApp::default();
+    assert!(!app.show_settings);
+    assert!(!app.show_sidebar);
+    assert!(!app.is_fullscreen);
+    assert!(app.tabs.is_empty());
 }

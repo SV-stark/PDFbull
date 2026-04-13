@@ -122,7 +122,7 @@ pub struct OpenResult {
     pub signatures: Vec<SignatureInfo>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct TextItem {
     pub text: String,
     pub x: f32,
@@ -131,7 +131,7 @@ pub struct TextItem {
     pub height: f32,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct RenderResult {
     pub width: u32,
     pub height: u32,
@@ -219,7 +219,7 @@ pub struct RecentFile {
     pub last_opened: u64,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct SessionData {
     pub open_tabs: Vec<String>,
     pub active_tab: usize,
@@ -232,7 +232,7 @@ pub struct PageBookmark {
     pub created_at: u64,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SearchResultItem {
     pub page_index: usize,
     pub text: String,
@@ -718,7 +718,7 @@ mod tests {
         for i in 0..20 {
             tab.view_state
                 .rendered_pages
-                .insert(i, (1.0, iced::widget::image::Handle::from_memory(vec![])));
+                .insert(i, (1.0, iced::widget::image::Handle::from_bytes(vec![])));
         }
 
         tab.zoom = 1.0;
@@ -743,10 +743,10 @@ mod tests {
 
         tab.view_state
             .rendered_pages
-            .insert(5, (2.0, iced::widget::image::Handle::from_memory(vec![])));
+            .insert(5, (2.0, iced::widget::image::Handle::from_bytes(vec![])));
         tab.view_state
             .rendered_pages
-            .insert(6, (1.0, iced::widget::image::Handle::from_memory(vec![])));
+            .insert(6, (1.0, iced::widget::image::Handle::from_bytes(vec![])));
 
         tab.zoom = 1.0;
         tab.cleanup_distant_pages();

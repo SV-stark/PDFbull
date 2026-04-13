@@ -104,49 +104,49 @@ pub fn handle_nav_message(app: &mut PdfBullApp, message: Message) -> Task<Messag
 mod tests {
     #[test]
     fn test_zoom_calculation_zoom_in() {
-        let zoom = 1.0;
+        let zoom: f32 = 1.0;
         let new_zoom = (zoom * 1.1).min(5.0);
         assert!((new_zoom - 1.1).abs() < 0.001);
     }
 
     #[test]
     fn test_zoom_calculation_max_zoom() {
-        let zoom = 5.0;
+        let zoom: f32 = 5.0;
         let new_zoom = (zoom * 1.1).min(5.0);
         assert_eq!(new_zoom, 5.0);
     }
 
     #[test]
     fn test_zoom_calculation_zoom_out() {
-        let zoom = 1.0;
+        let zoom: f32 = 1.0;
         let new_zoom = (zoom / 1.1).max(0.25);
         assert!((new_zoom - 0.909).abs() < 0.001);
     }
 
     #[test]
     fn test_zoom_calculation_min_zoom() {
-        let zoom = 0.25;
+        let zoom: f32 = 0.25;
         let new_zoom = (zoom / 1.1).max(0.25);
         assert_eq!(new_zoom, 0.25);
     }
 
     #[test]
     fn test_zoom_clamp_within_range() {
-        let zoom = 2.0;
+        let zoom: f32 = 2.0;
         let clamped = zoom.clamp(0.25, 5.0);
         assert_eq!(clamped, 2.0);
     }
 
     #[test]
     fn test_zoom_clamp_below_min() {
-        let zoom = 0.1;
+        let zoom: f32 = 0.1;
         let clamped = zoom.clamp(0.25, 5.0);
         assert_eq!(clamped, 0.25);
     }
 
     #[test]
     fn test_zoom_clamp_above_max() {
-        let zoom = 10.0;
+        let zoom: f32 = 10.0;
         let clamped = zoom.clamp(0.25, 5.0);
         assert_eq!(clamped, 5.0);
     }
@@ -176,14 +176,14 @@ mod tests {
 
     #[test]
     fn test_page_input_to_page_index_conversion() {
-        let user_page = 5;
+        let user_page: usize = 5;
         let page_index = user_page.saturating_sub(1);
         assert_eq!(page_index, 4);
     }
 
     #[test]
     fn test_page_input_to_page_index_zero() {
-        let user_page = 0;
+        let user_page: usize = 0;
         let page_index = user_page.saturating_sub(1);
         assert_eq!(page_index, 0);
     }
@@ -237,9 +237,9 @@ mod tests {
 
     #[test]
     fn test_zoom_factor_calculation() {
-        let base_zoom = 1.0;
-        let zoom_in_factor = 1.1;
-        let zoom_out_factor = 1.1;
+        let base_zoom: f32 = 1.0;
+        let zoom_in_factor: f32 = 1.1;
+        let zoom_out_factor: f32 = 1.1;
 
         let zoomed_in = base_zoom * zoom_in_factor;
         let zoomed_out = zoomed_in / zoom_out_factor;
