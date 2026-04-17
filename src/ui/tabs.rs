@@ -1,5 +1,6 @@
 use crate::app::PdfBullApp;
 use crate::app::{LUCIDE, icons};
+use crate::ui::theme;
 use iced::widget::{button, container, row, text};
 use iced::{Alignment, Color, Element, Length, Padding};
 use iced_draggable_tabs::DraggableTabs;
@@ -37,14 +38,15 @@ pub fn render<'a>(
 
     let tab_bar_bg = container(row![tabs, add_button].align_y(Alignment::Center))
         .width(Length::Fill)
-        .padding(Padding {
-            top: 2.0,
-            right: 5.0,
-            bottom: 0.0,
-            left: 5.0,
-        })
+        .padding([0, 10])
+        .height(36.0)
         .style(|_theme| iced::widget::container::Style {
-            background: Some(Color::from_rgb8(25, 26, 28).into()),
+            background: Some(theme::COLOR_BG_SIDEBAR.into()),
+            border: iced::Border {
+                width: 1.0,
+                color: Color::from_rgb(0.05, 0.05, 0.05),
+                ..Default::default()
+            },
             ..Default::default()
         });
 

@@ -4,328 +4,252 @@ use crate::models::PendingAnnotationKind;
 use crate::pdf_engine::RenderFilter;
 use crate::ui::theme;
 use iced::widget::{Space, button, column, container, row, text, tooltip};
-use iced::{Alignment, Border, Color, Element, Length, Padding, Shadow, Vector};
+use iced::{Alignment, Border, Color, Element, Length, Shadow, Vector};
 
 pub fn render(app: &PdfBullApp) -> Element<'_, crate::message::Message> {
     let Some(tab) = app.current_tab() else {
         return container(row![]).into();
     };
 
-    let open_btn = stacked_tool(
-        tooltip(
-            button(text(icons::OPEN).size(16).font(LUCIDE))
-                .on_press(crate::message::Message::OpenDocument)
-                .style(iced::widget::button::text),
-            "Open another PDF",
-            tooltip::Position::Bottom,
+    // --- SECTION: System actions ---
+    let system_tools = row![
+        tool_button(
+            icons::OPEN,
+            "Open",
+            crate::message::Message::OpenDocument,
+            false,
+            "Open document (Ctrl+O)"
         ),
-        "Open",
-    );
-
-    let sidebar_btn = stacked_tool(
-        tooltip(
-            button(text(icons::SIDEBAR).size(16).font(LUCIDE))
-                .on_press(crate::message::Message::ToggleSidebar)
-                .style(iced::widget::button::text),
-            "Toggle Sidebar (Ctrl+B)",
-            tooltip::Position::Bottom,
+        tool_button(
+            icons::SIDEBAR,
+            "Sidebar",
+            crate::message::Message::ToggleSidebar,
+            app.show_sidebar,
+            "Toggle sidebar (Ctrl+B)"
         ),
-        "Sidebar",
-    );
-
-    let zoom_controls = stacked_tool(
-        container(
-            row![
-                button(text(icons::ZOOM_OUT).size(14).font(LUCIDE))
-                    .on_press(crate::message::Message::ZoomOut)
-                    .style(|_theme, _status| iced::widget::button::Style {
-                        text_color: Color::WHITE,
-                        ..Default::default()
-                    }),
-                text(format!("{}%", (tab.zoom * 100.0) as u32))
-                    .size(13)
-                    .font(INTER_BOLD)
-                    .style(|_theme| iced::widget::text::Style {
-                        color: Some(Color::WHITE)
-                    }),
-                button(text(icons::ZOOM_IN).size(14).font(LUCIDE))
-                    .on_press(crate::message::Message::ZoomIn)
-                    .style(|_theme, _status| iced::widget::button::Style {
-                        text_color: Color::WHITE,
-                        ..Default::default()
-                    }),
-            ]
-            .spacing(12)
-            .align_y(Alignment::Center),
-        )
-        .padding([4, 10])
-        .style(|_theme| iced::widget::container::Style {
-            background: Some(Color::from_rgb8(30, 31, 34).into()),
-            border: iced::Border {
-                radius: 20.0.into(),
-                ..Default::default()
-            },
-            ..Default::default()
-        }),
-        "Zoom",
-    );
-
-    let rotate_btn = stacked_tool(
-        tooltip(
-            button(text(icons::ROTATE).size(16).font(LUCIDE))
-                .on_press(crate::message::Message::RotateClockwise)
-                .style(iced::widget::button::text),
-            "Rotate 90° clockwise",
-            tooltip::Position::Bottom,
-        ),
-        "Rotate",
-    );
-
-    let crop_filters = stacked_tool(
-        column![
-            row![
-                filter_btn_custom("None", RenderFilter::None, tab.render_filter),
-                filter_btn_custom("Gray", RenderFilter::Grayscale, tab.render_filter),
-                filter_btn_custom("Inv", RenderFilter::Inverted, tab.render_filter),
-            ]
-            .spacing(2),
-            row![
-                filter_btn_custom("Eco", RenderFilter::Eco, tab.render_filter),
-                filter_btn_custom("B&W", RenderFilter::BlackWhite, tab.render_filter),
-                filter_btn_custom("Light", RenderFilter::Lighten, tab.render_filter),
-            ]
-            .spacing(2),
-        ]
-        .spacing(2),
-        "Filters",
-    );
-
-    let autocrop_btn = stacked_tool(
-        button(
-            text(if tab.auto_crop { "ON" } else { "OFF" })
-                .size(11)
-                .font(INTER_BOLD)
-                .align_x(iced::alignment::Horizontal::Center),
-        )
-        .on_press(crate::message::Message::ToggleAutoCrop)
-        .style(move |_, _| {
-            if tab.auto_crop {
-                iced::widget::button::Style {
-                    background: Some(theme::COLOR_ACCENT.into()),
-                    text_color: Color::WHITE,
-                    border: Border {
-                        radius: 4.0.into(),
-                        ..Default::default()
-                    },
-                    ..Default::default()
-                }
-            } else {
-                iced::widget::button::Style {
-                    background: Some(Color::from_rgb8(60, 60, 65).into()),
-                    text_color: Color::WHITE,
-                    border: Border {
-                        radius: 4.0.into(),
-                        ..Default::default()
-                    },
-                    ..Default::default()
-                }
-            }
-        })
-        .padding([4, 8]),
-        "Auto-Crop",
-    );
-
-    let split_btn = stacked_tool(
-        button(text("Split").size(11).font(INTER_BOLD))
-            .on_press(crate::message::Message::SplitPDF(vec![tab.current_page]))
-            .style(iced::widget::button::text),
-        "Split",
-    );
-
-    let forms_btn = stacked_tool(
-        tooltip(
-            button(text(icons::FORMS).size(16).font(LUCIDE))
-                .on_press(crate::message::Message::ToggleFormsSidebar)
-                .style(iced::widget::button::text),
-            "Toggle Form Fields",
-            tooltip::Position::Bottom,
-        ),
-        "Forms",
-    );
-
-    let bookmark_btn = stacked_tool(
-        tooltip(
-            button(text(icons::BOOKMARK).size(16).font(LUCIDE))
-                .on_press(crate::message::Message::AddBookmark)
-                .style(iced::widget::button::text),
-            "Add Bookmark",
-            tooltip::Position::Bottom,
-        ),
-        "Bookmark",
-    );
-
-    let highlight_btn = stacked_tool(
-        tooltip(
-            button(text(icons::HIGHLIGHT).size(16).font(LUCIDE))
-                .on_press(crate::message::Message::SetAnnotationMode(Some(
-                    PendingAnnotationKind::Highlight,
-                )))
-                .style(iced::widget::button::text),
-            "Highlight Text",
-            tooltip::Position::Bottom,
-        ),
-        "Highlight",
-    );
-
-    let rectangle_btn = stacked_tool(
-        tooltip(
-            button(text(icons::RECTANGLE).size(16).font(LUCIDE))
-                .on_press(crate::message::Message::SetAnnotationMode(Some(
-                    PendingAnnotationKind::Rectangle,
-                )))
-                .style(iced::widget::button::text),
-            "Draw Rectangle",
-            tooltip::Position::Bottom,
-        ),
-        "Rectangle",
-    );
-
-    let redact_btn = stacked_tool(
-        tooltip(
-            button(text(icons::BLOCK).size(16).font(LUCIDE))
-                .on_press(crate::message::Message::SetAnnotationMode(Some(
-                    PendingAnnotationKind::Redact,
-                )))
-                .style(iced::widget::button::text),
-            "Redact Sensitive Content",
-            tooltip::Position::Bottom,
-        ),
-        "Redact",
-    );
-
-    let save_anns_btn = stacked_tool(
-        tooltip(
-            button(text(icons::SAVE).size(16).font(LUCIDE))
-                .on_press(crate::message::Message::SaveAnnotations)
-                .style(iced::widget::button::text),
-            "Save Annotations",
-            tooltip::Position::Bottom,
-        ),
-        "Save",
-    );
-
-    let right_tools = column![
-        row![
-            button(text("Info").size(12).font(INTER_BOLD))
-                .on_press(crate::message::Message::ToggleMetadata)
-                .style(iced::widget::button::text),
-            button(text(icons::HELP).size(16).font(LUCIDE))
-                .on_press(crate::message::Message::ToggleKeyboardHelp)
-                .style(iced::widget::button::text),
-            button(text(icons::SETTINGS).size(16).font(LUCIDE))
-                .on_press(crate::message::Message::OpenSettings)
-                .style(iced::widget::button::text),
-        ]
-        .spacing(8)
-        .align_y(Alignment::Center),
-        row![
-            button(
-                row![
-                    text(icons::COPY).size(12).font(LUCIDE),
-                    text("Text").size(11).font(INTER_REGULAR),
-                ]
-                .spacing(4)
-                .align_y(Alignment::Center)
-            )
-            .on_press(crate::message::Message::ExtractTextToClipboard)
-            .style(iced::widget::button::text),
-            button(
-                row![
-                    text(icons::COPY).size(12).font(LUCIDE),
-                    text("Image").size(11).font(INTER_REGULAR),
-                ]
-                .spacing(4)
-                .align_y(Alignment::Center)
-            )
-            .on_press(crate::message::Message::CopyImageToClipboard)
-            .style(iced::widget::button::text),
-        ]
-        .spacing(8)
-        .align_y(Alignment::Center),
-        button(
-            row![
-                text(icons::EXPORT).size(12).font(LUCIDE),
-                text("Export").size(11).font(INTER_REGULAR),
-            ]
-            .spacing(4)
-            .align_y(Alignment::Center)
-        )
-        .on_press(crate::message::Message::ExportImage)
-        .style(iced::widget::button::text),
-        button(
-            row![
-                text(icons::PRINT).size(12).font(LUCIDE),
-                text("Print").size(11).font(INTER_REGULAR),
-            ]
-            .spacing(4)
-            .align_y(Alignment::Center)
-        )
-        .on_press(crate::message::Message::Print)
-        .style(iced::widget::button::text),
     ]
-    .spacing(2)
-    .align_x(Alignment::Center);
+    .spacing(8);
+
+    // --- SECTION: Navigation & View ---
+    let view_tools = row![
+        zoom_control(tab.zoom),
+        v_sep(),
+        tool_button(
+            icons::ROTATE,
+            "Rotate",
+            crate::message::Message::RotateClockwise,
+            false,
+            "Rotate 90° clockwise"
+        ),
+        v_sep(),
+        filter_section(tab.render_filter, tab.auto_crop),
+    ]
+    .spacing(12)
+    .align_y(Alignment::Center);
+
+    // --- SECTION: Markup Tools ---
+    let markup_tools = row![
+        tool_button(
+            icons::HIGHLIGHT,
+            "Highlight",
+            crate::message::Message::SetAnnotationMode(Some(PendingAnnotationKind::Highlight)),
+            app.annotation_mode == Some(PendingAnnotationKind::Highlight),
+            "Highlight text"
+        ),
+        tool_button(
+            icons::RECTANGLE,
+            "Rect",
+            crate::message::Message::SetAnnotationMode(Some(PendingAnnotationKind::Rectangle)),
+            app.annotation_mode == Some(PendingAnnotationKind::Rectangle),
+            "Draw rectangle"
+        ),
+        tool_button(
+            icons::BLOCK,
+            "Redact",
+            crate::message::Message::SetAnnotationMode(Some(PendingAnnotationKind::Redact)),
+            app.annotation_mode == Some(PendingAnnotationKind::Redact),
+            "Redact content"
+        ),
+        v_sep(),
+        tool_button(
+            icons::SAVE,
+            "Save",
+            crate::message::Message::SaveAnnotations,
+            false,
+            "Save all annotations"
+        ),
+    ]
+    .spacing(8);
+
+    // --- SECTION: Utility / Right ---
+    let util_tools = row![
+        tool_button(
+            icons::FORMS,
+            "Forms",
+            crate::message::Message::ToggleFormsSidebar,
+            app.show_forms_sidebar,
+            "Form fields"
+        ),
+        tool_button(
+            icons::BOOKMARK,
+            "Mark",
+            crate::message::Message::AddBookmark,
+            false,
+            "Add bookmark"
+        ),
+        v_sep(),
+        button(text(icons::SETTINGS).size(18).font(LUCIDE))
+            .on_press(crate::message::Message::OpenSettings)
+            .style(theme::button_ghost)
+            .padding(8),
+    ]
+    .spacing(8)
+    .align_y(Alignment::Center);
 
     container(
         row![
-            open_btn,
-            Space::new().width(15),
-            sidebar_btn,
-            Space::new().width(25),
-            zoom_controls,
-            Space::new().width(20),
-            rotate_btn,
-            Space::new().width(20),
-            crop_filters,
-            Space::new().width(10),
-            autocrop_btn,
+            system_tools,
             Space::new().width(Length::Fill),
-            split_btn,
-            Space::new().width(15),
-            forms_btn,
-            Space::new().width(15),
-            bookmark_btn,
-            Space::new().width(15),
-            highlight_btn,
-            Space::new().width(15),
-            rectangle_btn,
-            Space::new().width(15),
-            redact_btn,
-            Space::new().width(20),
-            save_anns_btn,
-            Space::new().width(20),
-            right_tools,
+            view_tools,
+            Space::new().width(Length::Fill),
+            markup_tools,
+            Space::new().width(12),
+            v_sep(),
+            Space::new().width(12),
+            util_tools,
         ]
-        .spacing(5)
+        .padding([0, 20])
         .align_y(Alignment::Center),
     )
     .width(Length::Fill)
-    .padding(Padding {
-        top: 8.0,
-        right: 15.0,
-        bottom: 8.0,
-        left: 15.0,
-    })
+    .height(Length::Fixed(theme::TOOLBAR_HEIGHT))
     .style(|_theme| iced::widget::container::Style {
-        background: Some(Color::from_rgb8(43, 45, 49).into()),
+        background: Some(theme::COLOR_BG_HEADER.into()),
+        border: Border {
+            width: 1.0,
+            color: Color::from_rgb(0.05, 0.05, 0.06),
+            ..Default::default()
+        },
         shadow: Shadow {
-            color: Color::from_rgba(0.0, 0.0, 0.0, 0.2),
+            color: Color::from_rgba(0.0, 0.0, 0.0, 0.3),
             offset: Vector::new(0.0, 2.0),
-            blur_radius: 8.0,
+            blur_radius: 10.0,
         },
         ..Default::default()
     })
     .into()
+}
+
+fn v_sep() -> Element<'static, crate::message::Message> {
+    container(Space::new().width(1.0))
+        .width(1.0)
+        .height(24.0)
+        .style(|_| iced::widget::container::Style {
+            background: Some(Color::from_rgb(0.2, 0.2, 0.22).into()),
+            ..Default::default()
+        })
+        .into()
+}
+
+fn tool_button<'a>(
+    icon: &'a str,
+    label: &'a str,
+    msg: crate::message::Message,
+    active: bool,
+    tooltip_text: &'a str,
+) -> Element<'a, crate::message::Message> {
+    tooltip(
+        button(
+            column![
+                text(icon).size(18).font(LUCIDE),
+                text(label).size(10).font(INTER_REGULAR).style(move |_| {
+                    iced::widget::text::Style {
+                        color: Some(if active {
+                            Color::WHITE
+                        } else {
+                            theme::COLOR_TEXT_DIM
+                        }),
+                    }
+                })
+            ]
+            .spacing(4)
+            .align_x(Alignment::Center),
+        )
+        .on_press(msg)
+        .padding([6, 10])
+        .style(theme::button_tool(active)),
+        tooltip_text,
+        tooltip::Position::Bottom,
+    )
+    .into()
+}
+
+fn zoom_control(zoom: f32) -> Element<'static, crate::message::Message> {
+    container(
+        row![
+            button(text(icons::ZOOM_OUT).size(14).font(LUCIDE))
+                .on_press(crate::message::Message::ZoomOut)
+                .style(theme::button_ghost)
+                .padding(6),
+            text(format!("{}%", (zoom * 100.0) as u32))
+                .size(13)
+                .font(INTER_BOLD)
+                .width(48)
+                .align_x(iced::alignment::Horizontal::Center)
+                .style(|_| iced::widget::text::Style {
+                    color: Some(theme::COLOR_TEXT_PRIMARY)
+                }),
+            button(text(icons::ZOOM_IN).size(14).font(LUCIDE))
+                .on_press(crate::message::Message::ZoomIn)
+                .style(theme::button_ghost)
+                .padding(6),
+        ]
+        .spacing(4)
+        .align_y(Alignment::Center),
+    )
+    .padding(4)
+    .style(theme::input_field)
+    .into()
+}
+
+fn filter_section(
+    active_filter: RenderFilter,
+    auto_crop: bool,
+) -> Element<'static, crate::message::Message> {
+    row![
+        button(
+            text(if auto_crop { "CROP ON" } else { "AUTO CROP" })
+                .size(10)
+                .font(INTER_BOLD)
+        )
+        .on_press(crate::message::Message::ToggleAutoCrop)
+        .style(theme::button_tool(auto_crop))
+        .padding([6, 10]),
+        v_sep(),
+        // Small dropdown-like selector for filters or just compact buttons
+        row![
+            filter_chip("None", RenderFilter::None, active_filter),
+            filter_chip("Eco", RenderFilter::Eco, active_filter),
+            filter_chip("Inv", RenderFilter::Inverted, active_filter),
+        ]
+        .spacing(4)
+    ]
+    .spacing(12)
+    .align_y(Alignment::Center)
+    .into()
+}
+
+fn filter_chip(
+    label: &'static str,
+    f: RenderFilter,
+    active: RenderFilter,
+) -> Element<'static, crate::message::Message> {
+    let is_active = f == active;
+    button(text(label).size(10).font(INTER_BOLD))
+        .on_press(crate::message::Message::SetFilter(f))
+        .padding([4, 8])
+        .style(theme::button_tool(is_active))
+        .into()
 }
 
 fn stacked_tool<'a>(

@@ -1,26 +1,26 @@
 use crate::app::{INTER_BOLD, INTER_REGULAR, LUCIDE, icons};
 use crate::storage;
-use iced::widget::{Space, button, column, container, image, row, scrollable, text};
+use crate::ui::theme;
+use iced::widget::{Space, button, column, container, row, scrollable, text};
 use iced::{Alignment, Border, Color, Element, Length, Shadow, Vector};
 
 fn custom_card<'a>(
     content: impl Into<Element<'a, crate::message::Message>>,
 ) -> Element<'a, crate::message::Message> {
     container(content)
-        .padding(24)
+        .padding(32)
         .style(|_theme| iced::widget::container::Style {
-            background: Some(Color::from_rgb8(43, 45, 49).into()),
+            background: Some(theme::COLOR_BG_WIDGET.into()),
             border: Border {
-                radius: 12.0.into(),
+                radius: theme::BORDER_RADIUS_LG.into(),
                 width: 1.0,
-                color: Color::from_rgb8(50, 52, 56),
+                color: Color::from_rgb(0.2, 0.2, 0.22),
             },
             shadow: Shadow {
-                color: Color::from_rgba(0.0, 0.0, 0.0, 0.3),
-                offset: Vector::new(0.0, 4.0),
-                blur_radius: 12.0,
+                color: Color::from_rgba(0.0, 0.0, 0.0, 0.4),
+                offset: Vector::new(0.0, 8.0),
+                blur_radius: 20.0,
             },
-            text_color: None,
             ..Default::default()
         })
         .into()
@@ -35,61 +35,50 @@ fn quick_action_card<'a>(
 ) -> Element<'a, crate::message::Message> {
     container(
         column![
-            text(icon)
-                .size(40)
-                .font(LUCIDE)
-                .style(|_| iced::widget::text::Style {
-                    color: Some(Color::from_rgb8(120, 120, 130))
-                }),
-            text(title)
-                .size(20)
-                .font(INTER_BOLD)
-                .style(|_| iced::widget::text::Style {
-                    color: Some(Color::WHITE)
-                }),
-            text(description)
-                .size(14)
-                .font(INTER_REGULAR)
-                .style(|_| iced::widget::text::Style {
-                    color: Some(Color::from_rgb8(160, 160, 170))
-                })
-                .align_x(Alignment::Center),
-            Space::new().height(12),
-            button(text(action_label).size(14).font(INTER_BOLD).style(|_| {
-                iced::widget::text::Style {
-                    color: Some(Color::WHITE),
-                }
-            }))
-            .on_press(on_press)
-            .padding([10, 20])
-            .style(|_theme, status| {
-                let bg = if status == iced::widget::button::Status::Hovered {
-                    Color::from_rgb8(80, 80, 85)
-                } else {
-                    Color::from_rgb8(60, 60, 65)
-                };
-                iced::widget::button::Style {
-                    background: Some(bg.into()),
+            container(text(icon).size(32).font(LUCIDE))
+                .padding(16)
+                .style(|_| iced::widget::container::Style {
+                    background: Some(theme::COLOR_BG_HEADER.into()),
                     border: Border {
-                        radius: 8.0.into(),
+                        radius: theme::BORDER_RADIUS_MD.into(),
                         ..Default::default()
                     },
                     ..Default::default()
-                }
-            }),
+                }),
+            column![
+                text(title)
+                    .size(18)
+                    .font(INTER_BOLD)
+                    .style(|_| iced::widget::text::Style {
+                        color: Some(theme::COLOR_TEXT_PRIMARY)
+                    }),
+                text(description)
+                    .size(13)
+                    .font(INTER_REGULAR)
+                    .style(|_| iced::widget::text::Style {
+                        color: Some(theme::COLOR_TEXT_DIM)
+                    })
+                    .align_x(Alignment::Center),
+            ]
+            .spacing(4)
+            .align_x(Alignment::Center),
+            button(text(action_label).size(13).font(INTER_BOLD))
+                .on_press(on_press)
+                .padding([10, 24])
+                .style(theme::button_tool(true)),
         ]
         .align_x(Alignment::Center)
-        .spacing(12),
+        .spacing(20),
     )
     .width(Length::FillPortion(1))
     .padding(32)
     .style(|_| iced::widget::container::Style {
+        background: Some(theme::COLOR_BG_APP.into()),
         border: Border {
-            color: Color::from_rgb8(60, 60, 65),
             width: 1.0,
-            radius: 12.0.into(),
+            color: Color::from_rgb(0.15, 0.15, 0.17),
+            radius: theme::BORDER_RADIUS_LG.into(),
         },
-        background: Some(iced::Background::Color(Color::from_rgb8(30, 31, 34))),
         ..Default::default()
     })
     .into()
@@ -99,185 +88,102 @@ pub fn welcome_view(app: &crate::app::PdfBullApp) -> Element<'_, crate::message:
     let recent_section: Element<'_, crate::message::Message> = if app.recent_files.is_empty() {
         column![].into()
     } else {
-        let files = iced::widget::grid(app.recent_files.iter().map(|file| {
+        let files = iced::widget::column(app.recent_files.iter().map(|file| {
             let file_row = row![
-                text(icons::OPEN)
-                    .size(16)
-                    .font(LUCIDE)
-                    .style(|_theme| iced::widget::text::Style {
-                        color: Some(Color::from_rgb8(150, 150, 160))
+                container(text(icons::OPEN).size(14).font(LUCIDE))
+                    .padding(8)
+                    .style(|_| iced::widget::container::Style {
+                        background: Some(theme::COLOR_BG_HEADER.into()),
+                        border: Border {
+                            radius: theme::BORDER_RADIUS_SM.into(),
+                            ..Default::default()
+                        },
+                        ..Default::default()
                     }),
-                iced::widget::tooltip(
-                    text(&file.name)
-                        .size(14)
+                column![
+                    text(&file.name).size(14).font(INTER_BOLD).style(|_| {
+                        iced::widget::text::Style {
+                            color: Some(theme::COLOR_TEXT_PRIMARY),
+                        }
+                    }),
+                    text(file.path.clone())
+                        .size(12)
                         .font(INTER_REGULAR)
-                        .style(|_theme| iced::widget::text::Style {
-                            color: Some(Color::WHITE)
+                        .style(|_| iced::widget::text::Style {
+                            color: Some(theme::COLOR_TEXT_SECONDARY)
                         }),
-                    text(file.path.clone()).font(INTER_REGULAR),
-                    iced::widget::tooltip::Position::Bottom
-                ),
+                ]
+                .spacing(2),
                 Space::new().width(Length::Fill),
                 text(storage::time_ago(file.last_opened))
                     .size(11)
                     .font(INTER_REGULAR)
-                    .style(|_theme| iced::widget::text::Style {
-                        color: Some(Color::from_rgb8(120, 120, 130))
-                    }),
+                    .style(|_| iced::widget::text::Style { color: Some(theme::COLOR_TEXT_SECONDARY) }),
             ]
-            .spacing(12)
+            .spacing(16)
             .align_y(iced::Alignment::Center);
 
             button(file_row)
                 .on_press(crate::message::Message::OpenRecentFile(file.clone()))
                 .width(Length::Fill)
-                .padding(8)
-                .style(|_theme: &iced::Theme, status| {
-                    let bg = if status == iced::widget::button::Status::Hovered {
-                        Some(Color::from_rgb8(60, 62, 66).into())
-                    } else {
-                        None
-                    };
-                    iced::widget::button::Style {
-                        background: bg,
-                        border: Border {
-                            radius: 8.0.into(),
-                            ..Default::default()
-                        },
-                        ..Default::default()
-                    }
-                })
+                .padding(12)
+                .style(theme::button_ghost)
                 .into()
         }))
-        .columns(2)
-        .spacing(12);
+        .spacing(8);
 
-        custom_card(column![
+        column![
             row![
-                text("Recent Files")
-                    .size(16)
+                text("Recent Documents")
+                    .size(14)
                     .font(INTER_BOLD)
-                    .style(|_theme| iced::widget::text::Style {
-                        color: Some(Color::WHITE)
-                    }),
+                    .style(|_| iced::widget::text::Style { color: Some(theme::COLOR_TEXT_DIM) }),
                 Space::new().width(Length::Fill),
-                button(
-                    text("Clear All")
-                        .size(12)
-                        .font(INTER_REGULAR)
-                        .style(|_theme| iced::widget::text::Style {
-                            color: Some(Color::from_rgb8(180, 180, 180))
-                        })
-                )
-                .on_press(crate::message::Message::ClearRecentFiles)
-                .padding(5)
-                .style(iced::widget::button::text)
+                button(text("Clear History").size(12).font(INTER_REGULAR))
+                    .on_press(crate::message::Message::ClearRecentFiles)
+                    .style(iced::widget::button::text)
             ]
-            .align_y(Alignment::Center),
+            .align_y(Alignment::Center)
+            .padding([0, 8]),
             Space::new().height(12),
             files,
-        ])
+        ].into()
     };
 
     let actions = row![
-        quick_action_card(
-            icons::OPEN,
-            "Open PDF",
-            "Read and annotate a single document",
-            "Pick File",
-            crate::message::Message::OpenDocument
-        ),
-        quick_action_card(
-            icons::MERGE,
-            "Merge PDFs",
-            "Combine multiple PDFs into one",
-            "Pick Files",
-            crate::message::Message::MergeDocuments(vec![]) // Note: update.rs handles the file picking when paths are empty
-        ),
+        quick_action_card(icons::OPEN, "Open Document", "Pick a PDF to start reading", "Browse Files", crate::message::Message::OpenDocument),
+        quick_action_card(icons::MERGE, "Merge PDFs", "Combine multiple files easily", "Select Files", crate::message::Message::MergeDocuments(vec![])),
     ]
     .spacing(24)
     .width(Length::Fill);
 
-    let logo = image(iced::widget::image::Handle::from_bytes(
-        include_bytes!("../PDFbull.png").to_vec(),
-    ))
-    .width(Length::Fixed(100.0));
-
-    let open_card = custom_card(column![
-        row![
-            logo,
-            Space::new().width(24),
-            column![
-                text("Welcome to PDFbull")
-                    .size(28)
-                    .font(INTER_BOLD)
-                    .style(|_theme| iced::widget::text::Style {
-                        color: Some(Color::WHITE)
-                    }),
-                text("High-performance PDF reading")
-                    .size(14)
-                    .font(INTER_REGULAR)
-                    .style(|_theme| iced::widget::text::Style {
-                        color: Some(Color::from_rgb8(150, 150, 150))
-                    }),
-            ]
-        ]
-        .align_y(Alignment::Center),
-        Space::new().height(24),
-        actions,
-    ]);
-
-    container(
+    let content = column![
         column![
-            row![
-                image(iced::widget::image::Handle::from_bytes(
-                    include_bytes!("../PDFbull.png").to_vec(),
-                ))
-                .width(Length::Fixed(32.0)),
-                text("PDFbull").size(28).font(INTER_BOLD).style(|_theme| {
-                    iced::widget::text::Style {
-                        color: Some(Color::WHITE),
-                    }
-                }),
-                text(format!("v{}", env!("CARGO_PKG_VERSION")))
-                    .size(12)
-                    .font(INTER_REGULAR)
-                    .style(|_theme| iced::widget::text::Style {
-                        color: Some(Color::from_rgb8(180, 180, 180))
-                    }),
-                Space::new().width(Length::Fill),
-                button(
-                    row![
-                        text(icons::SETTINGS).font(LUCIDE).size(16),
-                        text("Settings").font(INTER_REGULAR).size(14),
-                    ]
-                    .spacing(8)
-                    .align_y(Alignment::Center)
-                )
-                .on_press(crate::message::Message::OpenSettings)
-                .style(iced::widget::button::text),
-            ]
-            .align_y(Alignment::Center)
-            .spacing(12)
-            .padding(24),
-            scrollable(
-                column![
-                    open_card,
-                    Space::new().height(24),
-                    recent_section,
-                    Space::new().height(40),
-                ]
-                .width(Length::Fixed(720.0))
-                .align_x(Alignment::Center)
-            )
-            .height(Length::Fill),
-        ]
-        .align_x(Alignment::Center)
-        .width(Length::Fill)
-        .height(Length::Fill),
-    )
-    .style(|_theme| iced::widget::container::Style {
-        background: Some(Color::from_rgb8(35, 36, 40).into()),
+            text("PDFbull").size(42).font(INTER_BOLD).style(|_| iced::widget::text::Style { color: Some(theme::COLOR_TEXT_PRIMARY) }),
+            text("FAST • LIGHT • SECURE").size(12).font(INTER_BOLD).style(|_| iced::widget::text::Style { color: Some(theme::COLOR_ACCENT) }),
+        ].align_x(Alignment::Center).spacing(8),
+        Space::new().height(48),
+        custom_card(column![
+            text("Getting Started").size(20).font(INTER_BOLD).style(|_| iced::widget::text::Style { color: Some(theme::COLOR_TEXT_PRIMARY) }),
+            Space::new().height(24),
+            actions,
+        ].align_x(Alignment::Center)),
+        Space::new().height(32),
+        recent_section,
+    ]
+    .width(Length::Fixed(800.0))
+    .align_x(Alignment::Center);
+
+    container(scrollable(
+        container(content)
+            .width(Length::Fill)
+            .padding(64)
+            .center_x(Length::Fill),
+    ))
+    .width(Length::Fill)
+    .height(Length::Fill)
+    .style(|_| iced::widget::container::Style {
+        background: Some(theme::COLOR_BG_APP.into()),
         ..Default::default()
     })
     .into()

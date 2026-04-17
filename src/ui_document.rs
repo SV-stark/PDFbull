@@ -19,26 +19,26 @@ fn render_page_nav(app: &PdfBullApp) -> Element<'_, crate::message::Message> {
             container(
                 text(format!("{}", app.rendering_count))
                     .font(INTER_BOLD)
-                    .size(12)
+                    .size(11)
             )
-            .padding([2, 6])
+            .padding([2, 5])
             .style(|_| iced::widget::container::Style {
                 background: Some(theme::COLOR_ACCENT.into()),
                 text_color: Some(Color::WHITE),
                 border: iced::Border {
-                    radius: 10.0.into(),
+                    radius: theme::BORDER_RADIUS_FULL.into(),
                     ..Default::default()
                 },
                 ..Default::default()
             }),
-            text("Rendering")
+            text("Rendering...")
                 .size(12)
                 .font(INTER_REGULAR)
                 .style(|_theme| iced::widget::text::Style {
                     color: Some(theme::COLOR_TEXT_DIM)
                 })
         ]
-        .spacing(8)
+        .spacing(6)
         .align_y(Alignment::Center)
     } else {
         row![]
@@ -46,111 +46,79 @@ fn render_page_nav(app: &PdfBullApp) -> Element<'_, crate::message::Message> {
 
     container(
         row![
-            Space::new().width(Length::Fill),
-            button(text(icons::PREV).size(14).font(LUCIDE))
-                .on_press(crate::message::Message::PrevPage)
-                .style(|_theme, _status| iced::widget::button::Style {
-                    background: Some(Color::from_rgb8(60, 60, 65).into()),
-                    text_color: Color::WHITE,
-                    border: iced::Border {
-                        radius: 6.0.into(),
-                        ..Default::default()
-                    },
-                    ..Default::default()
-                })
-                .padding([6, 12]),
-            text("Page")
-                .size(13)
-                .font(INTER_REGULAR)
-                .style(|_theme| iced::widget::text::Style {
-                    color: Some(theme::COLOR_TEXT_DIM)
-                }),
-            container(
-                text_input("Page", &app.page_input)
-                    .on_input(|input| {
-                        if input.is_empty() || input.parse::<usize>().is_ok() {
-                            crate::message::Message::PageInputChanged(input)
-                        } else {
-                            crate::message::Message::PageInputChanged(app.page_input.clone())
-                        }
-                    })
-                    .on_submit(crate::message::Message::PageInputSubmitted)
-                    .font(INTER_BOLD)
-                    .width(Length::Fixed(40.0))
-            )
-            .padding(1)
-            .style(|_theme| iced::widget::container::Style {
-                border: iced::Border {
-                    width: 1.0,
-                    color: Color::from_rgb8(80, 80, 80),
-                    radius: 6.0.into()
-                },
-                background: Some(Color::from_rgb8(30, 31, 34).into()),
-                ..Default::default()
-            }),
-            text(format!("of {}", tab.total_pages.max(1)))
-                .size(13)
-                .font(INTER_REGULAR)
-                .style(|_theme| iced::widget::text::Style {
-                    color: Some(theme::COLOR_TEXT_DIM)
-                }),
-            button(text(icons::NEXT).size(14).font(LUCIDE))
-                .on_press(crate::message::Message::NextPage)
-                .style(|_theme, _status| iced::widget::button::Style {
-                    background: Some(Color::from_rgb8(60, 60, 65).into()),
-                    text_color: Color::WHITE,
-                    border: iced::Border {
-                        radius: 6.0.into(),
-                        ..Default::default()
-                    },
-                    ..Default::default()
-                })
-                .padding([6, 12]),
-            Space::new().width(Length::Fill),
             loading_indicator,
-            Space::new().width(15),
+            Space::new().width(Length::Fill),
+            row![
+                button(text(icons::PREV).size(14).font(LUCIDE))
+                    .on_press(crate::message::Message::PrevPage)
+                    .style(theme::button_ghost)
+                    .padding(8),
+                container(
+                    row![
+                        text_input("", &app.page_input)
+                            .on_input(|input| {
+                                if input.is_empty() || input.parse::<usize>().is_ok() {
+                                    crate::message::Message::PageInputChanged(input)
+                                } else {
+                                    crate::message::Message::PageInputChanged(
+                                        app.page_input.clone(),
+                                    )
+                                }
+                            })
+                            .on_submit(crate::message::Message::PageInputSubmitted)
+                            .font(INTER_BOLD)
+                            .size(13)
+                            .width(36)
+                            .align_x(iced::alignment::Horizontal::Center),
+                        text(format!(" / {}", tab.total_pages.max(1)))
+                            .size(13)
+                            .font(INTER_REGULAR)
+                            .style(|_| iced::widget::text::Style {
+                                color: Some(theme::COLOR_TEXT_DIM)
+                            })
+                    ]
+                    .padding([2, 8])
+                    .align_y(Alignment::Center)
+                )
+                .style(theme::input_field),
+                button(text(icons::NEXT).size(14).font(LUCIDE))
+                    .on_press(crate::message::Message::NextPage)
+                    .style(theme::button_ghost)
+                    .padding(8),
+            ]
+            .spacing(4)
+            .align_y(Alignment::Center),
+            Space::new().width(Length::Fill),
             container(
                 row![
                     text(icons::SEARCH).font(LUCIDE).size(14).style(|_| {
                         iced::widget::text::Style {
-                            color: Some(Color::from_rgb8(150, 150, 150)),
+                            color: Some(theme::COLOR_TEXT_SECONDARY),
                         }
                     }),
-                    text_input("Search...", &app.search_query)
+                    text_input("Search in document...", &app.search_query)
                         .on_input(crate::message::Message::Search)
                         .on_submit(crate::message::Message::NextSearchResult)
                         .font(INTER_REGULAR)
-                        .width(Length::Fixed(180.0))
+                        .size(13)
+                        .width(180)
                 ]
                 .spacing(8)
                 .align_y(Alignment::Center)
                 .padding([0, 12])
             )
-            .style(|_theme| iced::widget::container::Style {
-                border: iced::Border {
-                    width: 1.0,
-                    color: Color::from_rgb8(80, 80, 80),
-                    radius: 20.0.into()
-                },
-                background: Some(Color::from_rgb8(30, 31, 34).into()),
-                ..Default::default()
-            }),
+            .style(theme::input_field),
         ]
-        .spacing(10)
         .align_y(Alignment::Center),
     )
     .width(Length::Fill)
-    .padding(Padding {
-        top: 6.0,
-        right: 15.0,
-        bottom: 6.0,
-        left: 15.0,
-    })
+    .height(Length::Fixed(theme::NAV_HEIGHT))
+    .padding([0, 20])
     .style(|_theme| iced::widget::container::Style {
-        background: Some(Color::from_rgb8(35, 36, 40).into()),
+        background: Some(theme::COLOR_BG_SIDEBAR.into()),
         border: iced::Border {
             width: 1.0,
-            color: Color::from_rgb8(20, 20, 20),
+            color: Color::from_rgb(0.05, 0.05, 0.05),
             ..Default::default()
         },
         ..Default::default()
@@ -548,18 +516,50 @@ pub fn document_view<'a>(
 
     let content: Element<crate::message::Message> = if tab.total_pages == 0 {
         let empty_content: Element<_> = if tab.view_state.is_loading {
-            column![text("⏳").size(50), text("Loading Document...").size(24)]
-                .align_x(Alignment::Center)
-                .spacing(20)
-                .into()
+            column![
+                text("⏳").size(40),
+                text("Loading Document...")
+                    .font(INTER_BOLD)
+                    .size(20)
+                    .style(|_| iced::widget::text::Style {
+                        color: Some(theme::COLOR_TEXT_DIM)
+                    })
+            ]
+            .align_x(Alignment::Center)
+            .spacing(16)
+            .into()
         } else {
-            text("No pages").into()
+            column![
+                text(icons::OPEN)
+                    .size(48)
+                    .font(LUCIDE)
+                    .style(|_| iced::widget::text::Style {
+                        color: Some(theme::COLOR_TEXT_SECONDARY)
+                    }),
+                text("No Pages Found").font(INTER_BOLD).size(20).style(|_| {
+                    iced::widget::text::Style {
+                        color: Some(theme::COLOR_TEXT_DIM),
+                    }
+                }),
+                text("This document might be empty or corrupted.")
+                    .size(14)
+                    .style(|_| iced::widget::text::Style {
+                        color: Some(theme::COLOR_TEXT_SECONDARY)
+                    }),
+            ]
+            .align_x(Alignment::Center)
+            .spacing(12)
+            .into()
         };
         container(empty_content)
             .width(Length::Fill)
             .height(Length::Fill)
             .center_x(Length::Fill)
             .center_y(Length::Fill)
+            .style(|_| iced::widget::container::Style {
+                background: Some(theme::COLOR_BG_APP.into()),
+                ..Default::default()
+            })
             .into()
     } else {
         content_row.into()
@@ -588,7 +588,10 @@ pub fn document_view<'a>(
             tabs::render(app, &tab_names),
             toolbar::render(app),
             render_page_nav(app),
-            content
+            container(content).style(|_| iced::widget::container::Style {
+                background: Some(theme::COLOR_BG_APP.into()),
+                ..Default::default()
+            })
         ]
         .into()
     }
