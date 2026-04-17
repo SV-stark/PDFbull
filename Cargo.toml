@@ -4,6 +4,7 @@ version = "0.3.0"
 description = "A lightweight PDF reader"
 authors = ["SV-stark"]
 edition = "2024"
+resolver = "3"
 license = "MIT"
 homepage = "https://github.com/SV-stark/PDFbull"
 repository = "https://github.com/SV-stark/PDFbull"

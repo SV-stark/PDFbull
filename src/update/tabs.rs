@@ -61,6 +61,7 @@ pub fn handle_tab_message(app: &mut PdfBullApp, message: Message) -> Task<Messag
             let tab_idx = app.tabs.len();
             app.tabs.push(tab);
             app.active_tab = tab_idx;
+            app.sync_tab_display_names();
             app.add_recent_file(&path);
 
             app.update(Message::DocumentOpened(Ok(data)))
@@ -131,6 +132,7 @@ pub fn handle_tab_message(app: &mut PdfBullApp, message: Message) -> Task<Messag
                 }
                 if !app.tabs.is_empty() {
                     app.tabs.pop();
+                    app.sync_tab_display_names();
                 }
                 Task::none()
             }
@@ -146,6 +148,7 @@ pub fn handle_tab_message(app: &mut PdfBullApp, message: Message) -> Task<Messag
             let doc_id = tab.id;
             app.tabs.push(tab);
             app.active_tab = app.tabs.len() - 1;
+            app.sync_tab_display_names();
             app.add_recent_file(&path);
 
             if let Some(engine) = &app.engine {
@@ -193,6 +196,7 @@ pub fn handle_tab_message(app: &mut PdfBullApp, message: Message) -> Task<Messag
             if app.active_tab >= app.tabs.len() && !app.tabs.is_empty() {
                 app.active_tab = app.tabs.len() - 1;
             }
+            app.sync_tab_display_names();
             app.save_session();
             Task::none()
         }
@@ -234,6 +238,7 @@ pub fn handle_tab_message(app: &mut PdfBullApp, message: Message) -> Task<Messag
                 app.active_tab = new_idx;
             }
 
+            app.sync_tab_display_names();
             app.save_session();
             Task::none()
         }
@@ -279,6 +284,7 @@ pub fn handle_tab_message(app: &mut PdfBullApp, message: Message) -> Task<Messag
                     let new_doc_id = new_tab.id;
                     app.tabs[idx] = new_tab;
                     app.active_tab = idx;
+                    app.sync_tab_display_names();
 
                     let path_s = path.to_string_lossy().to_string();
                     return Task::perform(

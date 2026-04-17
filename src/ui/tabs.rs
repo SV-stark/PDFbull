@@ -4,31 +4,15 @@ use iced::widget::{button, container, row, text};
 use iced::{Alignment, Color, Element, Length, Padding};
 use iced_draggable_tabs::DraggableTabs;
 
-thread_local! {
-    static TAB_NAMES: std::cell::RefCell<Vec<String>> = const { std::cell::RefCell::new(Vec::new()) };
-    static TAB_REFS: std::cell::RefCell<Vec<&'static str>> = const { std::cell::RefCell::new(Vec::new()) };
-}
-
-pub fn render(app: &PdfBullApp) -> Element<'_, crate::message::Message> {
-    let name_refs_slice: &'static [&'static str] = TAB_NAMES.with(|names_cell| {
-        TAB_REFS.with(|refs_cell| {
-            let mut names = names_cell.borrow_mut();
-            let mut refs = refs_cell.borrow_mut();
-            *names = app.tabs.iter().map(|t| t.name.clone()).collect();
-
-            *refs = names
-                .iter()
-                .map(|s| unsafe { std::mem::transmute::<&str, &'static str>(s.as_str()) })
-                .collect();
-
-            unsafe {
-                std::mem::transmute::<&[&'static str], &'static [&'static str]>(refs.as_slice())
-            }
-        })
-    });
-
+pub fn render<'a>(
+    app: &'a PdfBullApp,
+    // `&'static str` refs from `app.tab_display_names` (interned via Box::leak).
+    // Using `'static` here means the slice itself can live as long as needed,
+    // satisfying DraggableTabs<'a, _> which needs `&'a [&'a str]`.
+    tab_names: &'a [&'static str],
+) -> Element<'a, crate::message::Message> {
     let tabs = DraggableTabs::new(
-        name_refs_slice,
+        tab_names,
         app.active_tab,
         crate::message::Message::SwitchTab,
         crate::message::Message::TabReordered,

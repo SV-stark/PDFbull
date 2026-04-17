@@ -515,7 +515,10 @@ fn render_pdf_content(app: &PdfBullApp) -> Element<'_, crate::message::Message> 
     .into()
 }
 
-pub fn document_view(app: &PdfBullApp) -> Element<'_, crate::message::Message> {
+pub fn document_view<'a>(
+    app: &'a PdfBullApp,
+    tab_names: &'a [&'static str],
+) -> Element<'a, crate::message::Message> {
     let Some(tab) = app.current_tab() else {
         return container(text("Loading tab..."))
             .center_x(Length::Fill)
@@ -582,7 +585,7 @@ pub fn document_view(app: &PdfBullApp) -> Element<'_, crate::message::Message> {
         .into()
     } else {
         column![
-            tabs::render(app),
+            tabs::render(app, &tab_names),
             toolbar::render(app),
             render_page_nav(app),
             content

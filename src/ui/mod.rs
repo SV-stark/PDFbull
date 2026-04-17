@@ -23,7 +23,9 @@ pub fn view(app: &PdfBullApp) -> Element<'_, crate::message::Message> {
     let base = if app.tabs.is_empty() {
         welcome_view(app)
     } else {
-        document_view(app)
+        // tab_display_names contains &'static str (interned via Box::leak),
+        // so passing a slice of them is lifetime-safe.
+        document_view(app, &app.tab_display_names)
     };
 
     if app.show_metadata {
