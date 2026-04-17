@@ -138,11 +138,7 @@ impl PdfBullApp {
     /// Uses `Box::leak` to intern each unique tab name as a `'static str`.
     /// Acceptable memory cost: tab names are path stems — bounded and small.
     pub fn sync_tab_display_names(&mut self) {
-        self.tab_display_names = self
-            .tabs
-            .iter()
-            .map(|t| intern_str(&t.name))
-            .collect();
+        self.tab_display_names = self.tabs.iter().map(|t| intern_str(&t.name)).collect();
     }
 
     pub fn save_session(&mut self) {
