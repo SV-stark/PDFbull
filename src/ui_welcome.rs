@@ -118,7 +118,9 @@ pub fn welcome_view(app: &crate::app::PdfBullApp) -> Element<'_, crate::message:
                 text(storage::time_ago(file.last_opened))
                     .size(11)
                     .font(INTER_REGULAR)
-                    .style(|_| iced::widget::text::Style { color: Some(theme::COLOR_TEXT_SECONDARY) }),
+                    .style(|_| iced::widget::text::Style {
+                        color: Some(theme::COLOR_TEXT_SECONDARY)
+                    }),
             ]
             .spacing(16)
             .align_y(iced::Alignment::Center);
@@ -137,7 +139,9 @@ pub fn welcome_view(app: &crate::app::PdfBullApp) -> Element<'_, crate::message:
                 text("Recent Documents")
                     .size(14)
                     .font(INTER_BOLD)
-                    .style(|_| iced::widget::text::Style { color: Some(theme::COLOR_TEXT_DIM) }),
+                    .style(|_| iced::widget::text::Style {
+                        color: Some(theme::COLOR_TEXT_DIM)
+                    }),
                 Space::new().width(Length::Fill),
                 button(text("Clear History").size(12).font(INTER_REGULAR))
                     .on_press(crate::message::Message::ClearRecentFiles)
@@ -147,27 +151,60 @@ pub fn welcome_view(app: &crate::app::PdfBullApp) -> Element<'_, crate::message:
             .padding([0, 8]),
             Space::new().height(12),
             files,
-        ].into()
+        ]
+        .into()
     };
 
     let actions = row![
-        quick_action_card(icons::OPEN, "Open Document", "Pick a PDF to start reading", "Browse Files", crate::message::Message::OpenDocument),
-        quick_action_card(icons::MERGE, "Merge PDFs", "Combine multiple files easily", "Select Files", crate::message::Message::MergeDocuments(vec![])),
+        quick_action_card(
+            icons::OPEN,
+            "Open Document",
+            "Pick a PDF to start reading",
+            "Browse Files",
+            crate::message::Message::OpenDocument
+        ),
+        quick_action_card(
+            icons::MERGE,
+            "Merge PDFs",
+            "Combine multiple files easily",
+            "Select Files",
+            crate::message::Message::MergeDocuments(vec![])
+        ),
     ]
     .spacing(24)
     .width(Length::Fill);
 
     let content = column![
         column![
-            text("PDFbull").size(42).font(INTER_BOLD).style(|_| iced::widget::text::Style { color: Some(theme::COLOR_TEXT_PRIMARY) }),
-            text("FAST • LIGHT • SECURE").size(12).font(INTER_BOLD).style(|_| iced::widget::text::Style { color: Some(theme::COLOR_ACCENT) }),
-        ].align_x(Alignment::Center).spacing(8),
+            text("PDFbull")
+                .size(42)
+                .font(INTER_BOLD)
+                .style(|_| iced::widget::text::Style {
+                    color: Some(theme::COLOR_TEXT_PRIMARY)
+                }),
+            text("FAST • LIGHT • SECURE")
+                .size(12)
+                .font(INTER_BOLD)
+                .style(|_| iced::widget::text::Style {
+                    color: Some(theme::COLOR_ACCENT)
+                }),
+        ]
+        .align_x(Alignment::Center)
+        .spacing(8),
         Space::new().height(48),
-        custom_card(column![
-            text("Getting Started").size(20).font(INTER_BOLD).style(|_| iced::widget::text::Style { color: Some(theme::COLOR_TEXT_PRIMARY) }),
-            Space::new().height(24),
-            actions,
-        ].align_x(Alignment::Center)),
+        custom_card(
+            column![
+                text("Getting Started")
+                    .size(20)
+                    .font(INTER_BOLD)
+                    .style(|_| iced::widget::text::Style {
+                        color: Some(theme::COLOR_TEXT_PRIMARY)
+                    }),
+                Space::new().height(24),
+                actions,
+            ]
+            .align_x(Alignment::Center)
+        ),
         Space::new().height(32),
         recent_section,
     ]

@@ -118,18 +118,21 @@ pub fn handle_tab_message(app: &mut PdfBullApp, message: Message) -> Task<Messag
                 app.render_visible_pages()
             }
             Err(e) => {
-                tracing::error!("Error opening document: {e}");
                 if e == "Engine died" || e == "Channel closed" {
+                    tracing::error!("Error opening document: {e}");
                     app.engine = None;
                     app.status_message = Some(
                         "PDF engine crashed. Please try your action again to restart it.".into(),
                     );
                 } else if e.to_string().to_lowercase().contains("pdfium") {
+                    tracing::error!("Error opening document: {e}");
                     app.engine = None;
                     app.status_message = Some("PDF engine missing (pdfium.dll). Please download it and place it next to the executable.".into());
                 } else if e != "Cancelled" {
+                    tracing::error!("Error opening document: {e}");
                     app.status_message = Some(format!("Error opening document: {e}"));
                 }
+                // "Cancelled" is a normal user action — no log, no status message.
                 if !app.tabs.is_empty() {
                     app.tabs.pop();
                     app.sync_tab_display_names();

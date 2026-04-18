@@ -25,6 +25,7 @@ src-tauri/resources/
 
 # Rust / Cargo
 **/target/
+target_v2/
 **/Cargo.lock
 *.rs.bk
 .cargo/
