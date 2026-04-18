@@ -23,7 +23,7 @@ pub fn time_ago(unix_secs: u64) -> String {
             } else {
                 format!("{m} mins ago")
             }
-        } else if secs < 86400 {
+        } else if secs < 86_400 {
             let h = secs / 3600;
             if h == 1 {
                 "1 hour ago".into()
@@ -33,7 +33,7 @@ pub fn time_ago(unix_secs: u64) -> String {
         } else if secs < 172_800 {
             "yesterday".into()
         } else {
-            let d = secs / 86400;
+            let d = secs / 86_400;
             if d < 30 {
                 format!("{d} days ago")
             } else {
@@ -243,21 +243,21 @@ mod tests {
 
     #[test]
     fn test_time_ago_hours() {
-        let three_hours_ago = OffsetDateTime::now_utc().unix_timestamp() as u64 - 10800;
+        let three_hours_ago = OffsetDateTime::now_utc().unix_timestamp() as u64 - 10_800;
         let result = time_ago(three_hours_ago);
         assert!(result.contains("hours"));
     }
 
     #[test]
     fn test_time_ago_yesterday() {
-        let yesterday = OffsetDateTime::now_utc().unix_timestamp() as u64 - 86400;
+        let yesterday = OffsetDateTime::now_utc().unix_timestamp() as u64 - 86_400;
         let result = time_ago(yesterday);
         assert_eq!(result, "yesterday");
     }
 
     #[test]
     fn test_time_ago_days() {
-        let five_days_ago = OffsetDateTime::now_utc().unix_timestamp() as u64 - 432000;
+        let five_days_ago = OffsetDateTime::now_utc().unix_timestamp() as u64 - 432_000;
         let result = time_ago(five_days_ago);
         assert!(result.contains("days"));
     }
