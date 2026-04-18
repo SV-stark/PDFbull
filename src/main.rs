@@ -30,13 +30,9 @@ fn main() -> iced::Result {
     .font(include_bytes!("../src/assets/fonts/Inter-Bold.ttf"))
     .font(include_bytes!("../src/assets/fonts/lucide.ttf"))
     .font(include_bytes!("../src/assets/fonts/Phosphor.ttf"))
-    .theme(|app: &app::PdfBullApp| {
-        match app.settings.theme {
-            pdfbull::models::AppTheme::Dark => iced::Theme::Dark,
-            pdfbull::models::AppTheme::Light | pdfbull::models::AppTheme::System => {
-                iced::Theme::Light
-            } // Will be resolved to light/dark in app init
-        }
+    .theme(|app: &app::PdfBullApp| match app.settings.theme {
+        pdfbull::models::AppTheme::Dark => iced::Theme::Dark,
+        pdfbull::models::AppTheme::Light | pdfbull::models::AppTheme::System => iced::Theme::Light,
     })
     .subscription(app::PdfBullApp::subscription)
     .window(iced::window::Settings {

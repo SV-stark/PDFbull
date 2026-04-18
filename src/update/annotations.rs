@@ -17,7 +17,7 @@ pub fn handle_annotation_message(app: &mut PdfBullApp, message: Message) -> Task
                     page,
                     start: (x, y),
                     current: (x, y),
-                    kind: kind.clone(),
+                    kind: *kind,
                 });
             }
             Task::none()

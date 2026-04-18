@@ -585,7 +585,7 @@ pub fn document_view<'a>(
         .into()
     } else {
         column![
-            tabs::render(app, &tab_names),
+            tabs::render(app, tab_names),
             toolbar::render(app),
             render_page_nav(app),
             container(content).style(|_| iced::widget::container::Style {

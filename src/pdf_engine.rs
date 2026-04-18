@@ -752,15 +752,14 @@ impl<'a> DocumentStore<'a> {
                 pixel[1] = pixel[1].saturating_add(20);
                 pixel[2] = pixel[2].saturating_add(20);
             }
-            RenderFilter::NoShadow => {
+            RenderFilter::NoShadow
                 if pixel[0] > NO_SHADOW_THRESHOLD
                     && pixel[1] > NO_SHADOW_THRESHOLD
-                    && pixel[2] > NO_SHADOW_THRESHOLD
-                {
-                    pixel[0] = 255;
-                    pixel[1] = 255;
-                    pixel[2] = 255;
-                }
+                    && pixel[2] > NO_SHADOW_THRESHOLD =>
+            {
+                pixel[0] = 255;
+                pixel[1] = 255;
+                pixel[2] = 255;
             }
             _ => {}
         });

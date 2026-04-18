@@ -76,10 +76,8 @@ pub fn handle_misc_message(app: &mut PdfBullApp, message: Message) -> Task<Messa
                         }
                         Key::Character(c) => match c.as_str() {
                             "o" if modifiers.command() => return app.update(Message::OpenDocument),
-                            "p" if modifiers.command() => {
-                                if !app.tabs.is_empty() {
-                                    return app.update(Message::Print);
-                                }
+                            "p" if modifiers.command() && !app.tabs.is_empty() => {
+                                return app.update(Message::Print);
                             }
                             "s" if modifiers.command() => {
                                 return app.update(Message::SaveAnnotations);
@@ -93,10 +91,8 @@ pub fn handle_misc_message(app: &mut PdfBullApp, message: Message) -> Task<Messa
                             "0" if modifiers.command() => return app.update(Message::ResetZoom),
                             "=" | "+" if modifiers.command() => return app.update(Message::ZoomIn),
                             "-" if modifiers.command() => return app.update(Message::ZoomOut),
-                            "w" if modifiers.command() => {
-                                if !app.tabs.is_empty() {
-                                    return app.update(Message::CloseTab(app.active_tab));
-                                }
+                            "w" if modifiers.command() && !app.tabs.is_empty() => {
+                                return app.update(Message::CloseTab(app.active_tab));
                             }
                             "b" if modifiers.command() => {
                                 return app.update(Message::ToggleSidebar);
@@ -106,10 +102,10 @@ pub fn handle_misc_message(app: &mut PdfBullApp, message: Message) -> Task<Messa
                             }
                             _ => {}
                         },
-                        Key::Named(iced::keyboard::key::Named::Escape) => {
-                            if app.annotation_mode.is_some() {
-                                return app.update(Message::SetAnnotationMode(None));
-                            }
+                        Key::Named(iced::keyboard::key::Named::Escape)
+                            if app.annotation_mode.is_some() =>
+                        {
+                            return app.update(Message::SetAnnotationMode(None));
                         }
                         _ => {}
                     }
