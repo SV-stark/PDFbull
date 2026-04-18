@@ -1,0 +1,20 @@
+﻿
+{"reason":"compiler-message","package_id":"path+file:///E:/PDFbull#pdfbull@0.2.0","manifest_path":"E:\\PDFbull\\Cargo.toml","target"
+:{"kind":["bin"],"crate_types":["bin"],"name":"pdfbull","src_path":"E:\\PDFbull\\src\\main.rs","edition":"2021","doc":true,"doctest"
+:false,"test":true},"message":{"rendered":"warning: long literal lacking separators\n  --> src\\storage.rs:29:26\n   |\n29 |        
+ } else if secs < 172800 {\n   |                          ^^^^^^ help: consider: `172_800`\n   |\n   = help: for further 
+information visit https://rust-lang.github.io/rust-clippy/rust-1.94.0/index.html#unreadable_literal\n   = note: `-W 
+clippy::unreadable-literal` implied by `-W clippy::pedantic`\n   = help: to override `-W clippy::pedantic` add `#[allow(clippy::unre
+adable_literal)]`\n\n","$message_type":"diagnostic","children":[{"children":[],"code":null,"level":"help","message":"for further 
+information visit https://rust-lang.github.io/rust-clippy/rust-1.94.0/index.html#unreadable_literal","rendered":null,"spans":[]},{"c
+hildren":[],"code":null,"level":"note","message":"`-W clippy::unreadable-literal` implied by `-W 
+clippy::pedantic`","rendered":null,"spans":[]},{"children":[],"code":null,"level":"help","message":"to override `-W 
+clippy::pedantic` add `#[allow(clippy::unreadable_literal)]`","rendered":null,"spans":[]},{"children":[],"code":null,"level":"help",
+"message":"consider","rendered":null,"spans":[{"byte_end":888,"byte_start":882,"column_end":32,"column_start":26,"expansion":null,"f
+ile_name":"src\\storage.rs","is_primary":true,"label":null,"line_end":29,"line_start":29,"suggested_replacement":"172_800","suggesti
+on_applicability":"MaybeIncorrect","text":[{"highlight_end":32,"highlight_start":26,"text":"        } else if secs < 172800 
+{"}]}]}],"level":"warning","message":"long literal lacking separators","spans":[{"byte_end":888,"byte_start":882,"column_end":32,"co
+lumn_start":26,"expansion":null,"file_name":"src\\storage.rs","is_primary":true,"label":null,"line_end":29,"line_start":29,"suggeste
+d_replacement":null,"suggestion_applicability":null,"text":[{"highlight_end":32,"highlight_start":26,"text":"        } else if secs 
+< 172800 {"}]}],"code":{"code":"clippy::unreadable_literal","explanation":null}}}
+{"reason":"compiler-message","package_id":"path+file:///E:/PDFbull#pdfbull@0.2.0","manifest_path":"E:\\PDFbull\\Cargo.toml","target"
