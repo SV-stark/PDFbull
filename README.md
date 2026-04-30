@@ -29,39 +29,35 @@ PDFbull is built from the ground up for speed, leveraging modern Rust ecosystem 
 ## 🛠️ Feature Suite
 
 ### ✏️ Advanced Annotations
-- **Professional Tools**: Highlighting, geometric shapes (Rectangles, Circles, Lines, Arrows), Text Boxes, and Sticky Notes.
-- **Layer Management**: Organize annotations across multiple layers with independent visibility toggles.
-- **Robust History**: Full Undo/Redo stack (`Ctrl+Z` / `Ctrl+Y`) for complex editing sessions.
+- **Professional Tools**: Highlighting, Rectangles, Text Boxes, and Redaction.
+- **Robust History**: Basic Undo/Redo stack (`Ctrl+Z` / `Ctrl+Y`) for annotation lifecycle.
 - **Persistence**: Hybrid saving strategy with local storage fallbacks and manual `Ctrl+S` export.
 - **Export Annotations**: Export all annotations as JSON for backup or sharing.
 
 ### 📐 Productivity Utilities
 - **Fast Search**: Leverages PDFium's structured text engine for instantaneous document-wide searching with result navigation.
-- **Tabbed Interface**: Multi-document management with tab-based navigation and drag-and-drop support.
+- **Tabbed Interface**: Multi-document management with tab-based navigation.
 - **Recent Files**: Quick access dropdown for recently opened documents.
 - **Page Bookmarks**: Mark important pages with `Ctrl+D` for quick reference.
 - **Smart Formatting**: 
     - **Auto-Crop**: Dynamically removes whitespace margins for optimized reading on smaller displays.
-    - **Batch Mode**: Infrastructure for processing multiple documents (experimental).
 - **Data Export**:
     - **High-Fidelity Image Export**: Save any page as a crisp PNG.
     - **Text Extraction**: One-click extraction of document text to `.txt` format.
-- **Document Optimization**: Built-in PDF compression and form field detection.
-- **Scanner Mode**: Professional document scanning filters (Grayscale, B&W, Lighten, Eco, No Shadow) with adjustable intensity.
+- **Document Features**: Built-in form field detection and data entry.
+- **Real-time Filters**: Professional document rendering filters (Grayscale, Inverted, Lighten, Eco, No Shadow).
 
 ### 🎨 Visual Experience
-- **Adaptive Themes**: Seamlessly switch between Light, Dark, and High-Contrast modes with customizable accent colors.
-- **Real-time Filters**: Apply Greyscale or Inverted filters directly to the rendering pipeline for enhanced night reading.
+- **Adaptive Themes**: Seamlessly switch between Light and Dark modes with customizable accent colors.
 - **Fullscreen Mode**: Toggle immersive reading with `F11`.
-- **Virtual Scrolling**: Efficient rendering of large documents with on-demand page loading.
-- **Thumbnail Navigation**: Visual page overview in the right sidebar for quick navigation.
+- **Manual Virtualization**: Efficient rendering of large documents with on-demand page loading.
+- **Thumbnail Navigation**: Visual page overview in the left sidebar for quick navigation.
 - **Page Rotation**: Rotate pages in 90° increments for comfortable viewing.
 
 ### ⚙️ Customization & Settings
-- **Comprehensive Settings Dialog**: Fine-tune appearance, behavior, performance, file handling, and annotation defaults.
+- **Settings Dialog**: Fine-tune appearance, behavior, performance, and file handling.
 - **Keyboard Help Modal**: Built-in shortcut reference accessible via `?` or `F1`.
 - **Configurable Auto-Save**: Adjustable auto-save intervals for annotation safety.
-- **Session Restoration**: Optional automatic reopening of last session on startup.
 
 ---
 
@@ -72,7 +68,7 @@ PDFbull is built from the ground up for speed, leveraging modern Rust ecosystem 
 | **Document Management** | `Ctrl + O` (Open), `Ctrl + S` (Save), `Ctrl + E` (Export Image) |
 | **View Control** | `Ctrl + B` (Sidebar), `F11` (Fullscreen), `Ctrl + 0` (Reset Zoom) |
 | **Navigation** | `Arrow Keys`, `PgUp/PgDn`, `Home/End`, `Space` |
-| **Speed Dial (Tools)** | `H` (Highlight), `R` (Rectangle), `C` (Circle), `L` (Line), `A` (Arrow), `T` (Text), `N` (Note) |
+| **Speed Dial (Tools)** | `H` (Highlight), `R` (Rectangle), `T` (Text) |
 | **History** | `Ctrl + Z` (Undo), `Ctrl + Y` (Redo) |
 
 ---
@@ -93,48 +89,53 @@ PDFbull is built from the ground up for speed, leveraging modern Rust ecosystem 
 | Feature | PDFbull 🐂 | Adobe Acrobat Reader DC 🔴 | Chrome PDF Viewer 🔵 | Sumatra PDF 🟡 |
 | :--- | :--- | :--- | :--- | :--- |
 | **Engine** | PDFium (Rust) | Proprietary | PDFium (C++) | MuPDF (C++) |
-| **Startup Time** | **~50ms** | ~1.5-2.5s | ~300ms | ~50ms |
-| **RAM (10-page PDF)** | **~55MB** | ~280-350MB | ~180-250MB | ~55-80MB |
-| **RAM (50-page PDF)** | **~75MB** | ~350-450MB | ~200-280MB | ~60-100MB |
-| **Page Render Time** | **~8ms** | ~50-150ms | ~30-80ms | ~10-25ms |
-| **Filter Processing** | **~15ms (parallel)** | N/A | N/A | N/A |
-| **Architecture** | **Iced + Rust** | Electron-like | Browser Embedded | Native C++ |
+| **Startup Time** | **~150ms** | ~1.5-2.5s | ~300ms | ~50ms |
+| **RAM (10-page PDF)** | **~85MB** | ~280-350MB | ~180-250MB | ~55-80MB |
+| **RAM (50-page PDF)** | **~120MB** | ~350-450MB | ~200-280MB | ~60-100MB |
+| **Page Render Time** | **~12ms** | ~50-150ms | ~30-80ms | ~10-25ms |
+| **Filter Processing** | **~20ms (parallel)** | N/A | N/A | N/A |
+| **Architecture** | **Iced + Rust** | Native/Electron-like | Browser Embedded | Native C++ |
 | **Rendering** | **Zero-Copy Stream** | DOM-based | Canvas-based | Native Raster |
-| **Annotations** | **Multi-Layer + Export** | Full Enterprise Suite | Minimal (Highlight only) | Read-only |
+| **Annotations** | **Highlights + Basic Shapes** | Full Enterprise Suite | Minimal (Highlight only) | Read-only |
 | **Search** | **Document-wide + Nav** | Advanced (OCR) | Page-limited | Basic Text Search |
 | **Tabbed Interface** | **✓ Multi-document** | ✓ (Paid Pro) | ✗ (New tab only) | ✗ |
-| **Scanner Mode** | **✓ 6 Filters** | ✓ (Paid Pro) | ✗ | ✗ |
-| **Form Filling** | **Detection Only** | Full Interactive | Basic | Read-only |
+| **Filters** | **✓ 6 Filters** | ✓ (Paid Pro) | ✗ | ✗ |
+| **Form Filling** | **Detection + Input** | Full Interactive | Basic | Read-only |
 | **Privacy** | **100% Local** | Cloud Sync Available | Google Analytics | 100% Local |
-| **Cross-Platform** | Windows (Linux/Mac planned) | Windows/Mac | All Platforms | Windows/Linux |
 | **License** | **MIT (Free)** | Freemium | Free | GPL v3 (Free) |
 
-### Performance Benchmarks
+---
 
-| Operation | Time | Notes |
-| :--- | :--- | :--- |
-| **App Startup** | **~50ms** | Cold start to interactive |
-| **10-page PDF Open** | **~120ms** | Including initial page render |
-| **Page Turn** | **~8ms** | Cached page display |
-| **Zoom (1x → 2x)** | **~12ms** | Re-render with filter |
-| **Grayscale Filter** | **~15ms** | Rayon parallel (4 cores) |
-| **Full Document Search** | **~200ms** | 50-page document |
-| **Memory per Page** | **~0.4MB** | RGBA at 1x scale |
+## 🚧 Work in Progress (Coming Soon)
+
+### ✏️ Advanced Annotations
+- **Geometric Shapes**: Implementation for Circles, Lines, and Arrows.
+- **Sticky Notes**: Contextual comments and sticky note annotations.
+- **Layer Management**: Independent visibility toggles and z-index ordering for annotations.
+
+### 📐 Productivity
+- **Batch Mode**: Infrastructure for processing multiple documents simultaneously.
+- **Session Restoration**: Automatic reopening of last session (tabs and scroll positions) on startup.
+- **PDF Optimization**: Built-in document compression and metadata sanitization.
+
+### 🎨 Visuals & UX
+- **High-Contrast Theme**: Specialized high-contrast mode for accessibility.
+- **True Virtual Scrolling**: Enhanced engine for infinite-feeling scrolling in massive documents.
+- **Drag & Drop**: Native file and tab drag-and-drop support.
 
 ---
 
 ## 🗺️ Roadmap
 
 - [x] **High-Performance Rendering Engine** (Tokio + Rayon integration)
-- [ ] **Advanced Annotation System** (Shapes, Text, Highlights - Infrastructure ready, implementation pending)
+- [x] **Basic Annotation System** (Highlights, Rectangles, Text)
 - [x] **Zero-Copy Architecture** implementation
 - [x] **Migration to Iced UI** (Replaced Slint with Iced)
+- [ ] **Advanced Shapes & Sticky Notes**
 - [ ] **OCR Capability**: Built-in Optical Character Recognition for scanned documents.
-- [/] **Tabbed Interface 2.0**: Enhanced multi-document management with session recovery (Skeletal implementation).
 - [ ] **Digital Signatures**: Professional cryptographic signing and verification.
-- [ ] **PDF Optimization**: Advanced structural compression and metadata sanitization.
 - [ ] **Mobile Layout**: Responsive UI for small-screen Windows tablets.
-- [ ] **Cross-Platform Support**: Native binaries for Linux (`x86_64-unknown-linux-gnu`) and macOS (`aarch64-apple-darwin`).
+- [ ] **Cross-Platform Support**: Native binaries for Linux and macOS.
 
 ---
 
