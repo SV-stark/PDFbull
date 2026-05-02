@@ -460,7 +460,11 @@ impl DocumentTab {
             y = page_bottom + scaled_spacing;
         }
 
-        self.view_state.visible_range = (start, end + 1);
+        if !found_start {
+            self.view_state.visible_range = (0, 0);
+        } else {
+            self.view_state.visible_range = (start, end + 1);
+        }
     }
 
     pub fn get_visible_pages(&self) -> std::collections::HashSet<usize> {

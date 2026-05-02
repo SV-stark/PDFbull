@@ -255,9 +255,10 @@ impl<'a> DocumentStore<'a> {
             .documents
             .get(&doc_id)
             .ok_or(PdfError::EngineError(EngineErrorKind::DocumentNotFound))?;
+        let page_num_u16 = u16::try_from(page_num).map_err(|_| PdfError::PageNotFound(page_num))?;
         let page = doc
             .pages()
-            .get(page_num as u16)
+            .get(page_num_u16)
             .map_err(|_| PdfError::PageNotFound(page_num))?;
 
         let mut target_w = (page.width().value * options.scale) as i32;
@@ -463,9 +464,10 @@ impl<'a> DocumentStore<'a> {
         };
 
         for ann in annotations {
+            let page_num_u16 = u16::try_from(ann.page).map_err(|_| PdfError::PageNotFound(ann.page))?;
             let mut page = doc
                 .pages()
-                .get(ann.page as u16)
+                .get(page_num_u16)
                 .map_err(|_| PdfError::PageNotFound(ann.page))?;
             let page_height = page.height().value;
             let objects = page.objects_mut();
@@ -597,9 +599,10 @@ impl<'a> DocumentStore<'a> {
             .documents
             .get(&doc_id)
             .ok_or(PdfError::EngineError(EngineErrorKind::DocumentNotFound))?;
+        let page_num_u16 = u16::try_from(page_num).map_err(|_| PdfError::PageNotFound(page_num as usize))?;
         let page = doc
             .pages()
-            .get(page_num as u16)
+            .get(page_num_u16)
             .map_err(|_| PdfError::PageNotFound(page_num as usize))?;
 
         let render_config = PdfRenderConfig::new()
@@ -1009,7 +1012,7 @@ impl<'a> DocumentStore<'a> {
             .replace('(', "\\(")
             .replace(')', "\\)");
         let content =
-            format!("BT /F1 48 Tf 0.7 0.7 0.7 rg 0.5 Tm 200 400 Td 45 Tz ({escaped}) Tj ET\n");
+            format!("BT /F1 48 Tf 0.7 0.7 0.7 rg 1 0 0 1 200 400 Tm ({escaped}) Tj ET\n");
         let watermark_stream = lopdf::Stream::new(lopdf::Dictionary::new(), content.into_bytes());
 
         for &page_id in &pages {
@@ -1396,14 +1399,14 @@ mod tests {
 
     #[test]
     fn test_detect_content_bbox_parallel_empty() {
-        let data = vec![255u8; 40];
+        let data = vec![255u8; 400];
         let result = DocumentStore::detect_content_bbox_parallel(&data, 10, 10);
         assert!(result.is_none());
     }
 
     #[test]
     fn test_detect_content_bbox_parallel_full() {
-        let mut data = vec![255u8; 40];
+        let mut data = vec![255u8; 400];
         data[0] = 100;
         data[4] = 100;
         let result = DocumentStore::detect_content_bbox_parallel(&data, 10, 10);

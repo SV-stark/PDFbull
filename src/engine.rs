@@ -7,13 +7,11 @@ use tokio::sync::mpsc;
 #[derive(Debug, Clone)]
 pub struct EngineState {
     pub cmd_tx: mpsc::UnboundedSender<PdfCommand>,
-    pub active_workers: Arc<std::sync::atomic::AtomicUsize>,
 }
 
 #[must_use]
 pub fn spawn_engine_thread(cache_size: u64, max_memory_mb: u64) -> EngineState {
     let (cmd_tx, mut cmd_rx) = mpsc::unbounded_channel::<PdfCommand>();
-    let active_workers = Arc::new(std::sync::atomic::AtomicUsize::new(0));
 
     let render_cache: SharedRenderCache = create_render_cache(cache_size, max_memory_mb);
 
@@ -134,6 +132,5 @@ pub fn spawn_engine_thread(cache_size: u64, max_memory_mb: u64) -> EngineState {
 
     EngineState {
         cmd_tx,
-        active_workers,
     }
 }
