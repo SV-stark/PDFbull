@@ -460,10 +460,10 @@ impl DocumentTab {
             y = page_bottom + scaled_spacing;
         }
 
-        if !found_start {
-            self.view_state.visible_range = (0, 0);
-        } else {
+        if found_start {
             self.view_state.visible_range = (start, end + 1);
+        } else {
+            self.view_state.visible_range = (0, 0);
         }
     }
 

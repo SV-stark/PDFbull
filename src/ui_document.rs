@@ -17,21 +17,17 @@ fn render_page_nav(app: &PdfBullApp) -> Element<'_, crate::message::Message> {
     let rendering_count = app.rendering_set.len();
     let loading_indicator = if rendering_count > 0 {
         row![
-            container(
-                text(format!("{}", rendering_count))
-                    .font(INTER_BOLD)
-                    .size(11)
-            )
-            .padding([2, 5])
-            .style(|_| iced::widget::container::Style {
-                background: Some(theme::COLOR_ACCENT.into()),
-                text_color: Some(Color::WHITE),
-                border: iced::Border {
-                    radius: theme::BORDER_RADIUS_FULL.into(),
+            container(text(format!("{rendering_count}")).font(INTER_BOLD).size(11))
+                .padding([2, 5])
+                .style(|_| iced::widget::container::Style {
+                    background: Some(theme::COLOR_ACCENT.into()),
+                    text_color: Some(Color::WHITE),
+                    border: iced::Border {
+                        radius: theme::BORDER_RADIUS_FULL.into(),
+                        ..Default::default()
+                    },
                     ..Default::default()
-                },
-                ..Default::default()
-            }),
+                }),
             text("Rendering...")
                 .size(12)
                 .font(INTER_REGULAR)
