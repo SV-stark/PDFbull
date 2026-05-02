@@ -57,7 +57,7 @@ pub fn handle_render_message(app: &mut PdfBullApp, message: Message) -> Task<Mes
                 if !needs_render
                     || app
                         .rendering_set
-                        .contains(&crate::app::RenderTarget::Page(page_idx))
+                        .contains(&crate::app::RenderTarget::Page(doc_id, page_idx))
                 {
                     return Task::none();
                 }
@@ -73,7 +73,7 @@ pub fn handle_render_message(app: &mut PdfBullApp, message: Message) -> Task<Mes
             };
 
             app.rendering_set
-                .insert(crate::app::RenderTarget::Page(page_idx));
+                .insert(crate::app::RenderTarget::Page(doc_id, page_idx));
             app.rendering_count += 1;
 
             let Some(engine) = &app.engine else {
@@ -102,15 +102,15 @@ pub fn handle_render_message(app: &mut PdfBullApp, message: Message) -> Task<Mes
                         .await
                         .unwrap_or(Err(crate::models::PdfError::ChannelClosed))
                 },
-                move |res| Message::PageRendered(page_idx, zoom, res),
+                move |res| Message::PageRendered(doc_id, page_idx, zoom, res),
             )
         }
-        Message::PageRendered(page_idx, scale, result) => {
+        Message::PageRendered(doc_id, page_idx, scale, result) => {
             app.rendering_count = app.rendering_count.saturating_sub(1);
             app.rendering_set
-                .remove(&crate::app::RenderTarget::Page(page_idx));
+                .remove(&crate::app::RenderTarget::Page(doc_id, page_idx));
 
-            if let Some(tab) = app.current_tab_mut() {
+            if let Some(tab) = app.tabs.iter_mut().find(|t| t.id == doc_id) {
                 match result {
                     Ok(res) => {
                         let width = res.width;
@@ -143,12 +143,12 @@ pub fn handle_render_message(app: &mut PdfBullApp, message: Message) -> Task<Mes
             }
             app.render_visible_pages()
         }
-        Message::ThumbnailRendered(page_idx, scale, result) => {
+        Message::ThumbnailRendered(doc_id, page_idx, scale, result) => {
             app.rendering_count = app.rendering_count.saturating_sub(1);
             app.rendering_set
-                .remove(&crate::app::RenderTarget::Thumbnail(page_idx));
+                .remove(&crate::app::RenderTarget::Thumbnail(doc_id, page_idx));
 
-            if let Some(tab) = app.current_tab_mut() {
+            if let Some(tab) = app.tabs.iter_mut().find(|t| t.id == doc_id) {
                 let expected_thumb_zoom = (120.0 / tab.page_width.max(1.0)).min(5.0);
                 if (expected_thumb_zoom - scale).abs() > 0.001 {
                     return Task::none();

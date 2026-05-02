@@ -449,8 +449,9 @@ impl<'a> DocumentStore<'a> {
         let annotation_font = if let Some(handle) = font_handle {
             if let Ok(font_data) = handle.load() {
                 if let Some(data) = font_data.copy_font_data() {
-                    let _ = doc.fonts_mut().load_type1_from_bytes(&data, false);
-                    doc.fonts_mut().helvetica()
+                    doc.fonts_mut()
+                        .load_type1_from_bytes(&data, false)
+                        .unwrap_or_else(|_| doc.fonts_mut().helvetica())
                 } else {
                     doc.fonts_mut().helvetica()
                 }
@@ -876,9 +877,18 @@ impl<'a> DocumentStore<'a> {
                             group_name: None,
                         },
                         PdfFormFieldType::ComboBox | PdfFormFieldType::ListBox => {
+                            let (options, selected_index) =
+                                if let Some(choice) = form_field.as_choice_field() {
+                                    (
+                                        choice.options().iter().map(|o| o.text()).collect(),
+                                        choice.selected_option_index(),
+                                    )
+                                } else {
+                                    (Vec::new(), None)
+                                };
                             FormFieldVariant::ComboBox {
-                                options: Vec::new(),
-                                selected_index: None,
+                                options,
+                                selected_index,
                             }
                         }
                         _ => FormFieldVariant::Text {

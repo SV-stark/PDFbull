@@ -48,18 +48,21 @@ pub fn handle_nav_message(app: &mut PdfBullApp, message: Message) -> Task<Messag
         Message::ZoomIn => {
             if let Some(tab) = app.current_tab_mut() {
                 tab.zoom = (tab.zoom * 1.1).min(5.0);
+                tab.view_state.rendered_pages.clear();
             }
             app.render_visible_pages()
         }
         Message::ZoomOut => {
             if let Some(tab) = app.current_tab_mut() {
                 tab.zoom = (tab.zoom / 1.1).max(0.25);
+                tab.view_state.rendered_pages.clear();
             }
             app.render_visible_pages()
         }
         Message::SetZoom(zoom) => {
             if let Some(tab) = app.current_tab_mut() {
                 tab.zoom = zoom.clamp(0.25, 5.0);
+                tab.view_state.rendered_pages.clear();
             }
             app.render_visible_pages()
         }

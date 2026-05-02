@@ -41,8 +41,8 @@ pub mod icons {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum RenderTarget {
-    Page(usize),
-    Thumbnail(usize),
+    Page(crate::models::DocumentId, usize),
+    Thumbnail(crate::models::DocumentId, usize),
 }
 
 pub struct PdfBullApp {
@@ -198,7 +198,7 @@ impl PdfBullApp {
         };
 
         for page_idx in visible_pages {
-            let target = RenderTarget::Page(page_idx);
+            let target = RenderTarget::Page(doc_id, page_idx);
 
             let is_rendered = rendered_pages
                 .get(&page_idx)
@@ -235,7 +235,7 @@ impl PdfBullApp {
                         .unwrap_or_else(|_| Err(crate::models::PdfError::EngineDied));
                     (page_idx, current_scale, res)
                 },
-                |(page_idx, scale, res)| Message::PageRendered(page_idx, scale, res),
+                move |(page_idx, scale, res)| Message::PageRendered(doc_id, page_idx, scale, res),
             ));
         }
 
@@ -252,7 +252,7 @@ impl PdfBullApp {
             };
 
             for page_idx in visible_thumbnails {
-                let target = RenderTarget::Thumbnail(page_idx);
+                let target = RenderTarget::Thumbnail(doc_id, page_idx);
                 let is_thumb_rendered = rendered_thumbnails.contains(&page_idx);
 
                 if is_thumb_rendered || self.rendering_set.contains(&target) {
@@ -278,7 +278,7 @@ impl PdfBullApp {
                         };
                         (page_idx, thumb_zoom, res)
                     },
-                    |(page_idx, scale, res)| Message::ThumbnailRendered(page_idx, scale, res),
+                    move |(page_idx, scale, res)| Message::ThumbnailRendered(doc_id, page_idx, scale, res),
                 ));
             }
         }

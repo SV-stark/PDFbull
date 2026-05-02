@@ -14,28 +14,25 @@ pub fn time_ago(unix_secs: u64) -> String {
             return "unknown".into();
         }
 
-        if secs < 60 {
-            "just now".into()
-        } else if secs < 3600 {
-            let m = secs / 60;
-            if m == 1 {
-                "1 min ago".into()
+        let today = now.date();
+        let past_date = past.date();
+
+        if past_date == today {
+            if secs < 60 {
+                "just now".into()
+            } else if secs < 3600 {
+                let m = secs / 60;
+                format!("{m} min{} ago", if m == 1 { "" } else { "s" })
             } else {
-                format!("{m} mins ago")
+                let h = secs / 3600;
+                format!("{h} hour{} ago", if h == 1 { "" } else { "s" })
             }
-        } else if secs < 86_400 {
-            let h = secs / 3600;
-            if h == 1 {
-                "1 hour ago".into()
-            } else {
-                format!("{h} hours ago")
-            }
-        } else if secs < 172_800 {
+        } else if past_date == today.previous_day().unwrap_or(today) {
             "yesterday".into()
         } else {
-            let d = secs / 86_400;
+            let d = (today - past_date).whole_days();
             if d < 30 {
-                format!("{d} days ago")
+                format!("{d} day{} ago", if d == 1 { "" } else { "s" })
             } else {
                 let format =
                     time::format_description::parse("[month repr:short] [day], [year]").unwrap();
