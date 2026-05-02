@@ -5,10 +5,7 @@ use crate::ui;
 use crate::update::handle_message;
 use iced::futures::SinkExt;
 use iced::{Element, Font, Task, animation};
-use std::sync::{Mutex, OnceLock};
 use std::time::Instant;
-
-
 
 pub const INTER_REGULAR: Font = Font::with_name("Inter Regular");
 pub const INTER_BOLD: Font = Font::with_name("Inter Bold");
@@ -66,7 +63,6 @@ pub struct PdfBullApp {
     pub annotation_drag: Option<crate::models::AnnotationDrag>,
     pub engine: Option<EngineState>,
     pub loaded: bool,
-    pub rendering_count: usize,
     pub rendering_set: std::collections::HashSet<RenderTarget>,
     pub modifiers: iced::keyboard::Modifiers,
     pub last_session_save: Instant,
@@ -96,7 +92,6 @@ impl Default for PdfBullApp {
             annotation_drag: None,
             engine: None,
             loaded: false,
-            rendering_count: 0,
             rendering_set: std::collections::HashSet::new(),
             modifiers: iced::keyboard::Modifiers::default(),
             last_session_save: Instant::now(),
@@ -114,8 +109,6 @@ impl PdfBullApp {
     pub fn current_tab_mut(&mut self) -> Option<&mut DocumentTab> {
         self.tabs.get_mut(self.active_tab)
     }
-
-
 
     pub fn save_session(&mut self) {
         if !self.settings.restore_session {
@@ -217,7 +210,6 @@ impl PdfBullApp {
             };
 
             self.rendering_set.insert(target);
-            self.rendering_count += 1;
             let tx = cmd_tx.clone();
             let doc_id_cloned = doc_id;
             let current_scale = options.scale;
@@ -258,7 +250,6 @@ impl PdfBullApp {
                 if is_thumb_rendered || self.rendering_set.contains(&target) {
                     continue;
                 }
-                self.rendering_count += 1;
                 let thumb_zoom = (120.0 / page_width.max(1.0)).min(5.0);
                 self.rendering_set.insert(target);
                 let tx = cmd_tx.clone();
@@ -278,7 +269,9 @@ impl PdfBullApp {
                         };
                         (page_idx, thumb_zoom, res)
                     },
-                    move |(page_idx, scale, res)| Message::ThumbnailRendered(doc_id, page_idx, scale, res),
+                    move |(page_idx, scale, res)| {
+                        Message::ThumbnailRendered(doc_id, page_idx, scale, res)
+                    },
                 ));
             }
         }

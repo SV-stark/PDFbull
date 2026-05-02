@@ -57,7 +57,7 @@ pub fn handle_render_message(app: &mut PdfBullApp, message: Message) -> Task<Mes
                 if !needs_render
                     || app
                         .rendering_set
-                        .contains(&crate::app::RenderTarget::Page(doc_id, page_idx))
+                        .contains(&crate::app::RenderTarget::Page(tab.id, page_idx))
                 {
                     return Task::none();
                 }
@@ -74,7 +74,6 @@ pub fn handle_render_message(app: &mut PdfBullApp, message: Message) -> Task<Mes
 
             app.rendering_set
                 .insert(crate::app::RenderTarget::Page(doc_id, page_idx));
-            app.rendering_count += 1;
 
             let Some(engine) = &app.engine else {
                 return Task::none();
@@ -106,7 +105,6 @@ pub fn handle_render_message(app: &mut PdfBullApp, message: Message) -> Task<Mes
             )
         }
         Message::PageRendered(doc_id, page_idx, scale, result) => {
-            app.rendering_count = app.rendering_count.saturating_sub(1);
             app.rendering_set
                 .remove(&crate::app::RenderTarget::Page(doc_id, page_idx));
 
@@ -144,7 +142,6 @@ pub fn handle_render_message(app: &mut PdfBullApp, message: Message) -> Task<Mes
             app.render_visible_pages()
         }
         Message::ThumbnailRendered(doc_id, page_idx, scale, result) => {
-            app.rendering_count = app.rendering_count.saturating_sub(1);
             app.rendering_set
                 .remove(&crate::app::RenderTarget::Thumbnail(doc_id, page_idx));
 

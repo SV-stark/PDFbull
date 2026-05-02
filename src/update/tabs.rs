@@ -167,9 +167,15 @@ pub fn handle_tab_message(app: &mut PdfBullApp, message: Message) -> Task<Messag
                         let res = resp_rx
                             .await
                             .unwrap_or(Err(crate::models::PdfError::EngineDied));
-                        (doc_id, res)
+                        Ok((doc_id, res))
                     },
-                    |(id, res)| Message::DocumentOpened(id, res),
+                    |res| match res {
+                        Ok((id, r)) => Message::DocumentOpened(id, r),
+                        Err(_) => Message::DocumentOpened(
+                            crate::models::DocumentId::default(),
+                            Err(crate::models::PdfError::EngineDied),
+                        ),
+                    },
                 );
             }
             Task::none()
@@ -298,9 +304,15 @@ pub fn handle_tab_message(app: &mut PdfBullApp, message: Message) -> Task<Messag
                             let res = resp_rx
                                 .await
                                 .unwrap_or(Err(crate::models::PdfError::EngineDied));
-                            (new_doc_id, res)
+                            Ok((new_doc_id, res))
                         },
-                        |(id, res)| Message::DocumentOpened(id, res),
+                        |res| match res {
+                            Ok((id, r)) => Message::DocumentOpened(id, r),
+                            Err(_) => Message::DocumentOpened(
+                                crate::models::DocumentId::default(),
+                                Err(crate::models::PdfError::EngineDied),
+                            ),
+                        },
                     );
                 }
             }

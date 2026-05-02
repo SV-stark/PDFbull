@@ -1,7 +1,7 @@
 use crate::commands::PdfCommand;
 use crate::pdf_engine::{DocumentStore, SharedRenderCache, create_render_cache};
 use pdfium_render::prelude::*;
-use std::sync::Arc;
+
 use tokio::sync::mpsc;
 
 #[derive(Debug, Clone)]
@@ -116,9 +116,15 @@ pub fn spawn_engine_thread(cache_size: u64, max_memory_mb: u64) -> EngineState {
                     let res = store.fill_form(&path, fields, out);
                     let _ = tx.send(res);
                 }
-                PdfCommand::PrintPdf(path, tx) => {
-                    let res = crate::pdf_engine::DocumentStore::print_document(&path);
+                PdfCommand::PrintPdf(path, printer_name, tx) => {
+                    let res = crate::pdf_engine::DocumentStore::print_document(
+                        &path,
+                        printer_name.as_deref(),
+                    );
                     let _ = tx.send(res);
+                }
+                PdfCommand::ListPrinters(tx) => {
+                    let _ = tx.send(crate::pdf_engine::DocumentStore::list_printers());
                 }
                 PdfCommand::AddWatermark(input, text, output, tx) => {
                     let res =
@@ -130,7 +136,5 @@ pub fn spawn_engine_thread(cache_size: u64, max_memory_mb: u64) -> EngineState {
         }
     });
 
-    EngineState {
-        cmd_tx,
-    }
+    EngineState { cmd_tx }
 }

@@ -464,7 +464,8 @@ impl<'a> DocumentStore<'a> {
         };
 
         for ann in annotations {
-            let page_num_u16 = u16::try_from(ann.page).map_err(|_| PdfError::PageNotFound(ann.page))?;
+            let page_num_u16 =
+                u16::try_from(ann.page).map_err(|_| PdfError::PageNotFound(ann.page))?;
             let mut page = doc
                 .pages()
                 .get(page_num_u16)
@@ -599,7 +600,8 @@ impl<'a> DocumentStore<'a> {
             .documents
             .get(&doc_id)
             .ok_or(PdfError::EngineError(EngineErrorKind::DocumentNotFound))?;
-        let page_num_u16 = u16::try_from(page_num).map_err(|_| PdfError::PageNotFound(page_num as usize))?;
+        let page_num_u16 =
+            u16::try_from(page_num).map_err(|_| PdfError::PageNotFound(page_num as usize))?;
         let page = doc
             .pages()
             .get(page_num_u16)
@@ -880,12 +882,25 @@ impl<'a> DocumentStore<'a> {
                             group_name: None,
                         },
                         PdfFormFieldType::ComboBox | PdfFormFieldType::ListBox => {
+                            // pdfium-render exposes ComboBox and ListBox as separate typed fields.
+                            // Extract options from whichever variant is available.
                             let (options, selected_index) =
-                                if let Some(choice) = form_field.as_choice_field() {
-                                    (
-                                        choice.options().iter().map(|o| o.text()).collect(),
-                                        choice.selected_option_index(),
-                                    )
+                                if let Some(combo) = form_field.as_combo_box_field() {
+                                    let opts: Vec<String> = combo
+                                        .options()
+                                        .iter()
+                                        .map(|o| o.label().cloned().unwrap_or_default())
+                                        .collect();
+                                    let sel = combo.options().iter().position(|o| o.is_set());
+                                    (opts, sel)
+                                } else if let Some(list) = form_field.as_list_box_field() {
+                                    let opts: Vec<String> = list
+                                        .options()
+                                        .iter()
+                                        .map(|o| o.label().cloned().unwrap_or_default())
+                                        .collect();
+                                    let sel = list.options().iter().position(|o| o.is_set());
+                                    (opts, sel)
                                 } else {
                                     (Vec::new(), None)
                                 };
@@ -969,20 +984,42 @@ impl<'a> DocumentStore<'a> {
         Ok(output_path)
     }
 
-    pub fn print_document(path: &str) -> PdfResult<()> {
+    pub fn print_document(path: &str, printer_name: Option<&str>) -> PdfResult<()> {
         use winprint::printer::{FilePrinter, PdfiumPrinter, PrinterDevice};
 
-        let device = PrinterDevice::all()
-            .map_err(|e| PdfError::IoError(format!("Failed to list printers: {e}")))?
-            .into_iter()
-            .next()
-            .ok_or_else(|| PdfError::IoError("No printers found".into()))?;
+        let all_devices = PrinterDevice::all()
+            .map_err(|e| PdfError::IoError(format!("Failed to list printers: {e}")))?;
+
+        let device = if let Some(name) = printer_name {
+            all_devices
+                .into_iter()
+                .find(|d| d.name() == name)
+                .ok_or_else(|| PdfError::IoError(format!("Printer '{name}' not found")))?
+        } else {
+            all_devices
+                .into_iter()
+                .next()
+                .ok_or_else(|| PdfError::IoError("No printers found".into()))?
+        };
 
         let printer = PdfiumPrinter::new(device);
         printer
             .print(std::path::Path::new(path), Default::default())
             .map_err(|e| PdfError::IoError(format!("Print failed: {e}")))?;
         Ok(())
+    }
+
+    /// Returns a sorted list of all available printer names on this system.
+    pub fn list_printers() -> PdfResult<Vec<String>> {
+        use winprint::printer::PrinterDevice;
+        PrinterDevice::all()
+            .map(|devices| {
+                let mut names: Vec<String> =
+                    devices.into_iter().map(|d| d.name().to_string()).collect();
+                names.sort_unstable();
+                names
+            })
+            .map_err(|e| PdfError::IoError(format!("Failed to list printers: {e}")))
     }
 
     pub fn add_watermark(input_path: &str, text: &str, output_path: &str) -> PdfResult<String> {
@@ -1011,8 +1048,7 @@ impl<'a> DocumentStore<'a> {
             .replace('\\', "\\\\")
             .replace('(', "\\(")
             .replace(')', "\\)");
-        let content =
-            format!("BT /F1 48 Tf 0.7 0.7 0.7 rg 1 0 0 1 200 400 Tm ({escaped}) Tj ET\n");
+        let content = format!("BT /F1 48 Tf 0.7 0.7 0.7 rg 1 0 0 1 200 400 Tm ({escaped}) Tj ET\n");
         let watermark_stream = lopdf::Stream::new(lopdf::Dictionary::new(), content.into_bytes());
 
         for &page_id in &pages {

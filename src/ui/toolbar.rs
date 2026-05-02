@@ -68,7 +68,7 @@ pub fn render(app: &PdfBullApp) -> Element<'_, crate::message::Message> {
             "Redact",
             crate::message::Message::SetAnnotationMode(Some(PendingAnnotationKind::Redact)),
             app.annotation_mode == Some(PendingAnnotationKind::Redact),
-            "Redact content"
+            "⚠ Visual redaction only — content is NOT cryptographically removed"
         ),
         v_sep(),
         tool_button(

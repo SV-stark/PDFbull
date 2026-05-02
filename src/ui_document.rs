@@ -14,10 +14,11 @@ fn render_page_nav(app: &PdfBullApp) -> Element<'_, crate::message::Message> {
         return container(row![]).into();
     };
 
-    let loading_indicator = if app.rendering_count > 0 {
+    let rendering_count = app.rendering_set.len();
+    let loading_indicator = if rendering_count > 0 {
         row![
             container(
-                text(format!("{}", app.rendering_count))
+                text(format!("{}", rendering_count))
                     .font(INTER_BOLD)
                     .size(11)
             )
@@ -483,9 +484,7 @@ fn render_pdf_content(app: &PdfBullApp) -> Element<'_, crate::message::Message> 
     .into()
 }
 
-pub fn document_view<'a>(
-    app: &'a PdfBullApp,
-) -> Element<'a, crate::message::Message> {
+pub fn document_view<'a>(app: &'a PdfBullApp) -> Element<'a, crate::message::Message> {
     let Some(tab) = app.current_tab() else {
         return container(text("Loading tab..."))
             .center_x(Length::Fill)

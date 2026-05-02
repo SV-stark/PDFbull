@@ -93,11 +93,11 @@ pub fn handle_message(app: &mut PdfBullApp, message: Message) -> Task<Message> {
         | Message::ViewportChanged(_, _)
         | Message::SidebarViewportChanged(_)
         | Message::RequestRender(_)
-        | Message::PageRendered(_, _, _)
-        | Message::ThumbnailRendered(_, _, _) => render::handle_render_message(app, message),
+        | Message::PageRendered(_, _, _, _)
+        | Message::ThumbnailRendered(_, _, _, _) => render::handle_render_message(app, message),
         Message::OpenDocument
         | Message::DocumentOpenedWithPath(_)
-        | Message::DocumentOpened(_)
+        | Message::DocumentOpened(_, _)
         | Message::OpenFile(_)
         | Message::OpenRecentFile(_)
         | Message::CloseTab(_)
@@ -128,6 +128,9 @@ pub fn handle_message(app: &mut PdfBullApp, message: Message) -> Task<Message> {
         | Message::ImageExported(_)
         | Message::ExportImages
         | Message::Print
+        | Message::ListPrinters
+        | Message::PrintersListed(_)
+        | Message::PrintWithPrinter(_)
         | Message::PrintDone(_)
         | Message::AddWatermark(_)
         | Message::WatermarkDone(_)

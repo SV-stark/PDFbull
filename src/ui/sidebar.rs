@@ -71,7 +71,7 @@ pub fn render(app: &PdfBullApp) -> Element<'_, crate::message::Message> {
                     format!("Text: {}", &text[..text.len().min(20)])
                 }
                 AnnotationStyle::Redact { .. } => {
-                    format!("Redact P{}", ann.page + 1)
+                    format!("⚠ Redact P{} (visual only)", ann.page + 1)
                 }
             };
             annotations_col = annotations_col.push(row![

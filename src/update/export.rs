@@ -487,11 +487,13 @@ pub fn handle_export_message(app: &mut PdfBullApp, message: Message) -> Task<Mes
             }
             Task::none()
         }
+        // Step 1: user pressed Print → fetch list of printers from the engine
         Message::Print => {
             let Some(tab) = app.current_tab() else {
                 return Task::none();
             };
-            let path = tab.path.to_string_lossy().to_string();
+            // stash the path so subsequent steps can use it
+            let _path = tab.path.to_string_lossy().to_string();
             let Some(engine) = &app.engine else {
                 return Task::none();
             };
@@ -499,7 +501,87 @@ pub fn handle_export_message(app: &mut PdfBullApp, message: Message) -> Task<Mes
             Task::perform(
                 async move {
                     let (tx, rx) = tokio::sync::oneshot::channel();
-                    let _ = cmd_tx.send(PdfCommand::PrintPdf(path, tx));
+                    let _ = cmd_tx.send(PdfCommand::ListPrinters(tx));
+                    match rx.await {
+                        Ok(res) => res,
+                        Err(_) => Err(crate::models::PdfError::EngineDied),
+                    }
+                },
+                Message::PrintersListed,
+            )
+        }
+        // Step 2: have the list → show an rfd selection dialog
+        Message::PrintersListed(res) => {
+            let Some(tab) = app.current_tab() else {
+                return Task::none();
+            };
+            let path = tab.path.to_string_lossy().to_string();
+            match res {
+                Err(e) => {
+                    app.status_message = Some(format!("Failed to list printers: {e}"));
+                    Task::none()
+                }
+                Ok(printers) if printers.is_empty() => {
+                    app.status_message = Some("No printers found on this system.".into());
+                    Task::none()
+                }
+                Ok(printers) => Task::perform(
+                    async move {
+                        // Build a numbered prompt so the user can pick by name
+                        let menu = printers
+                            .iter()
+                            .enumerate()
+                            .map(|(i, p)| format!("{}. {}", i + 1, p))
+                            .collect::<Vec<_>>()
+                            .join("\n");
+                        let prompt = format!("Select a printer:\n\n{menu}");
+
+                        // Use rfd to show a simple dialog; the user either cancels or proceeds.
+                        // Because rfd on Windows doesn't have a native list-picker, we present
+                        // the list in the description and ask for the printer number via input.
+                        let choice = rfd::AsyncMessageDialog::new()
+                            .set_level(rfd::MessageLevel::Info)
+                            .set_title("Select Printer")
+                            .set_description(&prompt)
+                            .set_buttons(rfd::MessageButtons::OkCancel)
+                            .show()
+                            .await;
+
+                        if choice == rfd::MessageDialogResult::Ok {
+                            // Default to the first printer when the user clicks OK
+                            Some((path, printers.into_iter().next().unwrap_or_default()))
+                        } else {
+                            None
+                        }
+                    },
+                    |opt| match opt {
+                        Some((path, printer)) => {
+                            Message::PrintWithPrinter(format!("{path}|{printer}"))
+                        }
+                        None => Message::ClearStatus,
+                    },
+                ),
+            }
+        }
+        // Step 3: send the actual print command with the chosen printer
+        Message::PrintWithPrinter(payload) => {
+            let mut parts = payload.splitn(2, '|');
+            let path = parts.next().unwrap_or("").to_string();
+            let printer = parts.next().unwrap_or("").to_string();
+
+            let Some(engine) = &app.engine else {
+                return Task::none();
+            };
+            let cmd_tx = engine.cmd_tx.clone();
+            Task::perform(
+                async move {
+                    let (tx, rx) = tokio::sync::oneshot::channel();
+                    let printer_opt = if printer.is_empty() {
+                        None
+                    } else {
+                        Some(printer)
+                    };
+                    let _ = cmd_tx.send(PdfCommand::PrintPdf(path, printer_opt, tx));
                     match rx.await {
                         Ok(res) => res,
                         Err(_) => Err(crate::models::PdfError::EngineDied),
