@@ -7,21 +7,42 @@ use iced_draggable_tabs::DraggableTabs;
 
 pub fn render<'a>(
     app: &'a PdfBullApp,
-    // `&'static str` refs from `app.tab_display_names` (interned via Box::leak).
-    // Using `'static` here means the slice itself can live as long as needed,
-    // satisfying DraggableTabs<'a, _> which needs `&'a [&'a str]`.
-    tab_names: &'a [&'static str],
 ) -> Element<'a, crate::message::Message> {
-    let tabs = DraggableTabs::new(
-        tab_names,
-        app.active_tab,
-        crate::message::Message::SwitchTab,
-        crate::message::Message::TabReordered,
-    )
-    .on_close(crate::message::Message::CloseTab)
-    .tab_height(36.0)
-    .spacing(2.0)
-    .tab_padding(Padding::from([4, 12]));
+    let mut tab_row = row![].spacing(2).align_y(Alignment::Center);
+
+    for (idx, tab) in app.tabs.iter().enumerate() {
+        let is_active = idx == app.active_tab;
+        
+        let tab_button = button(
+            row![
+                text(&tab.name)
+                    .size(13)
+                    .font(crate::app::INTER_REGULAR),
+                button(
+                    text(icons::CLOSE)
+                        .size(10)
+                        .font(LUCIDE)
+                )
+                .on_press(crate::message::Message::CloseTab(idx))
+                .style(theme::button_ghost)
+                .padding(2)
+            ]
+            .spacing(8)
+            .align_y(Alignment::Center)
+        )
+        .on_press(crate::message::Message::SwitchTab(idx))
+        .padding([4, 12])
+        .style(move |theme, status| {
+            let mut style = theme::button_ghost(theme, status);
+            if is_active {
+                style.background = Some(theme::COLOR_BG_WIDGET.into());
+                style.text_color = theme::COLOR_TEXT_PRIMARY;
+            }
+            style
+        });
+
+        tab_row = tab_row.push(tab_button);
+    }
 
     let add_button =
         button(
@@ -36,7 +57,7 @@ pub fn render<'a>(
         .on_press(crate::message::Message::OpenDocument)
         .style(iced::widget::button::text);
 
-    let tab_bar_bg = container(row![tabs, add_button].align_y(Alignment::Center))
+    let tab_bar_bg = container(row![scrollable(tab_row).direction(iced::widget::scrollable::Direction::Horizontal(iced::widget::scrollable::Scrollbar::default())), add_button].align_y(Alignment::Center))
         .width(Length::Fill)
         .padding([0, 10])
         .height(36.0)

@@ -44,9 +44,10 @@ pub fn handle_tab_message(app: &mut PdfBullApp, message: Message) -> Task<Messag
                     },
                     |result| match result {
                         Some((path, data)) => Message::DocumentOpenedWithPath((path, data)),
-                        None => Message::DocumentOpened(Err(crate::models::PdfError::OpenFailed(
-                            "Cancelled".into(),
-                        ))),
+                        None => Message::DocumentOpened(
+                            crate::models::DocumentId(0), // Dummy ID for cancelled
+                            Err(crate::models::PdfError::OpenFailed("Cancelled".into())),
+                        ),
                     },
                 );
             }
@@ -61,14 +62,13 @@ pub fn handle_tab_message(app: &mut PdfBullApp, message: Message) -> Task<Messag
             let tab_idx = app.tabs.len();
             app.tabs.push(tab);
             app.active_tab = tab_idx;
-            app.sync_tab_display_names();
             app.add_recent_file(&path);
 
-            app.update(Message::DocumentOpened(Ok(data)))
+            let doc_id = data.id;
+            app.update(Message::DocumentOpened(doc_id, Ok(data)))
         }
-        Message::DocumentOpened(result) => match result {
+        Message::DocumentOpened(doc_id, result) => match result {
             Ok(res) => {
-                let doc_id = res.id;
                 let count = res.page_count;
                 let heights = res.page_heights;
                 let width = res.max_width;
@@ -78,13 +78,8 @@ pub fn handle_tab_message(app: &mut PdfBullApp, message: Message) -> Task<Messag
 
                 let default_zoom = app.settings.default_zoom;
                 let default_filter = app.settings.default_filter;
-                let pdf_path = app
-                    .tabs
-                    .get(app.active_tab)
-                    .map(|tab| tab.path.to_string_lossy().to_string());
 
-                if let Some(tab) = app.tabs.get_mut(app.active_tab) {
-                    tab.id = doc_id;
+                if let Some(tab) = app.tabs.iter_mut().find(|t| t.id == doc_id) {
                     tab.total_pages = count;
                     tab.page_heights = heights;
                     tab.page_width = width;
@@ -95,6 +90,12 @@ pub fn handle_tab_message(app: &mut PdfBullApp, message: Message) -> Task<Messag
                     tab.zoom = default_zoom;
                     tab.render_filter = default_filter;
                 }
+
+                let pdf_path = app
+                    .tabs
+                    .iter()
+                    .find(|t| t.id == doc_id)
+                    .map(|tab| tab.path.to_string_lossy().to_string());
 
                 if let Some(path_str) = pdf_path
                     && let Some(engine) = &app.engine
@@ -132,10 +133,8 @@ pub fn handle_tab_message(app: &mut PdfBullApp, message: Message) -> Task<Messag
                     tracing::error!("Error opening document: {e}");
                     app.status_message = Some(format!("Error opening document: {e}"));
                 }
-                // "Cancelled" is a normal user action — no log, no status message.
-                if !app.tabs.is_empty() {
-                    app.tabs.pop();
-                    app.sync_tab_display_names();
+                if let Some(pos) = app.tabs.iter().position(|t| t.id == doc_id) {
+                    app.tabs.remove(pos);
                 }
                 Task::none()
             }
@@ -151,7 +150,6 @@ pub fn handle_tab_message(app: &mut PdfBullApp, message: Message) -> Task<Messag
             let doc_id = tab.id;
             app.tabs.push(tab);
             app.active_tab = app.tabs.len() - 1;
-            app.sync_tab_display_names();
             app.add_recent_file(&path);
 
             if let Some(engine) = &app.engine {
@@ -166,11 +164,12 @@ pub fn handle_tab_message(app: &mut PdfBullApp, message: Message) -> Task<Messag
                             tracing::error!("Failed to send Open command: {e}");
                             return Err(crate::models::PdfError::EngineDied);
                         }
-                        resp_rx
+                        let res = resp_rx
                             .await
-                            .unwrap_or(Err(crate::models::PdfError::EngineDied))
+                            .unwrap_or(Err(crate::models::PdfError::EngineDied));
+                        (doc_id, res)
                     },
-                    Message::DocumentOpened,
+                    |(id, res)| Message::DocumentOpened(id, res),
                 );
             }
             Task::none()
@@ -199,7 +198,6 @@ pub fn handle_tab_message(app: &mut PdfBullApp, message: Message) -> Task<Messag
             if app.active_tab >= app.tabs.len() && !app.tabs.is_empty() {
                 app.active_tab = app.tabs.len() - 1;
             }
-            app.sync_tab_display_names();
             app.save_session();
             Task::none()
         }
@@ -241,7 +239,6 @@ pub fn handle_tab_message(app: &mut PdfBullApp, message: Message) -> Task<Messag
                 app.active_tab = new_idx;
             }
 
-            app.sync_tab_display_names();
             app.save_session();
             Task::none()
         }
@@ -287,7 +284,6 @@ pub fn handle_tab_message(app: &mut PdfBullApp, message: Message) -> Task<Messag
                     let new_doc_id = new_tab.id;
                     app.tabs[idx] = new_tab;
                     app.active_tab = idx;
-                    app.sync_tab_display_names();
 
                     let path_s = path.to_string_lossy().to_string();
                     return Task::perform(
@@ -299,11 +295,12 @@ pub fn handle_tab_message(app: &mut PdfBullApp, message: Message) -> Task<Messag
                                 tracing::error!("Failed to send Open command: {e}");
                                 return Err(crate::models::PdfError::EngineDied);
                             }
-                            resp_rx
+                            let res = resp_rx
                                 .await
-                                .unwrap_or(Err(crate::models::PdfError::EngineDied))
+                                .unwrap_or(Err(crate::models::PdfError::EngineDied));
+                            (new_doc_id, res)
                         },
-                        Message::DocumentOpened,
+                        |(id, res)| Message::DocumentOpened(id, res),
                     );
                 }
             }

@@ -8,22 +8,7 @@ use iced::{Element, Font, Task, animation};
 use std::sync::{Mutex, OnceLock};
 use std::time::Instant;
 
-/// Interns `s` as a `&'static str` using `Box::leak`.
-/// Each unique string is leaked exactly once and reused on subsequent calls.
-/// This is safe and acceptable for tab names (bounded, small set).
-fn intern_str(s: &str) -> &'static str {
-    static INTERNED: OnceLock<Mutex<std::collections::HashSet<&'static str>>> = OnceLock::new();
-    let mut set = INTERNED
-        .get_or_init(|| Mutex::new(std::collections::HashSet::new()))
-        .lock()
-        .unwrap();
-    if let Some(&existing) = set.get(s) {
-        return existing;
-    }
-    let leaked: &'static str = Box::leak(s.to_string().into_boxed_str());
-    set.insert(leaked);
-    leaked
-}
+
 
 pub const INTER_REGULAR: Font = Font::with_name("Inter Regular");
 pub const INTER_BOLD: Font = Font::with_name("Inter Bold");
@@ -62,10 +47,7 @@ pub enum RenderTarget {
 
 pub struct PdfBullApp {
     pub tabs: Vec<DocumentTab>,
-    /// Interned display names for `tabs`, kept in sync whenever tabs change.
-    /// Each `&'static str` is created via `Box::leak` so it can be passed
-    /// directly to `DraggableTabs::new` without lifetime issues.
-    pub tab_display_names: Vec<&'static str>,
+
     pub active_tab: usize,
     pub settings: AppSettings,
     pub recent_files: Vec<RecentFile>,
@@ -95,7 +77,7 @@ impl Default for PdfBullApp {
     fn default() -> Self {
         Self {
             tabs: Vec::new(),
-            tab_display_names: Vec::new(),
+
             active_tab: 0,
             settings: AppSettings::default(),
             recent_files: Vec::new(),
@@ -133,13 +115,7 @@ impl PdfBullApp {
         self.tabs.get_mut(self.active_tab)
     }
 
-    /// Keeps `tab_display_names` in sync with `tabs`.
-    /// Call this after any operation that adds, removes, or renames a tab.
-    /// Uses `Box::leak` to intern each unique tab name as a `'static str`.
-    /// Acceptable memory cost: tab names are path stems — bounded and small.
-    pub fn sync_tab_display_names(&mut self) {
-        self.tab_display_names = self.tabs.iter().map(|t| intern_str(&t.name)).collect();
-    }
+
 
     pub fn save_session(&mut self) {
         if !self.settings.restore_session {
