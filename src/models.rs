@@ -284,6 +284,7 @@ pub enum PendingAnnotationKind {
     Highlight,
     Rectangle,
     Redact,
+    Text,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

@@ -100,6 +100,11 @@ pub fn handle_misc_message(app: &mut PdfBullApp, message: Message) -> Task<Messa
                             "?" if modifiers.shift() => {
                                 return app.update(Message::ToggleKeyboardHelp);
                             }
+                            "t" if !modifiers.command() => {
+                                return app.update(Message::SetAnnotationMode(Some(
+                                    crate::models::PendingAnnotationKind::Text,
+                                )));
+                            }
                             _ => {}
                         },
                         Key::Named(iced::keyboard::key::Named::Escape)

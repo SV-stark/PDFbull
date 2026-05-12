@@ -3,11 +3,80 @@ use crate::app::{INTER_BOLD, INTER_REGULAR, LUCIDE, icons};
 use crate::models::{AnnotationStyle, DocumentTab, PendingAnnotationKind};
 use crate::ui::theme::{self, hex_to_rgb};
 use iced::widget::{
-    Space, Stack, button, column, container, mouse_area, row, scrollable, text, text_input,
+    Space, Stack, button, canvas, column, container, mouse_area, row, scrollable, text, text_input,
 };
-use iced::{Alignment, Color, Element, Length, Padding};
+use iced::{Alignment, Color, Element, Length, Padding, Rectangle};
 
 use crate::ui::{sidebar, tabs, toolbar};
+
+struct AnnotationCanvas {
+    page_idx: usize,
+    active: bool,
+}
+
+impl canvas::Program<crate::message::Message> for AnnotationCanvas {
+    type State = ();
+
+    fn update(
+        &self,
+        _state: &mut Self::State,
+        event: canvas::Event,
+        bounds: Rectangle,
+        cursor: iced::mouse::Cursor,
+    ) -> (canvas::Action, Option<crate::message::Message>) {
+        if !self.active {
+            return (canvas::Action::Pass, None);
+        }
+
+        match event {
+            canvas::Event::Mouse(iced::mouse::Event::ButtonPressed(iced::mouse::Button::Left)) => {
+                if let Some(position) = cursor.position_in(bounds) {
+                    (
+                        canvas::Action::Capture,
+                        Some(crate::message::Message::AnnotationDragStart {
+                            page: self.page_idx,
+                            x: position.x,
+                            y: position.y,
+                        }),
+                    )
+                } else {
+                    (canvas::Action::Pass, None)
+                }
+            }
+            canvas::Event::Mouse(iced::mouse::Event::CursorMoved { .. }) => {
+                if let Some(position) = cursor.position_in(bounds) {
+                    (
+                        canvas::Action::Capture,
+                        Some(crate::message::Message::AnnotationDragUpdate {
+                            x: position.x,
+                            y: position.y,
+                        }),
+                    )
+                } else {
+                    (canvas::Action::Pass, None)
+                }
+            }
+            canvas::Event::Mouse(iced::mouse::Event::ButtonReleased(iced::mouse::Button::Left)) => {
+                (
+                    canvas::Action::Capture,
+                    Some(crate::message::Message::AnnotationDragEnd),
+                )
+            }
+            _ => (canvas::Action::Pass, None),
+        }
+    }
+
+    fn draw(
+        &self,
+        _state: &Self::State,
+        _renderer: &iced::Renderer,
+        _theme: &iced::Theme,
+        _bounds: Rectangle,
+        _cursor: iced::mouse::Cursor,
+    ) -> Vec<canvas::Geometry> {
+        vec![]
+    }
+}
 
 fn render_page_nav(app: &PdfBullApp) -> Element<'_, crate::message::Message> {
     let Some(tab) = app.current_tab() else {
@@ -289,11 +358,12 @@ fn render_active_drag<'a>(
             PendingAnnotationKind::Highlight => Color::from_rgba(1.0, 1.0, 0.0, 0.4),
             PendingAnnotationKind::Rectangle => Color::from_rgba(1.0, 0.0, 0.0, 0.2),
             PendingAnnotationKind::Redact => Color::from_rgba(0.0, 0.0, 0.0, 0.8),
+            PendingAnnotationKind::Text => Color::from_rgba(0.0, 0.0, 1.0, 0.1),
         };
 
         let preview_border = match drag.kind {
             PendingAnnotationKind::Highlight => iced::Border::default(),
-            PendingAnnotationKind::Rectangle | PendingAnnotationKind::Redact => iced::Border {
+            PendingAnnotationKind::Rectangle | PendingAnnotationKind::Redact | PendingAnnotationKind::Text => iced::Border {
                 color: Color::from_rgb(1.0, 0.0, 0.0),
                 width: 2.0 * zoom,
                 radius: 0.0.into(),
@@ -383,6 +453,16 @@ fn render_page_canvas<'a>(
         for el in render_active_drag(page_idx, zoom, app) {
             page_stack = page_stack.push(el);
         }
+
+        // Add the annotation interaction layer
+        page_stack = page_stack.push(
+            canvas(AnnotationCanvas {
+                page_idx,
+                active: app.annotation_mode.is_some(),
+            })
+            .width(Length::Fixed(scaled_width))
+            .height(Length::Fixed(scaled_height)),
+        );
 
         container(page_stack)
             .width(Length::Fixed(scaled_width))
