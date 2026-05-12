@@ -74,8 +74,12 @@ pub fn handle_misc_message(app: &mut PdfBullApp, message: Message) -> Task<Messa
                         Key::Named(iced::keyboard::key::Named::F11) => {
                             return app.update(Message::ToggleFullscreen);
                         }
+                        Key::Named(iced::keyboard::key::Named::F1) => {
+                            return app.update(Message::ToggleKeyboardHelp);
+                        }
                         Key::Character(c) => match c.as_str() {
                             "o" if modifiers.command() => return app.update(Message::OpenDocument),
+                            "e" if modifiers.command() => return app.update(Message::ExportImage),
                             "p" if modifiers.command() && !app.tabs.is_empty() => {
                                 return app.update(Message::Print);
                             }

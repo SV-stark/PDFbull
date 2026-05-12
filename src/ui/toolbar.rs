@@ -27,6 +27,13 @@ pub fn render(app: &PdfBullApp) -> Element<'_, crate::message::Message> {
             app.show_sidebar,
             "Toggle sidebar (Ctrl+B)"
         ),
+        tool_button(
+            icons::HELP,
+            "Info",
+            crate::message::Message::ToggleMetadata,
+            app.show_metadata,
+            "Document Information"
+        ),
     ]
     .spacing(8);
 
@@ -236,8 +243,12 @@ fn filter_section(
         // Small dropdown-like selector for filters or just compact buttons
         row![
             filter_chip("None", RenderFilter::None, active_filter),
-            filter_chip("Eco", RenderFilter::Eco, active_filter),
+            filter_chip("Gray", RenderFilter::Grayscale, active_filter),
             filter_chip("Inv", RenderFilter::Inverted, active_filter),
+            filter_chip("Eco", RenderFilter::Eco, active_filter),
+            filter_chip("B&W", RenderFilter::BlackWhite, active_filter),
+            filter_chip("Light", RenderFilter::Lighten, active_filter),
+            filter_chip("NoShd", RenderFilter::NoShadow, active_filter),
         ]
         .spacing(4)
     ]
