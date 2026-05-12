@@ -383,7 +383,7 @@ impl<'a> DocumentStore<'a> {
         let result = crate::models::RenderResult {
             width: final_w,
             height: final_h,
-            data: bytes::Bytes::from(final_data),
+            data: final_data,
             text_items,
         };
 

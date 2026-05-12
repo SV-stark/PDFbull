@@ -6,12 +6,12 @@ use tokio::sync::mpsc;
 
 #[derive(Debug, Clone)]
 pub struct EngineState {
-    pub cmd_tx: mpsc::UnboundedSender<PdfCommand>,
+    pub cmd_tx: mpsc::Sender<PdfCommand>,
 }
 
 #[must_use]
 pub fn spawn_engine_thread(cache_size: u64, max_memory_mb: u64) -> EngineState {
-    let (cmd_tx, mut cmd_rx) = mpsc::unbounded_channel::<PdfCommand>();
+    let (cmd_tx, mut cmd_rx) = mpsc::channel::<PdfCommand>(64);
 
     let render_cache: SharedRenderCache = create_render_cache(cache_size, max_memory_mb);
 

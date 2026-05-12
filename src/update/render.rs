@@ -90,12 +90,11 @@ pub fn handle_render_message(app: &mut PdfBullApp, message: Message) -> Task<Mes
                         auto_crop,
                         quality,
                     };
-                    if let Err(e) = cmd_tx.send(crate::commands::PdfCommand::Render(
+                    if let Err(e) = cmd_tx.try_send(crate::commands::PdfCommand::Render(
                         doc_id, page_idx, options, resp_tx,
                     )) {
-                        tracing::error!("Failed to send Render command: {e}");
-
-                        return Err(crate::models::PdfError::EngineDied);
+                        tracing::warn!("Failed to send Render command: {e}");
+                        return Err(crate::models::PdfError::Cancelled);
                     }
                     resp_rx
                         .await
@@ -113,7 +112,7 @@ pub fn handle_render_message(app: &mut PdfBullApp, message: Message) -> Task<Mes
                     Ok(res) => {
                         let width = res.width;
                         let height = res.height;
-                        let pixel_data = res.data.to_vec();
+                        let pixel_data = res.data;
                         tab.view_state.rendered_pages.insert(
                             page_idx,
                             (
@@ -155,7 +154,7 @@ pub fn handle_render_message(app: &mut PdfBullApp, message: Message) -> Task<Mes
                     Ok(res) => {
                         let width = res.width;
                         let height = res.height;
-                        let pixel_data = res.data.to_vec();
+                        let pixel_data = res.data;
                         tab.view_state.thumbnails.insert(
                             page_idx,
                             iced_image::Handle::from_rgba(width, height, pixel_data),

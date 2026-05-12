@@ -135,7 +135,7 @@ pub struct TextItem {
 pub struct RenderResult {
     pub width: u32,
     pub height: u32,
-    pub data: bytes::Bytes,
+    pub data: Vec<u8>,
     pub text_items: Vec<TextItem>,
 }
 
