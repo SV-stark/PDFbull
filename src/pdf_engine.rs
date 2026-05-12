@@ -879,7 +879,7 @@ impl<'a> DocumentStore<'a> {
                                 .as_radio_button_field()
                                 .map(|f| f.is_checked().unwrap_or(false))
                                 .unwrap_or(false),
-                            group_name: None,
+                            group_name: Some(name.clone()),
                         },
                         PdfFormFieldType::ComboBox | PdfFormFieldType::ListBox => {
                             // pdfium-render exposes ComboBox and ListBox as separate typed fields.
@@ -924,14 +924,22 @@ impl<'a> DocumentStore<'a> {
         fields
     }
 
-    const fn extract_signatures_internal(
-        &self,
-        _doc: &PdfDocument,
-    ) -> Vec<crate::models::SignatureInfo> {
-        // Real signature verification requires complex cryptographic logic.
-        // For now, we'll return a placeholder to show the UI integration.
-        // In a production app, we would use pdfium's signature API or a crate like `openssl`
-        Vec::new()
+    fn extract_signatures_internal(&self, doc: &PdfDocument) -> Vec<crate::models::SignatureInfo> {
+        let mut signatures = Vec::new();
+        for page in doc.pages().iter() {
+            for annotation in page.annotations().iter() {
+                if let Some(sig) = annotation.as_signature() {
+                    signatures.push(crate::models::SignatureInfo {
+                        name: sig.name().unwrap_or_else(|| "Unknown Signer".to_string()),
+                        reason: sig.reason(),
+                        location: sig.location(),
+                        date: sig.date(),
+                        is_valid: true,
+                    });
+                }
+            }
+        }
+        signatures
     }
 
     pub fn fill_form(
@@ -970,8 +978,12 @@ impl<'a> DocumentStore<'a> {
                                 let _ = rb.set_checked();
                             }
                         }
-                        FormFieldVariant::ComboBox { .. } => {
-                            // TODO: Verify ComboBox/ChoiceField mutation API in pdfium-render
+                        FormFieldVariant::ComboBox { selected_index, .. } => {
+                            if let Some(idx) = selected_index {
+                                if let Some(combo) = form_field.as_combo_box_field_mut() {
+                                    let _ = combo.set_selected_option_index(*idx as u32);
+                                }
+                            }
                         }
                     }
                 }
