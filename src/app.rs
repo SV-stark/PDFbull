@@ -335,17 +335,20 @@ impl PdfBullApp {
             iced::stream::channel(
                 10,
                 move |mut output: iced::futures::channel::mpsc::Sender<Message>| async move {
-                    use interprocess::local_socket::{prelude::*, GenericNamespaced, ListenerOptions};
-                    use std::io::{BufReader, BufRead};
                     use iced::futures::SinkExt;
-
-                    let name = match "pdfbull-single-instance.sock".to_ns_name::<GenericNamespaced>() {
-                        Ok(n) => n,
-                        Err(e) => {
-                            tracing::error!("Failed to create IPC socket name: {e}");
-                            return;
-                        }
+                    use interprocess::local_socket::{
+                        GenericNamespaced, ListenerOptions, prelude::*,
                     };
+                    use std::io::{BufRead, BufReader};
+
+                    let name =
+                        match "pdfbull-single-instance.sock".to_ns_name::<GenericNamespaced>() {
+                            Ok(n) => n,
+                            Err(e) => {
+                                tracing::error!("Failed to create IPC socket name: {e}");
+                                return;
+                            }
+                        };
 
                     let listener = match ListenerOptions::new().name(name).create_sync() {
                         Ok(l) => l,

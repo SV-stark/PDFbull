@@ -104,6 +104,7 @@ pub fn handle_nav_message(app: &mut PdfBullApp, message: Message) -> Task<Messag
 }
 
 #[cfg(test)]
+#[allow(clippy::float_cmp, clippy::nonminimal_bool)]
 mod tests {
     #[test]
     fn test_zoom_calculation_zoom_in() {

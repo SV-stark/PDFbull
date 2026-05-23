@@ -360,7 +360,9 @@ fn render_active_drag<'a>(
 
         let preview_border = match drag.kind {
             PendingAnnotationKind::Highlight => iced::Border::default(),
-            PendingAnnotationKind::Rectangle | PendingAnnotationKind::Redact | PendingAnnotationKind::Text => iced::Border {
+            PendingAnnotationKind::Rectangle
+            | PendingAnnotationKind::Redact
+            | PendingAnnotationKind::Text => iced::Border {
                 color: Color::from_rgb(1.0, 0.0, 0.0),
                 width: 2.0 * zoom,
                 radius: 0.0.into(),

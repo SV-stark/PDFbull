@@ -561,7 +561,7 @@ impl<'a> DocumentStore<'a> {
                 }
                 AnnotationStyle::Redact { color } => {
                     let (r, g, b) = hex_to_rgb(color);
-                    
+
                     // Real Redaction & Sanitization:
                     // 1. Identify all page objects (Text, Image, Path) that overlap with the redact bounding box.
                     let mut indices_to_remove = Vec::new();
@@ -569,7 +569,12 @@ impl<'a> DocumentStore<'a> {
                     for idx in 0..objects_count {
                         if let Ok(obj) = objects.get(idx) {
                             let obj_type = obj.object_type();
-                            if matches!(obj_type, PdfPageObjectType::Text | PdfPageObjectType::Image | PdfPageObjectType::Path) {
+                            if matches!(
+                                obj_type,
+                                PdfPageObjectType::Text
+                                    | PdfPageObjectType::Image
+                                    | PdfPageObjectType::Path
+                            ) {
                                 if let Ok(obj_bounds) = obj.bounds() {
                                     // AABB overlap check between redaction rect and page object bounds
                                     let overlap_x = rect.left().value < obj_bounds.right().value
@@ -995,13 +1000,23 @@ impl<'a> DocumentStore<'a> {
                                 let _ = rb.set_checked();
                             }
                         }
-                        FormFieldVariant::ComboBox { selected_index, options } => {
+                        FormFieldVariant::ComboBox {
+                            selected_index,
+                            options,
+                        } => {
                             if let Some(idx) = selected_index {
-                                if let Some(combo) = form_field.as_combo_box_field() {
-                                    // In pdfium-render 0.9, set_selected_option_index was removed.
-                                    // Use set_value() with the option text at the given index instead.
+                                if let PdfFormField::ComboBox(combo) = form_field {
                                     if let Some(opt_text) = options.get(*idx) {
-                                        let _ = combo.set_value(opt_text);
+                                        unsafe {
+                                            let text_field = &mut *(combo
+                                                as *mut pdfium_render::prelude::PdfFormComboBoxField<
+                                                    '_,
+                                                >
+                                                as *mut pdfium_render::prelude::PdfFormTextField<
+                                                    '_,
+                                                >);
+                                            let _ = text_field.set_value(opt_text);
+                                        }
                                     }
                                 }
                             }
@@ -1079,12 +1094,13 @@ impl<'a> DocumentStore<'a> {
 
         let mut content = pdf_writer::Content::new();
         content.begin_text();
-        content.tf(pdf_writer::Name(b"F1"), 48.0);
-        content.rg(0.7, 0.7, 0.7);
-        content.tm(1.0, 0.0, 0.0, 1.0, 200.0, 400.0);
-        content.tj(pdf_writer::Str(text.as_bytes()));
+        content.set_font(pdf_writer::Name(b"F1"), 48.0);
+        content.set_fill_rgb(0.7, 0.7, 0.7);
+        content.set_text_matrix([1.0, 0.0, 0.0, 1.0, 200.0, 400.0]);
+        content.show(pdf_writer::Str(text.as_bytes()));
         content.end_text();
-        let watermark_stream = lopdf::Stream::new(lopdf::Dictionary::new(), content.finish().to_vec());
+        let watermark_stream =
+            lopdf::Stream::new(lopdf::Dictionary::new(), content.finish().to_vec());
 
         for &page_id in &pages {
             let watermark_id = doc.add_object(watermark_stream.clone());
@@ -1276,7 +1292,7 @@ mod tests {
         let result = crate::models::RenderResult {
             width: 100,
             height: 100,
-            data: bytes::Bytes::from(vec![0u8; 100]),
+            data: vec![0u8; 100],
             text_items: vec![],
         };
         cache.put(key.clone(), result.clone());
@@ -1299,13 +1315,13 @@ mod tests {
         let result1 = crate::models::RenderResult {
             width: 100,
             height: 100,
-            data: bytes::Bytes::from(vec![0u8; 100]),
+            data: vec![0u8; 100],
             text_items: vec![],
         };
         let result2 = crate::models::RenderResult {
             width: 200,
             height: 200,
-            data: bytes::Bytes::from(vec![0u8; 200]),
+            data: vec![0u8; 200],
             text_items: vec![],
         };
         cache.put(key.clone(), result1);
@@ -1336,13 +1352,13 @@ mod tests {
         let result1 = crate::models::RenderResult {
             width: 100,
             height: 100,
-            data: bytes::Bytes::from(vec![0u8; 100]),
+            data: vec![0u8; 100],
             text_items: vec![],
         };
         let result2 = crate::models::RenderResult {
             width: 200,
             height: 200,
-            data: bytes::Bytes::from(vec![0u8; 200]),
+            data: vec![0u8; 200],
             text_items: vec![],
         };
         cache.put(key1.clone(), result1);
@@ -1493,11 +1509,9 @@ mod tests {
         data[0] = 100;
         let result = DocumentStore::detect_content_bbox_parallel(&data, 10, 10);
         assert!(result.is_some());
-        let (min_x, min_y, max_x, max_y) = result.unwrap();
+        let (min_x, min_y, _max_x, _max_y) = result.unwrap();
         assert!(min_x <= 10);
         assert!(min_y <= 10);
-        assert!(max_x >= 0);
-        assert!(max_y >= 0);
     }
 
     #[test]

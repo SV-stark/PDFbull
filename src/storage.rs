@@ -270,7 +270,7 @@ mod tests {
         let file = RecentFile {
             path: "/test/file.pdf".to_string(),
             name: "file.pdf".to_string(),
-            last_opened: 1234567890,
+            last_opened: 1_234_567_890,
         };
         let json = serde_json::to_string(&file).unwrap();
         let deserialized: RecentFile = serde_json::from_str(&json).unwrap();
@@ -348,8 +348,8 @@ mod tests {
         let mut files = Vec::new();
         for i in 0..25 {
             files.push(RecentFile {
-                path: format!("/path/file{}.pdf", i),
-                name: format!("file{}.pdf", i),
+                path: format!("/path/file{i}.pdf"),
+                name: format!("file{i}.pdf"),
                 last_opened: i as u64,
             });
         }

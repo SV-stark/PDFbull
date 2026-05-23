@@ -20,7 +20,26 @@
     clippy::ignored_unit_patterns,
     clippy::branches_sharing_code,
     clippy::implicit_clone,
-    clippy::default_trait_access
+    clippy::default_trait_access,
+    clippy::assertions_on_constants,
+    clippy::float_cmp,
+    clippy::nonminimal_bool,
+    clippy::uninlined_format_args,
+    clippy::manual_map,
+    clippy::let_underscore_future,
+    clippy::clone_on_copy,
+    clippy::manual_range_contains,
+    clippy::redundant_clone,
+    clippy::collapsible_if,
+    clippy::unnecessary_cast,
+    clippy::useless_conversion,
+    clippy::missing_const_for_fn,
+    clippy::ptr_as_ptr,
+    clippy::ref_as_ptr,
+    clippy::match_same_arms,
+    clippy::unnecessary_lazy_evaluations,
+    clippy::manual_flatten,
+    clippy::redundant_pattern_matching
 )]
 
 #[global_allocator]

@@ -930,7 +930,7 @@ mod tests {
         let file = RecentFile {
             path: "/path/to/file.pdf".to_string(),
             name: "file.pdf".to_string(),
-            last_opened: 1234567890,
+            last_opened: 1_234_567_890,
         };
         let json = serde_json::to_string(&file).unwrap();
         let deserialized: RecentFile = serde_json::from_str(&json).unwrap();
@@ -943,7 +943,7 @@ mod tests {
         let bookmark = PageBookmark {
             page: 5,
             label: "Chapter 1".to_string(),
-            created_at: 1234567890,
+            created_at: 1_234_567_890,
         };
         let json = serde_json::to_string(&bookmark).unwrap();
         let deserialized: PageBookmark = serde_json::from_str(&json).unwrap();
@@ -1007,7 +1007,7 @@ mod tests {
         let result = RenderResult {
             width: 100,
             height: 200,
-            data: bytes::Bytes::from(vec![1, 2, 3, 4]),
+            data: vec![1, 2, 3, 4],
             text_items: vec![TextItem {
                 text: "test".to_string(),
                 x: 0.0,

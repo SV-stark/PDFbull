@@ -11,7 +11,7 @@ unsafe extern "system" {
 const SW_RESTORE: i32 = 9;
 
 pub fn ensure_single_instance(args: &[String]) -> Result<bool, Box<dyn std::error::Error>> {
-    use interprocess::local_socket::{prelude::*, GenericNamespaced, Stream};
+    use interprocess::local_socket::{GenericNamespaced, Stream, prelude::*};
     use std::io::Write;
 
     let name = "pdfbull-single-instance.sock".to_ns_name::<GenericNamespaced>()?;

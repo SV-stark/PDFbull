@@ -47,8 +47,9 @@ pub fn handle_search_message(app: &mut PdfBullApp, message: Message) -> Task<Mes
             Task::perform(
                 async move {
                     let (resp_tx, resp_rx) = oneshot::channel();
-                    if let Err(e) =
-                        cmd_tx.send(crate::commands::PdfCommand::Search(doc_id, query, resp_tx)).await
+                    if let Err(e) = cmd_tx
+                        .send(crate::commands::PdfCommand::Search(doc_id, query, resp_tx))
+                        .await
                     {
                         tracing::error!("Failed to send Search command: {e}");
                         return Err(crate::models::PdfError::EngineDied);

@@ -105,9 +105,11 @@ pub fn handle_tab_message(app: &mut PdfBullApp, message: Message) -> Task<Messag
                     return Task::perform(
                         async move {
                             let (resp_tx, resp_rx) = tokio::sync::oneshot::channel();
-                            let _ = cmd_tx.send(crate::commands::PdfCommand::LoadAnnotations(
-                                doc_id, path_str, resp_tx,
-                            )).await;
+                            let _ = cmd_tx
+                                .send(crate::commands::PdfCommand::LoadAnnotations(
+                                    doc_id, path_str, resp_tx,
+                                ))
+                                .await;
                             match resp_rx.await {
                                 Ok(Ok(annotations)) => (doc_id, annotations),
                                 Ok(Err(_)) | Err(_) => (doc_id, Vec::new()),
@@ -159,8 +161,9 @@ pub fn handle_tab_message(app: &mut PdfBullApp, message: Message) -> Task<Messag
                 return Task::perform(
                     async move {
                         let (resp_tx, resp_rx) = tokio::sync::oneshot::channel();
-                        if let Err(e) =
-                            cmd_tx.send(crate::commands::PdfCommand::Open(path_s, doc_id, resp_tx)).await
+                        if let Err(e) = cmd_tx
+                            .send(crate::commands::PdfCommand::Open(path_s, doc_id, resp_tx))
+                            .await
                         {
                             tracing::error!("Failed to send Open command: {e}");
                             return Err(crate::models::PdfError::EngineDied);
@@ -200,7 +203,9 @@ pub fn handle_tab_message(app: &mut PdfBullApp, message: Message) -> Task<Messag
                 let cmd_tx = engine.cmd_tx.clone();
                 let doc_id = tab.id;
                 tokio::spawn(async move {
-                    let _ = cmd_tx.send(crate::commands::PdfCommand::Close(doc_id)).await;
+                    let _ = cmd_tx
+                        .send(crate::commands::PdfCommand::Close(doc_id))
+                        .await;
                 });
             }
 
@@ -289,7 +294,9 @@ pub fn handle_tab_message(app: &mut PdfBullApp, message: Message) -> Task<Messag
                     let cmd_tx_close = engine.cmd_tx.clone();
                     let cmd_tx_open = engine.cmd_tx.clone();
                     tokio::spawn(async move {
-                         let _ = cmd_tx_close.send(crate::commands::PdfCommand::Close(doc_id)).await;
+                        let _ = cmd_tx_close
+                            .send(crate::commands::PdfCommand::Close(doc_id))
+                            .await;
                     });
 
                     let new_tab = DocumentTab::new(path.clone());
@@ -301,9 +308,12 @@ pub fn handle_tab_message(app: &mut PdfBullApp, message: Message) -> Task<Messag
                     return Task::perform(
                         async move {
                             let (resp_tx, resp_rx) = tokio::sync::oneshot::channel();
-                            if let Err(e) = cmd_tx_open.send(crate::commands::PdfCommand::Open(
-                                path_s, new_doc_id, resp_tx,
-                            )).await {
+                            if let Err(e) = cmd_tx_open
+                                .send(crate::commands::PdfCommand::Open(
+                                    path_s, new_doc_id, resp_tx,
+                                ))
+                                .await
+                            {
                                 tracing::error!("Failed to send Open command: {e}");
                                 return Err(crate::models::PdfError::EngineDied);
                             }

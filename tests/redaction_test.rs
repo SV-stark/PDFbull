@@ -28,9 +28,13 @@ fn test_real_redaction_removes_text() {
     let text_y = 500.0;
     let text_width = 250.0;
     let text_height = 30.0;
-    let mut text =
-        PdfPageTextObject::new(&doc, "CONFIDENTIAL_SSN_12345", helvetica, PdfPoints::new(16.0))
-            .unwrap();
+    let mut text = PdfPageTextObject::new(
+        &doc,
+        "CONFIDENTIAL_SSN_12345",
+        helvetica,
+        PdfPoints::new(16.0),
+    )
+    .unwrap();
     text.translate(PdfPoints::new(text_x), PdfPoints::new(text_y))
         .unwrap();
     page.objects_mut().add_text_object(text).unwrap();
@@ -46,7 +50,9 @@ fn test_real_redaction_removes_text() {
         .open_document(&temp_path.to_string_lossy(), doc_id)
         .expect("Failed to open document");
 
-    let original_text = store.extract_text(doc_id, 0).expect("Failed to extract text");
+    let original_text = store
+        .extract_text(doc_id, 0)
+        .expect("Failed to extract text");
     assert!(original_text.contains("CONFIDENTIAL_SSN_12345"));
 
     // 2. Apply our new redaction over that coordinate region
@@ -65,7 +71,11 @@ fn test_real_redaction_removes_text() {
 
     let redacted_path = std::env::temp_dir().join("test_redaction_after.pdf");
     store
-        .save_annotations(doc_id, &[ann], Some(redacted_path.to_string_lossy().to_string()))
+        .save_annotations(
+            doc_id,
+            &[ann],
+            Some(redacted_path.to_string_lossy().to_string()),
+        )
         .expect("Failed to save redactions");
 
     // Close before opening redacted one
@@ -77,8 +87,10 @@ fn test_real_redaction_removes_text() {
         .open_document(&redacted_path.to_string_lossy(), redacted_doc_id)
         .expect("Failed to open redacted document");
 
-    let redacted_text = store.extract_text(redacted_doc_id, 0).expect("Failed to extract redacted text");
-    
+    let redacted_text = store
+        .extract_text(redacted_doc_id, 0)
+        .expect("Failed to extract redacted text");
+
     // Assert that the redacted text is completely gone!
     assert!(
         !redacted_text.contains("CONFIDENTIAL_SSN_12345"),

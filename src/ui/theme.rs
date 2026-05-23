@@ -118,17 +118,18 @@ pub fn hex_to_rgb(hex: &str) -> (f32, f32, f32) {
     let input = if hex.starts_with('#') {
         hex.to_string()
     } else {
-        format!("#{}", hex)
+        format!("#{hex}")
     };
     csscolorparser::parse(&input)
         .map(|c| {
             let arr = c.to_array();
-            (arr[0], arr[1], arr[2])
+            (arr[0] as f32, arr[1] as f32, arr[2] as f32)
         })
         .unwrap_or((0.0, 0.0, 0.0))
 }
 
 #[cfg(test)]
+#[allow(clippy::assertions_on_constants, clippy::float_cmp)]
 mod tests {
     use super::*;
 
