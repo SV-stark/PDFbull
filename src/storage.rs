@@ -5,43 +5,31 @@ use std::path::PathBuf;
 use time::OffsetDateTime;
 
 pub fn time_ago(unix_secs: u64) -> String {
-    if let Ok(past) = OffsetDateTime::from_unix_timestamp(unix_secs as i64) {
-        let now = OffsetDateTime::now_utc();
-        let diff = now - past;
-        let secs = diff.whole_seconds();
-
-        if secs < 0 || unix_secs == u64::MAX {
-            return "unknown".into();
-        }
-
-        let today = now.date();
-        let past_date = past.date();
-
-        if past_date == today {
-            if secs < 60 {
-                "just now".into()
-            } else if secs < 3600 {
-                let m = secs / 60;
-                format!("{m} min{} ago", if m == 1 { "" } else { "s" })
-            } else {
-                let h = secs / 3600;
-                format!("{h} hour{} ago", if h == 1 { "" } else { "s" })
-            }
-        } else if past_date == today.previous_day().unwrap_or(today) {
-            "yesterday".into()
+    if unix_secs == u64::MAX {
+        return "unknown".into();
+    }
+    let now = OffsetDateTime::now_utc().unix_timestamp() as u64;
+    if unix_secs > now {
+        return "unknown".into();
+    }
+    let diff_secs = now - unix_secs;
+    if diff_secs >= 30 * 24 * 3600 {
+        if let Ok(past) = OffsetDateTime::from_unix_timestamp(unix_secs as i64) {
+            let format =
+                time::format_description::parse("[month repr:short] [day], [year]").unwrap();
+            past.format(&format)
+                .unwrap_or_else(|_| "unknown".to_string())
         } else {
-            let d = (today - past_date).whole_days();
-            if d < 30 {
-                format!("{d} day{} ago", if d == 1 { "" } else { "s" })
-            } else {
-                let format =
-                    time::format_description::parse("[month repr:short] [day], [year]").unwrap();
-                past.format(&format)
-                    .unwrap_or_else(|_| "unknown".to_string())
-            }
+            "unknown".into()
         }
     } else {
-        "unknown".into()
+        let duration = std::time::Duration::from_secs(diff_secs);
+        let res = timeago::Formatter::new().convert(duration);
+        if res == "now" {
+            "just now".to_string()
+        } else {
+            res
+        }
     }
 }
 
@@ -74,17 +62,13 @@ pub fn get_config_dir() -> PathBuf {
 }
 
 fn atomic_write(path: &PathBuf, data: &str) -> io::Result<()> {
-    let tmp_path = path.with_extension("tmp");
-
-    {
-        let mut file = fs::File::create(&tmp_path)?;
-        file.write_all(data.as_bytes())?;
-        file.sync_all()?;
-    }
-
-    fs::rename(&tmp_path, path)?;
-
-    Ok(())
+    use atomicwrites::{AllowOverwrite, AtomicFile};
+    let af = AtomicFile::new(path, AllowOverwrite);
+    af.write(|f| f.write_all(data.as_bytes()))
+        .map_err(|e| match e {
+            atomicwrites::Error::User(io_err) => io_err,
+            atomicwrites::Error::Internal(io_err) => io_err,
+        })
 }
 
 pub fn load_settings() -> AppSettings {
@@ -221,14 +205,14 @@ mod tests {
     fn test_time_ago_minutes() {
         let two_mins_ago = OffsetDateTime::now_utc().unix_timestamp() as u64 - 120;
         let result = time_ago(two_mins_ago);
-        assert!(result.contains("mins"));
+        assert!(result.contains("minute"));
     }
 
     #[test]
     fn test_time_ago_one_minute() {
         let one_min_ago = OffsetDateTime::now_utc().unix_timestamp() as u64 - 60;
         let result = time_ago(one_min_ago);
-        assert_eq!(result, "1 min ago");
+        assert_eq!(result, "1 minute ago");
     }
 
     #[test]
@@ -242,21 +226,21 @@ mod tests {
     fn test_time_ago_hours() {
         let three_hours_ago = OffsetDateTime::now_utc().unix_timestamp() as u64 - 10_800;
         let result = time_ago(three_hours_ago);
-        assert!(result.contains("hours"));
+        assert!(result.contains("hour"));
     }
 
     #[test]
     fn test_time_ago_yesterday() {
         let yesterday = OffsetDateTime::now_utc().unix_timestamp() as u64 - 86_400;
         let result = time_ago(yesterday);
-        assert_eq!(result, "yesterday");
+        assert_eq!(result, "1 day ago");
     }
 
     #[test]
     fn test_time_ago_days() {
         let five_days_ago = OffsetDateTime::now_utc().unix_timestamp() as u64 - 432_000;
         let result = time_ago(five_days_ago);
-        assert!(result.contains("days"));
+        assert!(result.contains("day"));
     }
 
     #[test]

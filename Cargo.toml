@@ -30,6 +30,9 @@ thiserror = "2.0"
 arboard = "3"
 lopdf = "0.34"
 pdf-writer = "0.12"
+csscolorparser = "0.6"
+timeago = "0.4"
+atomicwrites = "0.4"
 font-kit = "0.14"
 winprint = { version = "0.2.0", features = ["pdfium"] }
 oxipng = { version = "10.1.0", default-features = false, features = ["parallel"] }

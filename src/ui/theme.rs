@@ -114,14 +114,18 @@ pub fn input_field(_theme: &iced::Theme) -> iced::widget::container::Style {
 }
 
 pub fn hex_to_rgb(hex: &str) -> (f32, f32, f32) {
-    let hex = hex.trim().trim_start_matches('#');
-    if hex.len() != 6 {
-        return (0.0, 0.0, 0.0);
-    }
-    let r = f32::from(u8::from_str_radix(&hex[0..2], 16).unwrap_or(0)) / 255.0;
-    let g = f32::from(u8::from_str_radix(&hex[2..4], 16).unwrap_or(0)) / 255.0;
-    let b = f32::from(u8::from_str_radix(&hex[4..6], 16).unwrap_or(0)) / 255.0;
-    (r, g, b)
+    let hex = hex.trim();
+    let input = if hex.starts_with('#') {
+        hex.to_string()
+    } else {
+        format!("#{}", hex)
+    };
+    csscolorparser::parse(&input)
+        .map(|c| {
+            let arr = c.to_array();
+            (arr[0], arr[1], arr[2])
+        })
+        .unwrap_or((0.0, 0.0, 0.0))
 }
 
 #[cfg(test)]

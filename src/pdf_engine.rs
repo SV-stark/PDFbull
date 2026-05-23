@@ -1077,12 +1077,14 @@ impl<'a> DocumentStore<'a> {
                 )])),
             )])));
 
-        let escaped = text
-            .replace('\\', "\\\\")
-            .replace('(', "\\(")
-            .replace(')', "\\)");
-        let content = format!("BT /F1 48 Tf 0.7 0.7 0.7 rg 1 0 0 1 200 400 Tm ({escaped}) Tj ET\n");
-        let watermark_stream = lopdf::Stream::new(lopdf::Dictionary::new(), content.into_bytes());
+        let mut content = pdf_writer::Content::new();
+        content.begin_text();
+        content.tf(pdf_writer::Name(b"F1"), 48.0);
+        content.rg(0.7, 0.7, 0.7);
+        content.tm(1.0, 0.0, 0.0, 1.0, 200.0, 400.0);
+        content.tj(pdf_writer::Str(text.as_bytes()));
+        content.end_text();
+        let watermark_stream = lopdf::Stream::new(lopdf::Dictionary::new(), content.finish().to_vec());
 
         for &page_id in &pages {
             let watermark_id = doc.add_object(watermark_stream.clone());
