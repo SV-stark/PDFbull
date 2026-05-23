@@ -12,7 +12,7 @@ repository = "https://github.com/SV-stark/PDFbull"
 [dependencies]
 iced = { version = "0.14", features = ["image", "svg", "canvas", "tokio", "advanced"] }
 iced_draggable_tabs = "0.1"
-pdfium-render = { version = "0.8", features = ["thread_safe"] }
+pdfium-render = { version = "0.9", features = ["thread_safe"] }
 tokio = { version = "1.0", features = ["full"] }
 rfd = "0.14"
 native-dialog = "0.7"

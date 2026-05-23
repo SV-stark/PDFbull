@@ -20,49 +20,46 @@ impl canvas::Program<crate::message::Message> for AnnotationCanvas {
     fn update(
         &self,
         _state: &mut Self::State,
-        event: canvas::Event,
+        event: &iced::Event,
         bounds: Rectangle,
         cursor: iced::mouse::Cursor,
-    ) -> (canvas::Action, Option<crate::message::Message>) {
+    ) -> Option<canvas::Action<crate::message::Message>> {
         if !self.active {
-            return (canvas::Action::Pass, None);
+            return None;
         }
 
         match event {
-            canvas::Event::Mouse(iced::mouse::Event::ButtonPressed(iced::mouse::Button::Left)) => {
+            iced::Event::Mouse(iced::mouse::Event::ButtonPressed(iced::mouse::Button::Left)) => {
                 if let Some(position) = cursor.position_in(bounds) {
-                    (
-                        canvas::Action::Capture,
-                        Some(crate::message::Message::AnnotationDragStart {
+                    Some(canvas::Action::publish(
+                        crate::message::Message::AnnotationDragStart {
                             page: self.page_idx,
                             x: position.x,
                             y: position.y,
-                        }),
-                    )
+                        },
+                    ))
                 } else {
-                    (canvas::Action::Pass, None)
+                    None
                 }
             }
-            canvas::Event::Mouse(iced::mouse::Event::CursorMoved { .. }) => {
+            iced::Event::Mouse(iced::mouse::Event::CursorMoved { .. }) => {
                 if let Some(position) = cursor.position_in(bounds) {
-                    (
-                        canvas::Action::Capture,
-                        Some(crate::message::Message::AnnotationDragUpdate {
+                    Some(canvas::Action::publish(
+                        crate::message::Message::AnnotationDragUpdate {
                             x: position.x,
                             y: position.y,
-                        }),
-                    )
+                        },
+                    ))
                 } else {
-                    (canvas::Action::Pass, None)
+                    None
                 }
             }
-            canvas::Event::Mouse(iced::mouse::Event::ButtonReleased(iced::mouse::Button::Left)) => {
-                (
-                    canvas::Action::Capture,
-                    Some(crate::message::Message::AnnotationDragEnd),
-                )
+            iced::Event::Mouse(iced::mouse::Event::ButtonReleased(iced::mouse::Button::Left)) => {
+                Some(canvas::Action::publish(
+                    crate::message::Message::AnnotationDragEnd,
+                ))
             }
-            _ => (canvas::Action::Pass, None),
+            _ => None,
         }
     }
 

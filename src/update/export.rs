@@ -31,7 +31,7 @@ pub fn handle_export_message(app: &mut PdfBullApp, message: Message) -> Task<Mes
                             let path = f.path().to_path_buf();
                             let (resp_tx, resp_rx) = tokio::sync::oneshot::channel();
                             if let Err(e) =
-                                cmd_tx.send(PdfCommand::ExtractText(doc_id, page, resp_tx))
+                                cmd_tx.send(PdfCommand::ExtractText(doc_id, page, resp_tx)).await
                             {
                                 tracing::error!("Failed to send ExtractText command: {e}");
                                 return Err(crate::models::PdfError::EngineDied);
@@ -72,7 +72,7 @@ pub fn handle_export_message(app: &mut PdfBullApp, message: Message) -> Task<Mes
             Task::perform(
                 async move {
                     let (resp_tx, resp_rx) = tokio::sync::oneshot::channel();
-                    if let Err(e) = cmd_tx.send(PdfCommand::ExtractText(doc_id, page, resp_tx)) {
+                    if let Err(e) = cmd_tx.send(PdfCommand::ExtractText(doc_id, page, resp_tx)).await {
                         tracing::error!("Failed to send ExtractText command: {e}");
                         return Err(crate::models::PdfError::EngineDied);
                     }
@@ -128,7 +128,7 @@ pub fn handle_export_message(app: &mut PdfBullApp, message: Message) -> Task<Mes
                     };
                     if let Err(_e) = cmd_tx.send(crate::commands::PdfCommand::Render(
                         doc_id, page, options, resp_tx,
-                    )) {
+                    )).await {
                         return Err(crate::models::PdfError::EngineDied);
                     }
                     match resp_rx.await {
@@ -202,7 +202,7 @@ pub fn handle_export_message(app: &mut PdfBullApp, message: Message) -> Task<Mes
                             let path = f.path().to_path_buf();
                             let (resp_tx, resp_rx) = tokio::sync::oneshot::channel();
                             if let Err(e) =
-                                cmd_tx.send(PdfCommand::ExportImage(doc_id, page, zoom, resp_tx))
+                                cmd_tx.send(PdfCommand::ExportImage(doc_id, page, zoom, resp_tx)).await
                             {
                                 tracing::error!("Failed to send ExportImage command: {e}");
                                 return Err(crate::models::PdfError::EngineDied);
@@ -278,7 +278,7 @@ pub fn handle_export_message(app: &mut PdfBullApp, message: Message) -> Task<Mes
                                 zoom,
                                 path.clone(),
                                 resp_tx,
-                            )) {
+                            )).await {
                                 tracing::error!("Failed to send ExportImages command: {e}");
                                 return Err(crate::models::PdfError::EngineDied);
                             }
@@ -351,6 +351,7 @@ pub fn handle_export_message(app: &mut PdfBullApp, message: Message) -> Task<Mes
                                 f.path().to_string_lossy().to_string(),
                                 tx,
                             ))
+                            .await
                             .map_err(|_| {
                                 crate::models::PdfError::EngineError(
                                     "Failed to communicate with engine".into(),
@@ -394,7 +395,7 @@ pub fn handle_export_message(app: &mut PdfBullApp, message: Message) -> Task<Mes
                     if let Some(f) = folder {
                         let out_dir = f.path().to_string_lossy().to_string();
                         let (tx, rx) = tokio::sync::oneshot::channel();
-                        let _ = cmd_tx.send(PdfCommand::Split(path, pages, out_dir, tx));
+                        let _ = cmd_tx.send(PdfCommand::Split(path, pages, out_dir, tx)).await;
                         match rx.await {
                             Ok(res) => res,
                             Err(_) => Err(crate::models::PdfError::EngineDied),
@@ -428,6 +429,7 @@ pub fn handle_export_message(app: &mut PdfBullApp, message: Message) -> Task<Mes
                     let (tx, rx) = tokio::sync::oneshot::channel();
                     cmd_tx
                         .send(PdfCommand::GetFormFields(path, tx))
+                        .await
                         .map_err(|_| crate::models::PdfError::EngineDied)?;
                     rx.await
                         .map_err(|_| crate::models::PdfError::ChannelClosed)?
@@ -470,6 +472,7 @@ pub fn handle_export_message(app: &mut PdfBullApp, message: Message) -> Task<Mes
                                 f.path().to_string_lossy().to_string(),
                                 tx,
                             ))
+                            .await
                             .map_err(|_| crate::models::PdfError::EngineDied)?;
                         rx.await
                             .map_err(|_| crate::models::PdfError::ChannelClosed)?
@@ -501,7 +504,7 @@ pub fn handle_export_message(app: &mut PdfBullApp, message: Message) -> Task<Mes
             Task::perform(
                 async move {
                     let (tx, rx) = tokio::sync::oneshot::channel();
-                    let _ = cmd_tx.send(PdfCommand::ListPrinters(tx));
+                    let _ = cmd_tx.send(PdfCommand::ListPrinters(tx)).await;
                     match rx.await {
                         Ok(res) => res,
                         Err(_) => Err(crate::models::PdfError::EngineDied),
@@ -581,7 +584,7 @@ pub fn handle_export_message(app: &mut PdfBullApp, message: Message) -> Task<Mes
                     } else {
                         Some(printer)
                     };
-                    let _ = cmd_tx.send(PdfCommand::PrintPdf(path, printer_opt, tx));
+                    let _ = cmd_tx.send(PdfCommand::PrintPdf(path, printer_opt, tx)).await;
                     match rx.await {
                         Ok(res) => res,
                         Err(_) => Err(crate::models::PdfError::EngineDied),
@@ -619,7 +622,7 @@ pub fn handle_export_message(app: &mut PdfBullApp, message: Message) -> Task<Mes
                             let out = f.path().to_string_lossy().to_string();
                             let (tx, rx) = tokio::sync::oneshot::channel();
                             let _ =
-                                cmd_tx.send(PdfCommand::AddWatermark(path, text, out.clone(), tx));
+                                cmd_tx.send(PdfCommand::AddWatermark(path, text, out.clone(), tx)).await;
                             match rx.await {
                                 Ok(Ok(path)) => Ok(path),
                                 Ok(Err(e)) => Err(e),

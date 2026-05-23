@@ -1,7 +1,8 @@
 use crate::commands::PdfCommand;
 use crate::pdf_engine::{DocumentStore, SharedRenderCache, create_render_cache};
 use pdfium_render::prelude::*;
-
+use std::collections::HashMap;
+use std::sync::{Arc, RwLock};
 use tokio::sync::mpsc;
 
 #[derive(Debug, Clone)]
@@ -11,130 +12,238 @@ pub struct EngineState {
 
 #[must_use]
 pub fn spawn_engine_thread(cache_size: u64, max_memory_mb: u64) -> EngineState {
-    let (cmd_tx, mut cmd_rx) = mpsc::channel::<PdfCommand>(64);
+    let (cmd_tx, mut cmd_rx) = mpsc::channel::<PdfCommand>(128);
 
     let render_cache: SharedRenderCache = create_render_cache(cache_size, max_memory_mb);
 
-    std::thread::spawn(move || {
-        let pdfium = if let Ok(p) = Pdfium::bind_to_system_library() {
-            Pdfium::new(p)
-        } else {
-            tracing::error!("Failed to bind to Pdfium system library. Attempting local search...");
-            match Pdfium::bind_to_library(Pdfium::pdfium_platform_library_name_at_path("./")) {
-                Ok(p) => Pdfium::new(p),
-                Err(e) => {
-                    tracing::error!("CRITICAL: Could not find Pdfium: {e}");
-                    return;
-                }
-            }
-        };
+    // Shared paths mapping between all concurrent threads
+    let shared_paths = Arc::new(RwLock::new(HashMap::new()));
 
-        let mut store = DocumentStore::new(&pdfium, render_cache.clone());
+    // MPMC channel for distributing tasks across the thread pool
+    let (worker_tx, worker_rx) = crossbeam_channel::bounded::<PdfCommand>(256);
 
-        while let Some(cmd) = cmd_rx.blocking_recv() {
-            match cmd {
-                PdfCommand::Open(path, doc_id, tx) => {
-                    let res = store.open_document(&path, doc_id);
-                    let _ = tx.send(res);
-                }
-                PdfCommand::Render(doc_id, page_num, options, tx) => {
-                    let res = store.render_page(doc_id, page_num, options);
-                    let _ = tx.send(res);
-                }
-                PdfCommand::RenderThumbnail(doc_id, page_num, scale, tx) => {
-                    let options = crate::pdf_engine::RenderOptions {
-                        scale,
-                        rotation: 0,
-                        filter: crate::pdf_engine::RenderFilter::None,
-                        auto_crop: false,
-                        quality: crate::pdf_engine::RenderQuality::Low,
-                    };
-                    let res = store.render_thumbnail(doc_id, page_num, options);
-                    let _ = tx.send(res);
-                }
-                PdfCommand::Close(doc_id) => {
-                    store.close_document(doc_id);
-                }
-                PdfCommand::ExtractText(doc_id, page_num, tx) => {
-                    let res = store.extract_text(doc_id, page_num);
-                    let _ = tx.send(res);
-                }
-                PdfCommand::Search(doc_id, query, tx) => {
-                    let res = store.search(doc_id, &query);
-                    let _ = tx.send(res);
-                }
-                PdfCommand::SaveAnnotations(doc_id, annotations, tx) => {
-                    let res = store.save_annotations(doc_id, &annotations, None);
-                    let _ = tx.send(res);
-                }
-                PdfCommand::ExportImage(doc_id, page_num, scale, tx) => {
-                    let res = store.export_page_as_image(doc_id, page_num, scale);
-                    let _ = tx.send(res);
-                }
-                PdfCommand::ExportImages(doc_id, pages, scale, out_dir, tx) => {
-                    let out_path = std::path::Path::new(&out_dir);
-                    if !out_path.is_dir() {
-                        let _ = tx.send(Err(crate::models::PdfError::IoError(
-                            "Output directory does not exist".into(),
-                        )));
-                        continue;
-                    }
-                    let mut paths = Vec::new();
-                    for page_num in pages {
-                        let safe_name = format!("page_{page_num}.png");
-                        let out_file = out_path.join(&safe_name);
-                        if let Ok(buf) = store.export_page_as_image(doc_id, page_num, scale) {
-                            let optimized =
-                                oxipng::optimize_from_memory(&buf, &oxipng::Options::default())
-                                    .unwrap_or(buf);
-                            if std::fs::write(&out_file, optimized).is_ok()
-                                && let Some(path_str) = out_file.to_str()
-                            {
-                                paths.push(path_str.to_string());
-                            }
-                        }
-                    }
-                    let _ = tx.send(Ok(paths));
-                }
-                PdfCommand::ExportPdf(doc_id, path, annotations, tx) => {
-                    let res = store.save_annotations(doc_id, &annotations, Some(path));
-                    let _ = tx.send(res);
-                }
-                PdfCommand::Merge(paths, out, tx) => {
-                    let res = store.merge_documents(paths, out);
-                    let _ = tx.send(res);
-                }
-                PdfCommand::Split(path, pages, out, tx) => {
-                    let res = store.split_pdf(&path, pages, out);
-                    let _ = tx.send(res);
-                }
-                PdfCommand::GetFormFields(path, tx) => {
-                    let res = store.get_form_fields(&path);
-                    let _ = tx.send(res);
-                }
-                PdfCommand::FillForm(path, fields, out, tx) => {
-                    let res = store.fill_form(&path, fields, out);
-                    let _ = tx.send(res);
-                }
-                PdfCommand::PrintPdf(path, printer_name, tx) => {
-                    let res = crate::pdf_engine::DocumentStore::print_document(
-                        &path,
-                        printer_name.as_deref(),
-                    );
-                    let _ = tx.send(res);
-                }
-                PdfCommand::ListPrinters(tx) => {
-                    let _ = tx.send(crate::pdf_engine::DocumentStore::list_printers());
-                }
-                PdfCommand::AddWatermark(input, text, output, tx) => {
-                    let res =
-                        crate::pdf_engine::DocumentStore::add_watermark(&input, &text, &output);
-                    let _ = tx.send(res);
-                }
-                _ => {}
-            }
+    // Forward Tokio commands into the crossbeam MPMC channel
+    tokio::spawn(async move {
+        while let Some(cmd) = cmd_rx.recv().await {
+            let _ = worker_tx.send(cmd);
         }
     });
+
+    // Spawn 4 OS worker threads to run parallel PDFium operations
+    for thread_idx in 0..4 {
+        let rx = worker_rx.clone();
+        let cache = render_cache.clone();
+        let paths = shared_paths.clone();
+
+        std::thread::spawn(move || {
+            let pdfium = if let Ok(p) = Pdfium::bind_to_system_library() {
+                Pdfium::new(p)
+            } else {
+                tracing::error!("Failed to bind to Pdfium system library. Attempting local search...");
+                match Pdfium::bind_to_library(Pdfium::pdfium_platform_library_name_at_path("./")) {
+                    Ok(p) => Pdfium::new(p),
+                    Err(e) => {
+                        tracing::error!("CRITICAL [Thread {thread_idx}]: Could not find Pdfium: {e}");
+                        return;
+                    }
+                }
+            };
+
+            let mut store = DocumentStore::new(&pdfium, cache);
+
+            while let Ok(cmd) = rx.recv() {
+                match cmd {
+                    PdfCommand::Open(path, doc_id, tx) => {
+                        let res = store.open_document(&path, doc_id);
+                        if res.is_ok() {
+                            if let Ok(mut guard) = paths.write() {
+                                guard.insert(doc_id, path);
+                            }
+                        }
+                        let _ = tx.send(res);
+                    }
+                    PdfCommand::Render(doc_id, page_num, options, tx) => {
+                        if !store.has_document(doc_id) {
+                            let path_opt = if let Ok(guard) = paths.read() {
+                                guard.get(&doc_id).cloned()
+                            } else {
+                                None
+                            };
+                            if let Some(path) = path_opt {
+                                let _ = store.open_document(&path, doc_id);
+                            }
+                        }
+                        let res = store.render_page(doc_id, page_num, options);
+                        let _ = tx.send(res);
+                    }
+                    PdfCommand::RenderThumbnail(doc_id, page_num, scale, tx) => {
+                        if !store.has_document(doc_id) {
+                            let path_opt = if let Ok(guard) = paths.read() {
+                                guard.get(&doc_id).cloned()
+                            } else {
+                                None
+                            };
+                            if let Some(path) = path_opt {
+                                let _ = store.open_document(&path, doc_id);
+                            }
+                        }
+                        let options = crate::pdf_engine::RenderOptions {
+                            scale,
+                            rotation: 0,
+                            filter: crate::pdf_engine::RenderFilter::None,
+                            auto_crop: false,
+                            quality: crate::pdf_engine::RenderQuality::Low,
+                        };
+                        let res = store.render_thumbnail(doc_id, page_num, options);
+                        let _ = tx.send(res);
+                    }
+                    PdfCommand::Close(doc_id) => {
+                        store.close_document(doc_id);
+                        if let Ok(mut guard) = paths.write() {
+                            guard.remove(&doc_id);
+                        }
+                    }
+                    PdfCommand::ExtractText(doc_id, page_num, tx) => {
+                        if !store.has_document(doc_id) {
+                            let path_opt = if let Ok(guard) = paths.read() {
+                                guard.get(&doc_id).cloned()
+                            } else {
+                                None
+                            };
+                            if let Some(path) = path_opt {
+                                let _ = store.open_document(&path, doc_id);
+                            }
+                        }
+                        let res = store.extract_text(doc_id, page_num);
+                        let _ = tx.send(res);
+                    }
+                    PdfCommand::Search(doc_id, query, tx) => {
+                        if !store.has_document(doc_id) {
+                            let path_opt = if let Ok(guard) = paths.read() {
+                                guard.get(&doc_id).cloned()
+                            } else {
+                                None
+                            };
+                            if let Some(path) = path_opt {
+                                let _ = store.open_document(&path, doc_id);
+                            }
+                        }
+                        let res = store.search(doc_id, &query);
+                        let _ = tx.send(res);
+                    }
+                    PdfCommand::SaveAnnotations(doc_id, annotations, tx) => {
+                        if !store.has_document(doc_id) {
+                            let path_opt = if let Ok(guard) = paths.read() {
+                                guard.get(&doc_id).cloned()
+                            } else {
+                                None
+                            };
+                            if let Some(path) = path_opt {
+                                let _ = store.open_document(&path, doc_id);
+                            }
+                        }
+                        let res = store.save_annotations(doc_id, &annotations, None);
+                        let _ = tx.send(res);
+                    }
+                    PdfCommand::ExportImage(doc_id, page_num, scale, tx) => {
+                        if !store.has_document(doc_id) {
+                            let path_opt = if let Ok(guard) = paths.read() {
+                                guard.get(&doc_id).cloned()
+                            } else {
+                                None
+                            };
+                            if let Some(path) = path_opt {
+                                let _ = store.open_document(&path, doc_id);
+                            }
+                        }
+                        let res = store.export_page_as_image(doc_id, page_num, scale);
+                        let _ = tx.send(res);
+                    }
+                    PdfCommand::ExportImages(doc_id, pages, scale, out_dir, tx) => {
+                        if !store.has_document(doc_id) {
+                            let path_opt = if let Ok(guard) = paths.read() {
+                                guard.get(&doc_id).cloned()
+                            } else {
+                                None
+                            };
+                            if let Some(path) = path_opt {
+                                let _ = store.open_document(&path, doc_id);
+                            }
+                        }
+                        let out_path = std::path::Path::new(&out_dir);
+                        if !out_path.is_dir() {
+                            let _ = tx.send(Err(crate::models::PdfError::IoError(
+                                "Output directory does not exist".into(),
+                            )));
+                            continue;
+                        }
+                        let mut output_paths = Vec::new();
+                        for page_num in pages {
+                            let safe_name = format!("page_{page_num}.png");
+                            let out_file = out_path.join(&safe_name);
+                            if let Ok(buf) = store.export_page_as_image(doc_id, page_num, scale) {
+                                let optimized =
+                                    oxipng::optimize_from_memory(&buf, &oxipng::Options::default())
+                                        .unwrap_or(buf);
+                                if std::fs::write(&out_file, optimized).is_ok()
+                                    && let Some(path_str) = out_file.to_str()
+                                {
+                                    output_paths.push(path_str.to_string());
+                                }
+                            }
+                        }
+                        let _ = tx.send(Ok(output_paths));
+                    }
+                    PdfCommand::ExportPdf(doc_id, path, annotations, tx) => {
+                        if !store.has_document(doc_id) {
+                            let path_opt = if let Ok(guard) = paths.read() {
+                                guard.get(&doc_id).cloned()
+                            } else {
+                                None
+                            };
+                            if let Some(path) = path_opt {
+                                let _ = store.open_document(&path, doc_id);
+                            }
+                        }
+                        let res = store.save_annotations(doc_id, &annotations, Some(path));
+                        let _ = tx.send(res);
+                    }
+                    PdfCommand::Merge(paths_list, out, tx) => {
+                        let res = store.merge_documents(paths_list, out);
+                        let _ = tx.send(res);
+                    }
+                    PdfCommand::Split(path, pages, out, tx) => {
+                        let res = store.split_pdf(&path, pages, out);
+                        let _ = tx.send(res);
+                    }
+                    PdfCommand::GetFormFields(path, tx) => {
+                        let res = store.get_form_fields(&path);
+                        let _ = tx.send(res);
+                    }
+                    PdfCommand::FillForm(path, fields, out, tx) => {
+                        let res = store.fill_form(&path, fields, out);
+                        let _ = tx.send(res);
+                    }
+                    PdfCommand::PrintPdf(path, printer_name, tx) => {
+                        let res = crate::pdf_engine::DocumentStore::print_document(
+                            &path,
+                            printer_name.as_deref(),
+                        );
+                        let _ = tx.send(res);
+                    }
+                    PdfCommand::ListPrinters(tx) => {
+                        let _ = tx.send(crate::pdf_engine::DocumentStore::list_printers());
+                    }
+                    PdfCommand::AddWatermark(input, text, output, tx) => {
+                        let res =
+                            crate::pdf_engine::DocumentStore::add_watermark(&input, &text, &output);
+                        let _ = tx.send(res);
+                    }
+                    _ => {}
+                }
+            }
+        });
+    }
 
     EngineState { cmd_tx }
 }

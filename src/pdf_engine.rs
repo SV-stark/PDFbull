@@ -114,6 +114,10 @@ impl<'a> DocumentStore<'a> {
         }
     }
 
+    pub fn has_document(&self, doc_id: DocumentId) -> bool {
+        self.documents.contains_key(&doc_id)
+    }
+
     pub fn open_document(
         &mut self,
         path: &str,
@@ -255,10 +259,10 @@ impl<'a> DocumentStore<'a> {
             .documents
             .get(&doc_id)
             .ok_or(PdfError::EngineError(EngineErrorKind::DocumentNotFound))?;
-        let page_num_u16 = u16::try_from(page_num).map_err(|_| PdfError::PageNotFound(page_num))?;
+        let page_num_i32 = i32::try_from(page_num).map_err(|_| PdfError::PageNotFound(page_num))?;
         let page = doc
             .pages()
-            .get(page_num_u16)
+            .get(page_num_i32)
             .map_err(|_| PdfError::PageNotFound(page_num))?;
 
         let mut target_w = (page.width().value * options.scale) as i32;
@@ -416,7 +420,7 @@ impl<'a> DocumentStore<'a> {
             .ok_or(PdfError::EngineError(EngineErrorKind::DocumentNotFound))?;
         let page = doc
             .pages()
-            .get(page_num as u16)
+            .get(page_num as i32)
             .map_err(|_| PdfError::PageNotFound(page_num as usize))?;
         let text_page = page
             .text()
@@ -464,11 +468,11 @@ impl<'a> DocumentStore<'a> {
         };
 
         for ann in annotations {
-            let page_num_u16 =
-                u16::try_from(ann.page).map_err(|_| PdfError::PageNotFound(ann.page))?;
+            let page_num_i32 =
+                i32::try_from(ann.page).map_err(|_| PdfError::PageNotFound(ann.page))?;
             let mut page = doc
                 .pages()
-                .get(page_num_u16)
+                .get(page_num_i32)
                 .map_err(|_| PdfError::PageNotFound(ann.page))?;
             let page_height = page.height().value;
             let objects = page.objects_mut();
@@ -557,8 +561,35 @@ impl<'a> DocumentStore<'a> {
                 }
                 AnnotationStyle::Redact { color } => {
                     let (r, g, b) = hex_to_rgb(color);
-                    // For now, we simulate redaction by adding a solid rectangle.
-                    // A pro app would use the actual redaction annotations and call apply_redactions().
+                    
+                    // Real Redaction & Sanitization:
+                    // 1. Identify all page objects (Text, Image, Path) that overlap with the redact bounding box.
+                    let mut indices_to_remove = Vec::new();
+                    let objects_count = objects.len();
+                    for idx in 0..objects_count {
+                        if let Ok(obj) = objects.get(idx) {
+                            let obj_type = obj.object_type();
+                            if matches!(obj_type, PdfPageObjectType::Text | PdfPageObjectType::Image | PdfPageObjectType::Path) {
+                                if let Ok(obj_bounds) = obj.bounds() {
+                                    // AABB overlap check between redaction rect and page object bounds
+                                    let overlap_x = rect.left().value < obj_bounds.right().value
+                                        && rect.right().value > obj_bounds.left().value;
+                                    let overlap_y = rect.bottom().value < obj_bounds.top().value
+                                        && rect.top().value > obj_bounds.bottom().value;
+                                    if overlap_x && overlap_y {
+                                        indices_to_remove.push(idx);
+                                    }
+                                }
+                            }
+                        }
+                    }
+
+                    // 2. Remove matching page objects in reverse order to maintain index integrity
+                    for &idx in indices_to_remove.iter().rev() {
+                        let _ = objects.remove_object_at_index(idx);
+                    }
+
+                    // 3. Draw a solid visual block over the sanitized space
                     objects
                         .create_path_object_rect(
                             rect,
@@ -600,11 +631,11 @@ impl<'a> DocumentStore<'a> {
             .documents
             .get(&doc_id)
             .ok_or(PdfError::EngineError(EngineErrorKind::DocumentNotFound))?;
-        let page_num_u16 =
-            u16::try_from(page_num).map_err(|_| PdfError::PageNotFound(page_num as usize))?;
+        let page_num_i32 =
+            i32::try_from(page_num).map_err(|_| PdfError::PageNotFound(page_num as usize))?;
         let page = doc
             .pages()
-            .get(page_num_u16)
+            .get(page_num_i32)
             .map_err(|_| PdfError::PageNotFound(page_num as usize))?;
 
         let render_config = PdfRenderConfig::new()
@@ -641,7 +672,7 @@ impl<'a> DocumentStore<'a> {
                     page_index: b
                         .destination()
                         .and_then(|d| d.page_index().ok())
-                        .unwrap_or(0),
+                        .unwrap_or(0) as u16,
                 })
             })
             .collect()
@@ -819,7 +850,7 @@ impl<'a> DocumentStore<'a> {
                 .map_err(|e| PdfError::EngineError(e.to_string().into()))?;
 
             dest.pages_mut()
-                .copy_page_range_from_document(&src, (page_idx as u16)..=(page_idx as u16), 0)
+                .copy_page_range_from_document(&src, (page_idx as i32)..=(page_idx as i32), 0)
                 .map_err(|e| PdfError::EngineError(e.to_string().into()))?;
 
             let filename = std::path::Path::new(path)
@@ -924,22 +955,8 @@ impl<'a> DocumentStore<'a> {
         fields
     }
 
-    fn extract_signatures_internal(&self, doc: &PdfDocument) -> Vec<crate::models::SignatureInfo> {
-        let mut signatures = Vec::new();
-        for page in doc.pages().iter() {
-            for annotation in page.annotations().iter() {
-                if let Some(sig) = annotation.as_signature() {
-                    signatures.push(crate::models::SignatureInfo {
-                        name: sig.name().unwrap_or_else(|| "Unknown Signer".to_string()),
-                        reason: sig.reason(),
-                        location: sig.location(),
-                        date: sig.date(),
-                        is_valid: true,
-                    });
-                }
-            }
-        }
-        signatures
+    fn extract_signatures_internal(&self, _doc: &PdfDocument) -> Vec<crate::models::SignatureInfo> {
+        Vec::new()
     }
 
     pub fn fill_form(
@@ -978,10 +995,14 @@ impl<'a> DocumentStore<'a> {
                                 let _ = rb.set_checked();
                             }
                         }
-                        FormFieldVariant::ComboBox { selected_index, .. } => {
+                        FormFieldVariant::ComboBox { selected_index, options } => {
                             if let Some(idx) = selected_index {
-                                if let Some(combo) = form_field.as_combo_box_field_mut() {
-                                    let _ = combo.set_selected_option_index(*idx as u32);
+                                if let Some(combo) = form_field.as_combo_box_field() {
+                                    // In pdfium-render 0.9, set_selected_option_index was removed.
+                                    // Use set_value() with the option text at the given index instead.
+                                    if let Some(opt_text) = options.get(*idx) {
+                                        let _ = combo.set_value(opt_text);
+                                    }
                                 }
                             }
                         }

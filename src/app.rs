@@ -331,9 +331,54 @@ impl PdfBullApp {
         let events =
             iced::event::listen_with(|event, _status, _id| Some(Message::IcedEvent(event)));
 
+        let ipc_sub = iced::Subscription::run(|| {
+            iced::stream::channel(
+                10,
+                move |mut output: iced::futures::channel::mpsc::Sender<Message>| async move {
+                    use interprocess::local_socket::{prelude::*, GenericNamespaced, ListenerOptions};
+                    use std::io::{BufReader, BufRead};
+                    use iced::futures::SinkExt;
+
+                    let name = match "pdfbull-single-instance.sock".to_ns_name::<GenericNamespaced>() {
+                        Ok(n) => n,
+                        Err(e) => {
+                            tracing::error!("Failed to create IPC socket name: {e}");
+                            return;
+                        }
+                    };
+
+                    let listener = match ListenerOptions::new().name(name).create_sync() {
+                        Ok(l) => l,
+                        Err(e) => {
+                            tracing::error!("Failed to create IPC listener: {e}");
+                            return;
+                        }
+                    };
+
+                    for conn in listener.incoming() {
+                        if let Ok(stream) = conn {
+                            let mut reader = BufReader::new(stream);
+                            let mut buffer = String::new();
+                            if let Ok(_) = reader.read_line(&mut buffer) {
+                                if let Ok(args) = serde_json::from_str::<Vec<String>>(&buffer) {
+                                    if args.len() > 1 {
+                                        let path_str = &args[1];
+                                        let path_buf = std::path::PathBuf::from(path_str);
+                                        if path_buf.exists() && path_buf.is_file() {
+                                            let _ = output.send(Message::OpenFile(path_buf)).await;
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                },
+            )
+        });
+
         let paths: Vec<std::path::PathBuf> = self.tabs.iter().map(|t| t.path.clone()).collect();
         if paths.is_empty() {
-            return events;
+            return iced::Subscription::batch(vec![events, ipc_sub]);
         }
 
         let watch_sub = iced::Subscription::run_with(("file-watch", paths), |(_id, paths)| {
@@ -380,6 +425,6 @@ impl PdfBullApp {
             )
         });
 
-        iced::Subscription::batch(vec![events, watch_sub])
+        iced::Subscription::batch(vec![events, watch_sub, ipc_sub])
     }
 }
