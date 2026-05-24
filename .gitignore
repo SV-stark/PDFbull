@@ -51,3 +51,8 @@ agents.md
 .desloppify/
 nul
 .aider*
+
+# Antigravity CLI
+.antigravity/
+.antigravitycli/
+
