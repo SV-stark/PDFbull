@@ -1211,6 +1211,7 @@ impl<'a> DocumentStore<'a> {
         Ok(output_path)
     }
 
+    #[cfg(windows)]
     pub fn print_document(path: &str, printer_name: Option<&str>) -> PdfResult<()> {
         use winprint::printer::{FilePrinter, PdfiumPrinter, PrinterDevice};
 
@@ -1236,7 +1237,15 @@ impl<'a> DocumentStore<'a> {
         Ok(())
     }
 
+    #[cfg(not(windows))]
+    pub fn print_document(_path: &str, _printer_name: Option<&str>) -> PdfResult<()> {
+        Err(PdfError::IoError(
+            "Printing is only supported on Windows".into(),
+        ))
+    }
+
     /// Returns a sorted list of all available printer names on this system.
+    #[cfg(windows)]
     pub fn list_printers() -> PdfResult<Vec<String>> {
         use winprint::printer::PrinterDevice;
         PrinterDevice::all()
@@ -1247,6 +1256,11 @@ impl<'a> DocumentStore<'a> {
                 names
             })
             .map_err(|e| PdfError::IoError(format!("Failed to list printers: {e}")))
+    }
+
+    #[cfg(not(windows))]
+    pub fn list_printers() -> PdfResult<Vec<String>> {
+        Ok(Vec::new())
     }
 
     pub fn add_watermark(input_path: &str, text: &str, output_path: &str) -> PdfResult<String> {
