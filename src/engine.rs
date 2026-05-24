@@ -29,26 +29,59 @@ pub fn spawn_engine_thread(cache_size: u64, max_memory_mb: u64) -> EngineState {
         }
     });
 
+    // Sequential initialization lock to prevent concurrent V8 dynamic library loading races
+    let init_lock = Arc::new(std::sync::Mutex::new(()));
+
     // Spawn 4 OS worker threads to run parallel PDFium operations
     for thread_idx in 0..4 {
         let rx = worker_rx.clone();
         let cache = render_cache.clone();
         let paths = shared_paths.clone();
+        let init_lock = init_lock.clone();
 
         std::thread::spawn(move || {
-            let pdfium = if let Ok(p) = Pdfium::bind_to_system_library() {
-                Pdfium::new(p)
-            } else {
-                tracing::error!(
-                    "Failed to bind to Pdfium system library. Attempting local search..."
-                );
-                match Pdfium::bind_to_library(Pdfium::pdfium_platform_library_name_at_path("./")) {
-                    Ok(p) => Pdfium::new(p),
-                    Err(e) => {
-                        tracing::error!(
-                            "CRITICAL [Thread {thread_idx}]: Could not find Pdfium: {e}"
-                        );
-                        return;
+            // Serialize initialization step to guarantee thread safety
+            let pdfium = {
+                let _guard = init_lock.lock().unwrap();
+
+                // 1. Resolve executable's directory
+                let exe_dir_bindings = std::env::current_exe()
+                    .ok()
+                    .and_then(|p| p.parent().map(std::path::Path::to_path_buf))
+                    .and_then(|dir| {
+                        let mut dir_str = dir.to_string_lossy().into_owned();
+                        if !dir_str.ends_with('/') && !dir_str.ends_with('\\') {
+                            #[cfg(windows)]
+                            dir_str.push('\\');
+                            #[cfg(not(windows))]
+                            dir_str.push('/');
+                        }
+                        Pdfium::bind_to_library(Pdfium::pdfium_platform_library_name_at_path(
+                            &dir_str,
+                        ))
+                        .ok()
+                    });
+
+                if let Some(bindings) = exe_dir_bindings {
+                    Pdfium::new(bindings)
+                } else if let Ok(bindings) = Pdfium::bind_to_system_library() {
+                    // 2. Try system paths
+                    Pdfium::new(bindings)
+                } else {
+                    // 3. Fallback to current working directory
+                    tracing::error!(
+                        "Failed to bind to executable directory or system library. Attempting local search..."
+                    );
+                    match Pdfium::bind_to_library(Pdfium::pdfium_platform_library_name_at_path(
+                        "./",
+                    )) {
+                        Ok(bindings) => Pdfium::new(bindings),
+                        Err(e) => {
+                            tracing::error!(
+                                "CRITICAL [Thread {thread_idx}]: Could not find or load Pdfium: {e}"
+                            );
+                            return;
+                        }
                     }
                 }
             };
