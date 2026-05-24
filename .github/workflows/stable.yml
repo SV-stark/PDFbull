@@ -50,18 +50,32 @@ jobs:
           Compress-Archive -Path release_dist/* -DestinationPath "PDFbull-Portable.zip"
 
       - name: Install NSIS
-        run: choco install nsis -y
+        shell: pwsh
+        run: |
+          choco install nsis -y --no-progress
+          # Refresh PATH so makensis.exe is immediately available in subsequent steps
+          $env:PATH = [System.Environment]::GetEnvironmentVariable("PATH", "Machine") + ";" + [System.Environment]::GetEnvironmentVariable("PATH", "User")
+          echo "NSIS installed: $(makensis /VERSION)"
 
       - name: Build NSIS Installer
-        uses: joncloud/makensis-action@v4
-        with:
-          script-file: installer.nsi
+        shell: pwsh
+        run: |
+          # Ensure makensis is on PATH
+          $nsisPath = "C:\Program Files (x86)\NSIS"
+          if (Test-Path $nsisPath) { $env:PATH += ";$nsisPath" }
+          makensis installer.nsi
+          if (-not (Test-Path "PDFbull-Setup.exe")) {
+            Write-Error "PDFbull-Setup.exe was not produced by NSIS!"
+            exit 1
+          }
+          Write-Host "Installer built successfully: $(Get-Item PDFbull-Setup.exe | Select-Object -ExpandProperty Length) bytes"
 
       - name: Create Stable Release
         uses: softprops/action-gh-release@v2
         with:
           name: Release ${{ github.ref_name }}
           body: 'Stable release of PDFbull.'
+          fail_on_unmatched_files: true
           files: |
             release_dist/pdfbull.exe
             release_dist/pdfium.dll
@@ -71,3 +85,4 @@ jobs:
           prerelease: false
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
