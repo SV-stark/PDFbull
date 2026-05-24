@@ -281,7 +281,10 @@ mod tests {
     #[test]
     fn test_session_data_serialization() {
         let session = SessionData {
-            open_tabs: vec!["/path1.pdf".to_string(), "/path2.pdf".to_string()],
+            open_tabs: vec![
+                crate::models::SessionTabEntry::Simple("/path1.pdf".to_string()),
+                crate::models::SessionTabEntry::Simple("/path2.pdf".to_string()),
+            ],
             active_tab: 1,
         };
         let json = serde_json::to_string(&session).unwrap();

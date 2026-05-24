@@ -1,8 +1,8 @@
 use pdfbull::app::PdfBullApp;
 use pdfbull::message::Message;
 
-#[test]
-fn test_sidebar_toggle() {
+#[tokio::test]
+async fn test_sidebar_toggle() {
     let mut app = PdfBullApp::default();
 
     // Check if sidebar is hidden initially

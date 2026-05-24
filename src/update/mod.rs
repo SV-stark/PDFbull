@@ -30,6 +30,16 @@ pub fn scroll_to_page(tab: &crate::models::DocumentTab, page: usize) -> Task<Mes
     )
 }
 
+pub fn scroll_to_y(y_offset: f32) -> Task<Message> {
+    iced::widget::operation::scroll_to(
+        "pdf_scroll",
+        iced::widget::scrollable::AbsoluteOffset {
+            x: 0.0,
+            y: y_offset,
+        },
+    )
+}
+
 pub fn handle_message(app: &mut PdfBullApp, message: Message) -> Task<Message> {
     if !app.loaded {
         app.loaded = true;
@@ -48,8 +58,14 @@ pub fn handle_message(app: &mut PdfBullApp, message: Message) -> Task<Message> {
         {
             let target_tab = session_data.active_tab;
             let mut tasks = Vec::new();
-            for path in session_data.open_tabs.drain(..) {
-                tasks.push(app.update(Message::OpenFile(path.into())));
+            for entry in session_data.open_tabs.drain(..) {
+                let path: std::path::PathBuf = entry.clone().into();
+                tasks.push(app.update(Message::OpenFile(path)));
+                if let crate::models::SessionTabEntry::Detailed(detailed) = entry {
+                    if let Some(tab) = app.tabs.last_mut() {
+                        tab.pending_session = Some(detailed);
+                    }
+                }
             }
             if !tasks.is_empty() {
                 tasks.push(Task::perform(

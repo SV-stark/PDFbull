@@ -2,6 +2,7 @@ use crate::app::PdfBullApp;
 use crate::message::Message;
 use iced::Task;
 
+#[allow(clippy::suboptimal_flops)]
 pub fn handle_annotation_message(app: &mut PdfBullApp, message: Message) -> Task<Message> {
     match message {
         Message::SetAnnotationMode(mode) => {
@@ -33,12 +34,19 @@ pub fn handle_annotation_message(app: &mut PdfBullApp, message: Message) -> Task
                 && let Some(tab) = app.current_tab_mut()
             {
                 let zoom = tab.zoom;
-                let min_x = drag.start.0.min(drag.current.0);
-                let min_y = drag.start.1.min(drag.current.1);
-                let w = (drag.start.0 - drag.current.0).abs();
-                let h = (drag.start.1 - drag.current.1).abs();
+                let start_x = drag.start.0;
+                let start_y = drag.start.1;
+                let curr_x = drag.current.0;
+                let curr_y = drag.current.1;
 
-                if (w / zoom) > 5.0 && (h / zoom) > 5.0 {
+                let dx = curr_x - start_x;
+                let dy = curr_y - start_y;
+                let dist = dx.hypot(dy);
+
+                let is_sticky = drag.kind == crate::models::PendingAnnotationKind::StickyNote;
+                let is_valid = dist > 5.0 || is_sticky;
+
+                if is_valid {
                     let id = crate::models::next_annotation_id();
                     let style = match drag.kind {
                         crate::models::PendingAnnotationKind::Highlight => {
@@ -65,16 +73,64 @@ pub fn handle_annotation_message(app: &mut PdfBullApp, message: Message) -> Task
                                 font_size: 14,
                             }
                         }
+                        crate::models::PendingAnnotationKind::Circle => {
+                            crate::models::AnnotationStyle::Circle {
+                                color: "#E11D48".to_string(),
+                                thickness: 2.0,
+                                fill: false,
+                            }
+                        }
+                        crate::models::PendingAnnotationKind::Line => {
+                            crate::models::AnnotationStyle::Line {
+                                color: "#2563EB".to_string(),
+                                thickness: 2.0,
+                            }
+                        }
+                        crate::models::PendingAnnotationKind::Arrow => {
+                            crate::models::AnnotationStyle::Arrow {
+                                color: "#16A34A".to_string(),
+                                thickness: 2.0,
+                            }
+                        }
+                        crate::models::PendingAnnotationKind::StickyNote => {
+                            crate::models::AnnotationStyle::StickyNote {
+                                comment: "New sticky note comment".to_string(),
+                                color: "#FACC15".to_string(),
+                            }
+                        }
+                    };
+
+                    let (ann_x, ann_y, ann_w, ann_h) = match drag.kind {
+                        crate::models::PendingAnnotationKind::Line
+                        | crate::models::PendingAnnotationKind::Arrow => {
+                            (start_x / zoom, start_y / zoom, dx / zoom, dy / zoom)
+                        }
+                        crate::models::PendingAnnotationKind::StickyNote if dist <= 5.0 => {
+                            // Centered 24x24 box at click point
+                            (
+                                (start_x - 12.0 * zoom) / zoom,
+                                (start_y - 12.0 * zoom) / zoom,
+                                24.0,
+                                24.0,
+                            )
+                        }
+                        _ => {
+                            let min_x = start_x.min(curr_x);
+                            let min_y = start_y.min(curr_y);
+                            let w = (start_x - curr_x).abs();
+                            let h = (start_y - curr_y).abs();
+                            (min_x / zoom, min_y / zoom, w / zoom, h / zoom)
+                        }
                     };
 
                     let ann = crate::models::Annotation {
                         id,
                         page: drag.page,
                         style,
-                        x: min_x / zoom,
-                        y: min_y / zoom,
-                        width: w / zoom,
-                        height: h / zoom,
+                        x: ann_x,
+                        y: ann_y,
+                        width: ann_w,
+                        height: ann_h,
                     };
 
                     tab.undo_stack

@@ -115,11 +115,11 @@ pub fn input_field(_theme: &iced::Theme) -> iced::widget::container::Style {
 
 pub fn hex_to_rgb(hex: &str) -> (f32, f32, f32) {
     let hex = hex.trim();
-    let input = if hex.starts_with('#') {
-        hex.to_string()
-    } else {
-        format!("#{hex}")
-    };
+    let hex_digits = hex.strip_prefix('#').unwrap_or(hex);
+    if hex_digits.len() != 6 {
+        return (0.0, 0.0, 0.0);
+    }
+    let input = format!("#{hex_digits}");
     csscolorparser::parse(&input)
         .map(|c| {
             let arr = c.to_array();

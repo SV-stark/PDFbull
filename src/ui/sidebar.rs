@@ -73,6 +73,18 @@ pub fn render(app: &PdfBullApp) -> Element<'_, crate::message::Message> {
                 AnnotationStyle::Redact { .. } => {
                     format!("⚠ Redact P{} (visual only)", ann.page + 1)
                 }
+                AnnotationStyle::Circle { .. } => {
+                    format!("Circle P{}", ann.page + 1)
+                }
+                AnnotationStyle::Line { .. } => {
+                    format!("Line P{}", ann.page + 1)
+                }
+                AnnotationStyle::Arrow { .. } => {
+                    format!("Arrow P{}", ann.page + 1)
+                }
+                AnnotationStyle::StickyNote { comment, .. } => {
+                    format!("Sticky: {}", &comment[..comment.len().min(20)])
+                }
             };
             annotations_col = annotations_col.push(row![
                 button(text(label))

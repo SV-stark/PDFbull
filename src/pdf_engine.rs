@@ -428,6 +428,7 @@ impl<'a> DocumentStore<'a> {
         Ok(text_page.all())
     }
 
+    #[allow(clippy::suboptimal_flops)]
     pub fn save_annotations(
         &mut self,
         doc_id: DocumentId,
@@ -443,29 +444,7 @@ impl<'a> DocumentStore<'a> {
             .get_mut(&doc_id)
             .ok_or(PdfError::EngineError(EngineErrorKind::DocumentNotFound))?;
 
-        // Move font lookup outside the loop
-        let font_handle = font_kit::source::SystemSource::new()
-            .select_best_match(
-                &[font_kit::family_name::FamilyName::SansSerif],
-                &font_kit::properties::Properties::new(),
-            )
-            .ok();
-
-        let annotation_font = if let Some(handle) = font_handle {
-            if let Ok(font_data) = handle.load() {
-                if let Some(data) = font_data.copy_font_data() {
-                    doc.fonts_mut()
-                        .load_type1_from_bytes(&data, false)
-                        .unwrap_or_else(|_| doc.fonts_mut().helvetica())
-                } else {
-                    doc.fonts_mut().helvetica()
-                }
-            } else {
-                doc.fonts_mut().helvetica()
-            }
-        } else {
-            doc.fonts_mut().helvetica()
-        };
+        let annotation_font = doc.fonts_mut().helvetica();
 
         for ann in annotations {
             let page_num_i32 =
@@ -563,39 +542,66 @@ impl<'a> DocumentStore<'a> {
                     let (r, g, b) = hex_to_rgb(color);
 
                     // Real Redaction & Sanitization:
-                    // 1. Identify all page objects (Text, Image, Path) that overlap with the redact bounding box.
-                    let mut indices_to_remove = Vec::new();
-                    let objects_count = objects.len();
-                    for idx in 0..objects_count {
-                        if let Ok(obj) = objects.get(idx) {
-                            let obj_type = obj.object_type();
-                            if matches!(
-                                obj_type,
-                                PdfPageObjectType::Text
-                                    | PdfPageObjectType::Image
-                                    | PdfPageObjectType::Path
-                            ) {
-                                if let Ok(obj_bounds) = obj.bounds() {
-                                    // AABB overlap check between redaction rect and page object bounds
-                                    let overlap_x = rect.left().value < obj_bounds.right().value
-                                        && rect.right().value > obj_bounds.left().value;
-                                    let overlap_y = rect.bottom().value < obj_bounds.top().value
-                                        && rect.top().value > obj_bounds.bottom().value;
-                                    if overlap_x && overlap_y {
-                                        indices_to_remove.push(idx);
+                    // 1. Identify and remove matching page objects one-by-one, fresh-loading page each time to prevent index discrepancies.
+                    loop {
+                        let mut p = doc
+                            .pages()
+                            .get(page_num_i32)
+                            .map_err(|_| PdfError::PageNotFound(ann.page))?;
+                        let objs = p.objects_mut();
+                        let mut index_to_remove = None;
+
+                        for idx in 0..objs.len() {
+                            if let Ok(obj) = objs.get(idx) {
+                                let obj_type = obj.object_type();
+                                if matches!(
+                                    obj_type,
+                                    PdfPageObjectType::Text
+                                        | PdfPageObjectType::Image
+                                        | PdfPageObjectType::Path
+                                ) {
+                                    if let Ok(obj_bounds) = obj.bounds() {
+                                        // AABB overlap check between redaction rect and page object bounds
+                                        let overlap_x = rect.left().value
+                                            < obj_bounds.right().value
+                                            && rect.right().value > obj_bounds.left().value;
+                                        let overlap_y = rect.bottom().value
+                                            < obj_bounds.top().value
+                                            && rect.top().value > obj_bounds.bottom().value;
+                                        if overlap_x && overlap_y {
+                                            index_to_remove = Some(idx);
+                                            break;
+                                        }
                                     }
                                 }
                             }
                         }
+
+                        if let Some(idx) = index_to_remove {
+                            let mut p = doc
+                                .pages()
+                                .get(page_num_i32)
+                                .map_err(|_| PdfError::PageNotFound(ann.page))?;
+                            let _ = p.objects_mut().remove_object_at_index(idx);
+                        } else {
+                            break;
+                        }
                     }
 
-                    // 2. Remove matching page objects in reverse order to maintain index integrity
-                    for &idx in indices_to_remove.iter().rev() {
-                        let _ = objects.remove_object_at_index(idx);
-                    }
+                    // Explicitly regenerate the page content to commit changes and safely free PDFium resources
+                    let mut p = doc
+                        .pages()
+                        .get(page_num_i32)
+                        .map_err(|_| PdfError::PageNotFound(ann.page))?;
+                    p.regenerate_content()
+                        .map_err(|e| PdfError::RenderFailed(e.to_string()))?;
 
-                    // 3. Draw a solid visual block over the sanitized space
-                    objects
+                    // 2. Draw a solid visual block over the sanitized space
+                    let mut p = doc
+                        .pages()
+                        .get(page_num_i32)
+                        .map_err(|_| PdfError::PageNotFound(ann.page))?;
+                    p.objects_mut()
                         .create_path_object_rect(
                             rect,
                             None,
@@ -607,6 +613,169 @@ impl<'a> DocumentStore<'a> {
                                 255, // Solid
                             )),
                         )
+                        .map_err(|e| PdfError::RenderFailed(e.to_string()))?;
+                }
+                AnnotationStyle::Circle {
+                    color,
+                    thickness,
+                    fill,
+                } => {
+                    let (r, g, b) = hex_to_rgb(color);
+                    let fill_color = if *fill {
+                        Some(PdfColor::new(
+                            (r * 255.0) as u8,
+                            (g * 255.0) as u8,
+                            (b * 255.0) as u8,
+                            50,
+                        ))
+                    } else {
+                        None
+                    };
+                    objects
+                        .create_path_object_circle(
+                            rect,
+                            Some(PdfColor::new(
+                                (r * 255.0) as u8,
+                                (g * 255.0) as u8,
+                                (b * 255.0) as u8,
+                                255,
+                            )),
+                            Some(PdfPoints::new(*thickness)),
+                            fill_color,
+                        )
+                        .map_err(|e| PdfError::RenderFailed(e.to_string()))?;
+                }
+                AnnotationStyle::Line { color, thickness } => {
+                    let (r, g, b) = hex_to_rgb(color);
+                    let x1 = PdfPoints::new(ann.x);
+                    let y1 = PdfPoints::new(page_height - ann.y);
+                    let x2 = PdfPoints::new(ann.x + ann.width);
+                    let y2 = PdfPoints::new(page_height - (ann.y + ann.height));
+
+                    objects
+                        .create_path_object_line(
+                            x1,
+                            y1,
+                            x2,
+                            y2,
+                            PdfColor::new(
+                                (r * 255.0) as u8,
+                                (g * 255.0) as u8,
+                                (b * 255.0) as u8,
+                                255,
+                            ),
+                            PdfPoints::new(*thickness),
+                        )
+                        .map_err(|e| PdfError::RenderFailed(e.to_string()))?;
+                }
+                AnnotationStyle::Arrow { color, thickness } => {
+                    let (r, g, b) = hex_to_rgb(color);
+                    let color_obj =
+                        PdfColor::new((r * 255.0) as u8, (g * 255.0) as u8, (b * 255.0) as u8, 255);
+                    let x1 = ann.x;
+                    let y1 = page_height - ann.y;
+                    let x2 = ann.x + ann.width;
+                    let y2 = page_height - (ann.y + ann.height);
+
+                    // 1. Draw shaft
+                    objects
+                        .create_path_object_line(
+                            PdfPoints::new(x1),
+                            PdfPoints::new(y1),
+                            PdfPoints::new(x2),
+                            PdfPoints::new(y2),
+                            color_obj,
+                            PdfPoints::new(*thickness),
+                        )
+                        .map_err(|e| PdfError::RenderFailed(e.to_string()))?;
+
+                    // 2. Calculate arrowhead math
+                    let dx = x2 - x1;
+                    let dy = y2 - y1;
+                    let len = dx.hypot(dy);
+                    if len > 0.001 {
+                        let ux = dx / len;
+                        let uy = dy / len;
+
+                        let wing_len = 10.0 + thickness * 2.0;
+                        let cos_30 = 0.866;
+                        let sin_30 = 0.500;
+
+                        // Wing 1 vector
+                        let w1_x = x2 - wing_len * (ux * cos_30 + uy * sin_30);
+                        let w1_y = y2 - wing_len * (uy * cos_30 - ux * sin_30);
+
+                        // Wing 2 vector
+                        let w2_x = x2 - wing_len * (ux * cos_30 - uy * sin_30);
+                        let w2_y = y2 - wing_len * (uy * cos_30 + ux * sin_30);
+
+                        // Draw wings
+                        objects
+                            .create_path_object_line(
+                                PdfPoints::new(x2),
+                                PdfPoints::new(y2),
+                                PdfPoints::new(w1_x),
+                                PdfPoints::new(w1_y),
+                                color_obj,
+                                PdfPoints::new(*thickness),
+                            )
+                            .map_err(|e| PdfError::RenderFailed(e.to_string()))?;
+
+                        objects
+                            .create_path_object_line(
+                                PdfPoints::new(x2),
+                                PdfPoints::new(y2),
+                                PdfPoints::new(w2_x),
+                                PdfPoints::new(w2_y),
+                                color_obj,
+                                PdfPoints::new(*thickness),
+                            )
+                            .map_err(|e| PdfError::RenderFailed(e.to_string()))?;
+                    }
+                }
+                AnnotationStyle::StickyNote { comment, color } => {
+                    let (r, g, b) = hex_to_rgb(color);
+
+                    // Draw sticky post-it background box
+                    objects
+                        .create_path_object_rect(
+                            rect,
+                            Some(PdfColor::new(
+                                (r * 255.0 * 0.8) as u8,
+                                (g * 255.0 * 0.8) as u8,
+                                (b * 255.0 * 0.8) as u8,
+                                255,
+                            )),
+                            Some(PdfPoints::new(1.0)),
+                            Some(PdfColor::new(
+                                (r * 255.0) as u8,
+                                (g * 255.0) as u8,
+                                (b * 255.0) as u8,
+                                255,
+                            )),
+                        )
+                        .map_err(|e| PdfError::RenderFailed(e.to_string()))?;
+
+                    // Draw the first few characters of comment as preview text inside the sticky note
+                    let preview_text = if comment.len() > 15 {
+                        format!("{}...", &comment[0..12])
+                    } else {
+                        comment.clone()
+                    };
+
+                    let font = annotation_font;
+                    let text_size = 9.0;
+                    let mut text_obj = objects
+                        .create_text_object(
+                            PdfPoints::new(ann.x + 3.0),
+                            PdfPoints::new(page_height - (ann.y + ann.height) + 3.0),
+                            &preview_text,
+                            font,
+                            PdfPoints::new(text_size),
+                        )
+                        .map_err(|e| PdfError::RenderFailed(e.to_string()))?;
+                    text_obj
+                        .set_fill_color(PdfColor::new(0, 0, 0, 255))
                         .map_err(|e| PdfError::RenderFailed(e.to_string()))?;
                 }
             }

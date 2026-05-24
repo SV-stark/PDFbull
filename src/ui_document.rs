@@ -9,12 +9,15 @@ use iced::{Alignment, Color, Element, Length, Padding, Rectangle};
 
 use crate::ui::{sidebar, tabs, toolbar};
 
-struct AnnotationCanvas {
+struct AnnotationCanvas<'a> {
     page_idx: usize,
     active: bool,
+    annotations: &'a [crate::models::Annotation],
+    zoom: f32,
+    drag: Option<crate::models::AnnotationDrag>,
 }
 
-impl canvas::Program<crate::message::Message> for AnnotationCanvas {
+impl<'a> canvas::Program<crate::message::Message> for AnnotationCanvas<'a> {
     type State = ();
 
     fn update(
@@ -63,15 +66,169 @@ impl canvas::Program<crate::message::Message> for AnnotationCanvas {
         }
     }
 
+    #[allow(clippy::suboptimal_flops)]
     fn draw(
         &self,
         _state: &Self::State,
-        _renderer: &iced::Renderer,
+        renderer: &iced::Renderer,
         _theme: &iced::Theme,
-        _bounds: Rectangle,
+        bounds: Rectangle,
         _cursor: iced::mouse::Cursor,
     ) -> Vec<canvas::Geometry> {
-        vec![]
+        let mut frame = canvas::Frame::new(renderer, bounds.size());
+
+        // 1. Draw existing Line & Arrow annotations for this page
+        for ann in self.annotations.iter().filter(|a| a.page == self.page_idx) {
+            match &ann.style {
+                AnnotationStyle::Line { color, thickness } => {
+                    let (r, g, b) = hex_to_rgb(color);
+                    let stroke_color = Color::from_rgb(r, g, b);
+                    let p1 = iced::Point::new(ann.x * self.zoom, ann.y * self.zoom);
+                    let p2 = iced::Point::new(
+                        (ann.x + ann.width) * self.zoom,
+                        (ann.y + ann.height) * self.zoom,
+                    );
+
+                    let path = canvas::Path::new(|builder| {
+                        builder.move_to(p1);
+                        builder.line_to(p2);
+                    });
+                    frame.stroke(
+                        &path,
+                        canvas::Stroke::default()
+                            .with_color(stroke_color)
+                            .with_width(*thickness * self.zoom),
+                    );
+                }
+                AnnotationStyle::Arrow { color, thickness } => {
+                    let (r, g, b) = hex_to_rgb(color);
+                    let stroke_color = Color::from_rgb(r, g, b);
+                    let x1 = ann.x * self.zoom;
+                    let y1 = ann.y * self.zoom;
+                    let x2 = (ann.x + ann.width) * self.zoom;
+                    let y2 = (ann.y + ann.height) * self.zoom;
+
+                    // Draw shaft
+                    let path_shaft = canvas::Path::new(|builder| {
+                        builder.move_to(iced::Point::new(x1, y1));
+                        builder.line_to(iced::Point::new(x2, y2));
+                    });
+                    frame.stroke(
+                        &path_shaft,
+                        canvas::Stroke::default()
+                            .with_color(stroke_color)
+                            .with_width(*thickness * self.zoom),
+                    );
+
+                    // Draw wings
+                    let dx = x2 - x1;
+                    let dy = y2 - y1;
+                    let len = dx.hypot(dy);
+                    if len > 0.001 {
+                        let ux = dx / len;
+                        let uy = dy / len;
+                        let wing_len = (10.0 + thickness * 2.0) * self.zoom;
+                        let cos_30 = 0.866;
+                        let sin_30 = 0.500;
+
+                        let w1_x = x2 - wing_len * (ux * cos_30 + uy * sin_30);
+                        let w1_y = y2 - wing_len * (uy * cos_30 - ux * sin_30);
+
+                        let w2_x = x2 - wing_len * (ux * cos_30 - uy * sin_30);
+                        let w2_y = y2 - wing_len * (uy * cos_30 + ux * sin_30);
+
+                        let path_wings = canvas::Path::new(|builder| {
+                            builder.move_to(iced::Point::new(x2, y2));
+                            builder.line_to(iced::Point::new(w1_x, w1_y));
+                            builder.move_to(iced::Point::new(x2, y2));
+                            builder.line_to(iced::Point::new(w2_x, w2_y));
+                        });
+                        frame.stroke(
+                            &path_wings,
+                            canvas::Stroke::default()
+                                .with_color(stroke_color)
+                                .with_width(*thickness * self.zoom),
+                        );
+                    }
+                }
+                _ => {}
+            }
+        }
+
+        // 2. Draw active dragging preview if it is a Line or Arrow
+        if let Some(drag) = &self.drag
+            && drag.page == self.page_idx
+        {
+            match drag.kind {
+                PendingAnnotationKind::Line => {
+                    let stroke_color = Color::from_rgb(1.0, 0.0, 0.0);
+                    let p1 = iced::Point::new(drag.start.0, drag.start.1);
+                    let p2 = iced::Point::new(drag.current.0, drag.current.1);
+
+                    let path = canvas::Path::new(|builder| {
+                        builder.move_to(p1);
+                        builder.line_to(p2);
+                    });
+                    frame.stroke(
+                        &path,
+                        canvas::Stroke::default()
+                            .with_color(stroke_color)
+                            .with_width(2.0 * self.zoom),
+                    );
+                }
+                PendingAnnotationKind::Arrow => {
+                    let stroke_color = Color::from_rgb(1.0, 0.0, 0.0);
+                    let x1 = drag.start.0;
+                    let y1 = drag.start.1;
+                    let x2 = drag.current.0;
+                    let y2 = drag.current.1;
+
+                    let path_shaft = canvas::Path::new(|builder| {
+                        builder.move_to(iced::Point::new(x1, y1));
+                        builder.line_to(iced::Point::new(x2, y2));
+                    });
+                    frame.stroke(
+                        &path_shaft,
+                        canvas::Stroke::default()
+                            .with_color(stroke_color)
+                            .with_width(2.0 * self.zoom),
+                    );
+
+                    let dx = x2 - x1;
+                    let dy = y2 - y1;
+                    let len = dx.hypot(dy);
+                    if len > 0.001 {
+                        let ux = dx / len;
+                        let uy = dy / len;
+                        let wing_len = 14.0 * self.zoom;
+                        let cos_30 = 0.866;
+                        let sin_30 = 0.500;
+
+                        let w1_x = x2 - wing_len * (ux * cos_30 + uy * sin_30);
+                        let w1_y = y2 - wing_len * (uy * cos_30 - ux * sin_30);
+
+                        let w2_x = x2 - wing_len * (ux * cos_30 - uy * sin_30);
+                        let w2_y = y2 - wing_len * (uy * cos_30 + ux * sin_30);
+
+                        let path_wings = canvas::Path::new(|builder| {
+                            builder.move_to(iced::Point::new(x2, y2));
+                            builder.line_to(iced::Point::new(w1_x, w1_y));
+                            builder.move_to(iced::Point::new(x2, y2));
+                            builder.line_to(iced::Point::new(w2_x, w2_y));
+                        });
+                        frame.stroke(
+                            &path_wings,
+                            canvas::Stroke::default()
+                                .with_color(stroke_color)
+                                .with_width(2.0 * self.zoom),
+                        );
+                    }
+                }
+                _ => {}
+            }
+        }
+
+        vec![frame.into_geometry()]
     }
 }
 
@@ -198,7 +355,7 @@ fn render_annotations<'a>(
         .iter()
         .filter(|ann| ann.page == page_idx)
         .map(|ann| {
-            let ann_overlay = match &ann.style {
+            let ann_overlay: Element<'a, crate::message::Message> = match &ann.style {
                 AnnotationStyle::Highlight { color } => {
                     let (r, g, b) = hex_to_rgb(color);
                     container(Space::new())
@@ -208,6 +365,7 @@ fn render_annotations<'a>(
                             background: Some(Color::from_rgba(r, g, b, 0.4).into()),
                             ..Default::default()
                         })
+                        .into()
                 }
                 AnnotationStyle::Rectangle {
                     color,
@@ -231,6 +389,7 @@ fn render_annotations<'a>(
                             },
                             ..Default::default()
                         })
+                        .into()
                 }
                 AnnotationStyle::Text {
                     text,
@@ -244,6 +403,7 @@ fn render_annotations<'a>(
                             .font(INTER_REGULAR)
                             .color(Color::from_rgb(r, g, b)),
                     )
+                    .into()
                 }
                 AnnotationStyle::Redact { color } => {
                     let (r, g, b) = hex_to_rgb(color);
@@ -254,6 +414,63 @@ fn render_annotations<'a>(
                             background: Some(Color::from_rgb(r, g, b).into()),
                             ..Default::default()
                         })
+                        .into()
+                }
+                AnnotationStyle::Circle {
+                    color,
+                    thickness,
+                    fill,
+                } => {
+                    let (r, g, b) = hex_to_rgb(color);
+                    container(Space::new())
+                        .width(Length::Fixed(ann.width * zoom))
+                        .height(Length::Fixed(ann.height * zoom))
+                        .style(move |_| iced::widget::container::Style {
+                            background: if *fill {
+                                Some(Color::from_rgba(r, g, b, 0.2).into())
+                            } else {
+                                None
+                            },
+                            border: iced::Border {
+                                color: Color::from_rgb(r, g, b),
+                                width: *thickness * zoom,
+                                radius: (ann.width.min(ann.height) * zoom / 2.0).into(),
+                            },
+                            ..Default::default()
+                        })
+                        .into()
+                }
+                AnnotationStyle::Line { .. } | AnnotationStyle::Arrow { .. } => {
+                    container(Space::new())
+                        .width(Length::Fixed(0.0))
+                        .height(Length::Fixed(0.0))
+                        .into()
+                }
+                AnnotationStyle::StickyNote { comment, color } => {
+                    let (r, g, b) = hex_to_rgb(color);
+                    iced::widget::tooltip(
+                        container(
+                            iced::widget::text("📝")
+                                .size(14.0 * zoom)
+                                .color(Color::BLACK),
+                        )
+                        .width(Length::Fixed(24.0 * zoom))
+                        .height(Length::Fixed(24.0 * zoom))
+                        .align_x(Alignment::Center)
+                        .align_y(Alignment::Center)
+                        .style(move |_| iced::widget::container::Style {
+                            background: Some(Color::from_rgba(r, g, b, 0.9).into()),
+                            border: iced::Border {
+                                color: Color::from_rgb(r * 0.8, g * 0.8, b * 0.8),
+                                width: 1.0,
+                                radius: 4.0.into(),
+                            },
+                            ..Default::default()
+                        }),
+                        iced::widget::text(comment.clone()),
+                        iced::widget::tooltip::Position::Top,
+                    )
+                    .into()
                 }
             };
 
@@ -346,6 +563,10 @@ fn render_active_drag<'a>(
     if let Some(drag) = &app.annotation_drag
         && drag.page == page_idx
     {
+        if drag.kind == PendingAnnotationKind::Line || drag.kind == PendingAnnotationKind::Arrow {
+            return vec![];
+        }
+
         let min_x = drag.start.0.min(drag.current.0);
         let min_y = drag.start.1.min(drag.current.1);
         let w = (drag.start.0 - drag.current.0).abs();
@@ -356,17 +577,27 @@ fn render_active_drag<'a>(
             PendingAnnotationKind::Rectangle => Color::from_rgba(1.0, 0.0, 0.0, 0.2),
             PendingAnnotationKind::Redact => Color::from_rgba(0.0, 0.0, 0.0, 0.8),
             PendingAnnotationKind::Text => Color::from_rgba(0.0, 0.0, 1.0, 0.1),
+            PendingAnnotationKind::Circle => Color::from_rgba(1.0, 0.0, 0.0, 0.2),
+            PendingAnnotationKind::StickyNote => Color::from_rgba(1.0, 0.9, 0.3, 0.6),
+            PendingAnnotationKind::Line | PendingAnnotationKind::Arrow => Color::TRANSPARENT,
         };
 
         let preview_border = match drag.kind {
             PendingAnnotationKind::Highlight => iced::Border::default(),
             PendingAnnotationKind::Rectangle
             | PendingAnnotationKind::Redact
-            | PendingAnnotationKind::Text => iced::Border {
+            | PendingAnnotationKind::Text
+            | PendingAnnotationKind::StickyNote => iced::Border {
                 color: Color::from_rgb(1.0, 0.0, 0.0),
                 width: 2.0 * zoom,
                 radius: 0.0.into(),
             },
+            PendingAnnotationKind::Circle => iced::Border {
+                color: Color::from_rgb(1.0, 0.0, 0.0),
+                width: 2.0 * zoom,
+                radius: (w.min(h) * zoom / 2.0).into(),
+            },
+            PendingAnnotationKind::Line | PendingAnnotationKind::Arrow => iced::Border::default(),
         };
 
         return vec![
@@ -458,6 +689,9 @@ fn render_page_canvas<'a>(
             canvas(AnnotationCanvas {
                 page_idx,
                 active: app.annotation_mode.is_some(),
+                annotations: &tab.annotations,
+                zoom,
+                drag: app.annotation_drag.clone(),
             })
             .width(Length::Fixed(scaled_width))
             .height(Length::Fixed(scaled_height)),

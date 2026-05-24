@@ -80,6 +80,8 @@ pub fn handle_tab_message(app: &mut PdfBullApp, message: Message) -> Task<Messag
                 let default_zoom = app.settings.default_zoom;
                 let default_filter = app.settings.default_filter;
 
+                let mut scroll_task = Task::none();
+
                 if let Some(tab) = app.tabs.iter_mut().find(|t| t.id == doc_id) {
                     tab.total_pages = count;
                     tab.page_heights = heights;
@@ -88,8 +90,18 @@ pub fn handle_tab_message(app: &mut PdfBullApp, message: Message) -> Task<Messag
                     tab.links = links;
                     tab.signatures = signatures;
                     tab.view_state.is_loading = false;
-                    tab.zoom = default_zoom;
-                    tab.render_filter = default_filter;
+
+                    if let Some(session) = tab.pending_session.take() {
+                        tab.current_page = session.current_page.min(count.saturating_sub(1));
+                        tab.zoom = session.zoom;
+                        tab.rotation = session.rotation;
+                        tab.auto_crop = session.auto_crop;
+                        tab.view_state.viewport_y = session.viewport_y;
+                        scroll_task = crate::update::scroll_to_y(session.viewport_y);
+                    } else {
+                        tab.zoom = default_zoom;
+                        tab.render_filter = default_filter;
+                    }
                 }
 
                 let pdf_path = app
@@ -98,11 +110,11 @@ pub fn handle_tab_message(app: &mut PdfBullApp, message: Message) -> Task<Messag
                     .find(|t| t.id == doc_id)
                     .map(|tab| tab.path.to_string_lossy().to_string());
 
-                if let Some(path_str) = pdf_path
+                let render_task = if let Some(path_str) = pdf_path
                     && let Some(engine) = &app.engine
                 {
                     let cmd_tx = engine.cmd_tx.clone();
-                    return Task::perform(
+                    Task::perform(
                         async move {
                             let (resp_tx, resp_rx) = tokio::sync::oneshot::channel();
                             let _ = cmd_tx
@@ -116,10 +128,13 @@ pub fn handle_tab_message(app: &mut PdfBullApp, message: Message) -> Task<Messag
                             }
                         },
                         |(doc_id, annotations)| Message::AnnotationsLoaded(doc_id, annotations),
-                    );
-                }
+                    )
+                } else {
+                    app.render_visible_pages()
+                };
+
                 app.save_session();
-                app.render_visible_pages()
+                Task::batch(vec![render_task, scroll_task])
             }
             Err(e) => {
                 if e == "Engine died" || e == "Channel closed" {

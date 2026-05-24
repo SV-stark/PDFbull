@@ -128,7 +128,16 @@ impl PdfBullApp {
             open_tabs: self
                 .tabs
                 .iter()
-                .map(|t| t.path.to_string_lossy().to_string())
+                .map(|t| {
+                    crate::models::SessionTabEntry::Detailed(crate::models::TabSession {
+                        path: t.path.to_string_lossy().to_string(),
+                        current_page: t.current_page,
+                        zoom: t.zoom,
+                        viewport_y: t.view_state.viewport_y,
+                        rotation: t.rotation,
+                        auto_crop: t.auto_crop,
+                    })
+                })
                 .collect(),
             active_tab: self.active_tab,
         };

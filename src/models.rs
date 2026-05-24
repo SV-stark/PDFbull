@@ -219,9 +219,35 @@ pub struct RecentFile {
     pub last_opened: u64,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TabSession {
+    pub path: String,
+    pub current_page: usize,
+    pub zoom: f32,
+    pub viewport_y: f32,
+    pub rotation: i32,
+    pub auto_crop: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(untagged)]
+pub enum SessionTabEntry {
+    Simple(String),
+    Detailed(TabSession),
+}
+
+impl From<SessionTabEntry> for std::path::PathBuf {
+    fn from(entry: SessionTabEntry) -> Self {
+        match entry {
+            SessionTabEntry::Simple(path) => Self::from(path),
+            SessionTabEntry::Detailed(session) => Self::from(session.path),
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct SessionData {
-    pub open_tabs: Vec<String>,
+    pub open_tabs: Vec<SessionTabEntry>,
     pub active_tab: usize,
 }
 
@@ -260,6 +286,23 @@ pub enum AnnotationStyle {
     Redact {
         color: String,
     },
+    Circle {
+        color: String,
+        thickness: f32,
+        fill: bool,
+    },
+    Line {
+        color: String,
+        thickness: f32,
+    },
+    Arrow {
+        color: String,
+        thickness: f32,
+    },
+    StickyNote {
+        comment: String,
+        color: String,
+    },
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -285,6 +328,10 @@ pub enum PendingAnnotationKind {
     Rectangle,
     Redact,
     Text,
+    Circle,
+    Line,
+    Arrow,
+    StickyNote,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -373,6 +420,7 @@ pub struct DocumentTab {
     pub signatures: Vec<SignatureInfo>,
     pub metadata: DocumentMetadata,
     pub view_state: TabViewState,
+    pub pending_session: Option<TabSession>,
 }
 
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -416,6 +464,7 @@ impl DocumentTab {
             signatures: Vec::new(),
             metadata: DocumentMetadata::default(),
             view_state: TabViewState::default(),
+            pending_session: None,
         }
     }
 
