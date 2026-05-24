@@ -70,12 +70,33 @@ pub fn render(app: &PdfBullApp) -> Element<'_, crate::message::Message> {
             app.annotation_mode == Some(PendingAnnotationKind::Rectangle),
             "Draw rectangle"
         ),
-        tool_button(
-            icons::BLOCK,
-            "Redact",
-            crate::message::Message::SetAnnotationMode(Some(PendingAnnotationKind::Redact)),
-            app.annotation_mode == Some(PendingAnnotationKind::Redact),
-            "⚠ Visual redaction only — content is NOT cryptographically removed"
+        tool_button_emoji(
+            "⭕",
+            "Circle",
+            crate::message::Message::SetAnnotationMode(Some(PendingAnnotationKind::Circle)),
+            app.annotation_mode == Some(PendingAnnotationKind::Circle),
+            "Draw circle"
+        ),
+        tool_button_emoji(
+            "📏",
+            "Line",
+            crate::message::Message::SetAnnotationMode(Some(PendingAnnotationKind::Line)),
+            app.annotation_mode == Some(PendingAnnotationKind::Line),
+            "Draw line"
+        ),
+        tool_button_emoji(
+            "➡️",
+            "Arrow",
+            crate::message::Message::SetAnnotationMode(Some(PendingAnnotationKind::Arrow)),
+            app.annotation_mode == Some(PendingAnnotationKind::Arrow),
+            "Draw arrow"
+        ),
+        tool_button_emoji(
+            "📌",
+            "Note",
+            crate::message::Message::SetAnnotationMode(Some(PendingAnnotationKind::StickyNote)),
+            app.annotation_mode == Some(PendingAnnotationKind::StickyNote),
+            "Add sticky note"
         ),
         tool_button(
             icons::TEXT,
@@ -83,6 +104,13 @@ pub fn render(app: &PdfBullApp) -> Element<'_, crate::message::Message> {
             crate::message::Message::SetAnnotationMode(Some(PendingAnnotationKind::Text)),
             app.annotation_mode == Some(PendingAnnotationKind::Text),
             "Add text annotation"
+        ),
+        tool_button(
+            icons::BLOCK,
+            "Redact",
+            crate::message::Message::SetAnnotationMode(Some(PendingAnnotationKind::Redact)),
+            app.annotation_mode == Some(PendingAnnotationKind::Redact),
+            "⚠ Visual redaction only"
         ),
         v_sep(),
         tool_button(
@@ -120,7 +148,7 @@ pub fn render(app: &PdfBullApp) -> Element<'_, crate::message::Message> {
     .spacing(8)
     .align_y(Alignment::Center);
 
-    container(
+    let toolbar_container = container(
         row![
             system_tools,
             Space::new().width(Length::Fill),
@@ -150,8 +178,127 @@ pub fn render(app: &PdfBullApp) -> Element<'_, crate::message::Message> {
             blur_radius: 10.0,
         },
         ..Default::default()
-    })
-    .into()
+    });
+
+    let property_bar = if let Some(mode) = app.annotation_mode {
+        let colors = [
+            ("#408cff", "🔵"),
+            ("#ff4d4d", "🔴"),
+            ("#2ecc71", "🟢"),
+            ("#f1c40f", "🟡"),
+            ("#2c3e50", "⚫"),
+        ];
+
+        let mut color_swatches = row![text("Color: ").size(12).font(INTER_BOLD)]
+            .spacing(6)
+            .align_y(Alignment::Center);
+
+        for (hex, emoji) in colors {
+            let is_active = app.annotation_color == hex;
+            color_swatches = color_swatches.push(
+                button(text(emoji).size(16))
+                    .on_press(crate::message::Message::SetAnnotationColor(hex.to_string()))
+                    .style(move |_, _status| {
+                        let border_color = if is_active {
+                            theme::COLOR_ACCENT
+                        } else {
+                            Color::TRANSPARENT
+                        };
+                        iced::widget::button::Style {
+                            background: if is_active {
+                                Some(theme::COLOR_BG_WIDGET.into())
+                            } else {
+                                None
+                            },
+                            border: Border {
+                                radius: theme::BORDER_RADIUS_FULL.into(),
+                                width: 2.0,
+                                color: border_color,
+                            },
+                            ..Default::default()
+                        }
+                    })
+                    .padding(4),
+            );
+        }
+
+        let thickness_label = format!("Thickness: {:.0}px", app.annotation_thickness);
+        let thickness_control = row![
+            text(thickness_label).size(12).font(INTER_BOLD),
+            button("-")
+                .on_press(crate::message::Message::SetAnnotationThickness(
+                    (app.annotation_thickness - 1.0).max(1.0)
+                ))
+                .padding([2, 8]),
+            button("+")
+                .on_press(crate::message::Message::SetAnnotationThickness(
+                    (app.annotation_thickness + 1.0).min(10.0)
+                ))
+                .padding([2, 8]),
+        ]
+        .spacing(6)
+        .align_y(Alignment::Center);
+
+        let text_size_control: Element<'_, crate::message::Message> =
+            if mode == PendingAnnotationKind::Text {
+                let label = format!("Text Size: {:.0}pt", app.annotation_text_size);
+                row![
+                    text(label).size(12).font(INTER_BOLD),
+                    button("-")
+                        .on_press(crate::message::Message::SetAnnotationTextSize(
+                            (app.annotation_text_size - 1.0).max(8.0)
+                        ))
+                        .padding([2, 8]),
+                    button("+")
+                        .on_press(crate::message::Message::SetAnnotationTextSize(
+                            (app.annotation_text_size + 1.0).min(36.0)
+                        ))
+                        .padding([2, 8]),
+                ]
+                .spacing(6)
+                .align_y(Alignment::Center)
+                .into()
+            } else {
+                Space::new().into()
+            };
+
+        let bar = container(
+            row![
+                text("✏️ Style:")
+                    .size(12)
+                    .font(INTER_BOLD)
+                    .style(|_| iced::widget::text::Style {
+                        color: Some(theme::COLOR_ACCENT)
+                    }),
+                v_sep(),
+                color_swatches,
+                v_sep(),
+                thickness_control,
+                v_sep(),
+                text_size_control,
+            ]
+            .spacing(20)
+            .padding([0, 20])
+            .align_y(Alignment::Center),
+        )
+        .width(Length::Fill)
+        .height(Length::Fixed(40.0))
+        .style(|_| iced::widget::container::Style {
+            background: Some(theme::COLOR_BG_SIDEBAR.into()),
+            border: Border {
+                width: 1.0,
+                color: Color::from_rgb(0.15, 0.15, 0.17),
+                ..Default::default()
+            },
+            ..Default::default()
+        });
+
+        Element::from(bar)
+    } else {
+        Space::new().into()
+    };
+
+    column![toolbar_container, property_bar].into()
 }
 
 fn v_sep() -> Element<'static, crate::message::Message> {
@@ -176,6 +323,39 @@ fn tool_button<'a>(
         button(
             column![
                 text(icon).size(18).font(LUCIDE),
+                text(label).size(10).font(INTER_REGULAR).style(move |_| {
+                    iced::widget::text::Style {
+                        color: Some(if active {
+                            Color::WHITE
+                        } else {
+                            theme::COLOR_TEXT_DIM
+                        }),
+                    }
+                })
+            ]
+            .spacing(4)
+            .align_x(Alignment::Center),
+        )
+        .on_press(msg)
+        .padding([6, 10])
+        .style(theme::button_tool(active)),
+        tooltip_text,
+        tooltip::Position::Bottom,
+    )
+    .into()
+}
+
+fn tool_button_emoji<'a>(
+    icon: &'a str,
+    label: &'a str,
+    msg: crate::message::Message,
+    active: bool,
+    tooltip_text: &'a str,
+) -> Element<'a, crate::message::Message> {
+    tooltip(
+        button(
+            column![
+                text(icon).size(18),
                 text(label).size(10).font(INTER_REGULAR).style(move |_| {
                     iced::widget::text::Style {
                         color: Some(if active {
@@ -245,6 +425,7 @@ fn filter_section(
             filter_chip("None", RenderFilter::None, active_filter),
             filter_chip("Gray", RenderFilter::Grayscale, active_filter),
             filter_chip("Inv", RenderFilter::Inverted, active_filter),
+            filter_chip("Sepia", RenderFilter::Sepia, active_filter),
             filter_chip("Eco", RenderFilter::Eco, active_filter),
             filter_chip("B&W", RenderFilter::BlackWhite, active_filter),
             filter_chip("Light", RenderFilter::Lighten, active_filter),

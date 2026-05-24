@@ -92,5 +92,10 @@ pub enum Message {
     LinkClicked(crate::models::Hyperlink),
     ForceQuit,
     DocumentModifiedExternally(PathBuf),
+    SetSidebarMode(crate::models::SidebarMode),
+    SetReadingMode(crate::models::ReadingMode),
+    SetAnnotationColor(String),
+    SetAnnotationThickness(f32),
+    SetAnnotationTextSize(f32),
     ReloadDocument(PathBuf),
 }

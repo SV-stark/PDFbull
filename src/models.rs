@@ -181,6 +181,24 @@ pub enum AppTheme {
     Dark,
 }
 
+#[derive(Debug, Clone, Copy, serde::Serialize, serde::Deserialize, PartialEq, Eq, Default)]
+pub enum SidebarMode {
+    #[default]
+    Thumbnails,
+    Outline,
+    Annotations,
+    Search,
+}
+
+#[derive(Debug, Clone, Copy, serde::Serialize, serde::Deserialize, PartialEq, Eq, Default)]
+pub enum ReadingMode {
+    #[default]
+    Default,
+    Inverted,
+    Sepia,
+    Grayscale,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AppSettings {
     pub theme: AppTheme,

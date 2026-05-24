@@ -30,6 +30,10 @@ pub fn handle_annotation_message(app: &mut PdfBullApp, message: Message) -> Task
             Task::none()
         }
         Message::AnnotationDragEnd => {
+            let ann_color = app.annotation_color.clone();
+            let ann_thickness = app.annotation_thickness;
+            let ann_text_size = app.annotation_text_size;
+
             if let Some(drag) = app.annotation_drag.take()
                 && let Some(tab) = app.current_tab_mut()
             {
@@ -51,51 +55,51 @@ pub fn handle_annotation_message(app: &mut PdfBullApp, message: Message) -> Task
                     let style = match drag.kind {
                         crate::models::PendingAnnotationKind::Highlight => {
                             crate::models::AnnotationStyle::Highlight {
-                                color: "#FFFF00".to_string(),
+                                color: ann_color.clone(),
                             }
                         }
                         crate::models::PendingAnnotationKind::Rectangle => {
                             crate::models::AnnotationStyle::Rectangle {
-                                color: "#FF0000".to_string(),
-                                thickness: 2.0,
+                                color: ann_color.clone(),
+                                thickness: ann_thickness,
                                 fill: false,
                             }
                         }
                         crate::models::PendingAnnotationKind::Redact => {
                             crate::models::AnnotationStyle::Redact {
-                                color: "#000000".to_string(),
+                                color: ann_color.clone(),
                             }
                         }
                         crate::models::PendingAnnotationKind::Text => {
                             crate::models::AnnotationStyle::Text {
                                 text: "New Text".to_string(),
-                                color: "#000000".to_string(),
-                                font_size: 14,
+                                color: ann_color.clone(),
+                                font_size: ann_text_size as u32,
                             }
                         }
                         crate::models::PendingAnnotationKind::Circle => {
                             crate::models::AnnotationStyle::Circle {
-                                color: "#E11D48".to_string(),
-                                thickness: 2.0,
+                                color: ann_color.clone(),
+                                thickness: ann_thickness,
                                 fill: false,
                             }
                         }
                         crate::models::PendingAnnotationKind::Line => {
                             crate::models::AnnotationStyle::Line {
-                                color: "#2563EB".to_string(),
-                                thickness: 2.0,
+                                color: ann_color.clone(),
+                                thickness: ann_thickness,
                             }
                         }
                         crate::models::PendingAnnotationKind::Arrow => {
                             crate::models::AnnotationStyle::Arrow {
-                                color: "#16A34A".to_string(),
-                                thickness: 2.0,
+                                color: ann_color.clone(),
+                                thickness: ann_thickness,
                             }
                         }
                         crate::models::PendingAnnotationKind::StickyNote => {
                             crate::models::AnnotationStyle::StickyNote {
                                 comment: "New sticky note comment".to_string(),
-                                color: "#FACC15".to_string(),
+                                color: ann_color.clone(),
                             }
                         }
                     };

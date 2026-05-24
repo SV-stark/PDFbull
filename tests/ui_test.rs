@@ -1,7 +1,7 @@
 use pdfbull::app::PdfBullApp;
 use pdfbull::message::Message;
 
-#[tokio::test]
+#[tokio::test(flavor = "current_thread")]
 async fn test_sidebar_toggle() {
     let mut app = PdfBullApp::default();
 

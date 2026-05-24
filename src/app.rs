@@ -68,6 +68,11 @@ pub struct PdfBullApp {
     pub modifiers: iced::keyboard::Modifiers,
     pub last_session_save: Instant,
     pub sidebar_animation: animation::Animation<f32>,
+    pub sidebar_mode: crate::models::SidebarMode,
+    pub reading_mode: crate::models::ReadingMode,
+    pub annotation_color: String,
+    pub annotation_thickness: f32,
+    pub annotation_text_size: f32,
 }
 
 impl Default for PdfBullApp {
@@ -97,6 +102,11 @@ impl Default for PdfBullApp {
             modifiers: iced::keyboard::Modifiers::default(),
             last_session_save: Instant::now(),
             sidebar_animation: animation::Animation::new(0.0),
+            sidebar_mode: crate::models::SidebarMode::default(),
+            reading_mode: crate::models::ReadingMode::default(),
+            annotation_color: "#408cff".to_string(),
+            annotation_thickness: 2.0,
+            annotation_text_size: 14.0,
         }
     }
 }

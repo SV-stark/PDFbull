@@ -84,6 +84,7 @@ pub enum RenderFilter {
     BlackWhite,
     Lighten,
     NoShadow,
+    Sepia,
 }
 
 #[derive(Debug, Clone)]
@@ -936,6 +937,7 @@ impl<'a> DocumentStore<'a> {
         })
     }
 
+    #[allow(clippy::suboptimal_flops)]
     pub fn apply_filter(data: &mut [u8], filter: RenderFilter) {
         data.par_chunks_exact_mut(4).for_each(|pixel| match filter {
             RenderFilter::Inverted => {
@@ -971,6 +973,14 @@ impl<'a> DocumentStore<'a> {
                 pixel[0] = 255;
                 pixel[1] = 255;
                 pixel[2] = 255;
+            }
+            RenderFilter::Sepia => {
+                let r = pixel[0] as f32;
+                let g = pixel[1] as f32;
+                let b = pixel[2] as f32;
+                pixel[0] = (r * 0.393 + g * 0.769 + b * 0.189).min(255.0) as u8;
+                pixel[1] = (r * 0.349 + g * 0.686 + b * 0.168).min(255.0) as u8;
+                pixel[2] = (r * 0.272 + g * 0.534 + b * 0.131).min(255.0) as u8;
             }
             _ => {}
         });

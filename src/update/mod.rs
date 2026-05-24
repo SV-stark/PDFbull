@@ -90,6 +90,11 @@ pub fn handle_message(app: &mut PdfBullApp, message: Message) -> Task<Message> {
         | Message::RotateClockwise
         | Message::RotateCounterClockwise
         | Message::ToggleMetadata
+        | Message::SetSidebarMode(_)
+        | Message::SetReadingMode(_)
+        | Message::SetAnnotationColor(_)
+        | Message::SetAnnotationThickness(_)
+        | Message::SetAnnotationTextSize(_)
         | Message::ClearRecentFiles => app::handle_app_message(app, message),
         Message::AddBookmark | Message::RemoveBookmark(_) | Message::JumpToBookmark(_) => {
             bookmarks::handle_bookmark_message(app, message)

@@ -70,6 +70,29 @@ pub fn handle_app_message(app: &mut PdfBullApp, message: Message) -> Task<Messag
             app.show_metadata = !app.show_metadata;
             Task::none()
         }
+        Message::SetSidebarMode(mode) => {
+            app.sidebar_mode = mode;
+            Task::none()
+        }
+        Message::SetReadingMode(mode) => {
+            app.reading_mode = mode;
+            if let Some(tab) = app.current_tab_mut() {
+                tab.view_state.rendered_pages.clear();
+            }
+            app.render_visible_pages()
+        }
+        Message::SetAnnotationColor(color) => {
+            app.annotation_color = color;
+            Task::none()
+        }
+        Message::SetAnnotationThickness(thickness) => {
+            app.annotation_thickness = thickness;
+            Task::none()
+        }
+        Message::SetAnnotationTextSize(size) => {
+            app.annotation_text_size = size;
+            Task::none()
+        }
         _ => Task::none(),
     }
 }

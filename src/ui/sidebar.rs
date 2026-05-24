@@ -1,6 +1,6 @@
 use crate::app::PdfBullApp;
 use crate::app::{INTER_BOLD, INTER_REGULAR};
-use crate::models::{AnnotationStyle, FormFieldVariant};
+use crate::models::{AnnotationStyle, FormFieldVariant, SidebarMode};
 use crate::ui::theme;
 use iced::widget::{
     Space, button, checkbox, column, container, pick_list, radio, row, scrollable, text, text_input,
@@ -20,172 +20,369 @@ fn section_title<'a>(label: &'a str) -> Element<'a, crate::message::Message> {
     .into()
 }
 
+fn sidebar_tab_style(
+    active: bool,
+) -> impl Fn(&iced::Theme, iced::widget::button::Status) -> iced::widget::button::Style {
+    move |_theme, status| {
+        let base_bg = if active {
+            Some(theme::COLOR_BG_WIDGET.into())
+        } else {
+            None
+        };
+        let border_color = if active {
+            theme::COLOR_ACCENT
+        } else {
+            Color::TRANSPARENT
+        };
+
+        let base = iced::widget::button::Style {
+            background: base_bg,
+            text_color: if active {
+                Color::WHITE
+            } else {
+                theme::COLOR_TEXT_DIM
+            },
+            border: Border {
+                radius: theme::BORDER_RADIUS_SM.into(),
+                width: 1.0,
+                color: border_color,
+            },
+            ..Default::default()
+        };
+
+        match status {
+            iced::widget::button::Status::Hovered if !active => iced::widget::button::Style {
+                background: Some(theme::COLOR_BG_WIDGET_HOVER.into()),
+                text_color: theme::COLOR_TEXT_PRIMARY,
+                ..base
+            },
+            _ => base,
+        }
+    }
+}
+
+#[allow(clippy::if_not_else)]
 pub fn render(app: &PdfBullApp) -> Element<'_, crate::message::Message> {
     let Some(tab) = app.current_tab() else {
         return container(column![]).into();
     };
 
-    let mut sidebar_col = column![]
-        .spacing(10)
-        .padding(5)
-        .width(Length::Fixed(theme::SIDEBAR_WIDTH));
+    let tab_row = row![
+        button(text("📂").size(14))
+            .style(sidebar_tab_style(
+                app.sidebar_mode == SidebarMode::Thumbnails
+            ))
+            .on_press(crate::message::Message::SetSidebarMode(
+                SidebarMode::Thumbnails
+            )),
+        button(text("🔖").size(14))
+            .style(sidebar_tab_style(app.sidebar_mode == SidebarMode::Outline))
+            .on_press(crate::message::Message::SetSidebarMode(
+                SidebarMode::Outline
+            )),
+        button(text("📝").size(14))
+            .style(sidebar_tab_style(
+                app.sidebar_mode == SidebarMode::Annotations
+            ))
+            .on_press(crate::message::Message::SetSidebarMode(
+                SidebarMode::Annotations
+            )),
+        button(text("🔍").size(14))
+            .style(sidebar_tab_style(app.sidebar_mode == SidebarMode::Search))
+            .on_press(crate::message::Message::SetSidebarMode(SidebarMode::Search)),
+    ]
+    .spacing(4)
+    .padding([5, 10]);
 
-    if !tab.outline.is_empty() {
-        let mut outline_col = column![section_title("Outline")];
-        for bookmark in &tab.outline {
-            outline_col = outline_col.push(
-                button(text(&bookmark.title))
-                    .on_press(crate::message::Message::JumpToPage(
-                        bookmark.page_index as usize,
-                    ))
-                    .width(Length::Fill),
-            );
-        }
-        sidebar_col = sidebar_col.push(container(outline_col.spacing(5)).padding(10));
-    }
+    let main_sidebar = column![tab_row].spacing(10);
 
-    if !tab.bookmarks.is_empty() {
-        let mut bookmarks_col = column![section_title("Bookmarks")];
-        for (idx, bookmark) in tab.bookmarks.iter().enumerate() {
-            bookmarks_col = bookmarks_col.push(row![
-                button(text(&bookmark.label))
-                    .on_press(crate::message::Message::JumpToBookmark(idx))
-                    .width(Length::Fill),
-                button("×").on_press(crate::message::Message::RemoveBookmark(idx))
-            ]);
-        }
-        sidebar_col = sidebar_col.push(container(bookmarks_col.spacing(5)).padding(10));
-    }
+    let content_scroll: Element<'_, crate::message::Message> = match app.sidebar_mode {
+        SidebarMode::Thumbnails => {
+            let mut thumbnail_col = column![].spacing(10).padding(5);
 
-    if !tab.annotations.is_empty() {
-        let mut annotations_col = column![section_title("Annotations")];
-        for (idx, ann) in tab.annotations.iter().enumerate() {
-            let label = match &ann.style {
-                AnnotationStyle::Highlight { .. } => {
-                    format!("Highlight P{}", ann.page + 1)
-                }
-                AnnotationStyle::Rectangle { .. } => {
-                    format!("Rect P{}", ann.page + 1)
-                }
-                AnnotationStyle::Text { text, .. } => {
-                    format!("Text: {}", &text[..text.len().min(20)])
-                }
-                AnnotationStyle::Redact { .. } => {
-                    format!("⚠ Redact P{} (visual only)", ann.page + 1)
-                }
-                AnnotationStyle::Circle { .. } => {
-                    format!("Circle P{}", ann.page + 1)
-                }
-                AnnotationStyle::Line { .. } => {
-                    format!("Line P{}", ann.page + 1)
-                }
-                AnnotationStyle::Arrow { .. } => {
-                    format!("Arrow P{}", ann.page + 1)
-                }
-                AnnotationStyle::StickyNote { comment, .. } => {
-                    format!("Sticky: {}", &comment[..comment.len().min(20)])
-                }
-            };
-            annotations_col = annotations_col.push(row![
-                button(text(label))
-                    .on_press(crate::message::Message::JumpToPage(ann.page))
-                    .width(Length::Fill),
-                button("×").on_press(crate::message::Message::DeleteAnnotation(idx))
-            ]);
-        }
-        sidebar_col = sidebar_col.push(container(annotations_col.spacing(5)).padding(10));
-    }
-
-    if !tab.signatures.is_empty() {
-        let mut signatures_col = column![section_title("Signatures")];
-        for sig in &tab.signatures {
-            signatures_col = signatures_col.push(
+            thumbnail_col = thumbnail_col.push(
                 container(
-                    column![
-                        text(&sig.name).size(13).font(INTER_BOLD),
-                        text(if sig.is_valid {
-                            "✓ Valid Signature"
-                        } else {
-                            "✗ Invalid/Untrusted"
-                        })
+                    text(format!("Pages ({})", tab.total_pages))
+                        .size(14)
+                        .font(INTER_BOLD)
+                        .style(|_| iced::widget::text::Style {
+                            color: Some(Color::from_rgb(0.2, 0.4, 0.6)),
+                        }),
+                )
+                .padding([5, 0]),
+            );
+
+            let start_idx =
+                (tab.view_state.sidebar_viewport_y / theme::THUMBNAIL_HEIGHT).max(0.0) as usize;
+            let end_idx = (start_idx + 30).min(tab.total_pages);
+
+            if start_idx > 0 {
+                thumbnail_col = thumbnail_col
+                    .push(Space::new().height(start_idx as f32 * theme::THUMBNAIL_HEIGHT));
+            }
+
+            for page_idx in start_idx..end_idx {
+                if let Some(handle) = tab.view_state.thumbnails.get(&page_idx) {
+                    let img = iced::widget::Image::new(handle.clone())
+                        .width(Length::Fixed(theme::THUMBNAIL_WIDTH));
+                    thumbnail_col = thumbnail_col
+                        .push(button(img).on_press(crate::message::Message::JumpToPage(page_idx)));
+                } else {
+                    thumbnail_col = thumbnail_col.push(
+                        button(text(format!("Page {}", page_idx + 1)).font(INTER_REGULAR))
+                            .on_press(crate::message::Message::JumpToPage(page_idx))
+                            .width(Length::Fixed(theme::THUMBNAIL_WIDTH)),
+                    );
+                }
+            }
+
+            let remaining = tab.total_pages.saturating_sub(end_idx);
+            if remaining > 0 {
+                thumbnail_col = thumbnail_col
+                    .push(Space::new().height(remaining as f32 * theme::THUMBNAIL_HEIGHT));
+            }
+
+            scrollable(thumbnail_col)
+                .id("sidebar_scroll")
+                .on_scroll(|viewport| {
+                    crate::message::Message::SidebarViewportChanged(viewport.absolute_offset().y)
+                })
+                .width(Length::Fixed(theme::SIDEBAR_WIDTH))
+                .into()
+        }
+        SidebarMode::Outline => {
+            let mut outline_col = column![].spacing(10).padding(5);
+
+            if !tab.outline.is_empty() {
+                let mut list_col = column![section_title("Outline")];
+                for bookmark in &tab.outline {
+                    list_col = list_col.push(
+                        button(text(&bookmark.title))
+                            .on_press(crate::message::Message::JumpToPage(
+                                bookmark.page_index as usize,
+                            ))
+                            .width(Length::Fill),
+                    );
+                }
+                outline_col = outline_col.push(container(list_col.spacing(5)).padding(10));
+            } else {
+                outline_col = outline_col.push(
+                    container(text("No outline bookmarks found").size(12).style(|_| {
+                        iced::widget::text::Style {
+                            color: Some(theme::COLOR_TEXT_SECONDARY),
+                        }
+                    }))
+                    .padding(15),
+                );
+            }
+
+            if !tab.bookmarks.is_empty() {
+                let mut bookmarks_col = column![section_title("Bookmarks")];
+                for (idx, bookmark) in tab.bookmarks.iter().enumerate() {
+                    bookmarks_col = bookmarks_col.push(row![
+                        button(text(&bookmark.label))
+                            .on_press(crate::message::Message::JumpToBookmark(idx))
+                            .width(Length::Fill),
+                        button("×").on_press(crate::message::Message::RemoveBookmark(idx))
+                    ]);
+                }
+                outline_col = outline_col.push(container(bookmarks_col.spacing(5)).padding(10));
+            }
+
+            scrollable(outline_col)
+                .width(Length::Fixed(theme::SIDEBAR_WIDTH))
+                .into()
+        }
+        SidebarMode::Annotations => {
+            let mut ann_col = column![].spacing(10).padding(5);
+
+            if !tab.annotations.is_empty() {
+                let mut list_col = column![section_title("Annotations")];
+                for (idx, ann) in tab.annotations.iter().enumerate() {
+                    let label = match &ann.style {
+                        AnnotationStyle::Highlight { .. } => format!("Highlight P{}", ann.page + 1),
+                        AnnotationStyle::Rectangle { .. } => format!("Rect P{}", ann.page + 1),
+                        AnnotationStyle::Text { text, .. } => {
+                            format!("Text: {}", &text[..text.len().min(20)])
+                        }
+                        AnnotationStyle::Redact { .. } => format!("Redact P{}", ann.page + 1),
+                        AnnotationStyle::Circle { .. } => format!("Circle P{}", ann.page + 1),
+                        AnnotationStyle::Line { .. } => format!("Line P{}", ann.page + 1),
+                        AnnotationStyle::Arrow { .. } => format!("Arrow P{}", ann.page + 1),
+                        AnnotationStyle::StickyNote { comment, .. } => {
+                            format!("Sticky: {}", &comment[..comment.len().min(20)])
+                        }
+                    };
+                    list_col = list_col.push(row![
+                        button(text(label))
+                            .on_press(crate::message::Message::JumpToPage(ann.page))
+                            .width(Length::Fill),
+                        button("×").on_press(crate::message::Message::DeleteAnnotation(idx))
+                    ]);
+                }
+                ann_col = ann_col.push(container(list_col.spacing(5)).padding(10));
+            } else {
+                ann_col = ann_col.push(
+                    container(text("No annotations found").size(12).style(|_| {
+                        iced::widget::text::Style {
+                            color: Some(theme::COLOR_TEXT_SECONDARY),
+                        }
+                    }))
+                    .padding(15),
+                );
+            }
+
+            if !tab.signatures.is_empty() {
+                let mut signatures_col = column![section_title("Signatures")];
+                for sig in &tab.signatures {
+                    signatures_col = signatures_col.push(
+                        container(
+                            column![
+                                text(&sig.name).size(13).font(INTER_BOLD),
+                                text(if sig.is_valid {
+                                    "✓ Valid Signature"
+                                } else {
+                                    "✗ Invalid/Untrusted"
+                                })
+                                .size(11)
+                                .style(|_| {
+                                    iced::widget::text::Style {
+                                        color: Some(if sig.is_valid {
+                                            Color::from_rgb(0.0, 0.6, 0.0)
+                                        } else {
+                                            Color::from_rgb(0.8, 0.0, 0.0)
+                                        }),
+                                    }
+                                }),
+                                text(format!(
+                                    "Reason: {}",
+                                    sig.reason.as_deref().unwrap_or("N/A")
+                                ))
+                                .size(10),
+                            ]
+                            .spacing(2),
+                        )
+                        .padding(8)
+                        .style(|_| iced::widget::container::Style {
+                            background: Some(Color::from_rgb8(45, 46, 50).into()),
+                            border: Border {
+                                radius: 4.0.into(),
+                                ..Default::default()
+                            },
+                            ..Default::default()
+                        }),
+                    );
+                }
+                ann_col = ann_col.push(container(signatures_col.spacing(5)).padding(10));
+            }
+
+            scrollable(ann_col)
+                .width(Length::Fixed(theme::SIDEBAR_WIDTH))
+                .into()
+        }
+        SidebarMode::Search => {
+            let mut search_col = column![].spacing(10).padding(5);
+
+            search_col = search_col.push(section_title("Search"));
+
+            search_col = search_col.push(
+                text_input("Search term...", &app.search_query)
+                    .on_input(crate::message::Message::Search)
+                    .padding(8),
+            );
+
+            if tab.search_results.is_empty() {
+                if !app.search_query.is_empty() {
+                    search_col = search_col.push(
+                        container(text("No matches found").size(12).style(|_| {
+                            iced::widget::text::Style {
+                                color: Some(theme::COLOR_TEXT_SECONDARY),
+                            }
+                        }))
+                        .padding(15),
+                    );
+                } else {
+                    search_col = search_col.push(
+                        container(
+                            text("Type a query to search standard document text")
+                                .size(12)
+                                .style(|_| iced::widget::text::Style {
+                                    color: Some(theme::COLOR_TEXT_SECONDARY),
+                                }),
+                        )
+                        .padding(15),
+                    );
+                }
+            } else {
+                search_col = search_col.push(
+                    text(format!("{} matches found", tab.search_results.len()))
                         .size(11)
                         .style(|_| iced::widget::text::Style {
-                            color: Some(if sig.is_valid {
-                                Color::from_rgb(0.0, 0.6, 0.0)
-                            } else {
-                                Color::from_rgb(0.8, 0.0, 0.0)
-                            })
+                            color: Some(theme::COLOR_TEXT_DIM),
                         }),
-                        text(format!(
-                            "Reason: {}",
-                            sig.reason.as_deref().unwrap_or("N/A")
-                        ))
-                        .size(10),
-                    ]
-                    .spacing(2),
-                )
-                .padding(8)
-                .style(|_| iced::widget::container::Style {
-                    background: Some(Color::from_rgb8(45, 46, 50).into()),
-                    border: Border {
-                        radius: 4.0.into(),
+                );
+
+                let mut results_col = column![].spacing(8);
+                for (idx, res) in tab.search_results.iter().enumerate() {
+                    let is_current = tab.current_search_index == idx;
+                    let border_color = if is_current {
+                        theme::COLOR_ACCENT
+                    } else {
+                        Color::from_rgb(0.2, 0.2, 0.22)
+                    };
+
+                    let card = container(
+                        column![
+                            text(format!("Page {}", res.page + 1))
+                                .size(11)
+                                .font(INTER_BOLD)
+                                .style(|_| iced::widget::text::Style {
+                                    color: Some(theme::COLOR_ACCENT)
+                                }),
+                            text(res.text.clone())
+                                .size(12)
+                                .style(|_| iced::widget::text::Style {
+                                    color: Some(theme::COLOR_TEXT_PRIMARY)
+                                }),
+                        ]
+                        .spacing(2),
+                    )
+                    .padding(8)
+                    .style(move |_| iced::widget::container::Style {
+                        background: Some(if is_current {
+                            theme::COLOR_BG_WIDGET_HOVER.into()
+                        } else {
+                            theme::COLOR_BG_WIDGET.into()
+                        }),
+                        border: Border {
+                            radius: theme::BORDER_RADIUS_MD.into(),
+                            width: 1.0,
+                            color: border_color,
+                        },
                         ..Default::default()
-                    },
-                    ..Default::default()
-                }),
-            );
+                    });
+
+                    results_col = results_col.push(
+                        button(card)
+                            .on_press(crate::message::Message::JumpToPage(res.page))
+                            .style(move |_, _| iced::widget::button::Style {
+                                background: None,
+                                border: Border::default(),
+                                ..Default::default()
+                            })
+                            .width(Length::Fill),
+                    );
+                }
+                search_col = search_col.push(results_col);
+            }
+
+            scrollable(search_col)
+                .width(Length::Fixed(theme::SIDEBAR_WIDTH))
+                .into()
         }
-        sidebar_col = sidebar_col.push(container(signatures_col.spacing(5)).padding(10));
-    }
+    };
 
-    sidebar_col = sidebar_col.push(
-        container(
-            text(format!("Pages ({})", tab.total_pages))
-                .size(14)
-                .font(INTER_BOLD)
-                .style(|_| iced::widget::text::Style {
-                    color: Some(Color::from_rgb(0.2, 0.4, 0.6)),
-                }),
-        )
-        .padding([5, 0]),
-    );
-
-    let start_idx = (tab.view_state.sidebar_viewport_y / theme::THUMBNAIL_HEIGHT).max(0.0) as usize;
-    let end_idx = (start_idx + 30).min(tab.total_pages);
-
-    if start_idx > 0 {
-        sidebar_col =
-            sidebar_col.push(Space::new().height(start_idx as f32 * theme::THUMBNAIL_HEIGHT));
-    }
-
-    for page_idx in start_idx..end_idx {
-        if let Some(handle) = tab.view_state.thumbnails.get(&page_idx) {
-            let img = iced::widget::Image::new(handle.clone())
-                .width(Length::Fixed(theme::THUMBNAIL_WIDTH));
-            sidebar_col = sidebar_col
-                .push(button(img).on_press(crate::message::Message::JumpToPage(page_idx)));
-        } else {
-            sidebar_col = sidebar_col.push(
-                button(text(format!("Page {}", page_idx + 1)).font(INTER_REGULAR))
-                    .on_press(crate::message::Message::JumpToPage(page_idx))
-                    .width(Length::Fixed(theme::THUMBNAIL_WIDTH)),
-            );
-        }
-    }
-
-    let remaining = tab.total_pages.saturating_sub(end_idx);
-    if remaining > 0 {
-        sidebar_col =
-            sidebar_col.push(Space::new().height(remaining as f32 * theme::THUMBNAIL_HEIGHT));
-    }
-
-    scrollable(sidebar_col)
-        .id("sidebar_scroll")
-        .on_scroll(|viewport| {
-            crate::message::Message::SidebarViewportChanged(viewport.absolute_offset().y)
-        })
-        .width(Length::Fixed(theme::SIDEBAR_WIDTH))
-        .into()
+    main_sidebar.push(content_scroll).into()
 }
 
 pub fn render_forms(app: &PdfBullApp) -> Element<'_, crate::message::Message> {
