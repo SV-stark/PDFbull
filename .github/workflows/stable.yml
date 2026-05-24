@@ -53,16 +53,12 @@ jobs:
         shell: pwsh
         run: |
           choco install nsis -y --no-progress
-          # Refresh PATH so makensis.exe is immediately available in subsequent steps
-          $env:PATH = [System.Environment]::GetEnvironmentVariable("PATH", "Machine") + ";" + [System.Environment]::GetEnvironmentVariable("PATH", "User")
-          echo "NSIS installed: $(makensis /VERSION)"
+          # Persist NSIS to PATH for all subsequent steps via GITHUB_PATH
+          "C:\Program Files (x86)\NSIS" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
 
       - name: Build NSIS Installer
         shell: pwsh
         run: |
-          # Ensure makensis is on PATH
-          $nsisPath = "C:\Program Files (x86)\NSIS"
-          if (Test-Path $nsisPath) { $env:PATH += ";$nsisPath" }
           makensis installer.nsi
           if (-not (Test-Path "PDFbull-Setup.exe")) {
             Write-Error "PDFbull-Setup.exe was not produced by NSIS!"
