@@ -27,15 +27,7 @@ jobs:
       - name: Rust cache
         uses: swatinem/rust-cache@v2
 
-      - name: Cache PDFium
-        id: cache-pdfium
-        uses: actions/cache@v3
-        with:
-          path: pdfium.dll
-          key: ${{ runner.os }}-pdfium-7763
-
       - name: Download Build Resources (PDFium)
-        if: steps.cache-pdfium.outputs.cache-hit != 'true'
         shell: pwsh
         run: |
           # Download PDFium (Required for pdfium-render)
