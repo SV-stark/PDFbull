@@ -2,7 +2,7 @@ use crate::app::PdfBullApp;
 use crate::message::Message;
 use iced::Task;
 
-#[allow(clippy::suboptimal_flops)]
+#[allow(clippy::suboptimal_flops, clippy::similar_names)]
 pub fn handle_annotation_message(app: &mut PdfBullApp, message: Message) -> Task<Message> {
     match message {
         Message::SetAnnotationMode(mode) => {
