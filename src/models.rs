@@ -439,6 +439,8 @@ pub struct DocumentTab {
     pub metadata: DocumentMetadata,
     pub view_state: TabViewState,
     pub pending_session: Option<TabSession>,
+    pub page_mapping: Vec<usize>,
+    pub page_rotations: std::collections::HashMap<usize, i32>,
 }
 
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -483,6 +485,8 @@ impl DocumentTab {
             metadata: DocumentMetadata::default(),
             view_state: TabViewState::default(),
             pending_session: None,
+            page_mapping: Vec::new(),
+            page_rotations: std::collections::HashMap::new(),
         }
     }
 

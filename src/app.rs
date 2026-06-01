@@ -73,6 +73,16 @@ pub struct PdfBullApp {
     pub annotation_color: String,
     pub annotation_thickness: f32,
     pub annotation_text_size: f32,
+
+    // Tools state
+    pub show_watermark_prompt: bool,
+    pub watermark_input: String,
+    pub show_signature_creator: bool,
+    pub signature_lines: Vec<Vec<(f32, f32)>>,
+    pub signature_drag: Option<(f32, f32)>,
+    pub saved_signature: Option<Vec<Vec<(f32, f32)>>>,
+    pub signature_stamp_active: bool,
+    pub show_page_organizer: bool,
 }
 
 impl Default for PdfBullApp {
@@ -107,6 +117,16 @@ impl Default for PdfBullApp {
             annotation_color: "#408cff".to_string(),
             annotation_thickness: 2.0,
             annotation_text_size: 14.0,
+
+            // Tools default initialization
+            show_watermark_prompt: false,
+            watermark_input: "CONFIDENTIAL".to_string(),
+            show_signature_creator: false,
+            signature_lines: Vec::new(),
+            signature_drag: None,
+            saved_signature: None,
+            signature_stamp_active: false,
+            show_page_organizer: false,
         }
     }
 }

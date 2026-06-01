@@ -164,6 +164,107 @@ pub fn handle_message(app: &mut PdfBullApp, message: Message) -> Task<Message> {
         | Message::FormFieldChanged(_, _)
         | Message::FillForm(_)
         | Message::FormFilled(_) => export::handle_export_message(app, message),
+        Message::ToggleWatermarkPrompt(show) => {
+            app.show_watermark_prompt = show;
+            if show {
+                app.show_signature_creator = false;
+                app.show_page_organizer = false;
+            }
+            Task::none()
+        }
+        Message::WatermarkInputChanged(input) => {
+            app.watermark_input = input;
+            Task::none()
+        }
+        Message::SubmitWatermark => {
+            app.show_watermark_prompt = false;
+            let text = app.watermark_input.clone();
+            app.update(Message::AddWatermark(text))
+        }
+        Message::ToggleSignatureCreator(show) => {
+            app.show_signature_creator = show;
+            if show {
+                app.show_watermark_prompt = false;
+                app.show_page_organizer = false;
+                app.signature_lines.clear();
+                app.signature_drag = None;
+            }
+            Task::none()
+        }
+        Message::SignatureDragStart { x, y } => {
+            app.signature_drag = Some((x, y));
+            app.signature_lines.push(vec![(x, y)]);
+            Task::none()
+        }
+        Message::SignatureDragUpdate { x, y } => {
+            if app.signature_drag.is_some() {
+                if let Some(line) = app.signature_lines.last_mut() {
+                    line.push((x, y));
+                }
+                app.signature_drag = Some((x, y));
+            }
+            Task::none()
+        }
+        Message::SignatureDragEnd => {
+            app.signature_drag = None;
+            Task::none()
+        }
+        Message::ClearSignature => {
+            app.signature_lines.clear();
+            app.signature_drag = None;
+            Task::none()
+        }
+        Message::SaveSignature => {
+            if !app.signature_lines.is_empty() {
+                app.saved_signature = Some(app.signature_lines.clone());
+                app.signature_stamp_active = true;
+                app.annotation_mode = Some(crate::models::PendingAnnotationKind::Highlight);
+                app.status_message = Some(
+                    "Signature saved. Click anywhere on the PDF page to stamp it.".to_string(),
+                );
+            }
+            app.show_signature_creator = false;
+            Task::none()
+        }
+        Message::PlaceSignatureStamp(_page, _x, _y) => Task::none(),
+        Message::TogglePageOrganizer(show) => {
+            app.show_page_organizer = show;
+            if show {
+                app.show_watermark_prompt = false;
+                app.show_signature_creator = false;
+            }
+            Task::none()
+        }
+        Message::OrganizerDeletePage(page_idx) => {
+            if let Some(tab) = app.current_tab_mut() {
+                if page_idx < tab.page_mapping.len() {
+                    tab.page_mapping.remove(page_idx);
+                    if page_idx < tab.page_heights.len() {
+                        tab.page_heights.remove(page_idx);
+                    }
+                    tab.total_pages = tab.page_mapping.len();
+                    tab.current_page = tab.current_page.min(tab.total_pages.saturating_sub(1));
+                    tab.view_state.rendered_pages.clear();
+                    tab.view_state.thumbnails.clear();
+                }
+            }
+            app.render_visible_pages()
+        }
+        Message::OrganizerRotatePage(page_idx, rotation_diff) => {
+            if let Some(tab) = app.current_tab_mut() {
+                if page_idx < tab.page_mapping.len() {
+                    let actual_page = tab.page_mapping[page_idx];
+                    let current_rot = tab.page_rotations.entry(actual_page).or_insert(0);
+                    *current_rot = (*current_rot + rotation_diff) % 360;
+                    if *current_rot < 0 {
+                        *current_rot += 360;
+                    }
+                    tab.view_state.rendered_pages.clear();
+                    tab.view_state.thumbnails.clear();
+                }
+            }
+            app.render_visible_pages()
+        }
         Message::EngineInitialized(_)
         | Message::Error(_)
         | Message::ClearStatus

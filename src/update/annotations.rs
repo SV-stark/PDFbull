@@ -34,9 +34,91 @@ pub fn handle_annotation_message(app: &mut PdfBullApp, message: Message) -> Task
             let ann_thickness = app.annotation_thickness;
             let ann_text_size = app.annotation_text_size;
 
-            if let Some(drag) = app.annotation_drag.take()
-                && let Some(tab) = app.current_tab_mut()
-            {
+            let is_stamp = app.signature_stamp_active;
+            let sig_strokes = app.saved_signature.clone();
+
+            if let Some(drag) = app.annotation_drag.take() {
+                if is_stamp && let Some(sig_lines) = sig_strokes {
+                    if let Some(tab) = app.current_tab_mut() {
+                        let zoom = tab.zoom;
+                        let click_x = drag.start.0 / zoom;
+                        let click_y = drag.start.1 / zoom;
+
+                        let mut min_x = f32::MAX;
+                        let mut max_x = f32::MIN;
+                        let mut min_y = f32::MAX;
+                        let mut max_y = f32::MIN;
+
+                        for stroke in &sig_lines {
+                            for &(sx, sy) in stroke {
+                                if sx < min_x {
+                                    min_x = sx;
+                                }
+                                if sx > max_x {
+                                    max_x = sx;
+                                }
+                                if sy < min_y {
+                                    min_y = sy;
+                                }
+                                if sy > max_y {
+                                    max_y = sy;
+                                }
+                            }
+                        }
+
+                        let w = max_x - min_x;
+                        let h = max_y - min_y;
+
+                        if w > 1.0 && h > 1.0 {
+                            let stamp_w = 120.0;
+                            let stamp_h = stamp_w * (h / w);
+
+                            let offset_x = click_x - stamp_w / 2.0;
+                            let offset_y = click_y - stamp_h / 2.0;
+
+                            for stroke in &sig_lines {
+                                for window in stroke.windows(2) {
+                                    let p1 = window[0];
+                                    let p2 = window[1];
+
+                                    let rel_x1 = (p1.0 - min_x) / w;
+                                    let rel_y1 = (p1.1 - min_y) / h;
+                                    let rel_x2 = (p2.0 - min_x) / w;
+                                    let rel_y2 = (p2.1 - min_y) / h;
+
+                                    let sx1 = offset_x + rel_x1 * stamp_w;
+                                    let sy1 = offset_y + rel_y1 * stamp_h;
+                                    let sx2 = offset_x + rel_x2 * stamp_w;
+                                    let sy2 = offset_y + rel_y2 * stamp_h;
+
+                                    let id = crate::models::next_annotation_id();
+                                    let line_ann = crate::models::Annotation {
+                                        id,
+                                        page: drag.page,
+                                        style: crate::models::AnnotationStyle::Line {
+                                            color: "#2c3e50".to_string(), // Dark ink color
+                                            thickness: 2.0,
+                                        },
+                                        x: sx1,
+                                        y: sy1,
+                                        width: sx2 - sx1,
+                                        height: sy2 - sy1,
+                                    };
+                                    tab.annotations.push(line_ann);
+                                }
+                            }
+                        }
+                    }
+
+                    app.signature_stamp_active = false;
+                    app.annotation_mode = None;
+                    return app.render_visible_pages();
+                }
+
+                let Some(tab) = app.current_tab_mut() else {
+                    return Task::none();
+                };
+
                 let zoom = tab.zoom;
                 let start_x = drag.start.0;
                 let start_y = drag.start.1;

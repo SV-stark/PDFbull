@@ -3,7 +3,7 @@ use crate::app::{INTER_BOLD, INTER_REGULAR, LUCIDE, icons};
 use crate::models::PendingAnnotationKind;
 use crate::pdf_engine::RenderFilter;
 use crate::ui::theme;
-use iced::widget::{Space, button, column, container, row, text, tooltip};
+use iced::widget::{Space, button, column, container, pick_list, row, text, tooltip};
 use iced::{Alignment, Border, Color, Element, Length, Shadow, Vector};
 
 pub fn render(app: &PdfBullApp) -> Element<'_, crate::message::Message> {
@@ -124,6 +124,29 @@ pub fn render(app: &PdfBullApp) -> Element<'_, crate::message::Message> {
     .spacing(8);
 
     // --- SECTION: Utility / Right ---
+    let tools = vec![
+        "🖨️ Print PDF...".to_string(),
+        "✂️ Split PDF (All)...".to_string(),
+        "🔀 Merge PDFs...".to_string(),
+        "🏷️ Add Watermark...".to_string(),
+        "✍️ Create Signature...".to_string(),
+        "📂 Page Organizer...".to_string(),
+    ];
+
+    let tools_dropdown = pick_list(tools, None::<String>, |selected| match selected.as_str() {
+        "🖨️ Print PDF..." => crate::message::Message::Print,
+        "✂️ Split PDF (All)..." => crate::message::Message::SplitPDF(vec![]),
+        "🔀 Merge PDFs..." => crate::message::Message::MergeDocuments(vec![]),
+        "🏷️ Add Watermark..." => crate::message::Message::ToggleWatermarkPrompt(true),
+        "✍️ Create Signature..." => crate::message::Message::ToggleSignatureCreator(true),
+        "📂 Page Organizer..." => {
+            crate::message::Message::TogglePageOrganizer(!app.show_page_organizer)
+        }
+        _ => crate::message::Message::ClearStatus,
+    })
+    .placeholder("🛠️ Tools")
+    .width(Length::Fixed(145.0));
+
     let util_tools = row![
         tool_button(
             icons::FORMS,
@@ -139,6 +162,9 @@ pub fn render(app: &PdfBullApp) -> Element<'_, crate::message::Message> {
             false,
             "Add bookmark"
         ),
+        Space::new().width(2),
+        tools_dropdown,
+        Space::new().width(2),
         v_sep(),
         button(text(icons::SETTINGS).size(18).font(LUCIDE))
             .on_press(crate::message::Message::OpenSettings)

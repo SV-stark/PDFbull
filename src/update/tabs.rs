@@ -90,6 +90,7 @@ pub fn handle_tab_message(app: &mut PdfBullApp, message: Message) -> Task<Messag
                     tab.links = links;
                     tab.signatures = signatures;
                     tab.view_state.is_loading = false;
+                    tab.page_mapping = (0..count).collect();
 
                     if let Some(session) = tab.pending_session.take() {
                         tab.current_page = session.current_page.min(count.saturating_sub(1));
