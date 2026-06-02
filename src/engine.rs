@@ -44,6 +44,10 @@ pub fn spawn_engine_thread(cache_size: u64, max_memory_mb: u64) -> EngineState {
             .and_then(|p| p.parent().map(std::path::Path::to_path_buf))
             .and_then(|dir| {
                 let mut dir_str = dir.to_string_lossy().into_owned();
+                // Strip Windows UNC/extended-path prefix (\\?\) which LoadLibraryW does not support
+                if let Some(stripped) = dir_str.strip_prefix(r"\\?\") {
+                    dir_str = stripped.to_string();
+                }
                 if !dir_str.ends_with('/') && !dir_str.ends_with('\\') {
                     #[cfg(windows)]
                     dir_str.push('\\');
