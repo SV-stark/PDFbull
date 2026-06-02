@@ -30,6 +30,29 @@ pub fn spawn_engine_thread(cache_size: u64, max_memory_mb: u64) -> EngineState {
     });
 
     // ── PDFium initialization ──────────────────────────────────────────────────
+    // On Windows, explicitly add the executable's directory to the DLL search path.
+    // This resolves LoadLibrary failures in protected system folders like C:\Program Files\.
+    #[cfg(windows)]
+    {
+        if let Ok(exe_path) = std::env::current_exe() {
+            if let Some(exe_dir) = exe_path.parent() {
+                let mut dir_str = exe_dir.to_string_lossy().into_owned();
+                if let Some(stripped) = dir_str.strip_prefix(r"\\?\") {
+                    dir_str = stripped.to_string();
+                }
+                let mut path_w: Vec<u16> = dir_str.encode_utf16().collect();
+                path_w.push(0); // Null terminator
+                unsafe {
+                    #[link(name = "kernel32")]
+                    unsafe extern "system" {
+                        fn SetDllDirectoryW(lpPathName: *const u16) -> i32;
+                    }
+                    let _ = SetDllDirectoryW(path_w.as_ptr());
+                }
+            }
+        }
+    }
+
     // The pdfium-render crate registers bindings globally (one per process).
     // Calling bind_to_library more than once returns PdfiumLibraryBindingsAlreadyInitialized.
     // We therefore initialize exactly once here, on the calling thread, and share
@@ -76,8 +99,17 @@ pub fn spawn_engine_thread(cache_size: u64, max_memory_mb: u64) -> EngineState {
                 }
                 Err(e) => {
                     tracing::error!("CRITICAL: Could not find or load pdfium: {e}");
-                    // Return an EngineState with a dead sender; the UI will show the
-                    // engine-crashed banner immediately without a panic.
+                    // Diagnostic logging to AppData
+                    if let Some(proj_dirs) =
+                        directories::ProjectDirs::from("", "SV-stark", "PDFbull")
+                    {
+                        let log_path = proj_dirs.config_dir().join("engine_error.log");
+                        let _ = std::fs::create_dir_all(proj_dirs.config_dir());
+                        let _ = std::fs::write(
+                            &log_path,
+                            format!("Failed to load PDFium: {}\nDetails: {:?}", e, e),
+                        );
+                    }
                     return EngineState { cmd_tx };
                 }
             }
