@@ -103,7 +103,7 @@ async fn test_document_rotation() {
     // Rotate counter-clockwise
     let _ = app.update(Message::RotateCounterClockwise);
     assert_eq!(app.current_tab().unwrap().rotation, 90);
-    
+
     // Rotate counter-clockwise to negative/wrap
     let _ = app.update(Message::RotateCounterClockwise);
     assert_eq!(app.current_tab().unwrap().rotation, 0);

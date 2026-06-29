@@ -399,7 +399,8 @@ impl PdfBullApp {
 
                     for conn in listener.incoming() {
                         if let Ok(stream) = conn {
-                            let _ = stream.set_recv_timeout(Some(std::time::Duration::from_secs(1)));
+                            let _ =
+                                stream.set_recv_timeout(Some(std::time::Duration::from_secs(1)));
                             let mut reader = BufReader::new(stream);
                             let mut buffer = String::new();
                             if let Ok(_) = reader.read_line(&mut buffer) {
