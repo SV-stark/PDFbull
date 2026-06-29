@@ -112,6 +112,7 @@ async fn test_document_rotation() {
 }
 
 #[tokio::test(flavor = "current_thread")]
+#[allow(clippy::float_cmp)]
 async fn test_document_zoom() {
     let mut app = PdfBullApp::default();
     let tab = pdfbull::models::DocumentTab::new(std::path::PathBuf::from("test.pdf"));
