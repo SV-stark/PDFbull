@@ -445,8 +445,6 @@ impl<'a> DocumentStore<'a> {
             .get_mut(&doc_id)
             .ok_or(PdfError::EngineError(EngineErrorKind::DocumentNotFound))?;
 
-        let annotation_font = doc.fonts_mut().helvetica();
-
         for ann in annotations {
             let page_num_i32 =
                 i32::try_from(ann.page).map_err(|_| PdfError::PageNotFound(ann.page))?;
@@ -468,70 +466,70 @@ impl<'a> DocumentStore<'a> {
 
             match &ann.style {
                 AnnotationStyle::Highlight { color } => {
+                    let mut annot = page
+                        .annotations_mut()
+                        .create_highlight_annotation()
+                        .map_err(|e| PdfError::RenderFailed(e.to_string()))?;
+                    annot
+                        .set_bounds(rect)
+                        .map_err(|e| PdfError::RenderFailed(e.to_string()))?;
                     let (r, g, b) = hex_to_rgb(color);
-                    objects
-                        .create_path_object_rect(
-                            rect,
-                            None,
-                            None,
-                            Some(PdfColor::new(
-                                (r * 255.0) as u8,
-                                (g * 255.0) as u8,
-                                (b * 255.0) as u8,
-                                100,
-                            )),
-                        )
+                    annot
+                        .set_stroke_color(PdfColor::new(
+                            (r * 255.0) as u8,
+                            (g * 255.0) as u8,
+                            (b * 255.0) as u8,
+                            255,
+                        ))
                         .map_err(|e| PdfError::RenderFailed(e.to_string()))?;
                 }
                 AnnotationStyle::Rectangle {
                     color,
-                    thickness,
+                    thickness: _,
                     fill,
                 } => {
+                    let mut annot = page
+                        .annotations_mut()
+                        .create_square_annotation()
+                        .map_err(|e| PdfError::RenderFailed(e.to_string()))?;
+                    annot
+                        .set_bounds(rect)
+                        .map_err(|e| PdfError::RenderFailed(e.to_string()))?;
                     let (r, g, b) = hex_to_rgb(color);
-                    let fill_color = if *fill {
-                        Some(PdfColor::new(
+                    annot
+                        .set_stroke_color(PdfColor::new(
                             (r * 255.0) as u8,
                             (g * 255.0) as u8,
                             (b * 255.0) as u8,
-                            50,
+                            255,
                         ))
-                    } else {
-                        None
-                    };
-                    objects
-                        .create_path_object_rect(
-                            rect,
-                            Some(PdfColor::new(
+                        .map_err(|e| PdfError::RenderFailed(e.to_string()))?;
+                    if *fill {
+                        annot
+                            .set_fill_color(PdfColor::new(
                                 (r * 255.0) as u8,
                                 (g * 255.0) as u8,
                                 (b * 255.0) as u8,
-                                255,
-                            )),
-                            Some(PdfPoints::new(*thickness)),
-                            fill_color,
-                        )
-                        .map_err(|e| PdfError::RenderFailed(e.to_string()))?;
+                                50,
+                            ))
+                            .map_err(|e| PdfError::RenderFailed(e.to_string()))?;
+                    }
                 }
                 AnnotationStyle::Text {
                     text,
                     color,
-                    font_size,
+                    font_size: _,
                 } => {
-                    let font = annotation_font;
-                    let (r, g, b) = hex_to_rgb(color);
-
-                    let mut text_obj = objects
-                        .create_text_object(
-                            PdfPoints::new(ann.x),
-                            PdfPoints::new(page_height - (ann.y + ann.height)),
-                            text,
-                            font,
-                            PdfPoints::new(*font_size as f32),
-                        )
+                    let mut annot = page
+                        .annotations_mut()
+                        .create_free_text_annotation(text)
                         .map_err(|e| PdfError::RenderFailed(e.to_string()))?;
-                    text_obj
-                        .set_fill_color(PdfColor::new(
+                    annot
+                        .set_bounds(rect)
+                        .map_err(|e| PdfError::RenderFailed(e.to_string()))?;
+                    let (r, g, b) = hex_to_rgb(color);
+                    annot
+                        .set_stroke_color(PdfColor::new(
                             (r * 255.0) as u8,
                             (g * 255.0) as u8,
                             (b * 255.0) as u8,
@@ -618,33 +616,35 @@ impl<'a> DocumentStore<'a> {
                 }
                 AnnotationStyle::Circle {
                     color,
-                    thickness,
+                    thickness: _,
                     fill,
                 } => {
+                    let mut annot = page
+                        .annotations_mut()
+                        .create_square_annotation()
+                        .map_err(|e| PdfError::RenderFailed(e.to_string()))?;
+                    annot
+                        .set_bounds(rect)
+                        .map_err(|e| PdfError::RenderFailed(e.to_string()))?;
                     let (r, g, b) = hex_to_rgb(color);
-                    let fill_color = if *fill {
-                        Some(PdfColor::new(
+                    annot
+                        .set_stroke_color(PdfColor::new(
                             (r * 255.0) as u8,
                             (g * 255.0) as u8,
                             (b * 255.0) as u8,
-                            50,
+                            255,
                         ))
-                    } else {
-                        None
-                    };
-                    objects
-                        .create_path_object_circle(
-                            rect,
-                            Some(PdfColor::new(
+                        .map_err(|e| PdfError::RenderFailed(e.to_string()))?;
+                    if *fill {
+                        annot
+                            .set_fill_color(PdfColor::new(
                                 (r * 255.0) as u8,
                                 (g * 255.0) as u8,
                                 (b * 255.0) as u8,
-                                255,
-                            )),
-                            Some(PdfPoints::new(*thickness)),
-                            fill_color,
-                        )
-                        .map_err(|e| PdfError::RenderFailed(e.to_string()))?;
+                                50,
+                            ))
+                            .map_err(|e| PdfError::RenderFailed(e.to_string()))?;
+                    }
                 }
                 AnnotationStyle::Line { color, thickness } => {
                     let (r, g, b) = hex_to_rgb(color);
@@ -735,51 +735,26 @@ impl<'a> DocumentStore<'a> {
                     }
                 }
                 AnnotationStyle::StickyNote { comment, color } => {
+                    let mut annot = page
+                        .annotations_mut()
+                        .create_text_annotation(comment)
+                        .map_err(|e| PdfError::RenderFailed(e.to_string()))?;
+                    annot
+                        .set_bounds(rect)
+                        .map_err(|e| PdfError::RenderFailed(e.to_string()))?;
                     let (r, g, b) = hex_to_rgb(color);
-
-                    // Draw sticky post-it background box
-                    objects
-                        .create_path_object_rect(
-                            rect,
-                            Some(PdfColor::new(
-                                (r * 255.0 * 0.8) as u8,
-                                (g * 255.0 * 0.8) as u8,
-                                (b * 255.0 * 0.8) as u8,
-                                255,
-                            )),
-                            Some(PdfPoints::new(1.0)),
-                            Some(PdfColor::new(
-                                (r * 255.0) as u8,
-                                (g * 255.0) as u8,
-                                (b * 255.0) as u8,
-                                255,
-                            )),
-                        )
-                        .map_err(|e| PdfError::RenderFailed(e.to_string()))?;
-
-                    // Draw the first few characters of comment as preview text inside the sticky note
-                    let preview_text = if comment.len() > 15 {
-                        format!("{}...", &comment[0..12])
-                    } else {
-                        comment.clone()
-                    };
-
-                    let font = annotation_font;
-                    let text_size = 9.0;
-                    let mut text_obj = objects
-                        .create_text_object(
-                            PdfPoints::new(ann.x + 3.0),
-                            PdfPoints::new(page_height - (ann.y + ann.height) + 3.0),
-                            &preview_text,
-                            font,
-                            PdfPoints::new(text_size),
-                        )
-                        .map_err(|e| PdfError::RenderFailed(e.to_string()))?;
-                    text_obj
-                        .set_fill_color(PdfColor::new(0, 0, 0, 255))
+                    annot
+                        .set_stroke_color(PdfColor::new(
+                            (r * 255.0) as u8,
+                            (g * 255.0) as u8,
+                            (b * 255.0) as u8,
+                            255,
+                        ))
                         .map_err(|e| PdfError::RenderFailed(e.to_string()))?;
                 }
             }
+            page.regenerate_content()
+                .map_err(|e| PdfError::RenderFailed(e.to_string()))?;
         }
         let pdf_path_buf = std::path::Path::new(pdf_path);
         let final_path = output_path.unwrap_or_else(|| {

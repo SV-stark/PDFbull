@@ -20,12 +20,22 @@ pub fn handle_annotation_message(app: &mut PdfBullApp, message: Message) -> Task
                     current: (x, y),
                     kind: *kind,
                 });
+            } else if let Some(tab) = app.current_tab_mut() {
+                tab.selected_text = None;
+                tab.selected_boxes.clear();
+                let zoom = tab.zoom;
+                tab.selection_drag = Some((page, (x / zoom, y / zoom), (x / zoom, y / zoom)));
             }
             Task::none()
         }
         Message::AnnotationDragUpdate { x, y } => {
             if let Some(drag) = &mut app.annotation_drag {
                 drag.current = (x, y);
+            } else if let Some(tab) = app.current_tab_mut() {
+                if let Some((_, _, current)) = &mut tab.selection_drag {
+                    let zoom = tab.zoom;
+                    *current = (x / zoom, y / zoom);
+                }
             }
             Task::none()
         }
@@ -149,12 +159,12 @@ pub fn handle_annotation_message(app: &mut PdfBullApp, message: Message) -> Task
                         }
                         crate::models::PendingAnnotationKind::Redact => {
                             crate::models::AnnotationStyle::Redact {
-                                color: ann_color.clone(),
+                                color: "#000000".to_string(),
                             }
                         }
                         crate::models::PendingAnnotationKind::Text => {
                             crate::models::AnnotationStyle::Text {
-                                text: "New Text".to_string(),
+                                text: "Text Annotation".to_string(),
                                 color: ann_color.clone(),
                                 font_size: ann_text_size as u32,
                             }
@@ -180,8 +190,8 @@ pub fn handle_annotation_message(app: &mut PdfBullApp, message: Message) -> Task
                         }
                         crate::models::PendingAnnotationKind::StickyNote => {
                             crate::models::AnnotationStyle::StickyNote {
-                                comment: "New sticky note comment".to_string(),
-                                color: ann_color.clone(),
+                                comment: "Sticky Note".to_string(),
+                                color: "#ffeb3b".to_string(),
                             }
                         }
                     };
@@ -191,14 +201,11 @@ pub fn handle_annotation_message(app: &mut PdfBullApp, message: Message) -> Task
                         | crate::models::PendingAnnotationKind::Arrow => {
                             (start_x / zoom, start_y / zoom, dx / zoom, dy / zoom)
                         }
-                        crate::models::PendingAnnotationKind::StickyNote if dist <= 5.0 => {
-                            // Centered 24x24 box at click point
-                            (
-                                (start_x - 12.0 * zoom) / zoom,
-                                (start_y - 12.0 * zoom) / zoom,
-                                24.0,
-                                24.0,
-                            )
+                        crate::models::PendingAnnotationKind::Text
+                        | crate::models::PendingAnnotationKind::StickyNote => {
+                            let click_x = start_x / zoom;
+                            let click_y = start_y / zoom;
+                            (click_x, click_y, 120.0, 24.0)
                         }
                         _ => {
                             let min_x = start_x.min(curr_x);
@@ -223,6 +230,56 @@ pub fn handle_annotation_message(app: &mut PdfBullApp, message: Message) -> Task
                         .push(crate::models::UndoableAction::AddAnnotation(ann.clone()));
                     tab.redo_stack.clear();
                     tab.annotations.push(ann);
+                }
+            } else if let Some(tab) = app.current_tab_mut() {
+                if let Some((page_idx, start, current)) = tab.selection_drag.take() {
+                    let mut selected_words = Vec::new();
+                    if let Some(words) = tab.view_state.text_layers.get(&page_idx) {
+                        let x1 = start.0.min(current.0);
+                        let x2 = start.0.max(current.0);
+                        let y1 = start.1.min(current.1);
+                        let y2 = start.1.max(current.1);
+
+                        for word in words {
+                            let wx1 = word.x;
+                            let wx2 = word.x + word.width;
+                            let wy1 = word.y;
+                            let wy2 = word.y + word.height;
+
+                            let overlap_x = x1 < wx2 && x2 > wx1;
+                            let overlap_y = y1 < wy2 && y2 > wy1;
+
+                            if overlap_x && overlap_y {
+                                selected_words.push(word.clone());
+                            }
+                        }
+                    }
+                    if !selected_words.is_empty() {
+                        selected_words.sort_by(|a, b| {
+                            let y_diff = (a.y - b.y).abs();
+                            if y_diff < 5.0 {
+                                a.x.partial_cmp(&b.x).unwrap_or(std::cmp::Ordering::Equal)
+                            } else {
+                                a.y.partial_cmp(&b.y).unwrap_or(std::cmp::Ordering::Equal)
+                            }
+                        });
+                        let text: String = selected_words
+                            .iter()
+                            .map(|w| w.text.as_str())
+                            .collect::<Vec<_>>()
+                            .join(" ");
+                        tab.selected_boxes = selected_words
+                            .iter()
+                            .map(|w| (w.x, w.y, w.width, w.height))
+                            .collect();
+                        tab.selected_text = Some(text.clone());
+
+                        let mut clipboard = arboard::Clipboard::new().ok();
+                        if let Some(cb) = &mut clipboard {
+                            let _ = cb.set_text(text);
+                        }
+                        app.status_message = Some("Text copied to clipboard!".to_string());
+                    }
                 }
             }
             Task::none()

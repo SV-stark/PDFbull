@@ -555,6 +555,66 @@ fn render_search_highlights<'a>(
         .collect()
 }
 
+fn render_selection_overlay<'a>(
+    page_idx: usize,
+    tab: &'a DocumentTab,
+    zoom: f32,
+) -> Vec<Element<'a, crate::message::Message>> {
+    let mut overlays = Vec::new();
+
+    // 1. Draw the active selection drag blue box
+    if let Some((drag_page, start, current)) = tab.selection_drag {
+        if drag_page == page_idx {
+            let x = start.0.min(current.0);
+            let y = start.1.min(current.1);
+            let w = (current.0 - start.0).abs();
+            let h = (current.1 - start.1).abs();
+
+            overlays.push(
+                container(Space::new())
+                    .width(Length::Fixed(w * zoom))
+                    .height(Length::Fixed(h * zoom))
+                    .style(move |_| iced::widget::container::Style {
+                        background: Some(Color::from_rgba(0.0, 0.4, 1.0, 0.15).into()),
+                        border: iced::Border {
+                            color: Color::from_rgba(0.0, 0.4, 1.0, 0.5),
+                            width: 1.0,
+                            radius: 0.0.into(),
+                        },
+                        ..Default::default()
+                    })
+                    .padding(Padding {
+                        top: y * zoom,
+                        left: x * zoom,
+                        ..Default::default()
+                    })
+                    .into(),
+            );
+        }
+    }
+
+    // 2. Draw permanent selection highlight boxes for selected words
+    for &(bx, by, bw, bh) in &tab.selected_boxes {
+        overlays.push(
+            container(Space::new())
+                .width(Length::Fixed(bw * zoom))
+                .height(Length::Fixed(bh * zoom))
+                .style(move |_| iced::widget::container::Style {
+                    background: Some(Color::from_rgba(0.0, 0.4, 1.0, 0.25).into()),
+                    ..Default::default()
+                })
+                .padding(Padding {
+                    top: by * zoom,
+                    left: bx * zoom,
+                    ..Default::default()
+                })
+                .into(),
+        );
+    }
+
+    overlays
+}
+
 fn render_active_drag<'a>(
     page_idx: usize,
     zoom: f32,
@@ -671,24 +731,18 @@ fn render_page_canvas<'a>(
         for el in render_accessibility_layer(page_idx, tab, zoom) {
             page_stack = page_stack.push(el);
         }
-        for el in render_annotations(page_idx, tab, zoom) {
-            page_stack = page_stack.push(el);
-        }
-        for el in render_hyperlinks(page_idx, tab, zoom) {
+        for el in render_selection_overlay(page_idx, tab, zoom) {
             page_stack = page_stack.push(el);
         }
         for el in render_search_highlights(page_idx, tab, zoom, app) {
             page_stack = page_stack.push(el);
         }
-        for el in render_active_drag(page_idx, zoom, app) {
-            page_stack = page_stack.push(el);
-        }
 
-        // Add the annotation interaction layer
+        // Add the annotation interaction layer (positioned underneath annotations & hyperlinks to let them capture clicks)
         page_stack = page_stack.push(
             canvas(AnnotationCanvas {
                 page_idx,
-                active: app.annotation_mode.is_some(),
+                active: true,
                 annotations: &tab.annotations,
                 zoom,
                 drag: app.annotation_drag.clone(),
@@ -696,6 +750,16 @@ fn render_page_canvas<'a>(
             .width(Length::Fixed(scaled_width))
             .height(Length::Fixed(scaled_height)),
         );
+
+        for el in render_annotations(page_idx, tab, zoom) {
+            page_stack = page_stack.push(el);
+        }
+        for el in render_hyperlinks(page_idx, tab, zoom) {
+            page_stack = page_stack.push(el);
+        }
+        for el in render_active_drag(page_idx, zoom, app) {
+            page_stack = page_stack.push(el);
+        }
 
         container(page_stack)
             .width(Length::Fixed(scaled_width))

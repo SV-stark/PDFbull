@@ -441,6 +441,10 @@ pub struct DocumentTab {
     pub pending_session: Option<TabSession>,
     pub page_mapping: Vec<usize>,
     pub page_rotations: std::collections::HashMap<usize, i32>,
+    #[allow(clippy::type_complexity)]
+    pub selection_drag: Option<(usize, (f32, f32), (f32, f32))>,
+    pub selected_text: Option<String>,
+    pub selected_boxes: Vec<(f32, f32, f32, f32)>,
 }
 
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -487,6 +491,9 @@ impl DocumentTab {
             pending_session: None,
             page_mapping: Vec::new(),
             page_rotations: std::collections::HashMap::new(),
+            selection_drag: None,
+            selected_text: None,
+            selected_boxes: Vec::new(),
         }
     }
 
