@@ -2,6 +2,7 @@ use crate::pdf_engine::RenderFilter;
 use iced::widget::image as iced_image;
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
+use std::sync::Arc;
 use thiserror::Error;
 
 #[derive(Error, Debug, Clone, PartialEq, Eq)]
@@ -101,15 +102,6 @@ pub struct DocumentMetadata {
     pub modification_date: Option<String>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct SignatureInfo {
-    pub name: String,
-    pub reason: Option<String>,
-    pub location: Option<String>,
-    pub date: Option<String>,
-    pub is_valid: bool,
-}
-
 #[derive(Debug, Clone)]
 pub struct OpenResult {
     pub id: DocumentId,
@@ -119,7 +111,13 @@ pub struct OpenResult {
     pub outline: Vec<crate::pdf_engine::Bookmark>,
     pub links: Vec<Hyperlink>,
     pub metadata: DocumentMetadata,
-    pub signatures: Vec<SignatureInfo>,
+}
+
+#[derive(Debug, Clone)]
+pub struct DocumentMeta {
+    pub outline: Vec<crate::pdf_engine::Bookmark>,
+    pub links: Vec<Hyperlink>,
+    pub metadata: DocumentMetadata,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -135,8 +133,7 @@ pub struct TextItem {
 pub struct RenderResult {
     pub width: u32,
     pub height: u32,
-    pub data: Vec<u8>,
-    pub text_items: Vec<TextItem>,
+    pub data: Arc<[u8]>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -435,7 +432,6 @@ pub struct DocumentTab {
     pub bookmarks: Vec<PageBookmark>,
     pub annotations: Vec<Annotation>,
     pub links: Vec<Hyperlink>,
-    pub signatures: Vec<SignatureInfo>,
     pub metadata: DocumentMetadata,
     pub view_state: TabViewState,
     pub pending_session: Option<TabSession>,
@@ -485,7 +481,6 @@ impl DocumentTab {
             bookmarks: Vec::new(),
             annotations: Vec::new(),
             links: Vec::new(),
-            signatures: Vec::new(),
             metadata: DocumentMetadata::default(),
             view_state: TabViewState::default(),
             pending_session: None,
@@ -1085,33 +1080,12 @@ mod tests {
         let result = RenderResult {
             width: 100,
             height: 200,
-            data: vec![1, 2, 3, 4],
-            text_items: vec![TextItem {
-                text: "test".to_string(),
-                x: 0.0,
-                y: 0.0,
-                width: 10.0,
-                height: 10.0,
-            }],
+            data: vec![1, 2, 3, 4].into(),
         };
         let cloned = result.clone();
         assert_eq!(cloned.width, 100);
         assert_eq!(cloned.height, 200);
-        assert_eq!(cloned.text_items.len(), 1);
-    }
-
-    #[test]
-    fn test_signature_info_default() {
-        let sig = SignatureInfo {
-            name: "Test".to_string(),
-            reason: Some("Testing".to_string()),
-            location: None,
-            date: None,
-            is_valid: true,
-        };
-        assert_eq!(sig.name, "Test");
-        assert!(sig.is_valid);
-        assert!(sig.location.is_none());
+        assert_eq!(cloned.data.len(), 4);
     }
 
     #[test]
@@ -1124,7 +1098,6 @@ mod tests {
             outline: vec![],
             links: vec![],
             metadata: DocumentMetadata::default(),
-            signatures: vec![],
         };
         let cloned = result.clone();
         assert_eq!(cloned.page_count, 10);

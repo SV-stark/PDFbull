@@ -1,6 +1,6 @@
 use crate::app::PdfBullApp;
 use crate::message::Message;
-use crate::models::DocumentTab;
+use crate::models::{DocumentTab, PdfError};
 use crate::storage;
 use iced::Task;
 use std::path::PathBuf;
@@ -75,7 +75,6 @@ pub fn handle_tab_message(app: &mut PdfBullApp, message: Message) -> Task<Messag
                 let width = res.max_width;
                 let outline = res.outline;
                 let links = res.links;
-                let signatures = res.signatures;
 
                 let default_zoom = app.settings.default_zoom;
                 let default_filter = app.settings.default_filter;
@@ -88,7 +87,6 @@ pub fn handle_tab_message(app: &mut PdfBullApp, message: Message) -> Task<Messag
                     tab.page_width = width;
                     tab.outline = outline;
                     tab.links = links;
-                    tab.signatures = signatures;
                     tab.view_state.is_loading = false;
                     tab.page_mapping = (0..count).collect();
 
@@ -111,31 +109,49 @@ pub fn handle_tab_message(app: &mut PdfBullApp, message: Message) -> Task<Messag
                     .find(|t| t.id == doc_id)
                     .map(|tab| tab.path.to_string_lossy().to_string());
 
-                let render_task = if let Some(path_str) = pdf_path
-                    && let Some(engine) = &app.engine
-                {
+                let mut tasks: Vec<Task<Message>> = Vec::new();
+                if let Some(engine) = &app.engine {
+                    if let Some(path_str) = pdf_path {
+                        let cmd_tx = engine.cmd_tx.clone();
+                        tasks.push(Task::perform(
+                            async move {
+                                let (resp_tx, resp_rx) = tokio::sync::oneshot::channel();
+                                let _ = cmd_tx
+                                    .send(crate::commands::PdfCommand::LoadAnnotations(
+                                        doc_id, path_str, resp_tx,
+                                    ))
+                                    .await;
+                                match resp_rx.await {
+                                    Ok(Ok(annotations)) => (doc_id, annotations),
+                                    Ok(Err(_)) | Err(_) => (doc_id, Vec::new()),
+                                }
+                            },
+                            |(doc_id, annotations)| Message::AnnotationsLoaded(doc_id, annotations),
+                        ));
+                    }
+
                     let cmd_tx = engine.cmd_tx.clone();
-                    Task::perform(
+                    tasks.push(Task::perform(
                         async move {
                             let (resp_tx, resp_rx) = tokio::sync::oneshot::channel();
                             let _ = cmd_tx
-                                .send(crate::commands::PdfCommand::LoadAnnotations(
-                                    doc_id, path_str, resp_tx,
+                                .send(crate::commands::PdfCommand::LoadDocumentMeta(
+                                    doc_id, resp_tx,
                                 ))
                                 .await;
                             match resp_rx.await {
-                                Ok(Ok(annotations)) => (doc_id, annotations),
-                                Ok(Err(_)) | Err(_) => (doc_id, Vec::new()),
+                                Ok(meta) => (doc_id, meta),
+                                Err(_) => (doc_id, Err(PdfError::ChannelClosed)),
                             }
                         },
-                        |(doc_id, annotations)| Message::AnnotationsLoaded(doc_id, annotations),
-                    )
-                } else {
-                    app.render_visible_pages()
-                };
+                        |(doc_id, meta)| Message::DocumentMetaLoaded(doc_id, meta),
+                    ));
+                }
+
+                tasks.push(app.render_visible_pages());
 
                 app.save_session();
-                Task::batch(vec![render_task, scroll_task])
+                Task::batch(vec![Task::batch(tasks), scroll_task])
             }
             Err(e) => {
                 if e == "Engine died" || e == "Channel closed" {
@@ -158,6 +174,16 @@ pub fn handle_tab_message(app: &mut PdfBullApp, message: Message) -> Task<Messag
                 Task::none()
             }
         },
+        Message::DocumentMetaLoaded(doc_id, result) => {
+            if let Ok(meta) = result {
+                if let Some(tab) = app.tabs.iter_mut().find(|t| t.id == doc_id) {
+                    tab.outline = meta.outline;
+                    tab.links = meta.links;
+                    tab.metadata = meta.metadata;
+                }
+            }
+            Task::none()
+        }
         Message::OpenFile(path) => {
             if app.engine.is_none() {
                 let cache_size = app.settings.cache_size as u64;

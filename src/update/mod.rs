@@ -115,10 +115,12 @@ pub fn handle_message(app: &mut PdfBullApp, message: Message) -> Task<Message> {
         | Message::SidebarViewportChanged(_)
         | Message::RequestRender(_)
         | Message::PageRendered(_, _, _, _)
-        | Message::ThumbnailRendered(_, _, _, _) => render::handle_render_message(app, message),
+        | Message::ThumbnailRendered(_, _, _, _)
+        | Message::TextItemsLoaded(_, _, _) => render::handle_render_message(app, message),
         Message::OpenDocument
         | Message::DocumentOpenedWithPath(_)
         | Message::DocumentOpened(_, _)
+        | Message::DocumentMetaLoaded(_, _)
         | Message::OpenFile(_)
         | Message::OpenRecentFile(_)
         | Message::CloseTab(_)

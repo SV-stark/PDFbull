@@ -145,7 +145,7 @@ pub fn handle_export_message(app: &mut PdfBullApp, message: Message) -> Task<Mes
                             let image_data = arboard::ImageData {
                                 width: res.width as usize,
                                 height: res.height as usize,
-                                bytes: std::borrow::Cow::Borrowed(&res.data),
+                                bytes: std::borrow::Cow::Borrowed(res.data.as_ref()),
                             };
                             clipboard
                                 .set_image(image_data)

@@ -24,7 +24,6 @@ pub struct RenderKey {
     pub doc_id: DocumentId,
     pub page_num: usize,
     pub scale: u32,
-    pub filter: RenderFilter,
     pub auto_crop: bool,
     pub quality: RenderQuality,
 }
@@ -133,7 +132,6 @@ impl<'a> DocumentStore<'a> {
         let page_count = pages.len();
         let mut heights = Vec::with_capacity(page_count as usize);
         let mut max_width = 0.0;
-        let mut all_links = Vec::new();
 
         for i in 0..page_count {
             if let Ok(page) = pages.get(i) {
@@ -143,7 +141,32 @@ impl<'a> DocumentStore<'a> {
                 if w > max_width {
                     max_width = w;
                 }
+            } else {
+                heights.push(0.0);
+            }
+        }
 
+        self.documents.insert(doc_id, doc);
+        self.paths.insert(doc_id, path.to_string());
+
+        Ok(crate::models::OpenResult {
+            id: doc_id,
+            page_count: page_count as usize,
+            page_heights: heights,
+            max_width,
+            outline: Vec::new(),
+            links: Vec::new(),
+            metadata: crate::models::DocumentMetadata::default(),
+        })
+    }
+
+    fn extract_links_internal(&self, doc: &PdfDocument) -> Vec<Hyperlink> {
+        let mut all_links = Vec::new();
+        let pages = doc.pages();
+        let page_count = pages.len();
+
+        for i in 0..page_count {
+            if let Ok(page) = pages.get(i) {
                 for link in page.links().iter() {
                     if let Ok(rect) = link.rect() {
                         let url = link
@@ -168,13 +191,19 @@ impl<'a> DocumentStore<'a> {
                         }
                     }
                 }
-            } else {
-                heights.push(0.0);
             }
         }
+        all_links
+    }
 
-        let outline = self.get_outline_internal(&doc);
-        let signatures = self.extract_signatures_internal(&doc);
+    pub fn load_document_meta(&self, doc_id: DocumentId) -> PdfResult<crate::models::DocumentMeta> {
+        let doc = self
+            .documents
+            .get(&doc_id)
+            .ok_or(PdfError::EngineError(EngineErrorKind::DocumentNotFound))?;
+
+        let outline = self.get_outline_internal(doc);
+        let links = self.extract_links_internal(doc);
         let pdf_metadata = doc.metadata();
         let metadata = crate::models::DocumentMetadata {
             title: pdf_metadata
@@ -203,18 +232,10 @@ impl<'a> DocumentStore<'a> {
                 .map(|t| t.value().to_string()),
         };
 
-        self.documents.insert(doc_id, doc);
-        self.paths.insert(doc_id, path.to_string());
-
-        Ok(crate::models::OpenResult {
-            id: doc_id,
-            page_count: page_count as usize,
-            page_heights: heights,
-            max_width,
+        Ok(crate::models::DocumentMeta {
             outline,
-            links: all_links,
+            links,
             metadata,
-            signatures,
         })
     }
 
@@ -235,11 +256,6 @@ impl<'a> DocumentStore<'a> {
             doc_id,
             page_num,
             scale: rounded_scale,
-            filter: if is_thumbnail {
-                RenderFilter::None
-            } else {
-                options.filter
-            },
             auto_crop: if is_thumbnail {
                 false
             } else {
@@ -252,8 +268,17 @@ impl<'a> DocumentStore<'a> {
             },
         };
 
-        if let Some(cached) = self.render_cache.get(&cache_key) {
-            return Ok(cached);
+        if let Some(base) = self.render_cache.get(&cache_key) {
+            if options.filter == RenderFilter::None {
+                return Ok(base);
+            }
+            let mut filtered = base.data.to_vec();
+            Self::apply_filter(&mut filtered, options.filter);
+            return Ok(crate::models::RenderResult {
+                width: base.width,
+                height: base.height,
+                data: filtered.into(),
+            });
         }
 
         let doc = self
@@ -291,8 +316,6 @@ impl<'a> DocumentStore<'a> {
 
         if is_thumbnail {
             render_config = render_config.clear_before_rendering(true);
-        } else if options.filter == RenderFilter::Grayscale {
-            render_config = render_config.use_grayscale_rendering(true);
         }
 
         let bitmap = page
@@ -301,11 +324,10 @@ impl<'a> DocumentStore<'a> {
         let w = bitmap.width() as u32;
         let h = bitmap.height() as u32;
 
+        // Base (unfiltered) pixels are cached so that switching filters or
+        // re-displaying a page never re-renders from PDFium.
         let (final_w, final_h, final_data) = if !is_thumbnail && options.auto_crop {
             let mut result_data = bitmap.as_rgba_bytes().to_vec();
-            if options.filter != RenderFilter::None && options.filter != RenderFilter::Grayscale {
-                Self::apply_filter(&mut result_data, options.filter);
-            }
 
             if let Some((x1, y1, x2, y2)) = Self::detect_content_bbox_parallel(&result_data, w, h) {
                 let crop_w = (x2 - x1) + 1;
@@ -320,80 +342,29 @@ impl<'a> DocumentStore<'a> {
             } else {
                 (w, h, result_data)
             }
-        } else if !is_thumbnail
-            && options.filter != RenderFilter::None
-            && options.filter != RenderFilter::Grayscale
-        {
-            let mut result_data = bitmap.as_rgba_bytes().to_vec();
-            Self::apply_filter(&mut result_data, options.filter);
-            (w, h, result_data)
         } else {
             (w, h, bitmap.as_rgba_bytes().to_vec())
         };
 
-        let mut text_items = Vec::new();
-        if !is_thumbnail && let Ok(text_page) = page.text() {
-            let mut current_word = String::new();
-            let mut word_rect: Option<PdfRect> = None;
-
-            for char_obj in text_page.chars().iter() {
-                let Some(c) = char_obj.unicode_string() else {
-                    continue;
-                };
-                let Ok(bounds) = char_obj.loose_bounds() else {
-                    continue;
-                };
-
-                if c.trim().is_empty() {
-                    if !current_word.is_empty() {
-                        if let Some(rect) = word_rect {
-                            text_items.push(crate::models::TextItem {
-                                text: current_word.clone(),
-                                x: rect.left().value,
-                                y: page.height().value - rect.top().value,
-                                width: (rect.right().value - rect.left().value).abs(),
-                                height: (rect.top().value - rect.bottom().value).abs(),
-                            });
-                        }
-                        current_word.clear();
-                        word_rect = None;
-                    }
-                } else {
-                    current_word.push_str(&c);
-                    if let Some(rect) = word_rect {
-                        word_rect = Some(PdfRect::new(
-                            rect.bottom().min(bounds.bottom()),
-                            rect.left().min(bounds.left()),
-                            rect.top().max(bounds.top()),
-                            rect.right().max(bounds.right()),
-                        ));
-                    } else {
-                        word_rect = Some(bounds);
-                    }
-                }
-            }
-            if !current_word.is_empty()
-                && let Some(rect) = word_rect
-            {
-                text_items.push(crate::models::TextItem {
-                    text: current_word,
-                    x: rect.left().value,
-                    y: page.height().value - rect.top().value,
-                    width: (rect.right().value - rect.left().value).abs(),
-                    height: (rect.top().value - rect.bottom().value).abs(),
-                });
-            }
-        }
-
-        let result = crate::models::RenderResult {
+        let base = crate::models::RenderResult {
             width: final_w,
             height: final_h,
-            data: final_data,
-            text_items,
+            data: final_data.into(),
         };
 
-        self.render_cache.put(cache_key, result.clone());
-        Ok(result)
+        self.render_cache.put(cache_key, base.clone());
+
+        if options.filter == RenderFilter::None {
+            Ok(base)
+        } else {
+            let mut filtered = base.data.to_vec();
+            Self::apply_filter(&mut filtered, options.filter);
+            Ok(crate::models::RenderResult {
+                width: base.width,
+                height: base.height,
+                data: filtered.into(),
+            })
+        }
     }
 
     pub fn render_page(
@@ -427,6 +398,78 @@ impl<'a> DocumentStore<'a> {
             .text()
             .map_err(|e| PdfError::SearchError(e.to_string()))?;
         Ok(text_page.all())
+    }
+
+    pub fn extract_text_items(
+        &self,
+        doc_id: DocumentId,
+        page_num: usize,
+    ) -> PdfResult<Vec<crate::models::TextItem>> {
+        let doc = self
+            .documents
+            .get(&doc_id)
+            .ok_or(PdfError::EngineError(EngineErrorKind::DocumentNotFound))?;
+        let page = doc
+            .pages()
+            .get(page_num as i32)
+            .map_err(|_| PdfError::PageNotFound(page_num))?;
+
+        let mut text_items = Vec::new();
+        if let Ok(text_page) = page.text() {
+            let page_height = page.height().value;
+            let mut current_word = String::new();
+            let mut word_rect: Option<PdfRect> = None;
+
+            for char_obj in text_page.chars().iter() {
+                let Some(c) = char_obj.unicode_string() else {
+                    continue;
+                };
+                let Ok(bounds) = char_obj.loose_bounds() else {
+                    continue;
+                };
+
+                if c.trim().is_empty() {
+                    if !current_word.is_empty() {
+                        if let Some(rect) = word_rect {
+                            text_items.push(crate::models::TextItem {
+                                text: current_word.clone(),
+                                x: rect.left().value,
+                                y: page_height - rect.top().value,
+                                width: (rect.right().value - rect.left().value).abs(),
+                                height: (rect.top().value - rect.bottom().value).abs(),
+                            });
+                        }
+                        current_word.clear();
+                        word_rect = None;
+                    }
+                } else {
+                    current_word.push_str(&c);
+                    if let Some(rect) = word_rect {
+                        word_rect = Some(PdfRect::new(
+                            rect.bottom().min(bounds.bottom()),
+                            rect.left().min(bounds.left()),
+                            rect.top().max(bounds.top()),
+                            rect.right().max(bounds.right()),
+                        ));
+                    } else {
+                        word_rect = Some(bounds);
+                    }
+                }
+            }
+            if !current_word.is_empty()
+                && let Some(rect) = word_rect
+            {
+                text_items.push(crate::models::TextItem {
+                    text: current_word,
+                    x: rect.left().value,
+                    y: page_height - rect.top().value,
+                    width: (rect.right().value - rect.left().value).abs(),
+                    height: (rect.top().value - rect.bottom().value).abs(),
+                });
+            }
+        }
+
+        Ok(text_items)
     }
 
     #[allow(clippy::suboptimal_flops)]
@@ -957,7 +1000,14 @@ impl<'a> DocumentStore<'a> {
                 pixel[1] = (r * 0.349 + g * 0.686 + b * 0.168).min(255.0) as u8;
                 pixel[2] = (r * 0.272 + g * 0.534 + b * 0.131).min(255.0) as u8;
             }
-            _ => {}
+            RenderFilter::Grayscale => {
+                let luma = (pixel[0] as u32 * 299 + pixel[1] as u32 * 587 + pixel[2] as u32 * 114)
+                    / 1000;
+                pixel[0] = luma as u8;
+                pixel[1] = luma as u8;
+                pixel[2] = luma as u8;
+            }
+            RenderFilter::None => {}
         });
     }
 
@@ -1114,10 +1164,6 @@ impl<'a> DocumentStore<'a> {
         fields
     }
 
-    fn extract_signatures_internal(&self, _doc: &PdfDocument) -> Vec<crate::models::SignatureInfo> {
-        Vec::new()
-    }
-
     pub fn fill_form(
         &mut self,
         path: &str,
@@ -1161,16 +1207,19 @@ impl<'a> DocumentStore<'a> {
                             if let Some(idx) = selected_index {
                                 if let PdfFormField::ComboBox(combo) = form_field {
                                     if let Some(opt_text) = options.get(*idx) {
-                                        unsafe {
-                                            let text_field = &mut *(combo
-                                                as *mut pdfium_render::prelude::PdfFormComboBoxField<
-                                                    '_,
-                                                >
-                                                as *mut pdfium_render::prelude::PdfFormTextField<
-                                                    '_,
-                                                >);
-                                            let _ = text_field.set_value(opt_text);
-                                        }
+                                        // pdfium-render 0.9.3 exposes no public setter for
+                                        // combo-box field values. PdfFormComboBoxField and
+                                        // PdfFormTextField share an identical field layout
+                                        // (form_handle, annotation_handle, bindings) and neither
+                                        // has a Drop impl, so transmuting the owned value is sound
+                                        // and lets us reuse TextField::set_value to write the
+                                        // field's /V entry. std::mem::transmute statically verifies
+                                        // the two types have equal size, so this fails to compile
+                                        // if the library changes the layout.
+                                        let mut text_field: pdfium_render::prelude::PdfFormTextField<
+                                            '_,
+                                        > = unsafe { std::mem::transmute(combo) };
+                                        let _ = text_field.set_value(opt_text);
                                     }
                                 }
                             }
@@ -1328,7 +1377,6 @@ mod tests {
             doc_id,
             page_num: 0,
             scale: 100,
-            filter: RenderFilter::None,
             auto_crop: false,
             quality: RenderQuality::Medium,
         };
@@ -1336,7 +1384,6 @@ mod tests {
             doc_id,
             page_num: 0,
             scale: 100,
-            filter: RenderFilter::None,
             auto_crop: false,
             quality: RenderQuality::Medium,
         };
@@ -1350,7 +1397,6 @@ mod tests {
             doc_id,
             page_num: 0,
             scale: 100,
-            filter: RenderFilter::None,
             auto_crop: false,
             quality: RenderQuality::Medium,
         };
@@ -1358,7 +1404,6 @@ mod tests {
             doc_id,
             page_num: 1,
             scale: 100,
-            filter: RenderFilter::None,
             auto_crop: false,
             quality: RenderQuality::Medium,
         };
@@ -1372,7 +1417,6 @@ mod tests {
             doc_id,
             page_num: 0,
             scale: 100,
-            filter: RenderFilter::None,
             auto_crop: false,
             quality: RenderQuality::Medium,
         };
@@ -1393,7 +1437,6 @@ mod tests {
             doc_id: DocumentId(1),
             page_num: 0,
             scale: 100,
-            filter: RenderFilter::None,
             auto_crop: false,
             quality: RenderQuality::Medium,
         };
@@ -1401,7 +1444,6 @@ mod tests {
             doc_id: DocumentId(2),
             page_num: 0,
             scale: 100,
-            filter: RenderFilter::None,
             auto_crop: false,
             quality: RenderQuality::Medium,
         };
@@ -1453,15 +1495,13 @@ mod tests {
             doc_id: DocumentId(1),
             page_num: 0,
             scale: 100,
-            filter: RenderFilter::None,
             auto_crop: false,
             quality: RenderQuality::Medium,
         };
         let result = crate::models::RenderResult {
             width: 100,
             height: 100,
-            data: vec![0u8; 100],
-            text_items: vec![],
+            data: vec![0u8; 100].into(),
         };
         cache.put(key.clone(), result.clone());
         let cached = cache.get(&key);
@@ -1476,21 +1516,18 @@ mod tests {
             doc_id: DocumentId(1),
             page_num: 0,
             scale: 100,
-            filter: RenderFilter::None,
             auto_crop: false,
             quality: RenderQuality::Medium,
         };
         let result1 = crate::models::RenderResult {
             width: 100,
             height: 100,
-            data: vec![0u8; 100],
-            text_items: vec![],
+            data: vec![0u8; 100].into(),
         };
         let result2 = crate::models::RenderResult {
             width: 200,
             height: 200,
-            data: vec![0u8; 200],
-            text_items: vec![],
+            data: vec![0u8; 200].into(),
         };
         cache.put(key.clone(), result1);
         cache.put(key.clone(), result2);
@@ -1505,7 +1542,6 @@ mod tests {
             doc_id: DocumentId(1),
             page_num: 0,
             scale: 100,
-            filter: RenderFilter::None,
             auto_crop: false,
             quality: RenderQuality::Medium,
         };
@@ -1513,21 +1549,18 @@ mod tests {
             doc_id: DocumentId(1),
             page_num: 1,
             scale: 100,
-            filter: RenderFilter::None,
             auto_crop: false,
             quality: RenderQuality::Medium,
         };
         let result1 = crate::models::RenderResult {
             width: 100,
             height: 100,
-            data: vec![0u8; 100],
-            text_items: vec![],
+            data: vec![0u8; 100].into(),
         };
         let result2 = crate::models::RenderResult {
             width: 200,
             height: 200,
-            data: vec![0u8; 200],
-            text_items: vec![],
+            data: vec![0u8; 200].into(),
         };
         cache.put(key1.clone(), result1);
         cache.put(key2.clone(), result2);
@@ -1618,12 +1651,13 @@ mod tests {
     }
 
     #[test]
-    fn test_apply_filter_grayscale_does_nothing() {
+    fn test_apply_filter_grayscale() {
         let mut data = vec![100, 150, 200, 255];
         DocumentStore::apply_filter(&mut data, RenderFilter::Grayscale);
-        assert_eq!(data[0], 100);
-        assert_eq!(data[1], 150);
-        assert_eq!(data[2], 200);
+        let luma = ((100 * 299 + 150 * 587 + 200 * 114) / 1000) as u8;
+        assert_eq!(data[0], luma);
+        assert_eq!(data[1], luma);
+        assert_eq!(data[2], luma);
     }
 
     #[test]

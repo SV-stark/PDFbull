@@ -1,5 +1,6 @@
 use crate::models::{
-    Annotation, DocumentId, FormField, OpenResult, PdfResult, RenderResult, SearchResultItem,
+    Annotation, DocumentId, DocumentMeta, FormField, OpenResult, PdfResult, RenderResult,
+    SearchResultItem, TextItem,
 };
 use crate::pdf_engine::RenderOptions;
 use tokio::sync::oneshot;
@@ -21,6 +22,8 @@ pub enum PdfCommand {
     ),
     Close(DocumentId),
     ExtractText(DocumentId, i32, oneshot::Sender<PdfResult<String>>),
+    GetTextItems(DocumentId, usize, oneshot::Sender<PdfResult<Vec<TextItem>>>),
+    LoadDocumentMeta(DocumentId, oneshot::Sender<PdfResult<DocumentMeta>>),
     Search(
         DocumentId,
         String,

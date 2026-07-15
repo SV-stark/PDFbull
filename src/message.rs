@@ -1,6 +1,7 @@
 use crate::engine::EngineState;
 use crate::models::{
-    AppSettings, DocumentId, OpenResult, PdfResult, RecentFile, RenderResult, SearchResultItem,
+    AppSettings, DocumentId, DocumentMeta, OpenResult, PdfResult, RecentFile, RenderResult,
+    SearchResultItem, TextItem,
 };
 use crate::pdf_engine::RenderFilter;
 use std::path::PathBuf;
@@ -54,6 +55,8 @@ pub enum Message {
     DocumentOpened(DocumentId, PdfResult<OpenResult>),
     PageRendered(DocumentId, usize, f32, PdfResult<RenderResult>),
     ThumbnailRendered(DocumentId, usize, f32, PdfResult<RenderResult>),
+    TextItemsLoaded(DocumentId, usize, PdfResult<Vec<TextItem>>),
+    DocumentMetaLoaded(DocumentId, PdfResult<DocumentMeta>),
     RequestRender(usize),
     ViewportChanged(f32, f32),
     SidebarViewportChanged(f32),

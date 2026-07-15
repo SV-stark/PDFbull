@@ -1,5 +1,6 @@
 use crate::app::PdfBullApp;
 use crate::message::Message;
+use crate::models::PdfError;
 use iced::Task;
 use iced::widget::image as iced_image;
 
@@ -107,12 +108,14 @@ pub fn handle_render_message(app: &mut PdfBullApp, message: Message) -> Task<Mes
             app.rendering_set
                 .remove(&crate::app::RenderTarget::Page(doc_id, page_idx));
 
+            let mut text_tasks: Vec<Task<Message>> = Vec::new();
+
             if let Some(tab) = app.tabs.iter_mut().find(|t| t.id == doc_id) {
                 match result {
                     Ok(res) => {
                         let width = res.width;
                         let height = res.height;
-                        let pixel_data = res.data;
+                        let pixel_data = res.data.to_vec();
                         tab.view_state.rendered_pages.insert(
                             page_idx,
                             (
@@ -120,7 +123,36 @@ pub fn handle_render_message(app: &mut PdfBullApp, message: Message) -> Task<Mes
                                 iced_image::Handle::from_rgba(width, height, pixel_data),
                             ),
                         );
-                        tab.view_state.text_layers.insert(page_idx, res.text_items);
+
+                        // Lazily fetch text (selection / accessibility) so the
+                        // image paints without blocking on glyph extraction.
+                        if !tab.view_state.text_layers.contains_key(&page_idx)
+                            && !app.pending_text.contains(&(doc_id, page_idx))
+                        {
+                            app.pending_text.insert((doc_id, page_idx));
+                            if let Some(engine) = &app.engine {
+                                let cmd_tx = engine.cmd_tx.clone();
+                                text_tasks.push(Task::perform(
+                                    async move {
+                                        let (resp_tx, resp_rx) = tokio::sync::oneshot::channel();
+                                        let _ = cmd_tx
+                                            .send(crate::commands::PdfCommand::GetTextItems(
+                                                doc_id, page_idx, resp_tx,
+                                            ))
+                                            .await;
+                                        match resp_rx.await {
+                                            Ok(r) => (doc_id, page_idx, r),
+                                            Err(_) => (
+                                                doc_id,
+                                                page_idx,
+                                                Err(PdfError::ChannelClosed),
+                                            ),
+                                        }
+                                    },
+                                    |(d, p, r)| Message::TextItemsLoaded(d, p, r),
+                                ));
+                            }
+                        }
                     }
                     Err(e) => {
                         tracing::error!("Render error: {e}");
@@ -138,7 +170,23 @@ pub fn handle_render_message(app: &mut PdfBullApp, message: Message) -> Task<Mes
                     }
                 }
             }
-            app.render_visible_pages()
+
+            let render_task = app.render_visible_pages();
+            if text_tasks.is_empty() {
+                render_task
+            } else {
+                text_tasks.push(render_task);
+                Task::batch(text_tasks)
+            }
+        }
+        Message::TextItemsLoaded(doc_id, page_idx, result) => {
+            app.pending_text.remove(&(doc_id, page_idx));
+            if let Ok(items) = result {
+                if let Some(tab) = app.tabs.iter_mut().find(|t| t.id == doc_id) {
+                    tab.view_state.text_layers.insert(page_idx, items);
+                }
+            }
+            Task::none()
         }
         Message::ThumbnailRendered(doc_id, page_idx, scale, result) => {
             app.rendering_set
@@ -154,7 +202,7 @@ pub fn handle_render_message(app: &mut PdfBullApp, message: Message) -> Task<Mes
                     Ok(res) => {
                         let width = res.width;
                         let height = res.height;
-                        let pixel_data = res.data;
+                        let pixel_data = res.data.to_vec();
                         tab.view_state.thumbnails.insert(
                             page_idx,
                             iced_image::Handle::from_rgba(width, height, pixel_data),

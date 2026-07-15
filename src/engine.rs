@@ -10,6 +10,33 @@ pub struct EngineState {
     pub cmd_tx: mpsc::Sender<PdfCommand>,
 }
 
+/// Re-open a document from its remembered path if it isn't currently loaded.
+fn reload_if_needed(
+    store: &mut DocumentStore,
+    paths: &Arc<RwLock<HashMap<crate::models::DocumentId, String>>>,
+    doc_id: crate::models::DocumentId,
+) {
+    if !store.has_document(doc_id) {
+        if let Ok(guard) = paths.read() {
+            if let Some(path) = guard.get(&doc_id).cloned() {
+                let _ = store.open_document(&path, doc_id);
+            }
+        }
+    }
+}
+
+/// Resolve the directory containing the running executable, with the Windows
+/// UNC/extended-path prefix (`\\?\`) stripped. Used for PDFium/library loading.
+fn exe_dir_raw() -> Option<String> {
+    std::env::current_exe().ok()?.parent().map(|dir| {
+        let mut dir_str = dir.to_string_lossy().into_owned();
+        if let Some(stripped) = dir_str.strip_prefix(r"\\?\") {
+            dir_str = stripped.to_string();
+        }
+        dir_str
+    })
+}
+
 #[must_use]
 pub fn spawn_engine_thread(cache_size: u64, max_memory_mb: u64) -> EngineState {
     let (cmd_tx, mut cmd_rx) = mpsc::channel::<PdfCommand>(128);
@@ -34,21 +61,15 @@ pub fn spawn_engine_thread(cache_size: u64, max_memory_mb: u64) -> EngineState {
     // This resolves LoadLibrary failures in protected system folders like C:\Program Files\.
     #[cfg(windows)]
     {
-        if let Ok(exe_path) = std::env::current_exe() {
-            if let Some(exe_dir) = exe_path.parent() {
-                let mut dir_str = exe_dir.to_string_lossy().into_owned();
-                if let Some(stripped) = dir_str.strip_prefix(r"\\?\") {
-                    dir_str = stripped.to_string();
+        if let Some(dir_str) = exe_dir_raw() {
+            let mut path_w: Vec<u16> = dir_str.encode_utf16().collect();
+            path_w.push(0); // Null terminator
+            unsafe {
+                #[link(name = "kernel32")]
+                unsafe extern "system" {
+                    fn SetDllDirectoryW(lpPathName: *const u16) -> i32;
                 }
-                let mut path_w: Vec<u16> = dir_str.encode_utf16().collect();
-                path_w.push(0); // Null terminator
-                unsafe {
-                    #[link(name = "kernel32")]
-                    unsafe extern "system" {
-                        fn SetDllDirectoryW(lpPathName: *const u16) -> i32;
-                    }
-                    let _ = SetDllDirectoryW(path_w.as_ptr());
-                }
+                let _ = SetDllDirectoryW(path_w.as_ptr());
             }
         }
     }
@@ -62,23 +83,16 @@ pub fn spawn_engine_thread(cache_size: u64, max_memory_mb: u64) -> EngineState {
         // 1. Try the directory that contains the running executable (production installs,
         //    Desktop/Start Menu shortcuts, file-association launches — all cases where the
         //    process working-directory differs from the install folder).
-        let exe_dir_bindings = std::env::current_exe()
-            .ok()
-            .and_then(|p| p.parent().map(std::path::Path::to_path_buf))
-            .and_then(|dir| {
-                let mut dir_str = dir.to_string_lossy().into_owned();
-                // Strip Windows UNC/extended-path prefix (\\?\) which LoadLibraryW does not support
-                if let Some(stripped) = dir_str.strip_prefix(r"\\?\") {
-                    dir_str = stripped.to_string();
-                }
-                if !dir_str.ends_with('/') && !dir_str.ends_with('\\') {
-                    #[cfg(windows)]
-                    dir_str.push('\\');
-                    #[cfg(not(windows))]
-                    dir_str.push('/');
-                }
-                Pdfium::bind_to_library(Pdfium::pdfium_platform_library_name_at_path(&dir_str)).ok()
-            });
+        let exe_dir_bindings = exe_dir_raw().and_then(|mut dir_str| {
+            // Append a trailing separator so bind_to_library resolves the file.
+            if !dir_str.ends_with('/') && !dir_str.ends_with('\\') {
+                #[cfg(windows)]
+                dir_str.push('\\');
+                #[cfg(not(windows))]
+                dir_str.push('/');
+            }
+            Pdfium::bind_to_library(Pdfium::pdfium_platform_library_name_at_path(&dir_str)).ok()
+        });
 
         let bindings = if let Some(b) = exe_dir_bindings {
             tracing::info!("PDFium bound from executable directory.");
@@ -143,30 +157,12 @@ pub fn spawn_engine_thread(cache_size: u64, max_memory_mb: u64) -> EngineState {
                     let _ = tx.send(res);
                 }
                 PdfCommand::Render(doc_id, page_num, options, tx) => {
-                    if !store.has_document(doc_id) {
-                        let path_opt = if let Ok(guard) = paths.read() {
-                            guard.get(&doc_id).cloned()
-                        } else {
-                            None
-                        };
-                        if let Some(path) = path_opt {
-                            let _ = store.open_document(&path, doc_id);
-                        }
-                    }
+                    reload_if_needed(&mut store, &paths, doc_id);
                     let res = store.render_page(doc_id, page_num, options);
                     let _ = tx.send(res);
                 }
                 PdfCommand::RenderThumbnail(doc_id, page_num, scale, tx) => {
-                    if !store.has_document(doc_id) {
-                        let path_opt = if let Ok(guard) = paths.read() {
-                            guard.get(&doc_id).cloned()
-                        } else {
-                            None
-                        };
-                        if let Some(path) = path_opt {
-                            let _ = store.open_document(&path, doc_id);
-                        }
-                    }
+                    reload_if_needed(&mut store, &paths, doc_id);
                     let options = crate::pdf_engine::RenderOptions {
                         scale,
                         rotation: 0,
@@ -184,72 +180,37 @@ pub fn spawn_engine_thread(cache_size: u64, max_memory_mb: u64) -> EngineState {
                     }
                 }
                 PdfCommand::ExtractText(doc_id, page_num, tx) => {
-                    if !store.has_document(doc_id) {
-                        let path_opt = if let Ok(guard) = paths.read() {
-                            guard.get(&doc_id).cloned()
-                        } else {
-                            None
-                        };
-                        if let Some(path) = path_opt {
-                            let _ = store.open_document(&path, doc_id);
-                        }
-                    }
+                    reload_if_needed(&mut store, &paths, doc_id);
                     let res = store.extract_text(doc_id, page_num);
                     let _ = tx.send(res);
                 }
                 PdfCommand::Search(doc_id, query, tx) => {
-                    if !store.has_document(doc_id) {
-                        let path_opt = if let Ok(guard) = paths.read() {
-                            guard.get(&doc_id).cloned()
-                        } else {
-                            None
-                        };
-                        if let Some(path) = path_opt {
-                            let _ = store.open_document(&path, doc_id);
-                        }
-                    }
+                    reload_if_needed(&mut store, &paths, doc_id);
                     let res = store.search(doc_id, &query);
                     let _ = tx.send(res);
                 }
+                PdfCommand::GetTextItems(doc_id, page_num, tx) => {
+                    reload_if_needed(&mut store, &paths, doc_id);
+                    let res = store.extract_text_items(doc_id, page_num);
+                    let _ = tx.send(res);
+                }
+                PdfCommand::LoadDocumentMeta(doc_id, tx) => {
+                    reload_if_needed(&mut store, &paths, doc_id);
+                    let res = store.load_document_meta(doc_id);
+                    let _ = tx.send(res);
+                }
                 PdfCommand::SaveAnnotations(doc_id, annotations, tx) => {
-                    if !store.has_document(doc_id) {
-                        let path_opt = if let Ok(guard) = paths.read() {
-                            guard.get(&doc_id).cloned()
-                        } else {
-                            None
-                        };
-                        if let Some(path) = path_opt {
-                            let _ = store.open_document(&path, doc_id);
-                        }
-                    }
+                    reload_if_needed(&mut store, &paths, doc_id);
                     let res = store.save_annotations(doc_id, &annotations, None);
                     let _ = tx.send(res);
                 }
                 PdfCommand::ExportImage(doc_id, page_num, scale, tx) => {
-                    if !store.has_document(doc_id) {
-                        let path_opt = if let Ok(guard) = paths.read() {
-                            guard.get(&doc_id).cloned()
-                        } else {
-                            None
-                        };
-                        if let Some(path) = path_opt {
-                            let _ = store.open_document(&path, doc_id);
-                        }
-                    }
+                    reload_if_needed(&mut store, &paths, doc_id);
                     let res = store.export_page_as_image(doc_id, page_num, scale);
                     let _ = tx.send(res);
                 }
                 PdfCommand::ExportImages(doc_id, pages, scale, out_dir, tx) => {
-                    if !store.has_document(doc_id) {
-                        let path_opt = if let Ok(guard) = paths.read() {
-                            guard.get(&doc_id).cloned()
-                        } else {
-                            None
-                        };
-                        if let Some(path) = path_opt {
-                            let _ = store.open_document(&path, doc_id);
-                        }
-                    }
+                    reload_if_needed(&mut store, &paths, doc_id);
                     let out_path = std::path::Path::new(&out_dir);
                     if !out_path.is_dir() {
                         let _ = tx.send(Err(crate::models::PdfError::IoError(
@@ -275,16 +236,7 @@ pub fn spawn_engine_thread(cache_size: u64, max_memory_mb: u64) -> EngineState {
                     let _ = tx.send(Ok(output_paths));
                 }
                 PdfCommand::ExportPdf(doc_id, path, annotations, tx) => {
-                    if !store.has_document(doc_id) {
-                        let path_opt = if let Ok(guard) = paths.read() {
-                            guard.get(&doc_id).cloned()
-                        } else {
-                            None
-                        };
-                        if let Some(path) = path_opt {
-                            let _ = store.open_document(&path, doc_id);
-                        }
-                    }
+                    reload_if_needed(&mut store, &paths, doc_id);
                     let res = store.save_annotations(doc_id, &annotations, Some(path));
                     let _ = tx.send(res);
                 }

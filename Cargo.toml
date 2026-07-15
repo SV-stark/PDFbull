@@ -15,7 +15,6 @@ iced_draggable_tabs = "0.1"
 pdfium-render = { version = "0.9", features = ["thread_safe"] }
 tokio = { version = "1.0", features = ["full"] }
 rfd = "0.14"
-native-dialog = "0.7"
 zune-image = "0.4"
 zune-core = "0.4"
 serde = { version = "1.0", features = ["derive"] }
@@ -33,12 +32,10 @@ pdf-writer = "0.12"
 csscolorparser = "0.6"
 timeago = "0.4"
 atomicwrites = "0.4"
-font-kit = "0.14"
 oxipng = { version = "10.1.0", default-features = false, features = ["parallel"] }
 time = { version = "0.3", features = ["serde", "formatting", "macros"] }
 quick_cache = "0.6.20"
 mimalloc = "0.1"
-bytes = "1.5"
 human-panic = "2.0"
 notify = "8"
 notify-debouncer-full = "0.7"
@@ -70,6 +67,7 @@ nursery = { level = "warn", priority = -1 }
 [profile.dist]
 inherits = "release"
 lto = "thin"
+strip = true
 
 [patch.crates-io]
 winprint = { path = "winprint-0.2.0" }

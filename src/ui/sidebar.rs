@@ -232,50 +232,6 @@ pub fn render(app: &PdfBullApp) -> Element<'_, crate::message::Message> {
                 );
             }
 
-            if !tab.signatures.is_empty() {
-                let mut signatures_col = column![section_title("Signatures")];
-                for sig in &tab.signatures {
-                    signatures_col = signatures_col.push(
-                        container(
-                            column![
-                                text(&sig.name).size(13).font(INTER_BOLD),
-                                text(if sig.is_valid {
-                                    "✓ Valid Signature"
-                                } else {
-                                    "✗ Invalid/Untrusted"
-                                })
-                                .size(11)
-                                .style(|_| {
-                                    iced::widget::text::Style {
-                                        color: Some(if sig.is_valid {
-                                            Color::from_rgb(0.0, 0.6, 0.0)
-                                        } else {
-                                            Color::from_rgb(0.8, 0.0, 0.0)
-                                        }),
-                                    }
-                                }),
-                                text(format!(
-                                    "Reason: {}",
-                                    sig.reason.as_deref().unwrap_or("N/A")
-                                ))
-                                .size(10),
-                            ]
-                            .spacing(2),
-                        )
-                        .padding(8)
-                        .style(|_| iced::widget::container::Style {
-                            background: Some(Color::from_rgb8(45, 46, 50).into()),
-                            border: Border {
-                                radius: 4.0.into(),
-                                ..Default::default()
-                            },
-                            ..Default::default()
-                        }),
-                    );
-                }
-                ann_col = ann_col.push(container(signatures_col.spacing(5)).padding(10));
-            }
-
             scrollable(ann_col)
                 .width(Length::Fixed(theme::SIDEBAR_WIDTH))
                 .into()
