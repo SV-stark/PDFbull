@@ -1,7 +1,6 @@
 use std::fs;
 use zpdf::{
-    ContentInterpreter, ImageCache, PdfDocument, RenderBackend,
-    cpu::CpuRenderer, gpu::WgpuRenderer,
+    ContentInterpreter, ImageCache, PdfDocument, RenderBackend, cpu::CpuRenderer, gpu::WgpuRenderer,
 };
 
 fn main() {
@@ -23,8 +22,10 @@ fn bench_pdf_render_cpu() {
     let page = doc.page(0).expect("Failed to get page");
     let mut fonts = doc.load_page_fonts(&page);
     let mut images = ImageCache::new();
-    let content = doc.page_content_bytes(&page).expect("Failed to get content");
-    
+    let content = doc
+        .page_content_bytes(&page)
+        .expect("Failed to get content");
+
     let display_list = ContentInterpreter::new(page.effective_box())
         .with_fonts(&mut fonts)
         .with_document(doc.file(), &page.resources)
@@ -32,7 +33,9 @@ fn bench_pdf_render_cpu() {
         .interpret(&content);
 
     let mut renderer = CpuRenderer::new().with_fonts(&fonts).with_images(&images);
-    let _page_img = renderer.render_display_list(&display_list, 1.0).expect("Failed to render");
+    let _page_img = renderer
+        .render_display_list(&display_list, 1.0)
+        .expect("Failed to render");
 }
 
 #[divan::bench]
@@ -42,8 +45,10 @@ fn bench_pdf_render_gpu() {
     let page = doc.page(0).expect("Failed to get page");
     let mut fonts = doc.load_page_fonts(&page);
     let mut images = ImageCache::new();
-    let content = doc.page_content_bytes(&page).expect("Failed to get content");
-    
+    let content = doc
+        .page_content_bytes(&page)
+        .expect("Failed to get content");
+
     let display_list = ContentInterpreter::new(page.effective_box())
         .with_fonts(&mut fonts)
         .with_document(doc.file(), &page.resources)
@@ -51,5 +56,7 @@ fn bench_pdf_render_gpu() {
         .interpret(&content);
 
     let mut renderer = WgpuRenderer::new().with_fonts(&fonts).with_images(&images);
-    let _page_img = renderer.render_display_list(&display_list, 1.0).expect("Failed to render");
+    let _page_img = renderer
+        .render_display_list(&display_list, 1.0)
+        .expect("Failed to render");
 }
