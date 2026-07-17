@@ -157,6 +157,8 @@ pub fn handle_message(app: &mut PdfBullApp, message: Message) -> Task<Message> {
         | Message::PrintDone(_)
         | Message::AddWatermark(_)
         | Message::WatermarkDone(_)
+        | Message::OptimizePDF
+        | Message::PDFOptimized(_)
         | Message::MergeDocuments(_)
         | Message::DocumentsMerged(_)
         | Message::SplitPDF(_)

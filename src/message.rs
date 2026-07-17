@@ -88,6 +88,8 @@ pub enum Message {
     PrintDone(PdfResult<()>),
     AddWatermark(String),
     WatermarkDone(PdfResult<String>),
+    OptimizePDF,
+    PDFOptimized(PdfResult<String>),
     EngineInitialized(EngineState),
     Error(String),
     ClearStatus,

@@ -123,7 +123,6 @@ pub fn render(app: &PdfBullApp) -> Element<'_, crate::message::Message> {
     ]
     .spacing(8);
 
-    // --- SECTION: Utility / Right ---
     let tools = vec![
         "🖨️ Print PDF...".to_string(),
         "✂️ Split PDF (All)...".to_string(),
@@ -131,6 +130,7 @@ pub fn render(app: &PdfBullApp) -> Element<'_, crate::message::Message> {
         "🏷️ Add Watermark...".to_string(),
         "✍️ Create Signature...".to_string(),
         "📂 Page Organizer...".to_string(),
+        "⚡ Optimize PDF...".to_string(),
     ];
 
     let tools_dropdown = pick_list(tools, None::<String>, |selected| match selected.as_str() {
@@ -142,6 +142,7 @@ pub fn render(app: &PdfBullApp) -> Element<'_, crate::message::Message> {
         "📂 Page Organizer..." => {
             crate::message::Message::TogglePageOrganizer(!app.show_page_organizer)
         }
+        "⚡ Optimize PDF..." => crate::message::Message::OptimizePDF,
         _ => crate::message::Message::ClearStatus,
     })
     .placeholder("🛠️ Tools")

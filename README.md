@@ -120,14 +120,10 @@ The following capabilities are partially present in the codebase or planned, but
 
 
 ### ✏️ Advanced Annotations
-- **Geometric Shapes**: Circles, Lines, and Arrows are represented in the data model and sidebar, but their interactive creation/editing is **not yet implemented**.
-- **Sticky Notes**: Contextual comments and sticky note annotations — **not yet implemented**.
 - **Layer Management**: Independent visibility toggles and z-index ordering for annotations — **planned**.
 
 ### 📐 Productivity
 - **Batch Mode**: Infrastructure for processing multiple documents simultaneously — **planned**.
-- **Session Restoration**: Automatic reopening of last session (tabs and scroll positions) on startup — **planned**.
-- **PDF Optimization**: Built-in document compression and metadata sanitization — **planned**.
 
 ### 🎨 Visuals & UX
 - **High-Contrast Theme**: Specialized high-contrast mode for accessibility — **planned**.
@@ -144,7 +140,9 @@ The following capabilities are partially present in the codebase or planned, but
 - [x] **Migration to Iced UI** (Replaced Slint with Iced)
 - [x] **Form Field Detection & Filling**
 - [x] **GPU / WebGPU Rendering** (wire up `zpdf-render-wgpu`)
-- [ ] **Advanced Shapes (Circles/Lines/Arrows) & Sticky Notes**
+- [x] **Advanced Shapes (Circles/Lines/Arrows) & Sticky Notes** (interactive creation & vector rendering)
+- [x] **PDF Optimization** (built-in stream compression & metadata sanitization)
+- [x] **Session Restoration** (restores tabs, scroll positions, and crop modes)
 - [ ] **OCR Capability**: Built-in Optical Character Recognition for scanned documents.
 - [ ] **Digital Signatures**: Professional cryptographic signing and verification.
 - [ ] **Mobile Layout**: Responsive UI for small-screen Windows tablets.

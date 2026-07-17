@@ -1009,6 +1009,17 @@ impl DocumentStore {
 
     // apply_filter_parallel removed as it was just a misleading wrapper.
 
+    pub fn optimize_pdf(&self, input_path: &str, output_path: &str) -> PdfResult<String> {
+        let mut doc =
+            Document::load(input_path).map_err(|e| PdfError::OpenFailed(e.to_string()))?;
+        doc.compress();
+        doc.prune_objects();
+        let _ = doc.trailer.remove(b"Info");
+        doc.save(output_path)
+            .map_err(|e| PdfError::IoError(e.to_string()))?;
+        Ok(output_path.to_string())
+    }
+
     pub fn merge_documents(&self, paths: Vec<String>, output_path: String) -> PdfResult<String> {
         let mut max_id = 1;
         let mut documents = Vec::new();

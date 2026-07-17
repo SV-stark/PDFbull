@@ -71,4 +71,5 @@ pub enum PdfCommand {
     PrintPdf(String, Option<String>, oneshot::Sender<PdfResult<()>>),
     ListPrinters(oneshot::Sender<PdfResult<Vec<String>>>),
     AddWatermark(String, String, String, oneshot::Sender<PdfResult<String>>),
+    Optimize(String, String, oneshot::Sender<PdfResult<String>>),
 }

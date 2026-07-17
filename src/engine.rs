@@ -177,6 +177,10 @@ pub fn spawn_engine_thread(cache_size: u64, max_memory_mb: u64) -> EngineState {
                         crate::pdf_engine::DocumentStore::add_watermark(&input, &text, &output);
                     let _ = tx.send(res);
                 }
+                PdfCommand::Optimize(input, output, tx) => {
+                    let res = store.optimize_pdf(&input, &output);
+                    let _ = tx.send(res);
+                }
                 _ => {}
             }
         }

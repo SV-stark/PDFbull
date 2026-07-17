@@ -1,6 +1,6 @@
 [package]
 name = "pdfbull"
-version = "0.8.2"
+version = "0.8.3"
 description = "A lightweight PDF reader"
 authors = ["SV-stark"]
 edition = "2024"

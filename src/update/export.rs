@@ -664,6 +664,55 @@ pub fn handle_export_message(app: &mut PdfBullApp, message: Message) -> Task<Mes
             }
             Task::none()
         }
+        Message::OptimizePDF => {
+            let Some(tab) = app.current_tab() else {
+                return Task::none();
+            };
+            let path = tab.path.to_string_lossy().to_string();
+            let Some(engine) = &app.engine else {
+                return Task::none();
+            };
+            let cmd_tx = engine.cmd_tx.clone();
+            Task::perform(
+                async move {
+                    let save = rfd::AsyncFileDialog::new()
+                        .add_filter("PDF", &["pdf"])
+                        .set_file_name("optimized.pdf")
+                        .set_title("Save Optimized PDF")
+                        .save_file()
+                        .await;
+                    match save {
+                        Some(f) => {
+                            let out = f.path().to_string_lossy().to_string();
+                            let (tx, rx) = tokio::sync::oneshot::channel();
+                            let _ = cmd_tx
+                                .send(PdfCommand::Optimize(path, out.clone(), tx))
+                                .await;
+                            match rx.await {
+                                Ok(Ok(path)) => Ok(path),
+                                Ok(Err(e)) => Err(e),
+                                Err(_) => Err(crate::models::PdfError::EngineDied),
+                            }
+                        }
+                        None => Err(crate::models::PdfError::from("Cancelled")),
+                    }
+                },
+                Message::PDFOptimized,
+            )
+        }
+        Message::PDFOptimized(res) => {
+            match res {
+                Ok(path) => {
+                    app.status_message = Some(format!("Optimized PDF saved to: {path}"));
+                }
+                Err(e) => {
+                    if e != "Cancelled" {
+                        app.status_message = Some(format!("Optimization failed: {e}"));
+                    }
+                }
+            }
+            Task::none()
+        }
         _ => Task::none(),
     }
 }
