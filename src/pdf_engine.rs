@@ -11,9 +11,8 @@ use zpdf::{
     ContentInterpreter, FieldKind, FieldValue, ImageCache, PdfDocument, RenderBackend,
     cpu::CpuRenderer, spans_to_text,
 };
-use zune_image::codecs::png::PngEncoder;
+use zune_image::codecs::ImageFormat;
 use zune_image::image::Image;
-use zune_image::traits::EncoderTrait;
 
 use crate::ui::theme::hex_to_rgb;
 
@@ -814,9 +813,8 @@ impl DocumentStore {
             height,
             zune_core::colorspace::ColorSpace::RGBA,
         );
-        let mut encoder = PngEncoder::new();
-        let out_buf = encoder
-            .encode(&image)
+        let out_buf = image
+            .write_to_vec(ImageFormat::PNG)
             .map_err(|e| PdfError::RenderFailed(format!("{e:?}")))?;
 
         Ok(out_buf)
@@ -1203,8 +1201,8 @@ impl DocumentStore {
         };
 
         if let Ok(partial_name_obj) = field_dict.get(b"T") {
-            if let Ok(partial_name) = partial_name_obj.as_string() {
-                let partial_str = partial_name.into_owned();
+            if let Ok(partial_name) = partial_name_obj.as_str() {
+                let partial_str = String::from_utf8_lossy(partial_name).into_owned();
                 if name.is_empty() {
                     name = partial_str;
                 } else {

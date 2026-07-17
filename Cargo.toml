@@ -12,16 +12,16 @@ repository = "https://github.com/SV-stark/PDFbull"
 [dependencies]
 iced = { version = "0.14", features = ["image", "svg", "canvas", "tokio", "advanced"] }
 iced_draggable_tabs = "0.1"
-zpdf = { version = "0.8", features = ["cpu-render"] }
-zpdf-render-cpu = "0.8"
-zpdf-render-wgpu = "0.8"
+zpdf = { version = "0.10", features = ["cpu-render"] }
+zpdf-render-cpu = "0.10"
+zpdf-render-wgpu = "0.10"
 tokio = { version = "1.0", features = ["full"] }
-rfd = "0.14"
-zune-image = "0.4"
-zune-core = "0.4"
+rfd = "0.17"
+zune-image = "0.5"
+zune-core = "0.5"
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
-directories = "5"
+directories = "6"
 rayon = "1.10"
 dark-light = "2.0"
 tracing = "0.1"
@@ -29,14 +29,14 @@ tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 open = "5"
 thiserror = "2.0"
 arboard = "3"
-lopdf = "0.34"
-pdf-writer = "0.12"
-csscolorparser = "0.6"
-timeago = "0.4"
+lopdf = "0.44"
+pdf-writer = "0.15"
+csscolorparser = "0.8"
+timeago = "0.6"
 atomicwrites = "0.4"
 oxipng = { version = "10.1.0", default-features = false, features = ["parallel"] }
 time = { version = "0.3", features = ["serde", "formatting", "macros"] }
-quick_cache = "0.6.20"
+quick_cache = "0.7"
 mimalloc = "0.1"
 human-panic = "2.0"
 notify = "8"
@@ -52,7 +52,7 @@ windows = { version = "0.62.2", features = ["Win32_UI_Shell", "Win32_System_Com"
 iced_test = "0.14"
 insta = { version = "1.46.3", features = ["redactions"] }
 divan = "0.1.14"
-sha2 = "0.10.9"
+sha2 = "0.11"
 
 [build-dependencies]
 winresource = "0.1"
