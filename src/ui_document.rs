@@ -474,7 +474,45 @@ fn render_annotations<'a>(
                 }
             };
 
-            container(ann_overlay)
+            let ann_idx = tab
+                .annotations
+                .iter()
+                .position(|a| a.id == ann.id)
+                .unwrap_or(0);
+
+            let delete_btn = button(
+                iced::widget::text("×")
+                    .size(9)
+                    .font(INTER_BOLD)
+                    .color(Color::WHITE),
+            )
+            .padding([1, 4])
+            .style(|_theme, _status| button::Style {
+                background: Some(Color::from_rgb(0.8, 0.2, 0.2).into()),
+                text_color: Color::WHITE,
+                border: iced::Border {
+                    radius: theme::BORDER_RADIUS_SM.into(),
+                    ..Default::default()
+                },
+                ..Default::default()
+            })
+            .on_press(crate::message::Message::DeleteAnnotation(ann_idx));
+
+            let delete_btn_overlay = container(delete_btn)
+                .width(Length::Fixed((ann.width * zoom).max(16.0)))
+                .height(Length::Fixed((ann.height * zoom).max(16.0)))
+                .align_x(Alignment::End)
+                .align_y(Alignment::Start);
+
+            let ann_stack: Element<'a, crate::message::Message> = match &ann.style {
+                AnnotationStyle::Line { .. } | AnnotationStyle::Arrow { .. } => ann_overlay,
+                _ => Stack::new()
+                    .push(ann_overlay)
+                    .push(delete_btn_overlay)
+                    .into(),
+            };
+
+            container(ann_stack)
                 .padding(Padding {
                     top: ann.y * zoom,
                     left: ann.x * zoom,

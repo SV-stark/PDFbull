@@ -116,4 +116,5 @@ pub enum Message {
     TogglePageOrganizer(bool),
     OrganizerDeletePage(usize),
     OrganizerRotatePage(usize, i32),
+    OrganizerMovePage(usize, isize),
 }

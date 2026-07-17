@@ -360,6 +360,22 @@ fn organizer_view(app: &PdfBullApp) -> Element<'_, crate::message::Message> {
                 .into()
             };
 
+        let mut move_left_btn = button(text("◀").size(11))
+            .style(theme::button_ghost)
+            .padding(6);
+        if ui_idx > 0 {
+            move_left_btn =
+                move_left_btn.on_press(crate::message::Message::OrganizerMovePage(ui_idx, -1));
+        }
+
+        let mut move_right_btn = button(text("▶").size(11))
+            .style(theme::button_ghost)
+            .padding(6);
+        if ui_idx + 1 < tab.page_mapping.len() {
+            move_right_btn =
+                move_right_btn.on_press(crate::message::Message::OrganizerMovePage(ui_idx, 1));
+        }
+
         let page_card = container(
             column![
                 container(thumb_widget)
@@ -388,6 +404,7 @@ fn organizer_view(app: &PdfBullApp) -> Element<'_, crate::message::Message> {
                     }),
                 Space::new().height(5),
                 row![
+                    move_left_btn,
                     button(text("🔄").size(11))
                         .on_press(crate::message::Message::OrganizerRotatePage(ui_idx, 90))
                         .style(theme::button_ghost)
@@ -396,6 +413,7 @@ fn organizer_view(app: &PdfBullApp) -> Element<'_, crate::message::Message> {
                         .on_press(crate::message::Message::OrganizerDeletePage(ui_idx))
                         .style(theme::button_ghost)
                         .padding(6),
+                    move_right_btn,
                 ]
                 .spacing(10)
                 .align_y(Alignment::Center)

@@ -269,6 +269,20 @@ pub fn handle_message(app: &mut PdfBullApp, message: Message) -> Task<Message> {
             }
             app.render_visible_pages()
         }
+        Message::OrganizerMovePage(page_idx, direction) => {
+            if let Some(tab) = app.current_tab_mut() {
+                let target_idx = (page_idx as isize + direction) as usize;
+                if page_idx < tab.page_mapping.len() && target_idx < tab.page_mapping.len() {
+                    tab.page_mapping.swap(page_idx, target_idx);
+                    if page_idx < tab.page_heights.len() && target_idx < tab.page_heights.len() {
+                        tab.page_heights.swap(page_idx, target_idx);
+                    }
+                    tab.view_state.rendered_pages.clear();
+                    tab.view_state.thumbnails.clear();
+                }
+            }
+            app.render_visible_pages()
+        }
         Message::EngineInitialized(_)
         | Message::Error(_)
         | Message::ClearStatus

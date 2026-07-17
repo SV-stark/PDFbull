@@ -38,6 +38,19 @@ pub fn render(app: &PdfBullApp) -> Element<'_, crate::message::Message> {
     .spacing(8);
 
     // --- SECTION: Navigation & View ---
+    let is_midnight = tab.render_filter == RenderFilter::Inverted;
+    let midnight_btn = tool_button_emoji(
+        "🌙",
+        "Midnight",
+        crate::message::Message::SetFilter(if is_midnight {
+            RenderFilter::None
+        } else {
+            RenderFilter::Inverted
+        }),
+        is_midnight,
+        "Toggle Midnight Mode (Color Inversion)",
+    );
+
     let view_tools = row![
         zoom_control(tab.zoom),
         v_sep(),
@@ -48,6 +61,8 @@ pub fn render(app: &PdfBullApp) -> Element<'_, crate::message::Message> {
             false,
             "Rotate 90° clockwise"
         ),
+        v_sep(),
+        midnight_btn,
         v_sep(),
         filter_section(tab.render_filter, tab.auto_crop),
     ]
