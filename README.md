@@ -33,14 +33,13 @@ PDFbull is built from the ground up for speed, leveraging modern Rust ecosystem 
 ### ✏️ Advanced Annotations
 - **Professional Tools**: Highlighting, Rectangles, Text Boxes, and Redaction.
 - **Robust History**: Basic Undo/Redo stack (`Ctrl+Z` / `Ctrl+Y`) for annotation lifecycle.
-- **Persistence**: Hybrid saving strategy with local storage fallbacks and manual `Ctrl+S` export.
-- **Export Annotations**: Export all annotations as JSON for backup or sharing.
+- **Persistence**: Hybrid saving strategy with local storage fallbacks and manual `Ctrl+S` save (writes annotations back into the PDF).
 
 ### 📐 Productivity Utilities
 - **Fast Search**: Leverages zpdf's structured text engine for instantaneous document-wide searching with result navigation.
 - **Tabbed Interface**: Multi-document management with tab-based navigation.
 - **Recent Files**: Quick access dropdown for recently opened documents.
-- **Page Bookmarks**: Mark important pages with `Ctrl+D` for quick reference.
+- **Page Bookmarks**: Mark important pages via the bookmark button for quick reference and jump-to navigation. (PDF outline/bookmarks are also listed in the sidebar.)
 - **Smart Formatting**:
     - **Auto-Crop**: Dynamically removes whitespace margins for optimized reading on smaller displays.
 - **Data Export**:
