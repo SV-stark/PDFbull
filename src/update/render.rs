@@ -142,11 +142,9 @@ pub fn handle_render_message(app: &mut PdfBullApp, message: Message) -> Task<Mes
                                             .await;
                                         match resp_rx.await {
                                             Ok(r) => (doc_id, page_idx, r),
-                                            Err(_) => (
-                                                doc_id,
-                                                page_idx,
-                                                Err(PdfError::ChannelClosed),
-                                            ),
+                                            Err(_) => {
+                                                (doc_id, page_idx, Err(PdfError::ChannelClosed))
+                                            }
                                         }
                                     },
                                     |(d, p, r)| Message::TextItemsLoaded(d, p, r),

@@ -16,7 +16,8 @@ pub fn time_ago(unix_secs: u64) -> String {
     if diff_secs >= 30 * 24 * 3600 {
         if let Ok(past) = OffsetDateTime::from_unix_timestamp(unix_secs as i64) {
             let format =
-                time::format_description::parse("[month repr:short] [day], [year]").unwrap();
+                time::format_description::parse_borrowed::<2>("[month repr:short] [day], [year]")
+                    .unwrap();
             past.format(&format)
                 .unwrap_or_else(|_| "unknown".to_string())
         } else {

@@ -7,17 +7,16 @@ use quick_cache::{Weighter, sync::Cache};
 use rayon::prelude::*;
 use std::collections::HashMap;
 use std::sync::Arc;
+use zpdf::{
+    ContentInterpreter, FieldKind, FieldValue, ImageCache, PdfDocument, RenderBackend,
+    cpu::CpuRenderer, spans_to_text,
+};
 use zune_image::codecs::png::PngEncoder;
 use zune_image::image::Image;
 use zune_image::traits::EncoderTrait;
-use zpdf::{
-    AcroForm, ContentInterpreter, FieldKind, FieldValue, FormField as ZpdfFormField, ImageCache,
-    PdfDocument, RenderBackend, cpu::CpuRenderer, spans_to_text,
-};
 
 use crate::ui::theme::hex_to_rgb;
 
-const MAX_RENDER_DIM: i32 = 2500;
 // PDF field-flags bit for "radio button" (ISO 32000-1 Table 221).
 const FF_RADIO: i64 = 1 << 15;
 const WHITE_THRESHOLD: u8 = 245;
@@ -201,7 +200,7 @@ impl DocumentStore {
 
         let outline = self.get_outline_internal(doc);
         let links = self.extract_links_internal(doc);
-        
+
         let metadata = if let Some(info) = doc.info() {
             crate::models::DocumentMetadata {
                 title: info.title.clone(),
@@ -270,11 +269,15 @@ impl DocumentStore {
             .documents
             .get(&doc_id)
             .ok_or(PdfError::EngineError(EngineErrorKind::DocumentNotFound))?;
-        let page = doc.page(page_num).map_err(|_| PdfError::PageNotFound(page_num))?;
+        let page = doc
+            .page(page_num)
+            .map_err(|_| PdfError::PageNotFound(page_num))?;
 
         let mut fonts = doc.load_page_fonts(&page);
         let mut images = ImageCache::new();
-        let content = doc.page_content_bytes(&page).map_err(|e| PdfError::RenderFailed(e.to_string()))?;
+        let content = doc
+            .page_content_bytes(&page)
+            .map_err(|e| PdfError::RenderFailed(e.to_string()))?;
 
         // Incorporate custom option rotation into the display list rotation
         let display_list = ContentInterpreter::new(page.effective_box())
@@ -284,9 +287,7 @@ impl DocumentStore {
             .with_images(&mut images)
             .interpret(&content);
 
-        let mut renderer = CpuRenderer::new()
-            .with_fonts(&fonts)
-            .with_images(&images);
+        let mut renderer = CpuRenderer::new().with_fonts(&fonts).with_images(&images);
         let page_img = renderer
             .render_display_list(&display_list, options.scale)
             .map_err(|e| PdfError::RenderFailed(e.to_string()))?;
@@ -294,7 +295,7 @@ impl DocumentStore {
         let h = page_img.height;
 
         let (final_w, final_h, final_data) = if !is_thumbnail && options.auto_crop {
-            let mut result_data = page_img.data;
+            let result_data = page_img.data;
 
             if let Some((x1, y1, x2, y2)) = Self::detect_content_bbox_parallel(&result_data, w, h) {
                 let crop_w = (x2 - x1) + 1;
@@ -362,7 +363,9 @@ impl DocumentStore {
             .map_err(|_| PdfError::PageNotFound(page_num as usize))?;
         let mut fonts = doc.load_page_fonts(&page);
         let mut images = ImageCache::new();
-        let content = doc.page_content_bytes(&page).map_err(|e| PdfError::SearchError(e.to_string()))?;
+        let content = doc
+            .page_content_bytes(&page)
+            .map_err(|e| PdfError::SearchError(e.to_string()))?;
 
         let mut spans = Vec::new();
         {
@@ -391,7 +394,9 @@ impl DocumentStore {
             .map_err(|_| PdfError::PageNotFound(page_num))?;
         let mut fonts = doc.load_page_fonts(&page);
         let mut images = ImageCache::new();
-        let content = doc.page_content_bytes(&page).map_err(|e| PdfError::SearchError(e.to_string()))?;
+        let content = doc
+            .page_content_bytes(&page)
+            .map_err(|e| PdfError::SearchError(e.to_string()))?;
 
         let mut spans = Vec::new();
         {
@@ -432,8 +437,7 @@ impl DocumentStore {
             .get(&doc_id)
             .ok_or(PdfError::EngineError(EngineErrorKind::DocumentPathNotFound))?;
 
-        let mut doc = Document::load(pdf_path)
-            .map_err(|e| PdfError::OpenFailed(e.to_string()))?;
+        let mut doc = Document::load(pdf_path).map_err(|e| PdfError::OpenFailed(e.to_string()))?;
 
         // Group annotations by page
         let mut page_annots: HashMap<usize, Vec<&Annotation>> = HashMap::new();
@@ -477,180 +481,255 @@ impl DocumentStore {
                     AnnotationStyle::Highlight { color } => {
                         let (r, g, b) = hex_to_rgb(color);
                         annot_dict.set("Subtype", Object::Name(b"Highlight".to_vec()));
-                        annot_dict.set("Rect", Object::Array(vec![
-                            Object::Real(pdf_x),
-                            Object::Real(pdf_y),
-                            Object::Real(pdf_x + pdf_w),
-                            Object::Real(pdf_y + pdf_h),
-                        ]));
-                        annot_dict.set("C", Object::Array(vec![
-                            Object::Real(r as f32),
-                            Object::Real(g as f32),
-                            Object::Real(b as f32),
-                        ]));
-                        annot_dict.set("QuadPoints", Object::Array(vec![
-                            Object::Real(pdf_x), Object::Real(pdf_y + pdf_h),
-                            Object::Real(pdf_x + pdf_w), Object::Real(pdf_y + pdf_h),
-                            Object::Real(pdf_x), Object::Real(pdf_y),
-                            Object::Real(pdf_x + pdf_w), Object::Real(pdf_y),
-                        ]));
+                        annot_dict.set(
+                            "Rect",
+                            Object::Array(vec![
+                                Object::Real(pdf_x),
+                                Object::Real(pdf_y),
+                                Object::Real(pdf_x + pdf_w),
+                                Object::Real(pdf_y + pdf_h),
+                            ]),
+                        );
+                        annot_dict.set(
+                            "C",
+                            Object::Array(vec![
+                                Object::Real(r as f32),
+                                Object::Real(g as f32),
+                                Object::Real(b as f32),
+                            ]),
+                        );
+                        annot_dict.set(
+                            "QuadPoints",
+                            Object::Array(vec![
+                                Object::Real(pdf_x),
+                                Object::Real(pdf_y + pdf_h),
+                                Object::Real(pdf_x + pdf_w),
+                                Object::Real(pdf_y + pdf_h),
+                                Object::Real(pdf_x),
+                                Object::Real(pdf_y),
+                                Object::Real(pdf_x + pdf_w),
+                                Object::Real(pdf_y),
+                            ]),
+                        );
                     }
                     AnnotationStyle::Rectangle { color, fill, .. } => {
                         let (r, g, b) = hex_to_rgb(color);
                         annot_dict.set("Subtype", Object::Name(b"Square".to_vec()));
-                        annot_dict.set("Rect", Object::Array(vec![
-                            Object::Real(pdf_x),
-                            Object::Real(pdf_y),
-                            Object::Real(pdf_x + pdf_w),
-                            Object::Real(pdf_y + pdf_h),
-                        ]));
-                        annot_dict.set("C", Object::Array(vec![
-                            Object::Real(r as f32),
-                            Object::Real(g as f32),
-                            Object::Real(b as f32),
-                        ]));
-                        if *fill {
-                            annot_dict.set("IC", Object::Array(vec![
+                        annot_dict.set(
+                            "Rect",
+                            Object::Array(vec![
+                                Object::Real(pdf_x),
+                                Object::Real(pdf_y),
+                                Object::Real(pdf_x + pdf_w),
+                                Object::Real(pdf_y + pdf_h),
+                            ]),
+                        );
+                        annot_dict.set(
+                            "C",
+                            Object::Array(vec![
                                 Object::Real(r as f32),
                                 Object::Real(g as f32),
                                 Object::Real(b as f32),
-                            ]));
+                            ]),
+                        );
+                        if *fill {
+                            annot_dict.set(
+                                "IC",
+                                Object::Array(vec![
+                                    Object::Real(r as f32),
+                                    Object::Real(g as f32),
+                                    Object::Real(b as f32),
+                                ]),
+                            );
                         }
                     }
                     AnnotationStyle::Circle { color, fill, .. } => {
                         let (r, g, b) = hex_to_rgb(color);
                         annot_dict.set("Subtype", Object::Name(b"Circle".to_vec()));
-                        annot_dict.set("Rect", Object::Array(vec![
-                            Object::Real(pdf_x),
-                            Object::Real(pdf_y),
-                            Object::Real(pdf_x + pdf_w),
-                            Object::Real(pdf_y + pdf_h),
-                        ]));
-                        annot_dict.set("C", Object::Array(vec![
-                            Object::Real(r as f32),
-                            Object::Real(g as f32),
-                            Object::Real(b as f32),
-                        ]));
-                        if *fill {
-                            annot_dict.set("IC", Object::Array(vec![
+                        annot_dict.set(
+                            "Rect",
+                            Object::Array(vec![
+                                Object::Real(pdf_x),
+                                Object::Real(pdf_y),
+                                Object::Real(pdf_x + pdf_w),
+                                Object::Real(pdf_y + pdf_h),
+                            ]),
+                        );
+                        annot_dict.set(
+                            "C",
+                            Object::Array(vec![
                                 Object::Real(r as f32),
                                 Object::Real(g as f32),
                                 Object::Real(b as f32),
-                            ]));
+                            ]),
+                        );
+                        if *fill {
+                            annot_dict.set(
+                                "IC",
+                                Object::Array(vec![
+                                    Object::Real(r as f32),
+                                    Object::Real(g as f32),
+                                    Object::Real(b as f32),
+                                ]),
+                            );
                         }
                     }
                     AnnotationStyle::Text { text, color, .. } => {
                         let (r, g, b) = hex_to_rgb(color);
                         annot_dict.set("Subtype", Object::Name(b"FreeText".to_vec()));
-                        annot_dict.set("Rect", Object::Array(vec![
-                            Object::Real(pdf_x),
-                            Object::Real(pdf_y),
-                            Object::Real(pdf_x + pdf_w),
-                            Object::Real(pdf_y + pdf_h),
-                        ]));
+                        annot_dict.set(
+                            "Rect",
+                            Object::Array(vec![
+                                Object::Real(pdf_x),
+                                Object::Real(pdf_y),
+                                Object::Real(pdf_x + pdf_w),
+                                Object::Real(pdf_y + pdf_h),
+                            ]),
+                        );
                         annot_dict.set("Contents", Object::string_literal(text.clone()));
-                        annot_dict.set("C", Object::Array(vec![
-                            Object::Real(r as f32),
-                            Object::Real(g as f32),
-                            Object::Real(b as f32),
-                        ]));
+                        annot_dict.set(
+                            "C",
+                            Object::Array(vec![
+                                Object::Real(r as f32),
+                                Object::Real(g as f32),
+                                Object::Real(b as f32),
+                            ]),
+                        );
                     }
                     AnnotationStyle::StickyNote { comment, color } => {
                         let (r, g, b) = hex_to_rgb(color);
                         annot_dict.set("Subtype", Object::Name(b"Text".to_vec()));
-                        annot_dict.set("Rect", Object::Array(vec![
-                            Object::Real(pdf_x),
-                            Object::Real(pdf_y),
-                            Object::Real(pdf_x + 30.0),
-                            Object::Real(pdf_y + 30.0),
-                        ]));
+                        annot_dict.set(
+                            "Rect",
+                            Object::Array(vec![
+                                Object::Real(pdf_x),
+                                Object::Real(pdf_y),
+                                Object::Real(pdf_x + 30.0),
+                                Object::Real(pdf_y + 30.0),
+                            ]),
+                        );
                         annot_dict.set("Contents", Object::string_literal(comment.clone()));
-                        annot_dict.set("C", Object::Array(vec![
-                            Object::Real(r as f32),
-                            Object::Real(g as f32),
-                            Object::Real(b as f32),
-                        ]));
+                        annot_dict.set(
+                            "C",
+                            Object::Array(vec![
+                                Object::Real(r as f32),
+                                Object::Real(g as f32),
+                                Object::Real(b as f32),
+                            ]),
+                        );
                     }
                     AnnotationStyle::Redact { color } => {
                         let (r, g, b) = hex_to_rgb(color);
                         annot_dict.set("Subtype", Object::Name(b"Square".to_vec()));
-                        annot_dict.set("Rect", Object::Array(vec![
-                            Object::Real(pdf_x),
-                            Object::Real(pdf_y),
-                            Object::Real(pdf_x + pdf_w),
-                            Object::Real(pdf_y + pdf_h),
-                        ]));
-                        annot_dict.set("C", Object::Array(vec![
-                            Object::Real(r as f32),
-                            Object::Real(g as f32),
-                            Object::Real(b as f32),
-                        ]));
-                        annot_dict.set("IC", Object::Array(vec![
-                            Object::Real(r as f32),
-                            Object::Real(g as f32),
-                            Object::Real(b as f32),
-                        ]));
+                        annot_dict.set(
+                            "Rect",
+                            Object::Array(vec![
+                                Object::Real(pdf_x),
+                                Object::Real(pdf_y),
+                                Object::Real(pdf_x + pdf_w),
+                                Object::Real(pdf_y + pdf_h),
+                            ]),
+                        );
+                        annot_dict.set(
+                            "C",
+                            Object::Array(vec![
+                                Object::Real(r as f32),
+                                Object::Real(g as f32),
+                                Object::Real(b as f32),
+                            ]),
+                        );
+                        annot_dict.set(
+                            "IC",
+                            Object::Array(vec![
+                                Object::Real(r as f32),
+                                Object::Real(g as f32),
+                                Object::Real(b as f32),
+                            ]),
+                        );
                     }
                     AnnotationStyle::Line { color, thickness } => {
                         let (r, g, b) = hex_to_rgb(color);
                         annot_dict.set("Subtype", Object::Name(b"Line".to_vec()));
-                        annot_dict.set("Rect", Object::Array(vec![
-                            Object::Real(pdf_x.min(pdf_x + pdf_w)),
-                            Object::Real(pdf_y.min(pdf_y + pdf_h)),
-                            Object::Real(pdf_x.max(pdf_x + pdf_w)),
-                            Object::Real(pdf_y.max(pdf_y + pdf_h)),
-                        ]));
+                        annot_dict.set(
+                            "Rect",
+                            Object::Array(vec![
+                                Object::Real(pdf_x.min(pdf_x + pdf_w)),
+                                Object::Real(pdf_y.min(pdf_y + pdf_h)),
+                                Object::Real(pdf_x.max(pdf_x + pdf_w)),
+                                Object::Real(pdf_y.max(pdf_y + pdf_h)),
+                            ]),
+                        );
                         let x1 = ann.x as f32;
                         let y1 = page_height - ann.y as f32;
                         let x2 = (ann.x + ann.width) as f32;
                         let y2 = page_height - (ann.y + ann.height) as f32;
-                        annot_dict.set("L", Object::Array(vec![
-                            Object::Real(x1),
-                            Object::Real(y1),
-                            Object::Real(x2),
-                            Object::Real(y2),
-                        ]));
-                        annot_dict.set("C", Object::Array(vec![
-                            Object::Real(r as f32),
-                            Object::Real(g as f32),
-                            Object::Real(b as f32),
-                        ]));
-                        let border = lopdf::Dictionary::from_iter(vec![
-                            ("W", Object::Real(*thickness as f32)),
-                        ]);
+                        annot_dict.set(
+                            "L",
+                            Object::Array(vec![
+                                Object::Real(x1),
+                                Object::Real(y1),
+                                Object::Real(x2),
+                                Object::Real(y2),
+                            ]),
+                        );
+                        annot_dict.set(
+                            "C",
+                            Object::Array(vec![
+                                Object::Real(r as f32),
+                                Object::Real(g as f32),
+                                Object::Real(b as f32),
+                            ]),
+                        );
+                        let border = lopdf::Dictionary::from_iter(vec![(
+                            "W",
+                            Object::Real(*thickness as f32),
+                        )]);
                         annot_dict.set("BS", Object::Dictionary(border));
                     }
                     AnnotationStyle::Arrow { color, thickness } => {
                         let (r, g, b) = hex_to_rgb(color);
                         annot_dict.set("Subtype", Object::Name(b"Line".to_vec()));
-                        annot_dict.set("Rect", Object::Array(vec![
-                            Object::Real(pdf_x.min(pdf_x + pdf_w)),
-                            Object::Real(pdf_y.min(pdf_y + pdf_h)),
-                            Object::Real(pdf_x.max(pdf_x + pdf_w)),
-                            Object::Real(pdf_y.max(pdf_y + pdf_h)),
-                        ]));
+                        annot_dict.set(
+                            "Rect",
+                            Object::Array(vec![
+                                Object::Real(pdf_x.min(pdf_x + pdf_w)),
+                                Object::Real(pdf_y.min(pdf_y + pdf_h)),
+                                Object::Real(pdf_x.max(pdf_x + pdf_w)),
+                                Object::Real(pdf_y.max(pdf_y + pdf_h)),
+                            ]),
+                        );
                         let x1 = ann.x as f32;
                         let y1 = page_height - ann.y as f32;
                         let x2 = (ann.x + ann.width) as f32;
                         let y2 = page_height - (ann.y + ann.height) as f32;
-                        annot_dict.set("L", Object::Array(vec![
-                            Object::Real(x1),
-                            Object::Real(y1),
-                            Object::Real(x2),
-                            Object::Real(y2),
-                        ]));
-                        annot_dict.set("C", Object::Array(vec![
-                            Object::Real(r as f32),
-                            Object::Real(g as f32),
-                            Object::Real(b as f32),
-                        ]));
-                        annot_dict.set("LE", Object::Array(vec![
-                            Object::Name(b"None".to_vec()),
-                            Object::Name(b"ClosedArrow".to_vec()),
-                        ]));
-                        let border = lopdf::Dictionary::from_iter(vec![
-                            ("W", Object::Real(*thickness as f32)),
-                        ]);
+                        annot_dict.set(
+                            "L",
+                            Object::Array(vec![
+                                Object::Real(x1),
+                                Object::Real(y1),
+                                Object::Real(x2),
+                                Object::Real(y2),
+                            ]),
+                        );
+                        annot_dict.set(
+                            "C",
+                            Object::Array(vec![
+                                Object::Real(r as f32),
+                                Object::Real(g as f32),
+                                Object::Real(b as f32),
+                            ]),
+                        );
+                        annot_dict.set(
+                            "LE",
+                            Object::Array(vec![
+                                Object::Name(b"None".to_vec()),
+                                Object::Name(b"ClosedArrow".to_vec()),
+                            ]),
+                        );
+                        let border = lopdf::Dictionary::from_iter(vec![(
+                            "W",
+                            Object::Real(*thickness as f32),
+                        )]);
                         annot_dict.set("BS", Object::Dictionary(border));
                     }
                 }
@@ -665,7 +744,7 @@ impl DocumentStore {
                 .and_then(|o| o.as_dict().ok())
                 .and_then(|d| d.get(b"Annots").ok())
                 .and_then(|a| match a {
-                    Object::Reference(r) => doc.objects.get(&r).and_then(|o| o.as_array().ok()),
+                    Object::Reference(r) => doc.objects.get(r).and_then(|o| o.as_array().ok()),
                     Object::Array(arr) => Some(arr),
                     _ => None,
                 })
@@ -711,7 +790,9 @@ impl DocumentStore {
 
         let mut fonts = doc.load_page_fonts(&page);
         let mut images = ImageCache::new();
-        let content = doc.page_content_bytes(&page).map_err(|e| PdfError::RenderFailed(e.to_string()))?;
+        let content = doc
+            .page_content_bytes(&page)
+            .map_err(|e| PdfError::RenderFailed(e.to_string()))?;
 
         let display_list = ContentInterpreter::new(page.effective_box())
             .with_page_rotation(page.rotate)
@@ -720,9 +801,7 @@ impl DocumentStore {
             .with_images(&mut images)
             .interpret(&content);
 
-        let mut renderer = CpuRenderer::new()
-            .with_fonts(&fonts)
-            .with_images(&images);
+        let mut renderer = CpuRenderer::new().with_fonts(&fonts).with_images(&images);
         let page_img = renderer
             .render_display_list(&display_list, scale)
             .map_err(|e| PdfError::RenderFailed(e.to_string()))?;
@@ -803,7 +882,10 @@ impl DocumentStore {
                 let match_start = search_idx + pos;
                 let match_end = match_start + query_lower.len();
 
-                if let Some(&(_, _, span_idx)) = span_offsets.iter().find(|(s, e, _)| match_start >= *s && match_start < *e) {
+                if let Some(&(_, _, span_idx)) = span_offsets
+                    .iter()
+                    .find(|(s, e, _)| match_start >= *s && match_start < *e)
+                {
                     let first_span = &spans[span_idx];
                     results.push(SearchResultItem {
                         page_index: page_idx,
@@ -917,8 +999,8 @@ impl DocumentStore {
                 pixel[2] = (r * 0.272 + g * 0.534 + b * 0.131).min(255.0) as u8;
             }
             RenderFilter::Grayscale => {
-                let luma = (pixel[0] as u32 * 299 + pixel[1] as u32 * 587 + pixel[2] as u32 * 114)
-                    / 1000;
+                let luma =
+                    (pixel[0] as u32 * 299 + pixel[1] as u32 * 587 + pixel[2] as u32 * 114) / 1000;
                 pixel[0] = luma as u8;
                 pixel[1] = luma as u8;
                 pixel[2] = luma as u8;
@@ -934,8 +1016,7 @@ impl DocumentStore {
         let mut documents = Vec::new();
 
         for path in paths {
-            let mut doc = Document::load(&path)
-                .map_err(|e| PdfError::OpenFailed(e.to_string()))?;
+            let mut doc = Document::load(&path).map_err(|e| PdfError::OpenFailed(e.to_string()))?;
             doc.renumber_objects_with(max_id);
             max_id = doc.max_id + 1;
             documents.push(doc);
@@ -959,7 +1040,7 @@ impl DocumentStore {
 
         let pages_id = max_id;
         max_id += 1;
-        
+
         let count = merged_kids.len() as i32;
         let pages_dict = lopdf::Dictionary::from_iter(vec![
             ("Type", Object::Name(b"Pages".to_vec())),
@@ -986,11 +1067,14 @@ impl DocumentStore {
         }
 
         merged_doc.objects = merged_objects;
-        merged_doc.trailer.set("Root", Object::Reference((catalog_id, 0)));
+        merged_doc
+            .trailer
+            .set("Root", Object::Reference((catalog_id, 0)));
         merged_doc.trailer.set("Size", max_id as i64);
         merged_doc.max_id = max_id - 1;
 
-        merged_doc.save(&output_path)
+        merged_doc
+            .save(&output_path)
             .map_err(|e| PdfError::IoError(e.to_string()))?;
 
         Ok(output_path)
@@ -1005,8 +1089,7 @@ impl DocumentStore {
         let mut created_paths = Vec::new();
 
         for &page_idx in &page_indices {
-            let mut doc = Document::load(path)
-                .map_err(|e| PdfError::OpenFailed(e.to_string()))?;
+            let mut doc = Document::load(path).map_err(|e| PdfError::OpenFailed(e.to_string()))?;
 
             let page_count = doc.get_pages().len();
             let keep_page_1_based = (page_idx + 1) as u32;
@@ -1065,7 +1148,8 @@ impl DocumentStore {
                         }
                     }
                     FieldKind::Choice => {
-                        let opts: Vec<String> = f.options.iter().map(|(_, label)| label.clone()).collect();
+                        let opts: Vec<String> =
+                            f.options.iter().map(|(_, label)| label.clone()).collect();
                         let selected_val = match &f.value {
                             Some(FieldValue::Text(s)) => Some(s.clone()),
                             _ => None,
@@ -1078,7 +1162,9 @@ impl DocumentStore {
                             selected_index,
                         }
                     }
-                    _ => FormFieldVariant::Text { value: String::new() },
+                    _ => FormFieldVariant::Text {
+                        value: String::new(),
+                    },
                 };
 
                 let mut page_idx = 0;
@@ -1110,7 +1196,7 @@ impl DocumentStore {
         updates: &[FormField],
     ) {
         let mut name = parent_name.to_string();
-        
+
         let field_dict = match doc.get_object(field_ref) {
             Ok(Object::Dictionary(dict)) => dict.clone(),
             _ => return,
@@ -1158,7 +1244,10 @@ impl DocumentStore {
                             dict.set("AS", Object::Name(b"Off".to_vec()));
                         }
                     }
-                    FormFieldVariant::ComboBox { selected_index, options } => {
+                    FormFieldVariant::ComboBox {
+                        selected_index,
+                        options,
+                    } => {
                         if let Some(idx) = selected_index {
                             if let Some(opt_text) = options.get(*idx) {
                                 dict.set("V", Object::string_literal(opt_text.clone()));
@@ -1171,7 +1260,7 @@ impl DocumentStore {
                         .get(b"AcroForm")
                         .ok()
                         .and_then(|o| o.as_reference().ok());
-                    drop(catalog);
+                    let _ = catalog;
                     if let Some(acro_ref) = acro_ref {
                         if let Some(Object::Dictionary(acro)) = doc.objects.get_mut(&acro_ref) {
                             acro.set("NeedAppearances", Object::Boolean(true));
@@ -1188,15 +1277,14 @@ impl DocumentStore {
         updates: Vec<FormField>,
         output_path: String,
     ) -> PdfResult<String> {
-        let mut doc = Document::load(path)
-            .map_err(|e| PdfError::OpenFailed(e.to_string()))?;
+        let mut doc = Document::load(path).map_err(|e| PdfError::OpenFailed(e.to_string()))?;
 
         if let Ok(catalog) = doc.catalog_mut() {
             let acro_ref = catalog
                 .get(b"AcroForm")
                 .ok()
                 .and_then(|o| o.as_reference().ok());
-            drop(catalog);
+            let _ = catalog;
             if let Some(acro_ref) = acro_ref {
                 if let Some(Object::Dictionary(acro)) = doc.objects.get_mut(&acro_ref) {
                     if let Ok(fields_obj) = acro.get(b"Fields") {

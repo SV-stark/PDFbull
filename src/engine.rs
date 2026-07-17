@@ -24,18 +24,6 @@ fn reload_if_needed(
     }
 }
 
-/// Resolve the directory containing the running executable, with the Windows
-/// UNC/extended-path prefix (`\\?\`) stripped. Used for PDFium/library loading.
-fn exe_dir_raw() -> Option<String> {
-    std::env::current_exe().ok()?.parent().map(|dir| {
-        let mut dir_str = dir.to_string_lossy().into_owned();
-        if let Some(stripped) = dir_str.strip_prefix(r"\\?\") {
-            dir_str = stripped.to_string();
-        }
-        dir_str
-    })
-}
-
 #[must_use]
 pub fn spawn_engine_thread(cache_size: u64, max_memory_mb: u64) -> EngineState {
     let (cmd_tx, mut cmd_rx) = mpsc::channel::<PdfCommand>(128);

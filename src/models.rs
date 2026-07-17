@@ -129,7 +129,7 @@ pub struct TextItem {
     pub height: f32,
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RenderResult {
     pub width: u32,
     pub height: u32,
