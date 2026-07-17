@@ -1,6 +1,6 @@
 use crate::models::{
     Annotation, AnnotationStyle, DocumentId, EngineErrorKind, FormField, FormFieldVariant,
-    Hyperlink, PdfError, PdfResult, SearchResultItem, Bookmark,
+    Hyperlink, PdfError, PdfResult, SearchResultItem,
 };
 use lopdf::{Document, Object, ObjectId};
 use quick_cache::{Weighter, sync::Cache};
@@ -10,11 +10,16 @@ use std::sync::Arc;
 use zune_image::codecs::png::PngEncoder;
 use zune_image::image::Image;
 use zune_image::traits::EncoderTrait;
-use zpdf::{ContentInterpreter, ImageCache, PdfDocument, cpu::CpuRenderer, spans_to_text};
+use zpdf::{
+    AcroForm, ContentInterpreter, FieldKind, FieldValue, FormField as ZpdfFormField, ImageCache,
+    PdfDocument, RenderBackend, cpu::CpuRenderer, spans_to_text,
+};
 
 use crate::ui::theme::hex_to_rgb;
 
 const MAX_RENDER_DIM: i32 = 2500;
+// PDF field-flags bit for "radio button" (ISO 32000-1 Table 221).
+const FF_RADIO: i64 = 1 << 15;
 const WHITE_THRESHOLD: u8 = 245;
 const BBOX_MARGIN: u32 = 10;
 const NO_SHADOW_THRESHOLD: u8 = 230;
@@ -448,22 +453,22 @@ impl DocumentStore {
             let page_height = {
                 if let Some(doc_ref) = self.documents.get(&doc_id) {
                     if let Ok(p) = doc_ref.page(page_idx) {
-                        p.effective_box().height()
+                        p.effective_box().height() as f32
                     } else {
-                        792.0
+                        792.0_f32
                     }
                 } else {
-                    792.0
+                    792.0_f32
                 }
             };
 
             let mut annot_refs = Vec::new();
 
             for ann in annotations {
-                let pdf_x = ann.x as f64;
-                let pdf_w = ann.width as f64;
-                let pdf_h = ann.height as f64;
-                let pdf_y = page_height - (ann.y as f64 + pdf_h);
+                let pdf_x = ann.x as f32;
+                let pdf_w = ann.width as f32;
+                let pdf_h = ann.height as f32;
+                let pdf_y = page_height - (ann.y as f32 + pdf_h);
 
                 let mut annot_dict = lopdf::Dictionary::new();
                 annot_dict.set("Type", Object::Name(b"Annot".to_vec()));
@@ -479,9 +484,9 @@ impl DocumentStore {
                             Object::Real(pdf_y + pdf_h),
                         ]));
                         annot_dict.set("C", Object::Array(vec![
-                            Object::Real(r as f64),
-                            Object::Real(g as f64),
-                            Object::Real(b as f64),
+                            Object::Real(r as f32),
+                            Object::Real(g as f32),
+                            Object::Real(b as f32),
                         ]));
                         annot_dict.set("QuadPoints", Object::Array(vec![
                             Object::Real(pdf_x), Object::Real(pdf_y + pdf_h),
@@ -500,15 +505,15 @@ impl DocumentStore {
                             Object::Real(pdf_y + pdf_h),
                         ]));
                         annot_dict.set("C", Object::Array(vec![
-                            Object::Real(r as f64),
-                            Object::Real(g as f64),
-                            Object::Real(b as f64),
+                            Object::Real(r as f32),
+                            Object::Real(g as f32),
+                            Object::Real(b as f32),
                         ]));
                         if *fill {
                             annot_dict.set("IC", Object::Array(vec![
-                                Object::Real(r as f64),
-                                Object::Real(g as f64),
-                                Object::Real(b as f64),
+                                Object::Real(r as f32),
+                                Object::Real(g as f32),
+                                Object::Real(b as f32),
                             ]));
                         }
                     }
@@ -522,15 +527,15 @@ impl DocumentStore {
                             Object::Real(pdf_y + pdf_h),
                         ]));
                         annot_dict.set("C", Object::Array(vec![
-                            Object::Real(r as f64),
-                            Object::Real(g as f64),
-                            Object::Real(b as f64),
+                            Object::Real(r as f32),
+                            Object::Real(g as f32),
+                            Object::Real(b as f32),
                         ]));
                         if *fill {
                             annot_dict.set("IC", Object::Array(vec![
-                                Object::Real(r as f64),
-                                Object::Real(g as f64),
-                                Object::Real(b as f64),
+                                Object::Real(r as f32),
+                                Object::Real(g as f32),
+                                Object::Real(b as f32),
                             ]));
                         }
                     }
@@ -545,9 +550,9 @@ impl DocumentStore {
                         ]));
                         annot_dict.set("Contents", Object::string_literal(text.clone()));
                         annot_dict.set("C", Object::Array(vec![
-                            Object::Real(r as f64),
-                            Object::Real(g as f64),
-                            Object::Real(b as f64),
+                            Object::Real(r as f32),
+                            Object::Real(g as f32),
+                            Object::Real(b as f32),
                         ]));
                     }
                     AnnotationStyle::StickyNote { comment, color } => {
@@ -561,9 +566,9 @@ impl DocumentStore {
                         ]));
                         annot_dict.set("Contents", Object::string_literal(comment.clone()));
                         annot_dict.set("C", Object::Array(vec![
-                            Object::Real(r as f64),
-                            Object::Real(g as f64),
-                            Object::Real(b as f64),
+                            Object::Real(r as f32),
+                            Object::Real(g as f32),
+                            Object::Real(b as f32),
                         ]));
                     }
                     AnnotationStyle::Redact { color } => {
@@ -576,14 +581,14 @@ impl DocumentStore {
                             Object::Real(pdf_y + pdf_h),
                         ]));
                         annot_dict.set("C", Object::Array(vec![
-                            Object::Real(r as f64),
-                            Object::Real(g as f64),
-                            Object::Real(b as f64),
+                            Object::Real(r as f32),
+                            Object::Real(g as f32),
+                            Object::Real(b as f32),
                         ]));
                         annot_dict.set("IC", Object::Array(vec![
-                            Object::Real(r as f64),
-                            Object::Real(g as f64),
-                            Object::Real(b as f64),
+                            Object::Real(r as f32),
+                            Object::Real(g as f32),
+                            Object::Real(b as f32),
                         ]));
                     }
                     AnnotationStyle::Line { color, thickness } => {
@@ -595,10 +600,10 @@ impl DocumentStore {
                             Object::Real(pdf_x.max(pdf_x + pdf_w)),
                             Object::Real(pdf_y.max(pdf_y + pdf_h)),
                         ]));
-                        let x1 = ann.x as f64;
-                        let y1 = page_height - ann.y as f64;
-                        let x2 = (ann.x + ann.width) as f64;
-                        let y2 = page_height - (ann.y + ann.height) as f64;
+                        let x1 = ann.x as f32;
+                        let y1 = page_height - ann.y as f32;
+                        let x2 = (ann.x + ann.width) as f32;
+                        let y2 = page_height - (ann.y + ann.height) as f32;
                         annot_dict.set("L", Object::Array(vec![
                             Object::Real(x1),
                             Object::Real(y1),
@@ -606,12 +611,12 @@ impl DocumentStore {
                             Object::Real(y2),
                         ]));
                         annot_dict.set("C", Object::Array(vec![
-                            Object::Real(r as f64),
-                            Object::Real(g as f64),
-                            Object::Real(b as f64),
+                            Object::Real(r as f32),
+                            Object::Real(g as f32),
+                            Object::Real(b as f32),
                         ]));
                         let border = lopdf::Dictionary::from_iter(vec![
-                            ("W", Object::Real(*thickness as f64)),
+                            ("W", Object::Real(*thickness as f32)),
                         ]);
                         annot_dict.set("BS", Object::Dictionary(border));
                     }
@@ -624,10 +629,10 @@ impl DocumentStore {
                             Object::Real(pdf_x.max(pdf_x + pdf_w)),
                             Object::Real(pdf_y.max(pdf_y + pdf_h)),
                         ]));
-                        let x1 = ann.x as f64;
-                        let y1 = page_height - ann.y as f64;
-                        let x2 = (ann.x + ann.width) as f64;
-                        let y2 = page_height - (ann.y + ann.height) as f64;
+                        let x1 = ann.x as f32;
+                        let y1 = page_height - ann.y as f32;
+                        let x2 = (ann.x + ann.width) as f32;
+                        let y2 = page_height - (ann.y + ann.height) as f32;
                         annot_dict.set("L", Object::Array(vec![
                             Object::Real(x1),
                             Object::Real(y1),
@@ -635,16 +640,16 @@ impl DocumentStore {
                             Object::Real(y2),
                         ]));
                         annot_dict.set("C", Object::Array(vec![
-                            Object::Real(r as f64),
-                            Object::Real(g as f64),
-                            Object::Real(b as f64),
+                            Object::Real(r as f32),
+                            Object::Real(g as f32),
+                            Object::Real(b as f32),
                         ]));
                         annot_dict.set("LE", Object::Array(vec![
                             Object::Name(b"None".to_vec()),
                             Object::Name(b"ClosedArrow".to_vec()),
                         ]));
                         let border = lopdf::Dictionary::from_iter(vec![
-                            ("W", Object::Real(*thickness as f64)),
+                            ("W", Object::Real(*thickness as f32)),
                         ]);
                         annot_dict.set("BS", Object::Dictionary(border));
                     }
@@ -654,24 +659,22 @@ impl DocumentStore {
                 annot_refs.push(Object::Reference(annot_id));
             }
 
-            if let Some(Object::Dictionary(ref mut page_dict)) = doc.objects.get_mut(&page_id) {
-                if let Ok(annots_obj) = page_dict.get(b"Annots") {
-                    let mut annots_resolved = match annots_obj {
-                        Object::Reference(r) => {
-                            if let Ok(Object::Array(arr)) = doc.objects.get(r) {
-                                arr.clone()
-                            } else {
-                                Vec::new()
-                            }
-                        }
-                        Object::Array(arr) => arr.clone(),
-                        _ => Vec::new(),
-                    };
-                    annots_resolved.extend(annot_refs);
-                    page_dict.set("Annots", Object::Array(annots_resolved));
-                } else {
-                    page_dict.set("Annots", Object::Array(annot_refs));
-                }
+            let existing_annots = doc
+                .objects
+                .get(&page_id)
+                .and_then(|o| o.as_dict().ok())
+                .and_then(|d| d.get(b"Annots").ok())
+                .and_then(|a| match a {
+                    Object::Reference(r) => doc.objects.get(&r).and_then(|o| o.as_array().ok()),
+                    Object::Array(arr) => Some(arr),
+                    _ => None,
+                })
+                .cloned();
+
+            if let Some(Object::Dictionary(page_dict)) = doc.objects.get_mut(&page_id) {
+                let mut annots_resolved = existing_annots.unwrap_or_default();
+                annots_resolved.extend(annot_refs);
+                page_dict.set("Annots", Object::Array(annots_resolved));
             }
         }
 
@@ -895,14 +898,15 @@ impl DocumentStore {
                 pixel[1] = pixel[1].saturating_add(20);
                 pixel[2] = pixel[2].saturating_add(20);
             }
-            RenderFilter::NoShadow
+            RenderFilter::NoShadow => {
                 if pixel[0] > NO_SHADOW_THRESHOLD
                     && pixel[1] > NO_SHADOW_THRESHOLD
-                    && pixel[2] > NO_SHADOW_THRESHOLD =>
-            {
-                pixel[0] = 255;
-                pixel[1] = 255;
-                pixel[2] = 255;
+                    && pixel[2] > NO_SHADOW_THRESHOLD
+                {
+                    pixel[0] = 255;
+                    pixel[1] = 255;
+                    pixel[2] = 255;
+                }
             }
             RenderFilter::Sepia => {
                 let r = pixel[0] as f32;
@@ -975,7 +979,7 @@ impl DocumentStore {
         for doc in &documents {
             let pages = doc.get_pages();
             for (_, page_id) in pages {
-                if let Some(Object::Dictionary(ref mut dict)) = merged_objects.get_mut(&page_id) {
+                if let Some(Object::Dictionary(dict)) = merged_objects.get_mut(&page_id) {
                     dict.set("Parent", Object::Reference((pages_id, 0)));
                 }
             }
@@ -1039,19 +1043,19 @@ impl DocumentStore {
             for f in &acro.fields {
                 let name = f.name.clone();
                 let variant = match f.kind {
-                    zpdf::forms::FieldKind::Text => {
+                    FieldKind::Text => {
                         let val = match &f.value {
-                            Some(zpdf::forms::FieldValue::Text(s)) => s.clone(),
+                            Some(FieldValue::Text(s)) => s.clone(),
                             _ => String::new(),
                         };
                         FormFieldVariant::Text { value: val }
                     }
-                    zpdf::forms::FieldKind::Button => {
+                    FieldKind::Button => {
                         let is_checked = match &f.value {
-                            Some(zpdf::forms::FieldValue::Name(n)) => n != "Off",
+                            Some(FieldValue::Name(n)) => n != "Off",
                             _ => false,
                         };
-                        if f.flags & zpdf::forms::FF_RADIO != 0 {
+                        if f.flags & FF_RADIO != 0 {
                             FormFieldVariant::RadioButton {
                                 is_selected: is_checked,
                                 group_name: Some(name.clone()),
@@ -1060,10 +1064,10 @@ impl DocumentStore {
                             FormFieldVariant::Checkbox { is_checked }
                         }
                     }
-                    zpdf::forms::FieldKind::Choice => {
+                    FieldKind::Choice => {
                         let opts: Vec<String> = f.options.iter().map(|(_, label)| label.clone()).collect();
                         let selected_val = match &f.value {
-                            Some(zpdf::forms::FieldValue::Text(s)) => Some(s.clone()),
+                            Some(FieldValue::Text(s)) => Some(s.clone()),
                             _ => None,
                         };
                         let selected_index = selected_val.and_then(|val| {
@@ -1108,13 +1112,13 @@ impl DocumentStore {
         let mut name = parent_name.to_string();
         
         let field_dict = match doc.get_object(field_ref) {
-            Ok(Object::Dictionary(ref dict)) => dict.clone(),
+            Ok(Object::Dictionary(dict)) => dict.clone(),
             _ => return,
         };
 
         if let Ok(partial_name_obj) = field_dict.get(b"T") {
             if let Ok(partial_name) = partial_name_obj.as_string() {
-                let partial_str = String::from_utf8_lossy(partial_name).into_owned();
+                let partial_str = partial_name.into_owned();
                 if name.is_empty() {
                     name = partial_str;
                 } else {
@@ -1135,7 +1139,7 @@ impl DocumentStore {
         }
 
         if let Some(update) = updates.iter().find(|u| u.name == name) {
-            if let Some(Object::Dictionary(ref mut dict)) = doc.objects.get_mut(&field_ref) {
+            if let Some(Object::Dictionary(dict)) = doc.objects.get_mut(&field_ref) {
                 match &update.variant {
                     FormFieldVariant::Text { value } => {
                         dict.set("V", Object::string_literal(value.clone()));
@@ -1162,12 +1166,15 @@ impl DocumentStore {
                         }
                     }
                 }
-                if let Ok(catalog_ref) = doc.catalog() {
-                    if let Ok(Object::Dictionary(ref mut catalog)) = doc.objects.get_mut(&catalog_ref) {
-                        if let Ok(Object::Reference(acro_ref)) = catalog.get(b"AcroForm") {
-                            if let Some(Object::Dictionary(ref mut acro)) = doc.objects.get_mut(&acro_ref) {
-                                acro.set("NeedAppearances", Object::Boolean(true));
-                            }
+                if let Ok(catalog) = doc.catalog_mut() {
+                    let acro_ref = catalog
+                        .get(b"AcroForm")
+                        .ok()
+                        .and_then(|o| o.as_reference().ok());
+                    drop(catalog);
+                    if let Some(acro_ref) = acro_ref {
+                        if let Some(Object::Dictionary(acro)) = doc.objects.get_mut(&acro_ref) {
+                            acro.set("NeedAppearances", Object::Boolean(true));
                         }
                     }
                 }
@@ -1184,19 +1191,22 @@ impl DocumentStore {
         let mut doc = Document::load(path)
             .map_err(|e| PdfError::OpenFailed(e.to_string()))?;
 
-        if let Ok(catalog_ref) = doc.catalog() {
-            if let Ok(catalog) = doc.get_object(catalog_ref).and_then(|o| o.as_dict()) {
-                if let Ok(acro_ref) = catalog.get(b"AcroForm").and_then(|o| o.as_reference()) {
-                    if let Ok(acro) = doc.get_object(acro_ref).and_then(|o| o.as_dict()) {
-                        if let Ok(fields_obj) = acro.get(b"Fields") {
-                            if let Ok(fields_arr) = fields_obj.as_array() {
-                                let fields_refs: Vec<ObjectId> = fields_arr
-                                    .iter()
-                                    .filter_map(|f| f.as_reference().ok())
-                                    .collect();
-                                for r in fields_refs {
-                                    Self::walk_lopdf_fields(&mut doc, r, "", &updates);
-                                }
+        if let Ok(catalog) = doc.catalog_mut() {
+            let acro_ref = catalog
+                .get(b"AcroForm")
+                .ok()
+                .and_then(|o| o.as_reference().ok());
+            drop(catalog);
+            if let Some(acro_ref) = acro_ref {
+                if let Some(Object::Dictionary(acro)) = doc.objects.get_mut(&acro_ref) {
+                    if let Ok(fields_obj) = acro.get(b"Fields") {
+                        if let Ok(fields_arr) = fields_obj.as_array() {
+                            let fields_refs: Vec<ObjectId> = fields_arr
+                                .iter()
+                                .filter_map(|f| f.as_reference().ok())
+                                .collect();
+                            for r in fields_refs {
+                                Self::walk_lopdf_fields(&mut doc, r, "", &updates);
                             }
                         }
                     }

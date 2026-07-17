@@ -13,6 +13,8 @@ repository = "https://github.com/SV-stark/PDFbull"
 iced = { version = "0.14", features = ["image", "svg", "canvas", "tokio", "advanced"] }
 iced_draggable_tabs = "0.1"
 zpdf = { version = "0.8", features = ["cpu-render"] }
+zpdf-render-cpu = "0.8"
+zpdf-render-wgpu = "0.8"
 tokio = { version = "1.0", features = ["full"] }
 rfd = "0.14"
 zune-image = "0.4"
