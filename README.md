@@ -11,7 +11,7 @@
   <a href="https://www.rust-lang.org/"><img src="https://img.shields.io/badge/Backend-Rust-black?logo=rust" alt="Rust"></a>
 </p>
 
-**PDFbull** is a professional, high-performance PDF reader and editor engineered for efficiency. By combining the power of **Google's PDFium engine** with the safety of **Rust** and the declarative, native UI toolkit **Iced**, PDFbull delivers a desktop experience that is significantly faster and more resource-efficient than traditional Electron or WebView-based alternatives.
+**PDFbull** is a professional, high-performance PDF reader and editor engineered for efficiency. By combining the power of the **zpdf crate** with the safety of **Rust** and the declarative, native UI toolkit **Iced**, PDFbull delivers a desktop experience that is significantly faster and more resource-efficient than traditional Electron or WebView-based alternatives.
 
 ---
 
@@ -35,7 +35,7 @@ PDFbull is built from the ground up for speed, leveraging modern Rust ecosystem 
 - **Export Annotations**: Export all annotations as JSON for backup or sharing.
 
 ### 📐 Productivity Utilities
-- **Fast Search**: Leverages PDFium's structured text engine for instantaneous document-wide searching with result navigation.
+- **Fast Search**: Leverages zpdf's structured text engine for instantaneous document-wide searching with result navigation.
 - **Tabbed Interface**: Multi-document management with tab-based navigation.
 - **Recent Files**: Quick access dropdown for recently opened documents.
 - **Page Bookmarks**: Mark important pages with `Ctrl+D` for quick reference.
@@ -78,7 +78,7 @@ PDFbull is built from the ground up for speed, leveraging modern Rust ecosystem 
 - **UI Toolkit**: [Iced](https://iced.rs/) (Native, Cross-platform, Pure Rust)
 - **Language**: [Rust](https://www.rust-lang.org/)
 - **Concurrency**: [Tokio](https://tokio.rs/) (Async Runtime) & [Rayon](https://github.com/rayon-rs/rayon) (Data Parallelism)
-- **PDF Engine**: [PDFium](https://pdfium.googlesource.com/pdfium/) via [pdfium-render](https://crates.io/crates/pdfium-render)
+- **PDF Engine**: [zpdf](https://crates.io/crates/zpdf) crate
 - **Caching**: [quick_cache](https://github.com/arthurprs/quick-cache)
 - **File Dialogs**: [rfd](https://github.com/Empson/rye) (Native file dialogs)
 
@@ -88,7 +88,7 @@ PDFbull is built from the ground up for speed, leveraging modern Rust ecosystem 
 
 | Feature | PDFbull 🐂 | Adobe Acrobat Reader DC 🔴 | Chrome PDF Viewer 🔵 | Sumatra PDF 🟡 |
 | :--- | :--- | :--- | :--- | :--- |
-| **Engine** | PDFium (Rust) | Proprietary | PDFium (C++) | MuPDF (C++) |
+| **Engine** | zpdf (Rust) | Proprietary | PDFium (C++) | MuPDF (C++) |
 | **Startup Time** | **~150ms** | ~1.5-2.5s | ~300ms | ~50ms |
 | **RAM (10-page PDF)** | **~85MB** | ~280-350MB | ~180-250MB | ~55-80MB |
 | **RAM (50-page PDF)** | **~120MB** | ~350-450MB | ~200-280MB | ~60-100MB |
@@ -149,19 +149,16 @@ Download the latest binaries from the [Releases Page](https://github.com/SV-star
 **Prerequisites**:
 - Windows (Current target platform)
 - Rust (Stable)
-- pdfium.dll (Binary version `7713` recommended for compatibility - See [PDFium Binaries](https://github.com/bblanchon/pdfium-binaries/releases/tag/chromium%2F7713) and copy it to project root)
+- zpdf crate (handles PDFium binary automatically)
 
 ```bash
 # 1. Clone & Enter
 git clone https://github.com/SV-stark/PDFbull.git && cd PDFbull
 
-# 2. Get pdfium.dll (required)
-# Copy pdfium.dll to the project root directory
-
-# 3. Run Development Build
+# 2. Run Development Build
 cargo run
 
-# 4. Production Build
+# 3. Production Build
 cargo build --release
 ```
 
