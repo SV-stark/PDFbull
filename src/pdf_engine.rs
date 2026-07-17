@@ -1497,7 +1497,6 @@ mod tests {
             doc_id,
             page_num: 0,
             scale: 200,
-            filter: RenderFilter::None,
             auto_crop: false,
             quality: RenderQuality::Medium,
         };
@@ -1524,25 +1523,23 @@ mod tests {
     }
 
     #[test]
-    fn test_render_key_with_filters() {
+    fn test_render_key_distinguishes_scale() {
         let doc_id = DocumentId(1);
-        let key_grayscale = RenderKey {
+        let key_low = RenderKey {
             doc_id,
             page_num: 0,
             scale: 100,
-            filter: RenderFilter::Grayscale,
             auto_crop: false,
             quality: RenderQuality::Medium,
         };
-        let key_inverted = RenderKey {
+        let key_high = RenderKey {
             doc_id,
             page_num: 0,
-            scale: 100,
-            filter: RenderFilter::Inverted,
+            scale: 200,
             auto_crop: false,
             quality: RenderQuality::Medium,
         };
-        assert_ne!(key_grayscale, key_inverted);
+        assert_ne!(key_low, key_high);
     }
 
     #[test]
@@ -1553,7 +1550,6 @@ mod tests {
                 doc_id: DocumentId(1),
                 page_num: 0,
                 scale: 100,
-                filter: RenderFilter::None,
                 auto_crop: false,
                 quality: RenderQuality::Medium,
             }),
@@ -1798,7 +1794,6 @@ mod tests {
                     doc_id: DocumentId(1),
                     page_num: 0,
                     scale: 100,
-                    filter: RenderFilter::None,
                     auto_crop: false,
                     quality: RenderQuality::Medium,
                 })
