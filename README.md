@@ -13,7 +13,7 @@
 
 **PDFbull** is a professional, high-performance PDF reader and editor engineered for efficiency. By combining the power of the **zpdf crate** with the safety of **Rust** and the declarative, native UI toolkit **Iced**, PDFbull delivers a desktop experience that is significantly faster and more resource-efficient than traditional Electron or WebView-based alternatives.
 
-> **Engine note:** PDFbull migrated from `pdfium-render` to the pure-Rust **[zpdf](https://crates.io/crates/zpdf)** engine (with CPU rasterization via `zpdf-render-cpu`). All rendering is currently performed on the **CPU** path. The GPU (WebGPU) renderer (`zpdf-render-wgpu`) is included as a dependency but is **work-in-progress and not yet wired in** — see [Work in Progress](#-work-in-progress-wip).
+> **Engine note:** PDFbull migrated from `pdfium-render` to the pure-Rust **[zpdf](https://crates.io/crates/zpdf)** engine with GPU-accelerated rendering powered by **`zpdf-render-wgpu`**. CPU-based rendering (`zpdf-render-cpu`) is maintained as a feature toggle/compile option.
 
 ---
 
@@ -22,11 +22,21 @@
 PDFbull is built from the ground up for speed, leveraging modern Rust ecosystem powerhouses:
 
 - **Native UI with Iced**: A lightweight, cross-platform UI toolkit written entirely in Rust, producing native code without any web dependencies.
-- **CPU Rendering via zpdf**: Pages are rasterized in native Rust memory space using the `zpdf-render-cpu` backend and uploaded directly to the UI buffer.
+- **GPU Rendering via zpdf**: Pages are rasterized on the GPU in native Rust memory space using the `zpdf-render-wgpu` backend and uploaded directly to the UI buffer.
 - **Parallel Processing**: Powered by **Rayon**, heavy computational tasks like rendering, filtering, and search are parallelized across all available CPU cores.
 - **Smart Caching**: Powered by **quick_cache**, a lightweight, concurrent cache library with custom weighters, ensuring instant access to recently viewed pages.
 - **Async I/O with Tokio**: Ensuring the UI never freezes, even when loading large documents.
 - **Efficient RAM Management**: Consistently outperforms heavier reader stacks.
+
+### 📊 Real-world Benchmarks
+
+Measured using the `divan` benchmarking framework on a standard text-heavy test document (`test_document.pdf`):
+
+| Operation | Median Time | Fastest | Description |
+| :--- | :--- | :--- | :--- |
+| **PDF Parsing** (`bench_pdf_parse`) | **192.7 µs** | 165.9 µs | Parses document structure and catalog. |
+| **CPU Rendering** (`bench_pdf_render_cpu`) | **4.02 ms** | 3.163 ms | Software rasterization of display list commands. |
+| **GPU Rendering** (`bench_pdf_render_gpu`) | **685.7 ms** | 447.1 ms | WebGPU/WGPU hardware rasterization (includes pipeline/device init overhead). |
 
 ## 🛠️ Feature Suite
 
@@ -80,8 +90,8 @@ PDFbull is built from the ground up for speed, leveraging modern Rust ecosystem 
 - **Language**: [Rust](https://www.rust-lang.org/)
 - **Concurrency**: [Tokio](https://tokio.rs/) (Async Runtime) & [Rayon](https://github.com/rayon-rs/rayon) (Data Parallelism)
 - **PDF Engine**: [zpdf](https://crates.io/crates/zpdf) (pure-Rust PDF backend)
-- **CPU Rasterizer**: [zpdf-render-cpu](https://crates.io/crates/zpdf-render-cpu)
-- **GPU Rasterizer (WIP)**: [zpdf-render-wgpu](https://crates.io/crates/zpdf-render-wgpu) — declared, not yet active
+- **GPU Rasterizer**: [zpdf-render-wgpu](https://crates.io/crates/zpdf-render-wgpu) (active)
+- **CPU Rasterizer (Fallback)**: [zpdf-render-cpu](https://crates.io/crates/zpdf-render-cpu)
 - **Caching**: [quick_cache](https://github.com/arthurprs/quick-cache)
 - **File Dialogs**: [rfd](https://github.com/Empson/rfd) (Native file dialogs)
 
@@ -91,8 +101,7 @@ PDFbull is built from the ground up for speed, leveraging modern Rust ecosystem 
 
 The following capabilities are partially present in the codebase or planned, but are **not yet fully functional** and should be considered experimental:
 
-### 🖥️ GPU / WebGPU Rendering
-- The `zpdf-render-wgpu` backend is included as a dependency, but **GPU rasterization is not wired into the render pipeline**. PDFbull currently renders exclusively on the **CPU** path (`zpdf-render-cpu`). GPU acceleration is a future optimization.
+
 
 ### ✏️ Advanced Annotations
 - **Geometric Shapes**: Circles, Lines, and Arrows are represented in the data model and sidebar, but their interactive creation/editing is **not yet implemented**.
@@ -118,7 +127,7 @@ The following capabilities are partially present in the codebase or planned, but
 - [x] **Migration to zpdf engine** (replaced pdfium-render with pure-Rust zpdf + CPU rasterizer)
 - [x] **Migration to Iced UI** (Replaced Slint with Iced)
 - [x] **Form Field Detection & Filling**
-- [ ] **GPU / WebGPU Rendering** (wire up `zpdf-render-wgpu`)
+- [x] **GPU / WebGPU Rendering** (wire up `zpdf-render-wgpu`)
 - [ ] **Advanced Shapes (Circles/Lines/Arrows) & Sticky Notes**
 - [ ] **OCR Capability**: Built-in Optical Character Recognition for scanned documents.
 - [ ] **Digital Signatures**: Professional cryptographic signing and verification.

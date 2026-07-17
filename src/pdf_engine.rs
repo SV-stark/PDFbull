@@ -9,7 +9,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use zpdf::{
     ContentInterpreter, FieldKind, FieldValue, ImageCache, PdfDocument, RenderBackend,
-    cpu::CpuRenderer, spans_to_text,
+    gpu::WgpuRenderer, spans_to_text,
 };
 use zune_image::codecs::ImageFormat;
 use zune_image::image::Image;
@@ -286,7 +286,7 @@ impl DocumentStore {
             .with_images(&mut images)
             .interpret(&content);
 
-        let mut renderer = CpuRenderer::new().with_fonts(&fonts).with_images(&images);
+        let mut renderer = WgpuRenderer::new().with_fonts(&fonts).with_images(&images);
         let page_img = renderer
             .render_display_list(&display_list, options.scale)
             .map_err(|e| PdfError::RenderFailed(e.to_string()))?;
@@ -800,7 +800,7 @@ impl DocumentStore {
             .with_images(&mut images)
             .interpret(&content);
 
-        let mut renderer = CpuRenderer::new().with_fonts(&fonts).with_images(&images);
+        let mut renderer = WgpuRenderer::new().with_fonts(&fonts).with_images(&images);
         let page_img = renderer
             .render_display_list(&display_list, scale)
             .map_err(|e| PdfError::RenderFailed(e.to_string()))?;

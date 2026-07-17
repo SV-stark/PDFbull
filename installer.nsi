@@ -20,7 +20,6 @@ Section "Install"
     SetOutPath "$INSTDIR"
     
     File "release_dist\pdfbull.exe"
-    File "release_dist\pdfium.dll"
     
     WriteUninstaller "$INSTDIR\Uninstall.exe"
     
@@ -39,7 +38,6 @@ SectionEnd
 
 Section "Uninstall"
     Delete "$INSTDIR\pdfbull.exe"
-    Delete "$INSTDIR\pdfium.dll"
     Delete "$INSTDIR\Uninstall.exe"
     RMDir "$INSTDIR"
     

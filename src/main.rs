@@ -2,6 +2,12 @@ use pdfbull::app;
 use pdfbull::platform;
 
 fn main() -> iced::Result {
+    if std::env::var("WGPU_BACKEND").is_err() {
+        unsafe {
+            std::env::set_var("WGPU_BACKEND", "vulkan");
+        }
+    }
+
     tracing_subscriber::fmt()
         .with_env_filter(tracing_subscriber::EnvFilter::from_default_env())
         .init();

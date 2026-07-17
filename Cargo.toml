@@ -1,6 +1,6 @@
 [package]
 name = "pdfbull"
-version = "0.8.0"
+version = "0.8.1"
 description = "A lightweight PDF reader"
 authors = ["SV-stark"]
 edition = "2024"
@@ -12,7 +12,7 @@ repository = "https://github.com/SV-stark/PDFbull"
 [dependencies]
 iced = { version = "0.14", features = ["image", "svg", "canvas", "tokio", "advanced"] }
 iced_draggable_tabs = "0.1"
-zpdf = { version = "0.10", features = ["cpu-render"] }
+zpdf = { version = "0.10", features = ["cpu-render", "gpu-render"] }
 zpdf-render-cpu = "0.10"
 zpdf-render-wgpu = "0.10"
 tokio = { version = "1.0", features = ["full"] }
@@ -66,6 +66,12 @@ pedantic = { level = "warn", priority = -1 }
 nursery = { level = "warn", priority = -1 }
 
 # The profile that 'dist' will build with
+[profile.release]
+opt-level = 3
+lto = "fat"
+codegen-units = 1
+strip = true
+
 [profile.dist]
 inherits = "release"
 lto = "thin"
