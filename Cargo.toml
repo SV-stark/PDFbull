@@ -12,7 +12,7 @@ repository = "https://github.com/SV-stark/PDFbull"
 [dependencies]
 iced = { version = "0.14", features = ["image", "svg", "canvas", "tokio", "advanced"] }
 iced_draggable_tabs = "0.1"
-pdfium-render = { version = "0.9", features = ["thread_safe"] }
+zpdf = { version = "0.8", features = ["cpu-render"] }
 tokio = { version = "1.0", features = ["full"] }
 rfd = "0.14"
 zune-image = "0.4"
@@ -43,7 +43,7 @@ interprocess = { version = "2", features = ["tokio"] }
 crossbeam-channel = "0.5.15"
 
 [target.'cfg(windows)'.dependencies]
-winprint = { version = "0.2.0", features = ["pdfium"] }
+winprint = { version = "0.2.0", default-features = false }
 windows = { version = "0.62.2", features = ["Win32_UI_Shell", "Win32_System_Com", "Win32_Foundation"] }
 
 [dev-dependencies]

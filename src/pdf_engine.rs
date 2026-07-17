@@ -1,9 +1,8 @@
 use crate::models::{
     Annotation, AnnotationStyle, DocumentId, EngineErrorKind, FormField, FormFieldVariant,
-    Hyperlink, PdfError, PdfResult, SearchResultItem,
+    Hyperlink, PdfError, PdfResult, SearchResultItem, Bookmark,
 };
 use lopdf::{Document, Object, ObjectId};
-use pdfium_render::prelude::*;
 use quick_cache::{Weighter, sync::Cache};
 use rayon::prelude::*;
 use std::collections::HashMap;
@@ -11,6 +10,7 @@ use std::sync::Arc;
 use zune_image::codecs::png::PngEncoder;
 use zune_image::image::Image;
 use zune_image::traits::EncoderTrait;
+use zpdf::{ContentInterpreter, ImageCache, PdfDocument, cpu::CpuRenderer, spans_to_text};
 
 use crate::ui::theme::hex_to_rgb;
 
@@ -95,19 +95,17 @@ pub struct RenderOptions {
     pub quality: RenderQuality,
 }
 
-pub struct DocumentStore<'a> {
-    pdfium: &'a Pdfium,
-    documents: HashMap<DocumentId, PdfDocument<'a>>,
+pub struct DocumentStore {
+    documents: HashMap<DocumentId, PdfDocument>,
     paths: HashMap<DocumentId, String>,
     render_cache: SharedRenderCache,
 }
 
 // DocumentState wrapper removed as it was a single-field struct.
 
-impl<'a> DocumentStore<'a> {
-    pub fn new(pdfium: &'a Pdfium, cache: SharedRenderCache) -> Self {
+impl DocumentStore {
+    pub fn new(cache: SharedRenderCache) -> Self {
         Self {
-            pdfium,
             documents: HashMap::new(),
             paths: HashMap::new(),
             render_cache: cache,
@@ -123,20 +121,18 @@ impl<'a> DocumentStore<'a> {
         path: &str,
         doc_id: DocumentId,
     ) -> PdfResult<crate::models::OpenResult> {
-        let doc = self
-            .pdfium
-            .load_pdf_from_file(path, None)
-            .map_err(|e| PdfError::OpenFailed(e.to_string()))?;
+        let data = std::fs::read(path).map_err(|e| PdfError::OpenFailed(e.to_string()))?;
+        let doc = PdfDocument::open(data).map_err(|e| PdfError::OpenFailed(e.to_string()))?;
 
-        let pages = doc.pages();
-        let page_count = pages.len();
-        let mut heights = Vec::with_capacity(page_count as usize);
+        let page_count = doc.page_count();
+        let mut heights = Vec::with_capacity(page_count);
         let mut max_width = 0.0;
 
         for i in 0..page_count {
-            if let Ok(page) = pages.get(i) {
-                let w = page.width().value;
-                let h = page.height().value;
+            if let Ok(page) = doc.page(i) {
+                let rect = page.effective_box();
+                let w = rect.width() as f32;
+                let h = rect.height() as f32;
                 heights.push(h);
                 if w > max_width {
                     max_width = w;
@@ -151,7 +147,7 @@ impl<'a> DocumentStore<'a> {
 
         Ok(crate::models::OpenResult {
             id: doc_id,
-            page_count: page_count as usize,
+            page_count,
             page_heights: heights,
             max_width,
             outline: Vec::new(),
@@ -162,28 +158,24 @@ impl<'a> DocumentStore<'a> {
 
     fn extract_links_internal(&self, doc: &PdfDocument) -> Vec<Hyperlink> {
         let mut all_links = Vec::new();
-        let pages = doc.pages();
-        let page_count = pages.len();
+        let page_count = doc.page_count();
 
         for i in 0..page_count {
-            if let Ok(page) = pages.get(i) {
-                for link in page.links().iter() {
-                    if let Ok(rect) = link.rect() {
-                        let url = link
-                            .action()
-                            .and_then(|a| a.as_uri_action().and_then(|u| u.uri().ok()));
-                        let dest = link
-                            .destination()
-                            .and_then(|d| d.page_index().ok())
-                            .map(|idx| idx as usize);
+            if let Ok(page) = doc.page(i) {
+                let annots = doc.page_annotations(&page);
+                for annot in annots {
+                    if annot.subtype == "Link" {
+                        let rect = annot.rect;
+                        let url = annot.uri.clone();
+                        let dest = annot.dest.as_ref().and_then(|d| d.page);
                         if url.is_some() || dest.is_some() {
                             all_links.push(Hyperlink {
-                                page: i as usize,
+                                page: i,
                                 bounds: (
-                                    rect.left().value,
-                                    rect.bottom().value,
-                                    rect.width().value,
-                                    rect.height().value,
+                                    rect.x0 as f32,
+                                    rect.y0 as f32,
+                                    rect.width() as f32,
+                                    rect.height() as f32,
                                 ),
                                 url,
                                 destination_page: dest,
@@ -204,32 +196,20 @@ impl<'a> DocumentStore<'a> {
 
         let outline = self.get_outline_internal(doc);
         let links = self.extract_links_internal(doc);
-        let pdf_metadata = doc.metadata();
-        let metadata = crate::models::DocumentMetadata {
-            title: pdf_metadata
-                .get(PdfDocumentMetadataTagType::Title)
-                .map(|t| t.value().to_string()),
-            author: pdf_metadata
-                .get(PdfDocumentMetadataTagType::Author)
-                .map(|t| t.value().to_string()),
-            subject: pdf_metadata
-                .get(PdfDocumentMetadataTagType::Subject)
-                .map(|t| t.value().to_string()),
-            keywords: pdf_metadata
-                .get(PdfDocumentMetadataTagType::Keywords)
-                .map(|t| t.value().to_string()),
-            creator: pdf_metadata
-                .get(PdfDocumentMetadataTagType::Creator)
-                .map(|t| t.value().to_string()),
-            producer: pdf_metadata
-                .get(PdfDocumentMetadataTagType::Producer)
-                .map(|t| t.value().to_string()),
-            creation_date: pdf_metadata
-                .get(PdfDocumentMetadataTagType::CreationDate)
-                .map(|t| t.value().to_string()),
-            modification_date: pdf_metadata
-                .get(PdfDocumentMetadataTagType::ModificationDate)
-                .map(|t| t.value().to_string()),
+        
+        let metadata = if let Some(info) = doc.info() {
+            crate::models::DocumentMetadata {
+                title: info.title.clone(),
+                author: info.author.clone(),
+                subject: info.subject.clone(),
+                keywords: info.keywords.clone(),
+                creator: info.creator.clone(),
+                producer: info.producer.clone(),
+                creation_date: info.creation_date.clone(),
+                modification_date: info.mod_date.clone(),
+            }
+        } else {
+            crate::models::DocumentMetadata::default()
         };
 
         Ok(crate::models::DocumentMeta {
@@ -285,49 +265,31 @@ impl<'a> DocumentStore<'a> {
             .documents
             .get(&doc_id)
             .ok_or(PdfError::EngineError(EngineErrorKind::DocumentNotFound))?;
-        let page_num_i32 = i32::try_from(page_num).map_err(|_| PdfError::PageNotFound(page_num))?;
-        let page = doc
-            .pages()
-            .get(page_num_i32)
-            .map_err(|_| PdfError::PageNotFound(page_num))?;
+        let page = doc.page(page_num).map_err(|_| PdfError::PageNotFound(page_num))?;
 
-        let mut target_w = (page.width().value * options.scale) as i32;
-        let mut target_h = (page.height().value * options.scale) as i32;
+        let mut fonts = doc.load_page_fonts(&page);
+        let mut images = ImageCache::new();
+        let content = doc.page_content_bytes(&page).map_err(|e| PdfError::RenderFailed(e.to_string()))?;
 
-        if !is_thumbnail && (target_w > MAX_RENDER_DIM || target_h > MAX_RENDER_DIM) {
-            let scale_factor = MAX_RENDER_DIM as f32 / (target_w.max(target_h) as f32);
-            target_w = (target_w as f32 * scale_factor) as i32;
-            target_h = (target_h as f32 * scale_factor) as i32;
-        }
+        // Incorporate custom option rotation into the display list rotation
+        let display_list = ContentInterpreter::new(page.effective_box())
+            .with_page_rotation(page.rotate + options.rotation)
+            .with_fonts(&mut fonts)
+            .with_document(doc.file(), &page.resources)
+            .with_images(&mut images)
+            .interpret(&content);
 
-        let mut render_config = PdfRenderConfig::new()
-            .set_target_width(target_w)
-            .set_maximum_height(target_h)
-            .use_lcd_text_rendering(!is_thumbnail)
-            .rotate(
-                match options.rotation {
-                    90 => PdfPageRenderRotation::Degrees90,
-                    180 => PdfPageRenderRotation::Degrees180,
-                    270 => PdfPageRenderRotation::Degrees270,
-                    _ => PdfPageRenderRotation::None,
-                },
-                false,
-            );
-
-        if is_thumbnail {
-            render_config = render_config.clear_before_rendering(true);
-        }
-
-        let bitmap = page
-            .render_with_config(&render_config)
+        let mut renderer = CpuRenderer::new()
+            .with_fonts(&fonts)
+            .with_images(&images);
+        let page_img = renderer
+            .render_display_list(&display_list, options.scale)
             .map_err(|e| PdfError::RenderFailed(e.to_string()))?;
-        let w = bitmap.width() as u32;
-        let h = bitmap.height() as u32;
+        let w = page_img.width;
+        let h = page_img.height;
 
-        // Base (unfiltered) pixels are cached so that switching filters or
-        // re-displaying a page never re-renders from PDFium.
         let (final_w, final_h, final_data) = if !is_thumbnail && options.auto_crop {
-            let mut result_data = bitmap.as_rgba_bytes().to_vec();
+            let mut result_data = page_img.data;
 
             if let Some((x1, y1, x2, y2)) = Self::detect_content_bbox_parallel(&result_data, w, h) {
                 let crop_w = (x2 - x1) + 1;
@@ -343,7 +305,7 @@ impl<'a> DocumentStore<'a> {
                 (w, h, result_data)
             }
         } else {
-            (w, h, bitmap.as_rgba_bytes().to_vec())
+            (w, h, page_img.data)
         };
 
         let base = crate::models::RenderResult {
@@ -391,13 +353,23 @@ impl<'a> DocumentStore<'a> {
             .get(&doc_id)
             .ok_or(PdfError::EngineError(EngineErrorKind::DocumentNotFound))?;
         let page = doc
-            .pages()
-            .get(page_num as i32)
+            .page(page_num as usize)
             .map_err(|_| PdfError::PageNotFound(page_num as usize))?;
-        let text_page = page
-            .text()
-            .map_err(|e| PdfError::SearchError(e.to_string()))?;
-        Ok(text_page.all())
+        let mut fonts = doc.load_page_fonts(&page);
+        let mut images = ImageCache::new();
+        let content = doc.page_content_bytes(&page).map_err(|e| PdfError::SearchError(e.to_string()))?;
+
+        let mut spans = Vec::new();
+        {
+            let interp = ContentInterpreter::new(page.effective_box())
+                .with_fonts(&mut fonts)
+                .with_document(doc.file(), &page.resources)
+                .with_images(&mut images)
+                .with_text_sink(&mut spans);
+            let _ = interp.interpret(&content);
+        }
+        let text = spans_to_text(spans, 2.0);
+        Ok(text)
     }
 
     pub fn extract_text_items(
@@ -410,65 +382,36 @@ impl<'a> DocumentStore<'a> {
             .get(&doc_id)
             .ok_or(PdfError::EngineError(EngineErrorKind::DocumentNotFound))?;
         let page = doc
-            .pages()
-            .get(page_num as i32)
+            .page(page_num)
             .map_err(|_| PdfError::PageNotFound(page_num))?;
+        let mut fonts = doc.load_page_fonts(&page);
+        let mut images = ImageCache::new();
+        let content = doc.page_content_bytes(&page).map_err(|e| PdfError::SearchError(e.to_string()))?;
 
-        let mut text_items = Vec::new();
-        if let Ok(text_page) = page.text() {
-            let page_height = page.height().value;
-            let mut current_word = String::new();
-            let mut word_rect: Option<PdfRect> = None;
-
-            for char_obj in text_page.chars().iter() {
-                let Some(c) = char_obj.unicode_string() else {
-                    continue;
-                };
-                let Ok(bounds) = char_obj.loose_bounds() else {
-                    continue;
-                };
-
-                if c.trim().is_empty() {
-                    if !current_word.is_empty() {
-                        if let Some(rect) = word_rect {
-                            text_items.push(crate::models::TextItem {
-                                text: current_word.clone(),
-                                x: rect.left().value,
-                                y: page_height - rect.top().value,
-                                width: (rect.right().value - rect.left().value).abs(),
-                                height: (rect.top().value - rect.bottom().value).abs(),
-                            });
-                        }
-                        current_word.clear();
-                        word_rect = None;
-                    }
-                } else {
-                    current_word.push_str(&c);
-                    if let Some(rect) = word_rect {
-                        word_rect = Some(PdfRect::new(
-                            rect.bottom().min(bounds.bottom()),
-                            rect.left().min(bounds.left()),
-                            rect.top().max(bounds.top()),
-                            rect.right().max(bounds.right()),
-                        ));
-                    } else {
-                        word_rect = Some(bounds);
-                    }
-                }
-            }
-            if !current_word.is_empty()
-                && let Some(rect) = word_rect
-            {
-                text_items.push(crate::models::TextItem {
-                    text: current_word,
-                    x: rect.left().value,
-                    y: page_height - rect.top().value,
-                    width: (rect.right().value - rect.left().value).abs(),
-                    height: (rect.top().value - rect.bottom().value).abs(),
-                });
-            }
+        let mut spans = Vec::new();
+        {
+            let interp = ContentInterpreter::new(page.effective_box())
+                .with_fonts(&mut fonts)
+                .with_document(doc.file(), &page.resources)
+                .with_images(&mut images)
+                .with_text_sink(&mut spans);
+            let _ = interp.interpret(&content);
         }
 
+        let page_height = page.effective_box().height() as f32;
+        let mut text_items = Vec::new();
+        for span in spans {
+            if span.text.trim().is_empty() {
+                continue;
+            }
+            text_items.push(crate::models::TextItem {
+                text: span.text,
+                x: span.x as f32,
+                y: page_height - span.y as f32,
+                width: span.advance.abs() as f32,
+                height: span.size,
+            });
+        }
         Ok(text_items)
     }
 
@@ -483,322 +426,255 @@ impl<'a> DocumentStore<'a> {
             .paths
             .get(&doc_id)
             .ok_or(PdfError::EngineError(EngineErrorKind::DocumentPathNotFound))?;
-        let doc = self
-            .documents
-            .get_mut(&doc_id)
-            .ok_or(PdfError::EngineError(EngineErrorKind::DocumentNotFound))?;
 
+        let mut doc = Document::load(pdf_path)
+            .map_err(|e| PdfError::OpenFailed(e.to_string()))?;
+
+        // Group annotations by page
+        let mut page_annots: HashMap<usize, Vec<&Annotation>> = HashMap::new();
         for ann in annotations {
-            let page_num_i32 =
-                i32::try_from(ann.page).map_err(|_| PdfError::PageNotFound(ann.page))?;
-            let mut page = doc
-                .pages()
-                .get(page_num_i32)
-                .map_err(|_| PdfError::PageNotFound(ann.page))?;
-            let page_height = page.height().value;
-            let objects = page.objects_mut();
+            page_annots.entry(ann.page).or_default().push(ann);
+        }
 
-            // PDF coordinates start from bottom-left.
-            // UI coordinates start from top-left.
-            let rect = PdfRect::new(
-                PdfPoints::new(page_height - (ann.y + ann.height)),
-                PdfPoints::new(ann.x),
-                PdfPoints::new(page_height - ann.y),
-                PdfPoints::new(ann.x + ann.width),
-            );
+        // Get the page object IDs in the document
+        let pages = doc.get_pages();
 
-            match &ann.style {
-                AnnotationStyle::Highlight { color } => {
-                    let mut annot = page
-                        .annotations_mut()
-                        .create_highlight_annotation()
-                        .map_err(|e| PdfError::RenderFailed(e.to_string()))?;
-                    annot
-                        .set_bounds(rect)
-                        .map_err(|e| PdfError::RenderFailed(e.to_string()))?;
-                    let (r, g, b) = hex_to_rgb(color);
-                    annot
-                        .set_stroke_color(PdfColor::new(
-                            (r * 255.0) as u8,
-                            (g * 255.0) as u8,
-                            (b * 255.0) as u8,
-                            255,
-                        ))
-                        .map_err(|e| PdfError::RenderFailed(e.to_string()))?;
+        for (page_idx, annotations) in page_annots {
+            let page_key = (page_idx + 1) as u32;
+            let Some(&page_id) = pages.get(&page_key) else {
+                continue;
+            };
+
+            let page_height = {
+                if let Some(doc_ref) = self.documents.get(&doc_id) {
+                    if let Ok(p) = doc_ref.page(page_idx) {
+                        p.effective_box().height()
+                    } else {
+                        792.0
+                    }
+                } else {
+                    792.0
                 }
-                AnnotationStyle::Rectangle {
-                    color,
-                    thickness: _,
-                    fill,
-                } => {
-                    let mut annot = page
-                        .annotations_mut()
-                        .create_square_annotation()
-                        .map_err(|e| PdfError::RenderFailed(e.to_string()))?;
-                    annot
-                        .set_bounds(rect)
-                        .map_err(|e| PdfError::RenderFailed(e.to_string()))?;
-                    let (r, g, b) = hex_to_rgb(color);
-                    annot
-                        .set_stroke_color(PdfColor::new(
-                            (r * 255.0) as u8,
-                            (g * 255.0) as u8,
-                            (b * 255.0) as u8,
-                            255,
-                        ))
-                        .map_err(|e| PdfError::RenderFailed(e.to_string()))?;
-                    if *fill {
-                        annot
-                            .set_fill_color(PdfColor::new(
-                                (r * 255.0) as u8,
-                                (g * 255.0) as u8,
-                                (b * 255.0) as u8,
-                                50,
-                            ))
-                            .map_err(|e| PdfError::RenderFailed(e.to_string()))?;
+            };
+
+            let mut annot_refs = Vec::new();
+
+            for ann in annotations {
+                let pdf_x = ann.x as f64;
+                let pdf_w = ann.width as f64;
+                let pdf_h = ann.height as f64;
+                let pdf_y = page_height - (ann.y as f64 + pdf_h);
+
+                let mut annot_dict = lopdf::Dictionary::new();
+                annot_dict.set("Type", Object::Name(b"Annot".to_vec()));
+
+                match &ann.style {
+                    AnnotationStyle::Highlight { color } => {
+                        let (r, g, b) = hex_to_rgb(color);
+                        annot_dict.set("Subtype", Object::Name(b"Highlight".to_vec()));
+                        annot_dict.set("Rect", Object::Array(vec![
+                            Object::Real(pdf_x),
+                            Object::Real(pdf_y),
+                            Object::Real(pdf_x + pdf_w),
+                            Object::Real(pdf_y + pdf_h),
+                        ]));
+                        annot_dict.set("C", Object::Array(vec![
+                            Object::Real(r as f64),
+                            Object::Real(g as f64),
+                            Object::Real(b as f64),
+                        ]));
+                        annot_dict.set("QuadPoints", Object::Array(vec![
+                            Object::Real(pdf_x), Object::Real(pdf_y + pdf_h),
+                            Object::Real(pdf_x + pdf_w), Object::Real(pdf_y + pdf_h),
+                            Object::Real(pdf_x), Object::Real(pdf_y),
+                            Object::Real(pdf_x + pdf_w), Object::Real(pdf_y),
+                        ]));
+                    }
+                    AnnotationStyle::Rectangle { color, fill, .. } => {
+                        let (r, g, b) = hex_to_rgb(color);
+                        annot_dict.set("Subtype", Object::Name(b"Square".to_vec()));
+                        annot_dict.set("Rect", Object::Array(vec![
+                            Object::Real(pdf_x),
+                            Object::Real(pdf_y),
+                            Object::Real(pdf_x + pdf_w),
+                            Object::Real(pdf_y + pdf_h),
+                        ]));
+                        annot_dict.set("C", Object::Array(vec![
+                            Object::Real(r as f64),
+                            Object::Real(g as f64),
+                            Object::Real(b as f64),
+                        ]));
+                        if *fill {
+                            annot_dict.set("IC", Object::Array(vec![
+                                Object::Real(r as f64),
+                                Object::Real(g as f64),
+                                Object::Real(b as f64),
+                            ]));
+                        }
+                    }
+                    AnnotationStyle::Circle { color, fill, .. } => {
+                        let (r, g, b) = hex_to_rgb(color);
+                        annot_dict.set("Subtype", Object::Name(b"Circle".to_vec()));
+                        annot_dict.set("Rect", Object::Array(vec![
+                            Object::Real(pdf_x),
+                            Object::Real(pdf_y),
+                            Object::Real(pdf_x + pdf_w),
+                            Object::Real(pdf_y + pdf_h),
+                        ]));
+                        annot_dict.set("C", Object::Array(vec![
+                            Object::Real(r as f64),
+                            Object::Real(g as f64),
+                            Object::Real(b as f64),
+                        ]));
+                        if *fill {
+                            annot_dict.set("IC", Object::Array(vec![
+                                Object::Real(r as f64),
+                                Object::Real(g as f64),
+                                Object::Real(b as f64),
+                            ]));
+                        }
+                    }
+                    AnnotationStyle::Text { text, color, .. } => {
+                        let (r, g, b) = hex_to_rgb(color);
+                        annot_dict.set("Subtype", Object::Name(b"FreeText".to_vec()));
+                        annot_dict.set("Rect", Object::Array(vec![
+                            Object::Real(pdf_x),
+                            Object::Real(pdf_y),
+                            Object::Real(pdf_x + pdf_w),
+                            Object::Real(pdf_y + pdf_h),
+                        ]));
+                        annot_dict.set("Contents", Object::string_literal(text.clone()));
+                        annot_dict.set("C", Object::Array(vec![
+                            Object::Real(r as f64),
+                            Object::Real(g as f64),
+                            Object::Real(b as f64),
+                        ]));
+                    }
+                    AnnotationStyle::StickyNote { comment, color } => {
+                        let (r, g, b) = hex_to_rgb(color);
+                        annot_dict.set("Subtype", Object::Name(b"Text".to_vec()));
+                        annot_dict.set("Rect", Object::Array(vec![
+                            Object::Real(pdf_x),
+                            Object::Real(pdf_y),
+                            Object::Real(pdf_x + 30.0),
+                            Object::Real(pdf_y + 30.0),
+                        ]));
+                        annot_dict.set("Contents", Object::string_literal(comment.clone()));
+                        annot_dict.set("C", Object::Array(vec![
+                            Object::Real(r as f64),
+                            Object::Real(g as f64),
+                            Object::Real(b as f64),
+                        ]));
+                    }
+                    AnnotationStyle::Redact { color } => {
+                        let (r, g, b) = hex_to_rgb(color);
+                        annot_dict.set("Subtype", Object::Name(b"Square".to_vec()));
+                        annot_dict.set("Rect", Object::Array(vec![
+                            Object::Real(pdf_x),
+                            Object::Real(pdf_y),
+                            Object::Real(pdf_x + pdf_w),
+                            Object::Real(pdf_y + pdf_h),
+                        ]));
+                        annot_dict.set("C", Object::Array(vec![
+                            Object::Real(r as f64),
+                            Object::Real(g as f64),
+                            Object::Real(b as f64),
+                        ]));
+                        annot_dict.set("IC", Object::Array(vec![
+                            Object::Real(r as f64),
+                            Object::Real(g as f64),
+                            Object::Real(b as f64),
+                        ]));
+                    }
+                    AnnotationStyle::Line { color, thickness } => {
+                        let (r, g, b) = hex_to_rgb(color);
+                        annot_dict.set("Subtype", Object::Name(b"Line".to_vec()));
+                        annot_dict.set("Rect", Object::Array(vec![
+                            Object::Real(pdf_x.min(pdf_x + pdf_w)),
+                            Object::Real(pdf_y.min(pdf_y + pdf_h)),
+                            Object::Real(pdf_x.max(pdf_x + pdf_w)),
+                            Object::Real(pdf_y.max(pdf_y + pdf_h)),
+                        ]));
+                        let x1 = ann.x as f64;
+                        let y1 = page_height - ann.y as f64;
+                        let x2 = (ann.x + ann.width) as f64;
+                        let y2 = page_height - (ann.y + ann.height) as f64;
+                        annot_dict.set("L", Object::Array(vec![
+                            Object::Real(x1),
+                            Object::Real(y1),
+                            Object::Real(x2),
+                            Object::Real(y2),
+                        ]));
+                        annot_dict.set("C", Object::Array(vec![
+                            Object::Real(r as f64),
+                            Object::Real(g as f64),
+                            Object::Real(b as f64),
+                        ]));
+                        let border = lopdf::Dictionary::from_iter(vec![
+                            ("W", Object::Real(*thickness as f64)),
+                        ]);
+                        annot_dict.set("BS", Object::Dictionary(border));
+                    }
+                    AnnotationStyle::Arrow { color, thickness } => {
+                        let (r, g, b) = hex_to_rgb(color);
+                        annot_dict.set("Subtype", Object::Name(b"Line".to_vec()));
+                        annot_dict.set("Rect", Object::Array(vec![
+                            Object::Real(pdf_x.min(pdf_x + pdf_w)),
+                            Object::Real(pdf_y.min(pdf_y + pdf_h)),
+                            Object::Real(pdf_x.max(pdf_x + pdf_w)),
+                            Object::Real(pdf_y.max(pdf_y + pdf_h)),
+                        ]));
+                        let x1 = ann.x as f64;
+                        let y1 = page_height - ann.y as f64;
+                        let x2 = (ann.x + ann.width) as f64;
+                        let y2 = page_height - (ann.y + ann.height) as f64;
+                        annot_dict.set("L", Object::Array(vec![
+                            Object::Real(x1),
+                            Object::Real(y1),
+                            Object::Real(x2),
+                            Object::Real(y2),
+                        ]));
+                        annot_dict.set("C", Object::Array(vec![
+                            Object::Real(r as f64),
+                            Object::Real(g as f64),
+                            Object::Real(b as f64),
+                        ]));
+                        annot_dict.set("LE", Object::Array(vec![
+                            Object::Name(b"None".to_vec()),
+                            Object::Name(b"ClosedArrow".to_vec()),
+                        ]));
+                        let border = lopdf::Dictionary::from_iter(vec![
+                            ("W", Object::Real(*thickness as f64)),
+                        ]);
+                        annot_dict.set("BS", Object::Dictionary(border));
                     }
                 }
-                AnnotationStyle::Text {
-                    text,
-                    color,
-                    font_size: _,
-                } => {
-                    let mut annot = page
-                        .annotations_mut()
-                        .create_free_text_annotation(text)
-                        .map_err(|e| PdfError::RenderFailed(e.to_string()))?;
-                    annot
-                        .set_bounds(rect)
-                        .map_err(|e| PdfError::RenderFailed(e.to_string()))?;
-                    let (r, g, b) = hex_to_rgb(color);
-                    annot
-                        .set_stroke_color(PdfColor::new(
-                            (r * 255.0) as u8,
-                            (g * 255.0) as u8,
-                            (b * 255.0) as u8,
-                            255,
-                        ))
-                        .map_err(|e| PdfError::RenderFailed(e.to_string()))?;
-                }
-                AnnotationStyle::Redact { color } => {
-                    let (r, g, b) = hex_to_rgb(color);
 
-                    // Real Redaction & Sanitization:
-                    // 1. Identify and remove matching page objects one-by-one, fresh-loading page each time to prevent index discrepancies.
-                    loop {
-                        let mut p = doc
-                            .pages()
-                            .get(page_num_i32)
-                            .map_err(|_| PdfError::PageNotFound(ann.page))?;
-                        let objs = p.objects_mut();
-                        let mut index_to_remove = None;
+                let annot_id = doc.add_object(Object::Dictionary(annot_dict));
+                annot_refs.push(Object::Reference(annot_id));
+            }
 
-                        for idx in 0..objs.len() {
-                            if let Ok(obj) = objs.get(idx) {
-                                let obj_type = obj.object_type();
-                                if matches!(
-                                    obj_type,
-                                    PdfPageObjectType::Text
-                                        | PdfPageObjectType::Image
-                                        | PdfPageObjectType::Path
-                                ) {
-                                    if let Ok(obj_bounds) = obj.bounds() {
-                                        // AABB overlap check between redaction rect and page object bounds
-                                        let overlap_x = rect.left().value
-                                            < obj_bounds.right().value
-                                            && rect.right().value > obj_bounds.left().value;
-                                        let overlap_y = rect.bottom().value
-                                            < obj_bounds.top().value
-                                            && rect.top().value > obj_bounds.bottom().value;
-                                        if overlap_x && overlap_y {
-                                            index_to_remove = Some(idx);
-                                            break;
-                                        }
-                                    }
-                                }
+            if let Some(Object::Dictionary(ref mut page_dict)) = doc.objects.get_mut(&page_id) {
+                if let Ok(annots_obj) = page_dict.get(b"Annots") {
+                    let mut annots_resolved = match annots_obj {
+                        Object::Reference(r) => {
+                            if let Ok(Object::Array(arr)) = doc.objects.get(r) {
+                                arr.clone()
+                            } else {
+                                Vec::new()
                             }
                         }
-
-                        if let Some(idx) = index_to_remove {
-                            let mut p = doc
-                                .pages()
-                                .get(page_num_i32)
-                                .map_err(|_| PdfError::PageNotFound(ann.page))?;
-                            let _ = p.objects_mut().remove_object_at_index(idx);
-                        } else {
-                            break;
-                        }
-                    }
-
-                    // Explicitly regenerate the page content to commit changes and safely free PDFium resources
-                    let mut p = doc
-                        .pages()
-                        .get(page_num_i32)
-                        .map_err(|_| PdfError::PageNotFound(ann.page))?;
-                    p.regenerate_content()
-                        .map_err(|e| PdfError::RenderFailed(e.to_string()))?;
-
-                    // 2. Draw a solid visual block over the sanitized space
-                    let mut p = doc
-                        .pages()
-                        .get(page_num_i32)
-                        .map_err(|_| PdfError::PageNotFound(ann.page))?;
-                    p.objects_mut()
-                        .create_path_object_rect(
-                            rect,
-                            None,
-                            None,
-                            Some(PdfColor::new(
-                                (r * 255.0) as u8,
-                                (g * 255.0) as u8,
-                                (b * 255.0) as u8,
-                                255, // Solid
-                            )),
-                        )
-                        .map_err(|e| PdfError::RenderFailed(e.to_string()))?;
-                }
-                AnnotationStyle::Circle {
-                    color,
-                    thickness: _,
-                    fill,
-                } => {
-                    let mut annot = page
-                        .annotations_mut()
-                        .create_square_annotation()
-                        .map_err(|e| PdfError::RenderFailed(e.to_string()))?;
-                    annot
-                        .set_bounds(rect)
-                        .map_err(|e| PdfError::RenderFailed(e.to_string()))?;
-                    let (r, g, b) = hex_to_rgb(color);
-                    annot
-                        .set_stroke_color(PdfColor::new(
-                            (r * 255.0) as u8,
-                            (g * 255.0) as u8,
-                            (b * 255.0) as u8,
-                            255,
-                        ))
-                        .map_err(|e| PdfError::RenderFailed(e.to_string()))?;
-                    if *fill {
-                        annot
-                            .set_fill_color(PdfColor::new(
-                                (r * 255.0) as u8,
-                                (g * 255.0) as u8,
-                                (b * 255.0) as u8,
-                                50,
-                            ))
-                            .map_err(|e| PdfError::RenderFailed(e.to_string()))?;
-                    }
-                }
-                AnnotationStyle::Line { color, thickness } => {
-                    let (r, g, b) = hex_to_rgb(color);
-                    let x1 = PdfPoints::new(ann.x);
-                    let y1 = PdfPoints::new(page_height - ann.y);
-                    let x2 = PdfPoints::new(ann.x + ann.width);
-                    let y2 = PdfPoints::new(page_height - (ann.y + ann.height));
-
-                    objects
-                        .create_path_object_line(
-                            x1,
-                            y1,
-                            x2,
-                            y2,
-                            PdfColor::new(
-                                (r * 255.0) as u8,
-                                (g * 255.0) as u8,
-                                (b * 255.0) as u8,
-                                255,
-                            ),
-                            PdfPoints::new(*thickness),
-                        )
-                        .map_err(|e| PdfError::RenderFailed(e.to_string()))?;
-                }
-                AnnotationStyle::Arrow { color, thickness } => {
-                    let (r, g, b) = hex_to_rgb(color);
-                    let color_obj =
-                        PdfColor::new((r * 255.0) as u8, (g * 255.0) as u8, (b * 255.0) as u8, 255);
-                    let x1 = ann.x;
-                    let y1 = page_height - ann.y;
-                    let x2 = ann.x + ann.width;
-                    let y2 = page_height - (ann.y + ann.height);
-
-                    // 1. Draw shaft
-                    objects
-                        .create_path_object_line(
-                            PdfPoints::new(x1),
-                            PdfPoints::new(y1),
-                            PdfPoints::new(x2),
-                            PdfPoints::new(y2),
-                            color_obj,
-                            PdfPoints::new(*thickness),
-                        )
-                        .map_err(|e| PdfError::RenderFailed(e.to_string()))?;
-
-                    // 2. Calculate arrowhead math
-                    let dx = x2 - x1;
-                    let dy = y2 - y1;
-                    let len = dx.hypot(dy);
-                    if len > 0.001 {
-                        let ux = dx / len;
-                        let uy = dy / len;
-
-                        let wing_len = 10.0 + thickness * 2.0;
-                        let cos_30 = 0.866;
-                        let sin_30 = 0.500;
-
-                        // Wing 1 vector
-                        let w1_x = x2 - wing_len * (ux * cos_30 + uy * sin_30);
-                        let w1_y = y2 - wing_len * (uy * cos_30 - ux * sin_30);
-
-                        // Wing 2 vector
-                        let w2_x = x2 - wing_len * (ux * cos_30 - uy * sin_30);
-                        let w2_y = y2 - wing_len * (uy * cos_30 + ux * sin_30);
-
-                        // Draw wings
-                        objects
-                            .create_path_object_line(
-                                PdfPoints::new(x2),
-                                PdfPoints::new(y2),
-                                PdfPoints::new(w1_x),
-                                PdfPoints::new(w1_y),
-                                color_obj,
-                                PdfPoints::new(*thickness),
-                            )
-                            .map_err(|e| PdfError::RenderFailed(e.to_string()))?;
-
-                        objects
-                            .create_path_object_line(
-                                PdfPoints::new(x2),
-                                PdfPoints::new(y2),
-                                PdfPoints::new(w2_x),
-                                PdfPoints::new(w2_y),
-                                color_obj,
-                                PdfPoints::new(*thickness),
-                            )
-                            .map_err(|e| PdfError::RenderFailed(e.to_string()))?;
-                    }
-                }
-                AnnotationStyle::StickyNote { comment, color } => {
-                    let mut annot = page
-                        .annotations_mut()
-                        .create_text_annotation(comment)
-                        .map_err(|e| PdfError::RenderFailed(e.to_string()))?;
-                    annot
-                        .set_bounds(rect)
-                        .map_err(|e| PdfError::RenderFailed(e.to_string()))?;
-                    let (r, g, b) = hex_to_rgb(color);
-                    annot
-                        .set_stroke_color(PdfColor::new(
-                            (r * 255.0) as u8,
-                            (g * 255.0) as u8,
-                            (b * 255.0) as u8,
-                            255,
-                        ))
-                        .map_err(|e| PdfError::RenderFailed(e.to_string()))?;
+                        Object::Array(arr) => arr.clone(),
+                        _ => Vec::new(),
+                    };
+                    annots_resolved.extend(annot_refs);
+                    page_dict.set("Annots", Object::Array(annots_resolved));
+                } else {
+                    page_dict.set("Annots", Object::Array(annot_refs));
                 }
             }
-            page.regenerate_content()
-                .map_err(|e| PdfError::RenderFailed(e.to_string()))?;
         }
+
         let pdf_path_buf = std::path::Path::new(pdf_path);
         let final_path = output_path.unwrap_or_else(|| {
             let mut p = pdf_path_buf.to_path_buf();
@@ -809,8 +685,10 @@ impl<'a> DocumentStore<'a> {
             p.set_file_name(format!("{stem}_annotated.pdf"));
             p.to_string_lossy().to_string()
         });
-        doc.save_to_file(&final_path)
+
+        doc.save(&final_path)
             .map_err(|e| PdfError::IoError(e.to_string()))?;
+
         Ok(final_path)
     }
 
@@ -824,26 +702,32 @@ impl<'a> DocumentStore<'a> {
             .documents
             .get(&doc_id)
             .ok_or(PdfError::EngineError(EngineErrorKind::DocumentNotFound))?;
-        let page_num_i32 =
-            i32::try_from(page_num).map_err(|_| PdfError::PageNotFound(page_num as usize))?;
         let page = doc
-            .pages()
-            .get(page_num_i32)
+            .page(page_num as usize)
             .map_err(|_| PdfError::PageNotFound(page_num as usize))?;
 
-        let render_config = PdfRenderConfig::new()
-            .set_target_width((page.width().value * scale) as i32)
-            .set_maximum_height((page.height().value * scale) as i32)
-            .use_lcd_text_rendering(true);
+        let mut fonts = doc.load_page_fonts(&page);
+        let mut images = ImageCache::new();
+        let content = doc.page_content_bytes(&page).map_err(|e| PdfError::RenderFailed(e.to_string()))?;
 
-        let bitmap = page
-            .render_with_config(&render_config)
+        let display_list = ContentInterpreter::new(page.effective_box())
+            .with_page_rotation(page.rotate)
+            .with_fonts(&mut fonts)
+            .with_document(doc.file(), &page.resources)
+            .with_images(&mut images)
+            .interpret(&content);
+
+        let mut renderer = CpuRenderer::new()
+            .with_fonts(&fonts)
+            .with_images(&images);
+        let page_img = renderer
+            .render_display_list(&display_list, scale)
             .map_err(|e| PdfError::RenderFailed(e.to_string()))?;
-        let width = bitmap.width() as usize;
-        let height = bitmap.height() as usize;
+        let width = page_img.width as usize;
+        let height = page_img.height as usize;
 
         let image = Image::from_u8(
-            &bitmap.as_rgba_bytes(),
+            &page_img.data,
             width,
             height,
             zune_core::colorspace::ColorSpace::RGBA,
@@ -856,19 +740,21 @@ impl<'a> DocumentStore<'a> {
         Ok(out_buf)
     }
 
+    fn flatten_outline(items: &[zpdf::OutlineItem], out: &mut Vec<Bookmark>) {
+        for item in items {
+            let page_idx = item.dest.as_ref().and_then(|d| d.page).unwrap_or(0);
+            out.push(Bookmark {
+                title: item.title.clone(),
+                page_index: page_idx as u16,
+            });
+            Self::flatten_outline(&item.children, out);
+        }
+    }
+
     pub fn get_outline_internal(&self, doc: &PdfDocument) -> Vec<Bookmark> {
-        doc.bookmarks()
-            .iter()
-            .filter_map(|b| {
-                b.title().map(|title| Bookmark {
-                    title,
-                    page_index: b
-                        .destination()
-                        .and_then(|d| d.page_index().ok())
-                        .unwrap_or(0) as u16,
-                })
-            })
-            .collect()
+        let mut bookmarks = Vec::new();
+        Self::flatten_outline(&doc.outline(), &mut bookmarks);
+        bookmarks
     }
 
     pub fn search(&self, doc_id: DocumentId, query: &str) -> PdfResult<Vec<SearchResultItem>> {
@@ -877,30 +763,56 @@ impl<'a> DocumentStore<'a> {
             .get(&doc_id)
             .ok_or(PdfError::EngineError(EngineErrorKind::DocumentNotFound))?;
         let mut results = Vec::new();
-        for (page_idx, page) in doc.pages().iter().enumerate() {
-            if let Ok(text) = page.text()
-                && let Ok(searcher) = text.search(query, &PdfSearchOptions::new())
+        let query_lower = query.to_lowercase();
+
+        for page_idx in 0..doc.page_count() {
+            let Ok(page) = doc.page(page_idx) else {
+                continue;
+            };
+            let mut fonts = doc.load_page_fonts(&page);
+            let mut images = ImageCache::new();
+            let Ok(content) = doc.page_content_bytes(&page) else {
+                continue;
+            };
+
+            let mut spans: Vec<zpdf::TextSpan> = Vec::new();
             {
-                for segments in searcher.iter(PdfSearchDirection::SearchForward) {
-                    let mut text_all = String::new();
-                    let mut first_rect = None;
-                    for segment in segments.iter() {
-                        if first_rect.is_none() {
-                            first_rect = Some(segment.bounds());
-                        }
-                        text_all.push_str(&segment.text());
-                    }
-                    if let Some(rect) = first_rect {
-                        results.push(SearchResultItem {
-                            page_index: page_idx,
-                            text: text_all,
-                            y: rect.bottom().value,
-                            x: rect.left().value,
-                            width: rect.width().value,
-                            height: rect.height().value,
-                        });
-                    }
+                let interp = ContentInterpreter::new(page.effective_box())
+                    .with_fonts(&mut fonts)
+                    .with_document(doc.file(), &page.resources)
+                    .with_images(&mut images)
+                    .with_text_sink(&mut spans);
+                let _ = interp.interpret(&content);
+            }
+
+            let mut full_text = String::new();
+            let mut span_offsets = Vec::new();
+
+            for (idx, span) in spans.iter().enumerate() {
+                let start = full_text.len();
+                full_text.push_str(&span.text);
+                let end = full_text.len();
+                span_offsets.push((start, end, idx));
+            }
+
+            let mut search_idx = 0;
+            while let Some(pos) = full_text.to_lowercase()[search_idx..].find(&query_lower) {
+                let match_start = search_idx + pos;
+                let match_end = match_start + query_lower.len();
+
+                if let Some(&(_, _, span_idx)) = span_offsets.iter().find(|(s, e, _)| match_start >= *s && match_start < *e) {
+                    let first_span = &spans[span_idx];
+                    results.push(SearchResultItem {
+                        page_index: page_idx,
+                        text: full_text[match_start..match_end].to_string(),
+                        y: first_span.y as f32,
+                        x: first_span.x as f32,
+                        width: first_span.advance.abs() as f32,
+                        height: first_span.size,
+                    });
                 }
+
+                search_idx = match_start + 1;
             }
         }
         Ok(results)
@@ -1014,28 +926,69 @@ impl<'a> DocumentStore<'a> {
     // apply_filter_parallel removed as it was just a misleading wrapper.
 
     pub fn merge_documents(&self, paths: Vec<String>, output_path: String) -> PdfResult<String> {
-        let mut dest = self
-            .pdfium
-            .create_new_pdf()
-            .map_err(|e| PdfError::EngineError(e.to_string().into()))?;
+        let mut max_id = 1;
+        let mut documents = Vec::new();
 
         for path in paths {
-            let src = self
-                .pdfium
-                .load_pdf_from_file(&path, None)
+            let mut doc = Document::load(&path)
                 .map_err(|e| PdfError::OpenFailed(e.to_string()))?;
+            doc.renumber_objects_with(max_id);
+            max_id = doc.max_id + 1;
+            documents.push(doc);
+        }
 
-            let count = src.pages().len();
-            if count > 0 {
-                let dest_index = dest.pages().len();
-                dest.pages_mut()
-                    .copy_page_range_from_document(&src, 0..=(count - 1), dest_index)
-                    .map_err(|e| PdfError::EngineError(e.to_string().into()))?;
+        if documents.is_empty() {
+            return Err(PdfError::IoError("No documents to merge".into()));
+        }
+
+        let mut merged_doc = Document::with_version("1.5");
+        let mut merged_kids = Vec::new();
+        let mut merged_objects = std::collections::BTreeMap::new();
+
+        for doc in &documents {
+            merged_objects.extend(doc.objects.clone());
+            let pages = doc.get_pages();
+            for (_, page_id) in pages {
+                merged_kids.push(Object::Reference(page_id));
             }
         }
 
-        dest.save_to_file(&output_path)
+        let pages_id = max_id;
+        max_id += 1;
+        
+        let count = merged_kids.len() as i32;
+        let pages_dict = lopdf::Dictionary::from_iter(vec![
+            ("Type", Object::Name(b"Pages".to_vec())),
+            ("Count", Object::Integer(count as i64)),
+            ("Kids", Object::Array(merged_kids)),
+        ]);
+        merged_objects.insert((pages_id, 0), Object::Dictionary(pages_dict));
+
+        let catalog_id = max_id;
+        max_id += 1;
+        let catalog_dict = lopdf::Dictionary::from_iter(vec![
+            ("Type", Object::Name(b"Catalog".to_vec())),
+            ("Pages", Object::Reference((pages_id, 0))),
+        ]);
+        merged_objects.insert((catalog_id, 0), Object::Dictionary(catalog_dict));
+
+        for doc in &documents {
+            let pages = doc.get_pages();
+            for (_, page_id) in pages {
+                if let Some(Object::Dictionary(ref mut dict)) = merged_objects.get_mut(&page_id) {
+                    dict.set("Parent", Object::Reference((pages_id, 0)));
+                }
+            }
+        }
+
+        merged_doc.objects = merged_objects;
+        merged_doc.trailer.set("Root", Object::Reference((catalog_id, 0)));
+        merged_doc.trailer.set("Size", max_id as i64);
+        merged_doc.max_id = max_id - 1;
+
+        merged_doc.save(&output_path)
             .map_err(|e| PdfError::IoError(e.to_string()))?;
+
         Ok(output_path)
     }
 
@@ -1045,22 +998,23 @@ impl<'a> DocumentStore<'a> {
         page_indices: Vec<usize>,
         output_dir: String,
     ) -> PdfResult<Vec<String>> {
-        let src = self
-            .pdfium
-            .load_pdf_from_file(path, None)
-            .map_err(|e| PdfError::OpenFailed(e.to_string()))?;
-
         let mut created_paths = Vec::new();
 
         for &page_idx in &page_indices {
-            let mut dest = self
-                .pdfium
-                .create_new_pdf()
-                .map_err(|e| PdfError::EngineError(e.to_string().into()))?;
+            let mut doc = Document::load(path)
+                .map_err(|e| PdfError::OpenFailed(e.to_string()))?;
 
-            dest.pages_mut()
-                .copy_page_range_from_document(&src, (page_idx as i32)..=(page_idx as i32), 0)
-                .map_err(|e| PdfError::EngineError(e.to_string().into()))?;
+            let page_count = doc.get_pages().len();
+            let keep_page_1_based = (page_idx + 1) as u32;
+
+            let mut to_delete = Vec::new();
+            for p in 1..=(page_count as u32) {
+                if p != keep_page_1_based {
+                    to_delete.push(p);
+                }
+            }
+
+            doc.delete_pages(&to_delete);
 
             let filename = std::path::Path::new(path)
                 .file_stem()
@@ -1068,7 +1022,7 @@ impl<'a> DocumentStore<'a> {
                 .unwrap_or("document");
 
             let out_path = format!("{}/{}_page_{}.pdf", output_dir, filename, page_idx + 1);
-            dest.save_to_file(&out_path)
+            doc.save(&out_path)
                 .map_err(|e| PdfError::IoError(e.to_string()))?;
             created_paths.push(out_path);
         }
@@ -1077,91 +1031,148 @@ impl<'a> DocumentStore<'a> {
     }
 
     pub fn get_form_fields(&mut self, path: &str) -> PdfResult<Vec<FormField>> {
-        if let Some(doc_id) = self
-            .paths
-            .iter()
-            .find(|(_, p)| *p == path)
-            .map(|(id, _)| *id)
-        {
-            let doc = self.documents.get(&doc_id).unwrap();
-            Ok(self.extract_form_fields_internal(doc))
-        } else {
-            // Load temporarily if not open
-            let doc = self
-                .pdfium
-                .load_pdf_from_file(path, None)
-                .map_err(|e| PdfError::OpenFailed(e.to_string()))?;
-            Ok(self.extract_form_fields_internal(&doc))
-        }
-    }
+        let data = std::fs::read(path).map_err(|e| PdfError::OpenFailed(e.to_string()))?;
+        let doc = PdfDocument::open(data).map_err(|e| PdfError::OpenFailed(e.to_string()))?;
 
-    fn extract_form_fields_internal(&self, doc: &PdfDocument) -> Vec<FormField> {
         let mut fields = Vec::new();
-        for (idx, page) in doc.pages().iter().enumerate() {
-            for annotation in page.annotations().iter() {
-                if let Some(form_field) = annotation.as_form_field() {
-                    let name = form_field.name().unwrap_or_default();
-                    let variant = match form_field.field_type() {
-                        PdfFormFieldType::Text => FormFieldVariant::Text {
-                            value: form_field
-                                .as_text_field()
-                                .and_then(pdfium_render::prelude::PdfFormTextField::value)
-                                .unwrap_or_default(),
-                        },
-                        PdfFormFieldType::Checkbox => FormFieldVariant::Checkbox {
-                            is_checked: form_field
-                                .as_checkbox_field()
-                                .map(|f| f.is_checked().unwrap_or(false))
-                                .unwrap_or(false),
-                        },
-                        PdfFormFieldType::RadioButton => FormFieldVariant::RadioButton {
-                            is_selected: form_field
-                                .as_radio_button_field()
-                                .map(|f| f.is_checked().unwrap_or(false))
-                                .unwrap_or(false),
-                            group_name: Some(name.clone()),
-                        },
-                        PdfFormFieldType::ComboBox | PdfFormFieldType::ListBox => {
-                            // pdfium-render exposes ComboBox and ListBox as separate typed fields.
-                            // Extract options from whichever variant is available.
-                            let (options, selected_index) =
-                                if let Some(combo) = form_field.as_combo_box_field() {
-                                    let opts: Vec<String> = combo
-                                        .options()
-                                        .iter()
-                                        .map(|o| o.label().cloned().unwrap_or_default())
-                                        .collect();
-                                    let sel = combo.options().iter().position(|o| o.is_set());
-                                    (opts, sel)
-                                } else if let Some(list) = form_field.as_list_box_field() {
-                                    let opts: Vec<String> = list
-                                        .options()
-                                        .iter()
-                                        .map(|o| o.label().cloned().unwrap_or_default())
-                                        .collect();
-                                    let sel = list.options().iter().position(|o| o.is_set());
-                                    (opts, sel)
-                                } else {
-                                    (Vec::new(), None)
-                                };
-                            FormFieldVariant::ComboBox {
-                                options,
-                                selected_index,
+        if let Some(acro) = doc.acro_form() {
+            for f in &acro.fields {
+                let name = f.name.clone();
+                let variant = match f.kind {
+                    zpdf::forms::FieldKind::Text => {
+                        let val = match &f.value {
+                            Some(zpdf::forms::FieldValue::Text(s)) => s.clone(),
+                            _ => String::new(),
+                        };
+                        FormFieldVariant::Text { value: val }
+                    }
+                    zpdf::forms::FieldKind::Button => {
+                        let is_checked = match &f.value {
+                            Some(zpdf::forms::FieldValue::Name(n)) => n != "Off",
+                            _ => false,
+                        };
+                        if f.flags & zpdf::forms::FF_RADIO != 0 {
+                            FormFieldVariant::RadioButton {
+                                is_selected: is_checked,
+                                group_name: Some(name.clone()),
+                            }
+                        } else {
+                            FormFieldVariant::Checkbox { is_checked }
+                        }
+                    }
+                    zpdf::forms::FieldKind::Choice => {
+                        let opts: Vec<String> = f.options.iter().map(|(_, label)| label.clone()).collect();
+                        let selected_val = match &f.value {
+                            Some(zpdf::forms::FieldValue::Text(s)) => Some(s.clone()),
+                            _ => None,
+                        };
+                        let selected_index = selected_val.and_then(|val| {
+                            f.options.iter().position(|(export, _)| *export == val)
+                        });
+                        FormFieldVariant::ComboBox {
+                            options: opts,
+                            selected_index,
+                        }
+                    }
+                    _ => FormFieldVariant::Text { value: String::new() },
+                };
+
+                let mut page_idx = 0;
+                if let Some(&widget_id) = f.widgets.first() {
+                    for i in 0..doc.page_count() {
+                        if let Ok(page) = doc.page(i) {
+                            if page.annots.contains(&widget_id) {
+                                page_idx = i;
+                                break;
                             }
                         }
-                        _ => FormFieldVariant::Text {
-                            value: "".to_string(),
-                        },
-                    };
-                    fields.push(FormField {
-                        name,
-                        variant,
-                        page: idx,
-                    });
+                    }
+                }
+
+                fields.push(FormField {
+                    name,
+                    variant,
+                    page: page_idx,
+                });
+            }
+        }
+        Ok(fields)
+    }
+
+    fn walk_lopdf_fields(
+        doc: &mut Document,
+        field_ref: ObjectId,
+        parent_name: &str,
+        updates: &[FormField],
+    ) {
+        let mut name = parent_name.to_string();
+        
+        let field_dict = match doc.get_object(field_ref) {
+            Ok(Object::Dictionary(ref dict)) => dict.clone(),
+            _ => return,
+        };
+
+        if let Ok(partial_name_obj) = field_dict.get(b"T") {
+            if let Ok(partial_name) = partial_name_obj.as_string() {
+                let partial_str = String::from_utf8_lossy(partial_name).into_owned();
+                if name.is_empty() {
+                    name = partial_str;
+                } else {
+                    name = format!("{name}.{partial_str}");
                 }
             }
         }
-        fields
+
+        if let Ok(kids_obj) = field_dict.get(b"Kids") {
+            if let Ok(kids_arr) = kids_obj.as_array() {
+                for kid in kids_arr {
+                    if let Ok(kid_ref) = kid.as_reference() {
+                        Self::walk_lopdf_fields(doc, kid_ref, &name, updates);
+                    }
+                }
+                return;
+            }
+        }
+
+        if let Some(update) = updates.iter().find(|u| u.name == name) {
+            if let Some(Object::Dictionary(ref mut dict)) = doc.objects.get_mut(&field_ref) {
+                match &update.variant {
+                    FormFieldVariant::Text { value } => {
+                        dict.set("V", Object::string_literal(value.clone()));
+                    }
+                    FormFieldVariant::Checkbox { is_checked } => {
+                        let name_val = if *is_checked { "Yes" } else { "Off" };
+                        dict.set("V", Object::Name(name_val.as_bytes().to_vec()));
+                        dict.set("AS", Object::Name(name_val.as_bytes().to_vec()));
+                    }
+                    FormFieldVariant::RadioButton { is_selected, .. } => {
+                        if *is_selected {
+                            dict.set("V", Object::Name(b"Yes".to_vec()));
+                            dict.set("AS", Object::Name(b"Yes".to_vec()));
+                        } else {
+                            dict.set("V", Object::Name(b"Off".to_vec()));
+                            dict.set("AS", Object::Name(b"Off".to_vec()));
+                        }
+                    }
+                    FormFieldVariant::ComboBox { selected_index, options } => {
+                        if let Some(idx) = selected_index {
+                            if let Some(opt_text) = options.get(*idx) {
+                                dict.set("V", Object::string_literal(opt_text.clone()));
+                            }
+                        }
+                    }
+                }
+                if let Ok(catalog_ref) = doc.catalog() {
+                    if let Ok(Object::Dictionary(ref mut catalog)) = doc.objects.get_mut(&catalog_ref) {
+                        if let Ok(Object::Reference(acro_ref)) = catalog.get(b"AcroForm") {
+                            if let Some(Object::Dictionary(ref mut acro)) = doc.objects.get_mut(&acro_ref) {
+                                acro.set("NeedAppearances", Object::Boolean(true));
+                            }
+                        }
+                    }
+                }
+            }
+        }
     }
 
     pub fn fill_form(
@@ -1170,57 +1181,21 @@ impl<'a> DocumentStore<'a> {
         updates: Vec<FormField>,
         output_path: String,
     ) -> PdfResult<String> {
-        let doc = self
-            .pdfium
-            .load_pdf_from_file(path, None)
+        let mut doc = Document::load(path)
             .map_err(|e| PdfError::OpenFailed(e.to_string()))?;
 
-        for mut page in doc.pages().iter() {
-            let annotations = page.annotations_mut();
-            for mut annotation in annotations.iter() {
-                if let Some(form_field) = annotation.as_form_field_mut()
-                    && let Some(update) = updates
-                        .iter()
-                        .find(|f| f.name == form_field.name().unwrap_or_default())
-                {
-                    match &update.variant {
-                        FormFieldVariant::Text { value } => {
-                            if let Some(text_field) = form_field.as_text_field_mut() {
-                                let _ = text_field.set_value(value);
-                            }
-                        }
-                        FormFieldVariant::Checkbox { is_checked } => {
-                            if let Some(cb) = form_field.as_checkbox_field_mut() {
-                                let _ = cb.set_checked(*is_checked);
-                            }
-                        }
-                        FormFieldVariant::RadioButton { is_selected, .. } => {
-                            if *is_selected && let Some(rb) = form_field.as_radio_button_field_mut()
-                            {
-                                let _ = rb.set_checked();
-                            }
-                        }
-                        FormFieldVariant::ComboBox {
-                            selected_index,
-                            options,
-                        } => {
-                            if let Some(idx) = selected_index {
-                                if let PdfFormField::ComboBox(combo) = form_field {
-                                    if let Some(opt_text) = options.get(*idx) {
-                                        // pdfium-render 0.9.3 exposes no public setter for
-                                        // combo-box field values. PdfFormComboBoxField and
-                                        // PdfFormTextField share an identical field layout
-                                        // (form_handle, annotation_handle, bindings) and neither
-                                        // has a Drop impl, so transmuting the owned value is sound
-                                        // and lets us reuse TextField::set_value to write the
-                                        // field's /V entry. std::mem::transmute statically verifies
-                                        // the two types have equal size, so this fails to compile
-                                        // if the library changes the layout.
-                                        let mut text_field: pdfium_render::prelude::PdfFormTextField<
-                                            '_,
-                                        > = unsafe { std::mem::transmute(combo) };
-                                        let _ = text_field.set_value(opt_text);
-                                    }
+        if let Ok(catalog_ref) = doc.catalog() {
+            if let Ok(catalog) = doc.get_object(catalog_ref).and_then(|o| o.as_dict()) {
+                if let Ok(acro_ref) = catalog.get(b"AcroForm").and_then(|o| o.as_reference()) {
+                    if let Ok(acro) = doc.get_object(acro_ref).and_then(|o| o.as_dict()) {
+                        if let Ok(fields_obj) = acro.get(b"Fields") {
+                            if let Ok(fields_arr) = fields_obj.as_array() {
+                                let fields_refs: Vec<ObjectId> = fields_arr
+                                    .iter()
+                                    .filter_map(|f| f.as_reference().ok())
+                                    .collect();
+                                for r in fields_refs {
+                                    Self::walk_lopdf_fields(&mut doc, r, "", &updates);
                                 }
                             }
                         }
@@ -1229,7 +1204,7 @@ impl<'a> DocumentStore<'a> {
             }
         }
 
-        doc.save_to_file(&output_path)
+        doc.save(&output_path)
             .map_err(|e| PdfError::IoError(e.to_string()))?;
 
         Ok(output_path)
@@ -1237,7 +1212,7 @@ impl<'a> DocumentStore<'a> {
 
     #[cfg(windows)]
     pub fn print_document(path: &str, printer_name: Option<&str>) -> PdfResult<()> {
-        use winprint::printer::{FilePrinter, PdfiumPrinter, PrinterDevice};
+        use winprint::printer::{FilePrinter, PrinterDevice, WinPdfPrinter};
 
         let all_devices = PrinterDevice::all()
             .map_err(|e| PdfError::IoError(format!("Failed to list printers: {e}")))?;
@@ -1254,7 +1229,7 @@ impl<'a> DocumentStore<'a> {
                 .ok_or_else(|| PdfError::IoError("No printers found".into()))?
         };
 
-        let printer = PdfiumPrinter::new(device);
+        let printer = WinPdfPrinter::new(device);
         printer
             .print(std::path::Path::new(path), Default::default())
             .map_err(|e| PdfError::IoError(format!("Print failed: {e}")))?;

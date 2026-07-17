@@ -1,6 +1,5 @@
 use crate::commands::PdfCommand;
 use crate::pdf_engine::{DocumentStore, SharedRenderCache, create_render_cache};
-use pdfium_render::prelude::*;
 use std::collections::HashMap;
 use std::sync::{Arc, RwLock};
 use tokio::sync::mpsc;
@@ -56,94 +55,13 @@ pub fn spawn_engine_thread(cache_size: u64, max_memory_mb: u64) -> EngineState {
         }
     });
 
-    // ── PDFium initialization ──────────────────────────────────────────────────
-    // On Windows, explicitly add the executable's directory to the DLL search path.
-    // This resolves LoadLibrary failures in protected system folders like C:\Program Files\.
-    #[cfg(windows)]
-    {
-        if let Some(dir_str) = exe_dir_raw() {
-            let mut path_w: Vec<u16> = dir_str.encode_utf16().collect();
-            path_w.push(0); // Null terminator
-            unsafe {
-                #[link(name = "kernel32")]
-                unsafe extern "system" {
-                    fn SetDllDirectoryW(lpPathName: *const u16) -> i32;
-                }
-                let _ = SetDllDirectoryW(path_w.as_ptr());
-            }
-        }
-    }
-
-    // The pdfium-render crate registers bindings globally (one per process).
-    // Calling bind_to_library more than once returns PdfiumLibraryBindingsAlreadyInitialized.
-    // We therefore initialize exactly once here, on the calling thread, and share
-    // the resulting Pdfium instance across all worker threads via Arc.
-    // The `thread_safe` feature in Cargo.toml makes Pdfium: Send + Sync.
-    let pdfium: Arc<Pdfium> = {
-        // 1. Try the directory that contains the running executable (production installs,
-        //    Desktop/Start Menu shortcuts, file-association launches — all cases where the
-        //    process working-directory differs from the install folder).
-        let exe_dir_bindings = exe_dir_raw().and_then(|mut dir_str| {
-            // Append a trailing separator so bind_to_library resolves the file.
-            if !dir_str.ends_with('/') && !dir_str.ends_with('\\') {
-                #[cfg(windows)]
-                dir_str.push('\\');
-                #[cfg(not(windows))]
-                dir_str.push('/');
-            }
-            Pdfium::bind_to_library(Pdfium::pdfium_platform_library_name_at_path(&dir_str)).ok()
-        });
-
-        let bindings = if let Some(b) = exe_dir_bindings {
-            tracing::info!("PDFium bound from executable directory.");
-            b
-        } else if let Ok(b) = Pdfium::bind_to_system_library() {
-            // 2. System-wide library search paths.
-            tracing::info!("PDFium bound from system library.");
-            b
-        } else {
-            // 3. Current working directory fallback (dev runs / cargo run).
-            tracing::warn!(
-                "PDFium not found in executable directory or system paths. Trying './'..."
-            );
-            match Pdfium::bind_to_library(Pdfium::pdfium_platform_library_name_at_path("./")) {
-                Ok(b) => {
-                    tracing::info!("PDFium bound from current working directory.");
-                    b
-                }
-                Err(e) => {
-                    tracing::error!("CRITICAL: Could not find or load pdfium: {e}");
-                    // Diagnostic logging to AppData
-                    if let Some(proj_dirs) =
-                        directories::ProjectDirs::from("", "SV-stark", "PDFbull")
-                    {
-                        let log_path = proj_dirs.config_dir().join("engine_error.log");
-                        let _ = std::fs::create_dir_all(proj_dirs.config_dir());
-                        let _ = std::fs::write(
-                            &log_path,
-                            format!("Failed to load PDFium: {}\nDetails: {:?}", e, e),
-                        );
-                    }
-                    return EngineState { cmd_tx };
-                }
-            }
-        };
-
-        Arc::new(Pdfium::new(bindings))
-    };
-
     // Spawn exactly 1 background worker thread to process all PDF operations sequentially.
-    // PDFium is serialized internally by a global mutex, so there is no parallel rendering benefit
-    // from multiple threads, but a single thread completely eliminates stale thread-local state desyncs
-    // and redundant file-loading memory bloat.
     let rx = worker_rx.clone();
     let cache = render_cache.clone();
     let paths = shared_paths.clone();
-    // Arc clone: cheap reference-count increment, no re-initialization.
-    let pdfium = pdfium.clone();
 
     std::thread::spawn(move || {
-        let mut store = DocumentStore::new(&pdfium, cache);
+        let mut store = DocumentStore::new(cache);
 
         while let Ok(cmd) = rx.recv() {
             match cmd {
