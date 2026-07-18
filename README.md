@@ -13,7 +13,7 @@
 
 **PDFbull** is a professional, high-performance PDF reader and editor engineered for efficiency. By combining the power of the **zpdf crate** with the safety of **Rust** and the declarative, native UI toolkit **Iced**, PDFbull delivers a desktop experience that is significantly faster and more resource-efficient than traditional Electron or WebView-based alternatives.
 
-> **Engine note:** PDFbull migrated from `pdfium-render` to the pure-Rust **[zpdf](https://crates.io/crates/zpdf)** engine with GPU-accelerated rendering powered by **`zpdf-render-wgpu`**. CPU-based rendering (`zpdf-render-cpu`) is maintained as a feature toggle/compile option.
+> **Engine note:** PDFbull utilizes the pure-Rust **[zpdf](https://crates.io/crates/zpdf)** engine with software rendering powered by **`zpdf-render-cpu`** (via **`tiny-skia`**). This backend is chosen by default to eliminate GPU driver-level overhead, adapter initialization delays, and slow texture memory readbacks.
 
 ---
 
@@ -22,7 +22,7 @@
 PDFbull is built from the ground up for speed, leveraging modern Rust ecosystem powerhouses:
 
 - **Native UI with Iced**: A lightweight, cross-platform UI toolkit written entirely in Rust, producing native code without any web dependencies.
-- **GPU Rendering via zpdf**: Pages are rasterized on the GPU in native Rust memory space using the `zpdf-render-wgpu` backend and uploaded directly to the UI buffer.
+- **CPU Rasterization via zpdf**: Pages are rasterized directly to system RAM using `zpdf-render-cpu` (powered by `tiny-skia`), avoiding CPU-GPU transfer bottlenecks and starting renders instantly.
 - **Parallel Processing**: Powered by **Rayon**, heavy computational tasks like rendering, filtering, and search are parallelized across all available CPU cores.
 - **Smart Caching**: Powered by **quick_cache**, a lightweight, concurrent cache library with custom weighters, ensuring instant access to recently viewed pages.
 - **Async I/O with Tokio**: Ensuring the UI never freezes, even when loading large documents.
@@ -37,14 +37,12 @@ Measured using the `divan` benchmarking framework on a standard text-heavy test 
 | :--- | :--- | :--- | :--- |
 | **PDF Parsing** (`bench_pdf_parse`) | **192.7 µs** | 165.9 µs | Parses document structure and catalog. |
 | **CPU Rendering** (`bench_pdf_render_cpu`) | **4.02 ms** | 3.163 ms | Software rasterization of display list commands. |
-| **GPU Rendering** (`bench_pdf_render_gpu`) | **685.7 ms** | 447.1 ms | WebGPU/WGPU hardware rasterization (includes pipeline/device init overhead). |
 
 #### ⚖️ Engine-to-Engine Comparison (Single Page Render)
 Typical performance metrics for rendering a standard text-heavy PDF page:
 
 | Engine / Application | Runtime / Language | Page Render Time (Median) | Memory Footprint | Architecture Type |
 | :--- | :--- | :--- | :--- | :--- |
-| **PDFbull (`zpdf` GPU)** | Rust / WebGPU | **~1.2 ms** (excluding WGPU init) | **Very Low** (~35 MB) | Pure Rust Native |
 | **PDFbull (`zpdf` CPU)** | Rust / Tiny-Skia | **4.02 ms** (measured) | **Very Low** (~30 MB) | Pure Rust Native |
 | **MuPDF** | C / Assembly | **~2 - 5 ms** | **Extremely Low** (<15 MB) | Native Binary |
 | **Chrome (PDFium)** | C++ | **~3 - 8 ms** | **High** (~120 MB+) | Sandbox Native (Chromium) |
@@ -52,7 +50,7 @@ Typical performance metrics for rendering a standard text-heavy PDF page:
 | **Firefox (pdf.js)** | JavaScript | **~15 - 50 ms** | **Moderate** (via Browser) | Web Canvas Interpreter |
 
 > [!NOTE]
-> Native compiled backends (MuPDF, PDFium, and zpdf) achieve significantly faster rendering times and lower memory usage compared to browser sandbox environments like Firefox's JavaScript-based pdf.js. WGPU rendering in zpdf leverages hardware acceleration to minimize rasterization overhead once the device context is initialized.
+> Native compiled backends (MuPDF, PDFium, and zpdf) achieve significantly faster rendering times and lower memory usage compared to browser sandbox environments like Firefox's JavaScript-based pdf.js. CPU rendering in zpdf leverages highly optimized SIMD instructions to rasterize paths and text with zero driver initialization latency.
 
 ## 🛠️ Feature Suite
 
