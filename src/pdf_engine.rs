@@ -352,14 +352,14 @@ impl DocumentStore {
         self.render_page_internal(doc_id, page_num, options, true)
     }
 
-    pub fn extract_text(&self, doc_id: DocumentId, page_num: i32) -> PdfResult<String> {
+    pub fn extract_text(&self, doc_id: DocumentId, page_num: usize) -> PdfResult<String> {
         let doc = self
             .documents
             .get(&doc_id)
             .ok_or(PdfError::EngineError(EngineErrorKind::DocumentNotFound))?;
         let page = doc
-            .page(page_num as usize)
-            .map_err(|_| PdfError::PageNotFound(page_num as usize))?;
+            .page(page_num)
+            .map_err(|_| PdfError::PageNotFound(page_num))?;
         let mut fonts = doc.load_page_fonts(&page);
         let mut images = ImageCache::new();
         let content = doc
@@ -776,7 +776,7 @@ impl DocumentStore {
     pub fn export_page_as_image(
         &self,
         doc_id: DocumentId,
-        page_num: i32,
+        page_num: usize,
         scale: f32,
     ) -> PdfResult<Vec<u8>> {
         let doc = self
@@ -784,8 +784,8 @@ impl DocumentStore {
             .get(&doc_id)
             .ok_or(PdfError::EngineError(EngineErrorKind::DocumentNotFound))?;
         let page = doc
-            .page(page_num as usize)
-            .map_err(|_| PdfError::PageNotFound(page_num as usize))?;
+            .page(page_num)
+            .map_err(|_| PdfError::PageNotFound(page_num))?;
 
         let mut fonts = doc.load_page_fonts(&page);
         let mut images = ImageCache::new();
@@ -1930,5 +1930,29 @@ mod tests {
         assert_eq!(none, RenderFilter::None);
         assert_eq!(grayscale, RenderFilter::Grayscale);
         assert_eq!(inverted, RenderFilter::Inverted);
+    }
+
+    #[test]
+    fn test_crash_investigation() {
+        let handle = std::thread::spawn(move || {
+            let mut store = DocumentStore::new(create_render_cache(10, 0));
+            let path = "E:\\PDFbull\\winprint-0.2.0\\test_data\\test_document.pdf";
+            let doc_id = DocumentId(1);
+            let open_res = store.open_document(path, doc_id).unwrap();
+            assert!(open_res.page_count > 0);
+            let render_options = RenderOptions {
+                scale: 1.0,
+                rotation: 0,
+                filter: RenderFilter::None,
+                auto_crop: false,
+                quality: RenderQuality::High,
+            };
+            let render_res = store.render_page(doc_id, 0, render_options).unwrap();
+            println!(
+                "Rendered page size: {}x{}",
+                render_res.width, render_res.height
+            );
+        });
+        handle.join().unwrap();
     }
 }

@@ -33,7 +33,6 @@ pub enum PdfError {
 pub enum EngineErrorKind {
     DocumentNotFound,
     DocumentPathNotFound,
-    PdfiumError(String),
     Generic(String),
 }
 
@@ -54,7 +53,6 @@ impl std::fmt::Display for EngineErrorKind {
         match self {
             Self::DocumentNotFound => write!(f, "Document not found"),
             Self::DocumentPathNotFound => write!(f, "Document path not found"),
-            Self::PdfiumError(e) => write!(f, "PDFium error: {e}"),
             Self::Generic(e) => write!(f, "{e}"),
         }
     }

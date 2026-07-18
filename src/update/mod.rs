@@ -30,6 +30,52 @@ pub fn scroll_to_page(tab: &crate::models::DocumentTab, page: usize) -> Task<Mes
     )
 }
 
+pub fn scroll_to_search_result(
+    tab: &crate::models::DocumentTab,
+    result_idx: usize,
+) -> Task<Message> {
+    if let Some(result) = tab.search_results.get(result_idx) {
+        let page = result.page;
+        let y_page_start: f32 = tab
+            .page_heights
+            .iter()
+            .take(page)
+            .map(|h| (h + crate::ui::theme::PAGE_SPACING) * tab.zoom)
+            .sum();
+
+        let actual_page = tab.page_mapping.get(page).copied().unwrap_or(page);
+        let page_rotation = tab
+            .page_rotations
+            .get(&actual_page)
+            .copied()
+            .unwrap_or(tab.rotation);
+        let original_height = tab.page_heights.get(page).copied().unwrap_or(800.0);
+
+        let (_, ry, _, _) = crate::models::rotate_coords(
+            result.x,
+            result.y_position,
+            result.width,
+            result.height,
+            tab.page_width,
+            original_height,
+            page_rotation,
+        );
+
+        let target_y = y_page_start + (ry * tab.zoom) - 100.0;
+        let clamped_y = target_y.max(0.0);
+
+        iced::widget::operation::scroll_to(
+            "pdf_scroll",
+            iced::widget::scrollable::AbsoluteOffset {
+                x: 0.0,
+                y: clamped_y,
+            },
+        )
+    } else {
+        Task::none()
+    }
+}
+
 pub fn scroll_to_y(y_offset: f32) -> Task<Message> {
     iced::widget::operation::scroll_to(
         "pdf_scroll",
@@ -53,11 +99,22 @@ pub fn handle_message(app: &mut PdfBullApp, message: Message) -> Task<Message> {
                 app.settings.theme = AppTheme::Light;
             }
         }
-        if app.settings.restore_session
+        let args: Vec<String> = std::env::args().collect();
+        let mut cli_path = None;
+        if args.len() > 1 {
+            let path = std::path::PathBuf::from(&args[1]);
+            if path.exists() && path.is_file() {
+                cli_path = Some(path);
+            }
+        }
+
+        let mut tasks = Vec::new();
+        if let Some(path) = cli_path {
+            tasks.push(app.update(Message::OpenFile(path)));
+        } else if app.settings.restore_session
             && let Some(mut session_data) = session
         {
             let target_tab = session_data.active_tab;
-            let mut tasks = Vec::new();
             for entry in session_data.open_tabs.drain(..) {
                 let path: std::path::PathBuf = entry.clone().into();
                 tasks.push(app.update(Message::OpenFile(path)));
@@ -72,9 +129,12 @@ pub fn handle_message(app: &mut PdfBullApp, message: Message) -> Task<Message> {
                     async move { Message::SwitchTab(target_tab) },
                     |m| m,
                 ));
-                tasks.push(app.update(message));
-                return Task::batch(tasks);
             }
+        }
+
+        if !tasks.is_empty() {
+            tasks.push(app.update(message));
+            return Task::batch(tasks);
         }
     }
 

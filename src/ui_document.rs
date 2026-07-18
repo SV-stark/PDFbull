@@ -868,8 +868,8 @@ fn render_accessibility_layer<'a>(
                             color: Some(Color::TRANSPARENT),
                         }
                     }))
-                    .width(Length::Fixed(rw * zoom))
-                    .height(Length::Fixed(rh * zoom))
+                    .width(Length::Fixed((rx + rw) * zoom))
+                    .height(Length::Fixed((ry + rh) * zoom))
                     .padding(Padding {
                         top: ry * zoom,
                         left: rx * zoom,

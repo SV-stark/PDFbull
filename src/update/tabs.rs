@@ -59,7 +59,8 @@ pub fn handle_tab_message(app: &mut PdfBullApp, message: Message) -> Task<Messag
                 return Task::none();
             }
 
-            let tab = DocumentTab::new(path.clone());
+            let mut tab = DocumentTab::new(path.clone());
+            tab.id = data.id;
             let tab_idx = app.tabs.len();
             app.tabs.push(tab);
             app.active_tab = tab_idx;
@@ -160,10 +161,6 @@ pub fn handle_tab_message(app: &mut PdfBullApp, message: Message) -> Task<Messag
                     app.status_message = Some(
                         "PDF engine crashed. Please try your action again to restart it.".into(),
                     );
-                } else if e.to_string().to_lowercase().contains("pdfium") {
-                    tracing::error!("Error opening document: {e}");
-                    app.engine = None;
-                    app.status_message = Some("PDF engine missing (pdfium.dll). Please download it and place it next to the executable.".into());
                 } else if e != "Cancelled" {
                     tracing::error!("Error opening document: {e}");
                     app.status_message = Some(format!("Error opening document: {e}"));

@@ -39,7 +39,9 @@
     clippy::match_same_arms,
     clippy::unnecessary_lazy_evaluations,
     clippy::manual_flatten,
-    clippy::redundant_pattern_matching
+    clippy::redundant_pattern_matching,
+    clippy::suboptimal_flops,
+    clippy::field_reassign_with_default
 )]
 
 #[global_allocator]

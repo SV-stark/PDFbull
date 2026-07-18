@@ -308,7 +308,11 @@ mod tests {
         use std::io::Read;
 
         let temp_dir = std::env::temp_dir();
-        let test_path = temp_dir.join("test_atomic_write.txt");
+        let timestamp = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_nanos();
+        let test_path = temp_dir.join(format!("test_atomic_write_{}.txt", timestamp));
 
         let result = atomic_write(&test_path, "test content");
         assert!(result.is_ok());
@@ -327,7 +331,11 @@ mod tests {
         use std::io::Read;
 
         let temp_dir = std::env::temp_dir();
-        let test_path = temp_dir.join("test_atomic_overwrite.txt");
+        let timestamp = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_nanos();
+        let test_path = temp_dir.join(format!("test_atomic_overwrite_{}.txt", timestamp));
 
         let _ = atomic_write(&test_path, "original");
         let result = atomic_write(&test_path, "updated");

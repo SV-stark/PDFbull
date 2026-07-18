@@ -47,6 +47,9 @@ pub fn handle_misc_message(app: &mut PdfBullApp, message: Message) -> Task<Messa
                 iced::Event::Window(iced::window::Event::FileDropped(path)) => {
                     return app.update(Message::OpenFile(path));
                 }
+                iced::Event::Mouse(iced::mouse::Event::CursorMoved { position }) => {
+                    app.cursor_position = Some(position);
+                }
                 iced::Event::Mouse(iced::mouse::Event::WheelScrolled { delta }) => {
                     use iced::mouse::ScrollDelta;
                     let modifiers = app.modifiers;
@@ -125,7 +128,13 @@ pub fn handle_misc_message(app: &mut PdfBullApp, message: Message) -> Task<Messa
         }
         Message::LinkClicked(link) => {
             if let Some(url) = link.url {
-                let _ = open::that(&url);
+                let url_lower = url.to_lowercase();
+                if url_lower.starts_with("http://")
+                    || url_lower.starts_with("https://")
+                    || url_lower.starts_with("mailto:")
+                {
+                    let _ = open::that(&url);
+                }
             } else if let Some(dest_page) = link.destination_page {
                 return app.update(Message::JumpToPage(dest_page));
             }

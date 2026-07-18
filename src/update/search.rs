@@ -1,7 +1,6 @@
 use crate::app::PdfBullApp;
 use crate::message::Message;
 use crate::models::SearchResult;
-use crate::update::scroll_to_page;
 use iced::Task;
 use tokio::sync::oneshot;
 
@@ -95,29 +94,29 @@ pub fn handle_search_message(app: &mut PdfBullApp, message: Message) -> Task<Mes
             Task::none()
         }
         Message::NextSearchResult => {
-            let next_page = if let Some(tab) = app.current_tab_mut() {
+            let res = if let Some(tab) = app.current_tab_mut() {
                 if tab.search_results.is_empty() {
                     None
                 } else {
                     tab.current_search_index =
                         (tab.current_search_index + 1) % tab.search_results.len();
                     tab.current_page = tab.search_results[tab.current_search_index].page;
-                    Some(tab.current_page)
+                    Some((tab.current_page, tab.current_search_index))
                 }
             } else {
                 None
             };
 
-            if let Some(page) = next_page {
+            if let Some((page, idx)) = res {
                 app.page_input = (page + 1).to_string();
                 if let Some(tab) = app.current_tab_mut() {
-                    return scroll_to_page(tab, page);
+                    return crate::update::scroll_to_search_result(tab, idx);
                 }
             }
             Task::none()
         }
         Message::PrevSearchResult => {
-            let prev_page = if let Some(tab) = app.current_tab_mut() {
+            let res = if let Some(tab) = app.current_tab_mut() {
                 if tab.search_results.is_empty() {
                     None
                 } else {
@@ -127,16 +126,16 @@ pub fn handle_search_message(app: &mut PdfBullApp, message: Message) -> Task<Mes
                         tab.current_search_index - 1
                     };
                     tab.current_page = tab.search_results[tab.current_search_index].page;
-                    Some(tab.current_page)
+                    Some((tab.current_page, tab.current_search_index))
                 }
             } else {
                 None
             };
 
-            if let Some(page) = prev_page {
+            if let Some((page, idx)) = res {
                 app.page_input = (page + 1).to_string();
                 if let Some(tab) = app.current_tab_mut() {
-                    return scroll_to_page(tab, page);
+                    return crate::update::scroll_to_search_result(tab, idx);
                 }
             }
             Task::none()

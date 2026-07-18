@@ -22,7 +22,7 @@ pub enum PdfCommand {
         oneshot::Sender<PdfResult<RenderResult>>,
     ),
     Close(DocumentId),
-    ExtractText(DocumentId, i32, oneshot::Sender<PdfResult<String>>),
+    ExtractText(DocumentId, usize, oneshot::Sender<PdfResult<String>>),
     GetTextItems(DocumentId, usize, oneshot::Sender<PdfResult<Vec<TextItem>>>),
     LoadDocumentMeta(DocumentId, oneshot::Sender<PdfResult<DocumentMeta>>),
     Search(
@@ -40,10 +40,10 @@ pub enum PdfCommand {
         String,
         oneshot::Sender<PdfResult<Vec<Annotation>>>,
     ),
-    ExportImage(DocumentId, i32, f32, oneshot::Sender<PdfResult<Vec<u8>>>),
+    ExportImage(DocumentId, usize, f32, oneshot::Sender<PdfResult<Vec<u8>>>),
     ExportImages(
         DocumentId,
-        Vec<i32>,
+        Vec<usize>,
         f32,
         String,
         oneshot::Sender<PdfResult<Vec<String>>>,

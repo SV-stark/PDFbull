@@ -153,17 +153,25 @@ pub fn handle_render_message(app: &mut PdfBullApp, message: Message) -> Task<Mes
                         }
                     }
                     Err(e) => {
-                        tracing::error!("Render error: {e}");
-                        if e == "Engine died" || e == "Channel closed" {
+                        tracing::error!(
+                            "PageRendered error for page {} of {:?}: {:?}",
+                            page_idx,
+                            doc_id,
+                            e
+                        );
+                        if matches!(
+                            e,
+                            crate::models::PdfError::EngineDied
+                                | crate::models::PdfError::ChannelClosed
+                        ) {
+                            tracing::error!(
+                                "Engine channel closed — setting engine to None for restart"
+                            );
                             app.engine = None;
                             app.status_message = Some(
                                 "PDF engine crashed. Please try your action again to restart it."
                                     .into(),
                             );
-                        } else if e.to_string().to_lowercase().contains("pdfium") {
-                            app.engine = None;
-                            app.status_message =
-                                Some("Failed to load PDF engine (pdfium.dll missing).".into());
                         }
                     }
                 }

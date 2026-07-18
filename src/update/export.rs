@@ -10,7 +10,7 @@ pub fn handle_export_message(app: &mut PdfBullApp, message: Message) -> Task<Mes
                 return Task::none();
             };
 
-            let page = tab.current_page as i32;
+            let page = tab.current_page;
             let doc_id = tab.id;
 
             let Some(engine) = &app.engine else {
@@ -62,7 +62,7 @@ pub fn handle_export_message(app: &mut PdfBullApp, message: Message) -> Task<Mes
                 return Task::none();
             };
 
-            let page = tab.current_page as i32;
+            let page = tab.current_page;
             let doc_id = tab.id;
 
             let Some(engine) = &app.engine else {
@@ -187,7 +187,7 @@ pub fn handle_export_message(app: &mut PdfBullApp, message: Message) -> Task<Mes
                 return Task::none();
             };
 
-            let page = tab.current_page as i32;
+            let page = tab.current_page;
             let zoom = tab.zoom;
             let doc_id = tab.id;
 
@@ -278,7 +278,7 @@ pub fn handle_export_message(app: &mut PdfBullApp, message: Message) -> Task<Mes
                     match folder {
                         Some(f) => {
                             let path = f.path().to_string_lossy().to_string();
-                            let pages: Vec<i32> = (0..total_pages as i32).collect();
+                            let pages: Vec<usize> = (0..total_pages).collect();
                             let (resp_tx, resp_rx) = tokio::sync::oneshot::channel();
                             if let Err(e) = cmd_tx
                                 .send(PdfCommand::ExportImages(

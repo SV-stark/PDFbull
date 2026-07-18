@@ -67,6 +67,7 @@ pub struct PdfBullApp {
     pub rendering_set: std::collections::HashSet<RenderTarget>,
     pub pending_text: std::collections::HashSet<(crate::models::DocumentId, usize)>,
     pub modifiers: iced::keyboard::Modifiers,
+    pub cursor_position: Option<iced::Point>,
     pub last_session_save: Instant,
     pub sidebar_animation: animation::Animation<f32>,
     pub sidebar_mode: crate::models::SidebarMode,
@@ -113,6 +114,7 @@ impl Default for PdfBullApp {
             rendering_set: std::collections::HashSet::new(),
             pending_text: std::collections::HashSet::new(),
             modifiers: iced::keyboard::Modifiers::default(),
+            cursor_position: None,
             last_session_save: Instant::now(),
             sidebar_animation: animation::Animation::new(0.0),
             sidebar_mode: crate::models::SidebarMode::default(),
@@ -272,12 +274,14 @@ impl PdfBullApp {
             tasks.push(Task::perform(
                 async move {
                     let (resp_tx, resp_rx) = tokio::sync::oneshot::channel();
-                    let _ = tx.send(crate::commands::PdfCommand::Render(
-                        doc_id_cloned,
-                        actual_page,
-                        options,
-                        resp_tx,
-                    ));
+                    let _ = tx
+                        .send(crate::commands::PdfCommand::Render(
+                            doc_id_cloned,
+                            actual_page,
+                            options,
+                            resp_tx,
+                        ))
+                        .await;
                     let res = resp_rx
                         .await
                         .unwrap_or_else(|_| Err(crate::models::PdfError::EngineDied));
@@ -324,13 +328,15 @@ impl PdfBullApp {
                 tasks.push(Task::perform(
                     async move {
                         let (resp_tx, resp_rx) = tokio::sync::oneshot::channel();
-                        let _ = tx.send(crate::commands::PdfCommand::RenderThumbnail(
-                            doc_id_cloned,
-                            thumb_actual,
-                            thumb_zoom,
-                            thumb_rotation,
-                            resp_tx,
-                        ));
+                        let _ = tx
+                            .send(crate::commands::PdfCommand::RenderThumbnail(
+                                doc_id_cloned,
+                                thumb_actual,
+                                thumb_zoom,
+                                thumb_rotation,
+                                resp_tx,
+                            ))
+                            .await;
                         let res = match resp_rx.await {
                             Ok(result) => result,
                             Err(_) => Err(crate::models::PdfError::EngineDied),
@@ -404,9 +410,9 @@ impl PdfBullApp {
                 move |mut output: iced::futures::channel::mpsc::Sender<Message>| async move {
                     use iced::futures::SinkExt;
                     use interprocess::local_socket::{
-                        GenericNamespaced, ListenerOptions, prelude::*,
+                        GenericNamespaced, ListenerOptions, tokio::prelude::*,
                     };
-                    use std::io::{BufRead, BufReader};
+                    use tokio::io::{AsyncBufReadExt, BufReader};
 
                     let name =
                         match "pdfbull-single-instance.sock".to_ns_name::<GenericNamespaced>() {
@@ -417,7 +423,7 @@ impl PdfBullApp {
                             }
                         };
 
-                    let listener = match ListenerOptions::new().name(name).create_sync() {
+                    let listener = match ListenerOptions::new().name(name).create_tokio() {
                         Ok(l) => l,
                         Err(e) => {
                             tracing::error!("Failed to create IPC listener: {e}");
@@ -425,13 +431,11 @@ impl PdfBullApp {
                         }
                     };
 
-                    for conn in listener.incoming() {
-                        if let Ok(stream) = conn {
-                            let _ =
-                                stream.set_recv_timeout(Some(std::time::Duration::from_secs(1)));
+                    loop {
+                        if let Ok(stream) = listener.accept().await {
                             let mut reader = BufReader::new(stream);
                             let mut buffer = String::new();
-                            if let Ok(_) = reader.read_line(&mut buffer) {
+                            if let Ok(_) = reader.read_line(&mut buffer).await {
                                 if let Ok(args) = serde_json::from_str::<Vec<String>>(&buffer) {
                                     if args.len() > 1 {
                                         let path_str = &args[1];

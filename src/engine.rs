@@ -36,11 +36,15 @@ pub fn spawn_engine_thread(cache_size: u64, max_memory_mb: u64) -> EngineState {
     // MPMC channel for distributing tasks across the thread pool
     let (worker_tx, worker_rx) = crossbeam_channel::bounded::<PdfCommand>(256);
 
-    // Forward Tokio commands into the crossbeam MPMC channel
+    // Forward Tokio mpsc commands into the crossbeam MPMC channel.
+    // iced uses the `tokio` feature so a full multi-thread runtime is always
+    // available here; tokio::spawn is safe and keeps the forwarder alive for
+    // the lifetime of the iced application.
     tokio::spawn(async move {
         while let Some(cmd) = cmd_rx.recv().await {
             let _ = worker_tx.send(cmd);
         }
+        tracing::debug!("Engine forwarder task exited (cmd_tx dropped)");
     });
 
     let num_workers = std::thread::available_parallelism()
@@ -59,17 +63,75 @@ pub fn spawn_engine_thread(cache_size: u64, max_memory_mb: u64) -> EngineState {
             while let Ok(cmd) = rx.recv() {
                 match cmd {
                     PdfCommand::Open(path, doc_id, tx) => {
-                        let res = store.open_document(&path, doc_id);
+                        tracing::info!("Engine worker: opening {:?}", path);
+                        let mut store_ref = std::panic::AssertUnwindSafe(&mut store);
+                        let path_clone = path.clone();
+                        let result = std::panic::catch_unwind(move || {
+                            store_ref.open_document(&path_clone, doc_id)
+                        });
+
+                        let res = match result {
+                            Ok(res) => res,
+                            Err(err) => {
+                                let panic_msg = if let Some(s) = err.downcast_ref::<&str>() {
+                                    *s
+                                } else if let Some(s) = err.downcast_ref::<String>() {
+                                    s.as_str()
+                                } else {
+                                    "unknown panic"
+                                };
+                                tracing::error!(
+                                    "Engine worker panicked during open: {}",
+                                    panic_msg
+                                );
+                                Err(crate::models::PdfError::EngineDied)
+                            }
+                        };
+
                         if res.is_ok() {
                             if let Ok(mut guard) = paths.write() {
                                 guard.insert(doc_id, path);
                             }
+                        } else {
+                            tracing::error!("Engine worker: open failed: {:?}", res);
                         }
                         let _ = tx.send(res);
                     }
                     PdfCommand::Render(doc_id, page_num, options, tx) => {
+                        tracing::debug!("Engine worker: render page {} for {:?}", page_num, doc_id);
                         reload_if_needed(&mut store, &paths, doc_id);
-                        let res = store.render_page(doc_id, page_num, options);
+
+                        let mut store_ref = std::panic::AssertUnwindSafe(&mut store);
+                        let result = std::panic::catch_unwind(move || {
+                            store_ref.render_page(doc_id, page_num, options)
+                        });
+
+                        let res = match result {
+                            Ok(res) => res,
+                            Err(err) => {
+                                let panic_msg = if let Some(s) = err.downcast_ref::<&str>() {
+                                    *s
+                                } else if let Some(s) = err.downcast_ref::<String>() {
+                                    s.as_str()
+                                } else {
+                                    "unknown panic"
+                                };
+                                tracing::error!(
+                                    "Engine worker panicked during render page {}: {}",
+                                    page_num,
+                                    panic_msg
+                                );
+                                Err(crate::models::PdfError::EngineDied)
+                            }
+                        };
+
+                        if res.is_err() {
+                            tracing::error!(
+                                "Engine worker: render page {} failed: {:?}",
+                                page_num,
+                                res
+                            );
+                        }
                         let _ = tx.send(res);
                     }
                     PdfCommand::RenderThumbnail(doc_id, page_num, scale, rotation, tx) => {

@@ -1,7 +1,8 @@
+#![allow(unexpected_cfgs)]
 use std::fs;
-use zpdf::{
-    ContentInterpreter, ImageCache, PdfDocument, RenderBackend, cpu::CpuRenderer, gpu::WgpuRenderer,
-};
+#[cfg(feature = "gpu-render")]
+use zpdf::gpu::WgpuRenderer;
+use zpdf::{ContentInterpreter, ImageCache, PdfDocument, RenderBackend, cpu::CpuRenderer};
 
 fn main() {
     divan::main();
@@ -38,6 +39,7 @@ fn bench_pdf_render_cpu() {
         .expect("Failed to render");
 }
 
+#[cfg(feature = "gpu-render")]
 #[divan::bench]
 fn bench_pdf_render_gpu() {
     let data = fs::read(PDF_PATH).expect("Failed to read test PDF");

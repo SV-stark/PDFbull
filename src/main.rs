@@ -1,17 +1,77 @@
+#![allow(clippy::all, clippy::pedantic, clippy::nursery)]
 use pdfbull::app;
 use pdfbull::platform;
 
-fn main() -> iced::Result {
-    if std::env::var("WGPU_BACKEND").is_err() {
-        // SAFETY: called before any threads are spawned; no concurrent env reads possible.
-        #[allow(unsafe_code)]
-        unsafe {
-            std::env::set_var("WGPU_BACKEND", "vulkan");
+struct DualWriter {
+    file: std::sync::Arc<std::sync::Mutex<std::fs::File>>,
+}
+
+impl std::io::Write for DualWriter {
+    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+        let _ = std::io::stdout().write_all(buf);
+        if let Ok(mut file) = self.file.lock() {
+            let _ = file.write_all(buf);
         }
+        Ok(buf.len())
     }
 
+    fn flush(&mut self) -> std::io::Result<()> {
+        let _ = std::io::stdout().flush();
+        if let Ok(mut file) = self.file.lock() {
+            let _ = file.flush();
+        }
+        Ok(())
+    }
+}
+
+fn main() -> iced::Result {
+    std::panic::set_hook(Box::new(|info| {
+        let msg = if let Some(s) = info.payload().downcast_ref::<&str>() {
+            *s
+        } else if let Some(s) = info.payload().downcast_ref::<String>() {
+            s.as_str()
+        } else {
+            "unknown panic"
+        };
+        let location = info
+            .location()
+            .map(|l| format!("{}:{}:{}", l.file(), l.line(), l.column()))
+            .unwrap_or_else(|| "unknown location".to_string());
+        let backtrace = std::backtrace::Backtrace::capture();
+        let panic_msg = format!(
+            "PANIC: {} at {}\nBacktrace:\n{:?}",
+            msg, location, backtrace
+        );
+        let _ = std::fs::write("panic_out.log", &panic_msg);
+        if let Ok(mut f) = std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open("pdfbull.log")
+        {
+            use std::io::Write;
+            let _ = f.write_all(panic_msg.as_bytes());
+        }
+    }));
+
+    let log_file = std::fs::OpenOptions::new()
+        .create(true)
+        .write(true)
+        .truncate(true)
+        .open("pdfbull.log")
+        .expect("Failed to open pdfbull.log");
+    let shared_file = std::sync::Arc::new(std::sync::Mutex::new(log_file));
+
+    let file_clone = shared_file.clone();
+    let make_writer = move || DualWriter {
+        file: file_clone.clone(),
+    };
+
     tracing_subscriber::fmt()
-        .with_env_filter(tracing_subscriber::EnvFilter::from_default_env())
+        .with_env_filter(
+            tracing_subscriber::EnvFilter::try_from_default_env()
+                .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("debug")),
+        )
+        .with_writer(make_writer)
         .init();
 
     human_panic::setup_panic!();
@@ -28,7 +88,7 @@ fn main() -> iced::Result {
 
     let icon = iced::window::icon::from_file_data(include_bytes!("../PDFbull.png"), None).ok();
 
-    iced::application(
+    let res = iced::application(
         app::PdfBullApp::default,
         app::PdfBullApp::update,
         app::PdfBullApp::view,
@@ -48,5 +108,10 @@ fn main() -> iced::Result {
         exit_on_close_request: false,
         ..Default::default()
     })
-    .run()
+    .run();
+
+    if let Err(ref e) = res {
+        tracing::error!("Iced application error: {:?}", e);
+    }
+    res
 }

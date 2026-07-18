@@ -1,3 +1,4 @@
+#![allow(clippy::field_reassign_with_default)]
 use pdfbull::app::PdfBullApp;
 use pdfbull::message::Message;
 
@@ -137,4 +138,31 @@ async fn test_document_zoom() {
     // Set zoom out
     let _ = app.update(Message::ZoomOut);
     assert!((app.current_tab().unwrap().zoom - (2.5 / 1.1)).abs() < 1e-5);
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn test_open_document_flow() {
+    let mut app = PdfBullApp::default();
+    app.loaded = true; // Prevent loading real session/settings in test
+    let test_path = std::path::PathBuf::from("winprint-0.2.0/test_data/test_document.pdf");
+
+    // Simulate what happens after the file is picked and loaded by the engine
+    let doc_id = pdfbull::models::DocumentId(42);
+    let open_res = pdfbull::models::OpenResult {
+        id: doc_id,
+        page_count: 5,
+        page_heights: vec![800.0; 5],
+        max_width: 600.0,
+        outline: Vec::new(),
+        links: Vec::new(),
+        metadata: pdfbull::models::DocumentMetadata::default(),
+    };
+
+    // Send DocumentOpenedWithPath message
+    let _ = app.update(Message::DocumentOpenedWithPath((test_path, open_res)));
+
+    // The tab should have been created with the correct ID matching the engine's doc_id
+    assert_eq!(app.tabs.len(), 1);
+    assert_eq!(app.tabs[0].id, doc_id);
+    assert_eq!(app.active_tab, 0);
 }
