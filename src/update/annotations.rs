@@ -206,7 +206,7 @@ pub fn handle_annotation_message(app: &mut PdfBullApp, message: Message) -> Task
                         }
                     };
 
-                    let (ann_x, ann_y, ann_w, ann_h) = match drag.kind {
+                    let (ann_x_vis, ann_y_vis, ann_w_vis, ann_h_vis) = match drag.kind {
                         crate::models::PendingAnnotationKind::Line
                         | crate::models::PendingAnnotationKind::Arrow => {
                             (start_x / zoom, start_y / zoom, dx / zoom, dy / zoom)
@@ -226,6 +226,28 @@ pub fn handle_annotation_message(app: &mut PdfBullApp, message: Message) -> Task
                         }
                     };
 
+                    let actual_page = tab
+                        .page_mapping
+                        .get(drag.page)
+                        .copied()
+                        .unwrap_or(drag.page);
+                    let page_rotation = tab
+                        .page_rotations
+                        .get(&actual_page)
+                        .copied()
+                        .unwrap_or(tab.rotation);
+                    let original_height = tab.page_heights.get(drag.page).copied().unwrap_or(800.0);
+
+                    let (ann_x, ann_y, ann_w, ann_h) = crate::models::unrotate_coords(
+                        ann_x_vis,
+                        ann_y_vis,
+                        ann_w_vis,
+                        ann_h_vis,
+                        tab.page_width,
+                        original_height,
+                        page_rotation,
+                    );
+
                     let ann = crate::models::Annotation {
                         id,
                         page: drag.page,
@@ -244,12 +266,39 @@ pub fn handle_annotation_message(app: &mut PdfBullApp, message: Message) -> Task
                 }
             } else if let Some(tab) = app.current_tab_mut() {
                 if let Some((page_idx, start, current)) = tab.selection_drag.take() {
+                    let actual_page = tab.page_mapping.get(page_idx).copied().unwrap_or(page_idx);
+                    let page_rotation = tab
+                        .page_rotations
+                        .get(&actual_page)
+                        .copied()
+                        .unwrap_or(tab.rotation);
+                    let original_height = tab.page_heights.get(page_idx).copied().unwrap_or(800.0);
+
+                    let (sx, sy, _, _) = crate::models::unrotate_coords(
+                        start.0,
+                        start.1,
+                        0.0,
+                        0.0,
+                        tab.page_width,
+                        original_height,
+                        page_rotation,
+                    );
+                    let (cx, cy, _, _) = crate::models::unrotate_coords(
+                        current.0,
+                        current.1,
+                        0.0,
+                        0.0,
+                        tab.page_width,
+                        original_height,
+                        page_rotation,
+                    );
+
                     let mut selected_words = Vec::new();
                     if let Some(words) = tab.view_state.text_layers.get(&page_idx) {
-                        let x1 = start.0.min(current.0);
-                        let x2 = start.0.max(current.0);
-                        let y1 = start.1.min(current.1);
-                        let y2 = start.1.max(current.1);
+                        let x1 = sx.min(cx);
+                        let x2 = sx.max(cx);
+                        let y1 = sy.min(cy);
+                        let y2 = sy.max(cy);
 
                         for word in words {
                             let wx1 = word.x;

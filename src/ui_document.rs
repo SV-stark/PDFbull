@@ -15,6 +15,9 @@ struct AnnotationCanvas<'a> {
     annotations: &'a [crate::models::Annotation],
     zoom: f32,
     drag: Option<crate::models::AnnotationDrag>,
+    rotation: i32,
+    page_width: f32,
+    page_height: f32,
 }
 
 impl<'a> canvas::Program<crate::message::Message> for AnnotationCanvas<'a> {
@@ -83,11 +86,26 @@ impl<'a> canvas::Program<crate::message::Message> for AnnotationCanvas<'a> {
                 AnnotationStyle::Line { color, thickness } => {
                     let (r, g, b) = hex_to_rgb(color);
                     let stroke_color = Color::from_rgb(r, g, b);
-                    let p1 = iced::Point::new(ann.x * self.zoom, ann.y * self.zoom);
-                    let p2 = iced::Point::new(
-                        (ann.x + ann.width) * self.zoom,
-                        (ann.y + ann.height) * self.zoom,
+                    let (rx1, ry1, _, _) = crate::models::rotate_coords(
+                        ann.x,
+                        ann.y,
+                        0.0,
+                        0.0,
+                        self.page_width,
+                        self.page_height,
+                        self.rotation,
                     );
+                    let (rx2, ry2, _, _) = crate::models::rotate_coords(
+                        ann.x + ann.width,
+                        ann.y + ann.height,
+                        0.0,
+                        0.0,
+                        self.page_width,
+                        self.page_height,
+                        self.rotation,
+                    );
+                    let p1 = iced::Point::new(rx1 * self.zoom, ry1 * self.zoom);
+                    let p2 = iced::Point::new(rx2 * self.zoom, ry2 * self.zoom);
 
                     let path = canvas::Path::new(|builder| {
                         builder.move_to(p1);
@@ -103,10 +121,28 @@ impl<'a> canvas::Program<crate::message::Message> for AnnotationCanvas<'a> {
                 AnnotationStyle::Arrow { color, thickness } => {
                     let (r, g, b) = hex_to_rgb(color);
                     let stroke_color = Color::from_rgb(r, g, b);
-                    let x1 = ann.x * self.zoom;
-                    let y1 = ann.y * self.zoom;
-                    let x2 = (ann.x + ann.width) * self.zoom;
-                    let y2 = (ann.y + ann.height) * self.zoom;
+                    let (rx1, ry1, _, _) = crate::models::rotate_coords(
+                        ann.x,
+                        ann.y,
+                        0.0,
+                        0.0,
+                        self.page_width,
+                        self.page_height,
+                        self.rotation,
+                    );
+                    let (rx2, ry2, _, _) = crate::models::rotate_coords(
+                        ann.x + ann.width,
+                        ann.y + ann.height,
+                        0.0,
+                        0.0,
+                        self.page_width,
+                        self.page_height,
+                        self.rotation,
+                    );
+                    let x1 = rx1 * self.zoom;
+                    let y1 = ry1 * self.zoom;
+                    let x2 = rx2 * self.zoom;
+                    let y2 = ry2 * self.zoom;
 
                     // Draw shaft
                     let path_shaft = canvas::Path::new(|builder| {
@@ -355,12 +391,39 @@ fn render_annotations<'a>(
         .iter()
         .filter(|ann| ann.page == page_idx)
         .map(|ann| {
+            let actual_page = tab.page_mapping.get(page_idx).copied().unwrap_or(page_idx);
+            let page_rotation = tab
+                .page_rotations
+                .get(&actual_page)
+                .copied()
+                .unwrap_or(tab.rotation);
+            let original_height = tab.page_heights.get(page_idx).copied().unwrap_or(800.0);
+
+            let (ann_x, ann_y, ann_width, ann_height) = crate::models::rotate_coords(
+                ann.x,
+                ann.y,
+                ann.width,
+                ann.height,
+                tab.page_width,
+                original_height,
+                page_rotation,
+            );
+
+            let display_width = match &ann.style {
+                AnnotationStyle::StickyNote { .. } => 24.0,
+                _ => ann_width,
+            };
+            let display_height = match &ann.style {
+                AnnotationStyle::StickyNote { .. } => 24.0,
+                _ => ann_height,
+            };
+
             let ann_overlay: Element<'a, crate::message::Message> = match &ann.style {
                 AnnotationStyle::Highlight { color } => {
                     let (r, g, b) = hex_to_rgb(color);
                     container(Space::new())
-                        .width(Length::Fixed(ann.width * zoom))
-                        .height(Length::Fixed(ann.height * zoom))
+                        .width(Length::Fixed(display_width * zoom))
+                        .height(Length::Fixed(display_height * zoom))
                         .style(move |_| iced::widget::container::Style {
                             background: Some(Color::from_rgba(r, g, b, 0.4).into()),
                             ..Default::default()
@@ -374,8 +437,8 @@ fn render_annotations<'a>(
                 } => {
                     let (r, g, b) = hex_to_rgb(color);
                     container(Space::new())
-                        .width(Length::Fixed(ann.width * zoom))
-                        .height(Length::Fixed(ann.height * zoom))
+                        .width(Length::Fixed(display_width * zoom))
+                        .height(Length::Fixed(display_height * zoom))
                         .style(move |_| iced::widget::container::Style {
                             background: if *fill {
                                 Some(Color::from_rgba(r, g, b, 0.2).into())
@@ -408,8 +471,8 @@ fn render_annotations<'a>(
                 AnnotationStyle::Redact { color } => {
                     let (r, g, b) = hex_to_rgb(color);
                     container(Space::new())
-                        .width(Length::Fixed(ann.width * zoom))
-                        .height(Length::Fixed(ann.height * zoom))
+                        .width(Length::Fixed(display_width * zoom))
+                        .height(Length::Fixed(display_height * zoom))
                         .style(move |_| iced::widget::container::Style {
                             background: Some(Color::from_rgb(r, g, b).into()),
                             ..Default::default()
@@ -423,8 +486,8 @@ fn render_annotations<'a>(
                 } => {
                     let (r, g, b) = hex_to_rgb(color);
                     container(Space::new())
-                        .width(Length::Fixed(ann.width * zoom))
-                        .height(Length::Fixed(ann.height * zoom))
+                        .width(Length::Fixed(display_width * zoom))
+                        .height(Length::Fixed(display_height * zoom))
                         .style(move |_| iced::widget::container::Style {
                             background: if *fill {
                                 Some(Color::from_rgba(r, g, b, 0.2).into())
@@ -434,7 +497,7 @@ fn render_annotations<'a>(
                             border: iced::Border {
                                 color: Color::from_rgb(r, g, b),
                                 width: *thickness * zoom,
-                                radius: (ann.width.min(ann.height) * zoom / 2.0).into(),
+                                radius: (display_width.min(display_height) * zoom / 2.0).into(),
                             },
                             ..Default::default()
                         })
@@ -497,8 +560,8 @@ fn render_annotations<'a>(
             }
 
             let delete_btn_overlay = container(delete_btn)
-                .width(Length::Fixed((ann.width * zoom).max(16.0)))
-                .height(Length::Fixed((ann.height * zoom).max(16.0)))
+                .width(Length::Fixed((display_width * zoom).max(16.0)))
+                .height(Length::Fixed((display_height * zoom).max(16.0)))
                 .align_x(Alignment::End)
                 .align_y(Alignment::Start);
 
@@ -512,8 +575,8 @@ fn render_annotations<'a>(
 
             container(ann_stack)
                 .padding(Padding {
-                    top: ann.y * zoom,
-                    left: ann.x * zoom,
+                    top: ann_y * zoom,
+                    left: ann_x * zoom,
                     ..Default::default()
                 })
                 .into()
@@ -530,7 +593,24 @@ fn render_hyperlinks<'a>(
         .iter()
         .filter(|link| link.page == page_idx)
         .map(|link| {
-            let (lx, ly, lw, lh) = link.bounds;
+            let actual_page = tab.page_mapping.get(page_idx).copied().unwrap_or(page_idx);
+            let page_rotation = tab
+                .page_rotations
+                .get(&actual_page)
+                .copied()
+                .unwrap_or(tab.rotation);
+            let original_height = tab.page_heights.get(page_idx).copied().unwrap_or(800.0);
+
+            let (lx, ly, lw, lh) = crate::models::rotate_coords(
+                link.bounds.0,
+                link.bounds.1,
+                link.bounds.2,
+                link.bounds.3,
+                tab.page_width,
+                original_height,
+                page_rotation,
+            );
+
             let overlay = mouse_area(
                 container(Space::new())
                     .width(Length::Fixed(lw * zoom))
@@ -572,18 +652,36 @@ fn render_search_highlights<'a>(
                 Color::from_rgba(1.0, 1.0, 0.0, 0.4)
             };
 
+            let actual_page = tab.page_mapping.get(page_idx).copied().unwrap_or(page_idx);
+            let page_rotation = tab
+                .page_rotations
+                .get(&actual_page)
+                .copied()
+                .unwrap_or(tab.rotation);
+            let original_height = tab.page_heights.get(page_idx).copied().unwrap_or(800.0);
+
+            let (rx, ry, rw, rh) = crate::models::rotate_coords(
+                result.x,
+                result.y_position,
+                result.width,
+                result.height,
+                tab.page_width,
+                original_height,
+                page_rotation,
+            );
+
             container(
                 Space::new()
-                    .width(Length::Fixed(result.width * zoom))
-                    .height(Length::Fixed(result.height * zoom)),
+                    .width(Length::Fixed(rw * zoom))
+                    .height(Length::Fixed(rh * zoom)),
             )
             .style(move |_| iced::widget::container::Style {
                 background: Some(iced::Background::Color(highlight_color)),
                 ..Default::default()
             })
             .padding(Padding {
-                top: result.y_position * zoom,
-                left: result.x * zoom,
+                top: ry * zoom,
+                left: rx * zoom,
                 ..Default::default()
             })
             .into()
@@ -631,17 +729,35 @@ fn render_selection_overlay<'a>(
 
     // 2. Draw permanent selection highlight boxes for selected words
     for &(bx, by, bw, bh) in &tab.selected_boxes {
+        let actual_page = tab.page_mapping.get(page_idx).copied().unwrap_or(page_idx);
+        let page_rotation = tab
+            .page_rotations
+            .get(&actual_page)
+            .copied()
+            .unwrap_or(tab.rotation);
+        let original_height = tab.page_heights.get(page_idx).copied().unwrap_or(800.0);
+
+        let (rx, ry, rw, rh) = crate::models::rotate_coords(
+            bx,
+            by,
+            bw,
+            bh,
+            tab.page_width,
+            original_height,
+            page_rotation,
+        );
+
         overlays.push(
             container(Space::new())
-                .width(Length::Fixed(bw * zoom))
-                .height(Length::Fixed(bh * zoom))
+                .width(Length::Fixed(rw * zoom))
+                .height(Length::Fixed(rh * zoom))
                 .style(move |_| iced::widget::container::Style {
                     background: Some(Color::from_rgba(0.0, 0.4, 1.0, 0.25).into()),
                     ..Default::default()
                 })
                 .padding(Padding {
-                    top: by * zoom,
-                    left: bx * zoom,
+                    top: ry * zoom,
+                    left: rx * zoom,
                     ..Default::default()
                 })
                 .into(),
@@ -727,17 +843,36 @@ fn render_accessibility_layer<'a>(
         .text_layers
         .get(&page_idx)
         .map(|items| {
+            let actual_page = tab.page_mapping.get(page_idx).copied().unwrap_or(page_idx);
+            let page_rotation = tab
+                .page_rotations
+                .get(&actual_page)
+                .copied()
+                .unwrap_or(tab.rotation);
+            let original_height = tab.page_heights.get(page_idx).copied().unwrap_or(800.0);
+
             items
                 .iter()
                 .map(|item| {
+                    let (rx, ry, rw, rh) = crate::models::rotate_coords(
+                        item.x,
+                        item.y,
+                        item.width,
+                        item.height,
+                        tab.page_width,
+                        original_height,
+                        page_rotation,
+                    );
                     container(text(item.text.clone()).size(item.height * zoom).style(|_| {
                         iced::widget::text::Style {
                             color: Some(Color::TRANSPARENT),
                         }
                     }))
+                    .width(Length::Fixed(rw * zoom))
+                    .height(Length::Fixed(rh * zoom))
                     .padding(Padding {
-                        top: item.y * zoom,
-                        left: item.x * zoom,
+                        top: ry * zoom,
+                        left: rx * zoom,
                         ..Default::default()
                     })
                     .into()
@@ -753,9 +888,22 @@ fn render_page_canvas<'a>(
     app: &'a PdfBullApp,
 ) -> Element<'a, crate::message::Message> {
     let zoom = tab.zoom;
+    let actual_page = tab.page_mapping.get(page_idx).copied().unwrap_or(page_idx);
+    let page_rotation = tab
+        .page_rotations
+        .get(&actual_page)
+        .copied()
+        .unwrap_or(tab.rotation);
     let original_height = tab.page_heights.get(page_idx).copied().unwrap_or(800.0);
-    let scaled_height = original_height * zoom;
-    let scaled_width = tab.page_width * zoom;
+    let is_landscape = page_rotation % 180 != 0;
+
+    let (original_width, original_height_layout) = if is_landscape {
+        (original_height, tab.page_width)
+    } else {
+        (tab.page_width, original_height)
+    };
+    let scaled_height = original_height_layout * zoom;
+    let scaled_width = original_width * zoom;
 
     if let Some((_, handle)) = tab.view_state.rendered_pages.get(&page_idx) {
         let img = iced::widget::Image::new(handle.clone())
@@ -782,6 +930,9 @@ fn render_page_canvas<'a>(
                 annotations: &tab.annotations,
                 zoom,
                 drag: app.annotation_drag.clone(),
+                rotation: page_rotation,
+                page_width: tab.page_width,
+                page_height: original_height,
             })
             .width(Length::Fixed(scaled_width))
             .height(Length::Fixed(scaled_height)),

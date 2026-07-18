@@ -254,6 +254,13 @@ pub fn handle_message(app: &mut PdfBullApp, message: Message) -> Task<Message> {
                     if page_idx < tab.page_heights.len() {
                         tab.page_heights.remove(page_idx);
                     }
+                    // Remove annotations on the deleted page and shift remaining ones
+                    tab.annotations.retain(|ann| ann.page != page_idx);
+                    for ann in &mut tab.annotations {
+                        if ann.page > page_idx {
+                            ann.page -= 1;
+                        }
+                    }
                     tab.total_pages = tab.page_mapping.len();
                     tab.current_page = tab.current_page.min(tab.total_pages.saturating_sub(1));
                     tab.view_state.rendered_pages.clear();
@@ -285,6 +292,14 @@ pub fn handle_message(app: &mut PdfBullApp, message: Message) -> Task<Message> {
                         if page_idx < tab.page_heights.len() && target_idx < tab.page_heights.len()
                         {
                             tab.page_heights.swap(page_idx, target_idx);
+                        }
+                        // Swap annotation page indices to keep them bound to the physical page content
+                        for ann in &mut tab.annotations {
+                            if ann.page == page_idx {
+                                ann.page = target_idx;
+                            } else if ann.page == target_idx {
+                                ann.page = page_idx;
+                            }
                         }
                         tab.view_state.rendered_pages.clear();
                         tab.view_state.thumbnails.clear();

@@ -838,66 +838,85 @@ impl DocumentStore {
     }
 
     pub fn search(&self, doc_id: DocumentId, query: &str) -> PdfResult<Vec<SearchResultItem>> {
+        let path = self
+            .paths
+            .get(&doc_id)
+            .ok_or(PdfError::EngineError(EngineErrorKind::DocumentPathNotFound))?;
+        let file_data = std::fs::read(path).map_err(|e| PdfError::OpenFailed(e.to_string()))?;
+        let shared_data: std::sync::Arc<[u8]> = std::sync::Arc::from(file_data.into_boxed_slice());
+
         let doc = self
             .documents
             .get(&doc_id)
             .ok_or(PdfError::EngineError(EngineErrorKind::DocumentNotFound))?;
-        let mut results = Vec::new();
+        let total_pages = doc.page_count();
         let query_lower = query.to_lowercase();
 
-        for page_idx in 0..doc.page_count() {
-            let Ok(page) = doc.page(page_idx) else {
-                continue;
-            };
-            let mut fonts = doc.load_page_fonts(&page);
-            let mut images = ImageCache::new();
-            let Ok(content) = doc.page_content_bytes(&page) else {
-                continue;
-            };
+        let results: Vec<SearchResultItem> = (0..total_pages)
+            .into_par_iter()
+            .flat_map(|page_idx| {
+                let local_bytes = shared_data.to_vec();
+                let Ok(local_doc) = PdfDocument::open(local_bytes) else {
+                    return Vec::new();
+                };
+                let Ok(page) = local_doc.page(page_idx) else {
+                    return Vec::new();
+                };
+                let mut fonts = local_doc.load_page_fonts(&page);
+                let mut images = ImageCache::new();
+                let Ok(content) = local_doc.page_content_bytes(&page) else {
+                    return Vec::new();
+                };
 
-            let mut spans: Vec<zpdf::TextSpan> = Vec::new();
-            {
-                let interp = ContentInterpreter::new(page.effective_box())
-                    .with_fonts(&mut fonts)
-                    .with_document(doc.file(), &page.resources)
-                    .with_images(&mut images)
-                    .with_text_sink(&mut spans);
-                let _ = interp.interpret(&content);
-            }
-
-            let mut full_text = String::new();
-            let mut span_offsets = Vec::new();
-
-            for (idx, span) in spans.iter().enumerate() {
-                let start = full_text.len();
-                full_text.push_str(&span.text);
-                let end = full_text.len();
-                span_offsets.push((start, end, idx));
-            }
-
-            let mut search_idx = 0;
-            while let Some(pos) = full_text.to_lowercase()[search_idx..].find(&query_lower) {
-                let match_start = search_idx + pos;
-                let match_end = match_start + query_lower.len();
-
-                if let Some(&(_, _, span_idx)) = span_offsets
-                    .iter()
-                    .find(|(s, e, _)| match_start >= *s && match_start < *e)
+                let mut spans: Vec<zpdf::TextSpan> = Vec::new();
                 {
-                    let first_span = &spans[span_idx];
-                    results.push(SearchResultItem {
-                        page_index: page_idx,
-                        text: full_text[match_start..match_end].to_string(),
-                        y: first_span.y as f32,
-                        x: first_span.x as f32,
-                        width: first_span.advance.abs() as f32,
-                        height: first_span.size,
-                    });
+                    let interp = ContentInterpreter::new(page.effective_box())
+                        .with_fonts(&mut fonts)
+                        .with_document(local_doc.file(), &page.resources)
+                        .with_images(&mut images)
+                        .with_text_sink(&mut spans);
+                    let _ = interp.interpret(&content);
                 }
 
-                search_idx = match_start + 1;
-            }
-        }
+                let page_height = page.effective_box().height() as f32;
+                let mut full_text = String::new();
+                let mut span_offsets = Vec::new();
+
+                for (idx, span) in spans.iter().enumerate() {
+                    let start = full_text.len();
+                    full_text.push_str(&span.text);
+                    let end = full_text.len();
+                    span_offsets.push((start, end, idx));
+                }
+
+                let mut page_results = Vec::new();
+                let mut search_idx = 0;
+                while let Some(pos) = full_text.to_lowercase()[search_idx..].find(&query_lower) {
+                    let match_start = search_idx + pos;
+                    let match_end = match_start + query_lower.len();
+
+                    if let Some(&(_, _, span_idx)) = span_offsets
+                        .iter()
+                        .find(|(s, e, _)| match_start >= *s && match_start < *e)
+                    {
+                        let first_span = &spans[span_idx];
+                        let y_top_down = page_height - first_span.y as f32 - first_span.size;
+                        page_results.push(SearchResultItem {
+                            page_index: page_idx,
+                            text: full_text[match_start..match_end].to_string(),
+                            y: y_top_down,
+                            x: first_span.x as f32,
+                            width: first_span.advance.abs() as f32,
+                            height: first_span.size,
+                        });
+                    }
+
+                    search_idx = match_start + 1;
+                }
+                page_results
+            })
+            .collect();
+
         Ok(results)
     }
 

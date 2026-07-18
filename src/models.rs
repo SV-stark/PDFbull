@@ -599,6 +599,50 @@ impl DocumentTab {
     }
 }
 
+pub fn rotate_coords(
+    x: f32,
+    y: f32,
+    width: f32,
+    height: f32,
+    page_width: f32,
+    page_height: f32,
+    rotation: i32,
+) -> (f32, f32, f32, f32) {
+    match rotation {
+        90 => (page_height - (y + height), x, height, width),
+        180 => (
+            page_width - (x + width),
+            page_height - (y + height),
+            width,
+            height,
+        ),
+        270 => (y, page_width - (x + width), height, width),
+        _ => (x, y, width, height),
+    }
+}
+
+pub fn unrotate_coords(
+    x: f32,
+    y: f32,
+    width: f32,
+    height: f32,
+    page_width: f32,
+    page_height: f32,
+    rotation: i32,
+) -> (f32, f32, f32, f32) {
+    match rotation {
+        90 => (y, page_height - (x + width), height, width),
+        180 => (
+            page_width - (x + width),
+            page_height - (y + height),
+            width,
+            height,
+        ),
+        270 => (page_width - (y + height), x, height, width),
+        _ => (x, y, width, height),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

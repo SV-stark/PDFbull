@@ -251,7 +251,13 @@ pub fn handle_tab_message(app: &mut PdfBullApp, message: Message) -> Task<Messag
                 });
             }
 
-            if app.active_tab >= app.tabs.len() && !app.tabs.is_empty() {
+            if app.active_tab > idx {
+                app.active_tab -= 1;
+            }
+
+            if app.tabs.is_empty() {
+                app.active_tab = 0;
+            } else if app.active_tab >= app.tabs.len() {
                 app.active_tab = app.tabs.len() - 1;
             }
             app.save_session();
