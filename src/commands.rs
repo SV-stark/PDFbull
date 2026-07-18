@@ -18,6 +18,7 @@ pub enum PdfCommand {
         DocumentId,
         usize,
         f32,
+        i32,
         oneshot::Sender<PdfResult<RenderResult>>,
     ),
     Close(DocumentId),
@@ -72,4 +73,10 @@ pub enum PdfCommand {
     ListPrinters(oneshot::Sender<PdfResult<Vec<String>>>),
     AddWatermark(String, String, String, oneshot::Sender<PdfResult<String>>),
     Optimize(String, String, oneshot::Sender<PdfResult<String>>),
+    ReorderPages(
+        String,
+        Vec<usize>,
+        String,
+        oneshot::Sender<PdfResult<String>>,
+    ),
 }

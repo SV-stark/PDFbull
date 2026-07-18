@@ -3,7 +3,7 @@ use crate::app::{INTER_BOLD, INTER_REGULAR, LUCIDE, icons};
 use crate::models::PendingAnnotationKind;
 use crate::pdf_engine::RenderFilter;
 use crate::ui::theme;
-use iced::widget::{Space, button, column, container, pick_list, row, text, tooltip};
+use iced::widget::{Space, button, column, container, pick_list, row, text, text_input, tooltip};
 use iced::{Alignment, Border, Color, Element, Length, Shadow, Vector};
 
 pub fn render(app: &PdfBullApp) -> Element<'_, crate::message::Message> {
@@ -304,6 +304,28 @@ pub fn render(app: &PdfBullApp) -> Element<'_, crate::message::Message> {
                 Space::new().into()
             };
 
+        let text_content_control: Element<'_, crate::message::Message> =
+            if mode == PendingAnnotationKind::Text || mode == PendingAnnotationKind::StickyNote {
+                let placeholder = if mode == PendingAnnotationKind::Text {
+                    "Annotation text..."
+                } else {
+                    "Note content..."
+                };
+                row![
+                    text("Content: ").size(12).font(INTER_BOLD),
+                    text_input(placeholder, &app.annotation_text)
+                        .on_input(crate::message::Message::AnnotationTextChanged)
+                        .width(Length::Fixed(200.0))
+                        .padding([4, 8])
+                        .size(12),
+                ]
+                .spacing(6)
+                .align_y(Alignment::Center)
+                .into()
+            } else {
+                Space::new().into()
+            };
+
         let bar = container(
             row![
                 text("✏️ Style:")
@@ -318,6 +340,8 @@ pub fn render(app: &PdfBullApp) -> Element<'_, crate::message::Message> {
                 thickness_control,
                 v_sep(),
                 text_size_control,
+                v_sep(),
+                text_content_control,
             ]
             .spacing(20)
             .padding([0, 20])

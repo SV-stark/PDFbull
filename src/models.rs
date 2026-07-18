@@ -441,6 +441,7 @@ pub struct DocumentTab {
     pub selection_drag: Option<(usize, (f32, f32), (f32, f32))>,
     pub selected_text: Option<String>,
     pub selected_boxes: Vec<(f32, f32, f32, f32)>,
+    pub annotations_dirty: bool,
 }
 
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -489,6 +490,7 @@ impl DocumentTab {
             selection_drag: None,
             selected_text: None,
             selected_boxes: Vec::new(),
+            annotations_dirty: false,
         }
     }
 

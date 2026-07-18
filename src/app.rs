@@ -74,6 +74,7 @@ pub struct PdfBullApp {
     pub annotation_color: String,
     pub annotation_thickness: f32,
     pub annotation_text_size: f32,
+    pub annotation_text: String,
 
     // Tools state
     pub show_watermark_prompt: bool,
@@ -119,6 +120,7 @@ impl Default for PdfBullApp {
             annotation_color: "#408cff".to_string(),
             annotation_thickness: 2.0,
             annotation_text_size: 14.0,
+            annotation_text: String::new(),
 
             // Tools default initialization
             show_watermark_prompt: false,
@@ -192,6 +194,8 @@ impl PdfBullApp {
             filter,
             auto_crop,
             page_width,
+            page_mapping,
+            page_rotations_map,
         ) = {
             let Some(tab) = self.current_tab_mut() else {
                 return Task::none();
@@ -206,6 +210,8 @@ impl PdfBullApp {
                 tab.render_filter,
                 tab.auto_crop,
                 tab.page_width,
+                tab.page_mapping.clone(),
+                tab.page_rotations.clone(),
             )
         };
 
@@ -243,9 +249,17 @@ impl PdfBullApp {
                 continue;
             }
 
+            // Translate visual page index to actual source page via page_mapping.
+            let actual_page = page_mapping.get(page_idx).copied().unwrap_or(page_idx);
+            // Per-page rotation from the organizer overrides the global tab rotation.
+            let page_rotation = page_rotations_map
+                .get(&actual_page)
+                .copied()
+                .unwrap_or(rotation);
+
             let options = crate::pdf_engine::RenderOptions {
                 scale: zoom,
-                rotation,
+                rotation: page_rotation,
                 filter,
                 auto_crop,
                 quality,
@@ -260,7 +274,7 @@ impl PdfBullApp {
                     let (resp_tx, resp_rx) = tokio::sync::oneshot::channel();
                     let _ = tx.send(crate::commands::PdfCommand::Render(
                         doc_id_cloned,
-                        page_idx,
+                        actual_page,
                         options,
                         resp_tx,
                     ));
@@ -285,6 +299,9 @@ impl PdfBullApp {
                     .collect::<std::collections::HashSet<usize>>()
             };
 
+            let page_mapping_thumb = page_mapping.clone();
+            let page_rotations_thumb = page_rotations_map.clone();
+
             for page_idx in visible_thumbnails {
                 let target = RenderTarget::Thumbnail(doc_id, page_idx);
                 let is_thumb_rendered = rendered_thumbnails.contains(&page_idx);
@@ -293,6 +310,14 @@ impl PdfBullApp {
                     continue;
                 }
                 let thumb_zoom = (120.0 / page_width.max(1.0)).min(5.0);
+                let thumb_actual = page_mapping_thumb
+                    .get(page_idx)
+                    .copied()
+                    .unwrap_or(page_idx);
+                let thumb_rotation = page_rotations_thumb
+                    .get(&thumb_actual)
+                    .copied()
+                    .unwrap_or(0);
                 self.rendering_set.insert(target);
                 let tx = cmd_tx.clone();
                 let doc_id_cloned = doc_id;
@@ -301,8 +326,9 @@ impl PdfBullApp {
                         let (resp_tx, resp_rx) = tokio::sync::oneshot::channel();
                         let _ = tx.send(crate::commands::PdfCommand::RenderThumbnail(
                             doc_id_cloned,
-                            page_idx,
+                            thumb_actual,
                             thumb_zoom,
+                            thumb_rotation,
                             resp_tx,
                         ));
                         let res = match resp_rx.await {

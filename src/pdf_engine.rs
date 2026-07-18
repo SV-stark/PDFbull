@@ -1089,6 +1089,56 @@ impl DocumentStore {
         Ok(output_path)
     }
 
+    pub fn reorder_pages(
+        &self,
+        input_path: &str,
+        page_order: &[usize],
+        output_path: &str,
+    ) -> PdfResult<String> {
+        let mut doc = lopdf::Document::load(input_path)
+            .map_err(|e| PdfError::from(format!("Failed to load PDF for reorder: {e}")))?;
+
+        let pages: Vec<lopdf::ObjectId> = doc.page_iter().collect();
+        let total = pages.len();
+
+        // Build the new page list in the requested order (filter out-of-range indices)
+        let reordered: Vec<lopdf::ObjectId> = page_order
+            .iter()
+            .filter(|&&i| i < total)
+            .map(|&i| pages[i])
+            .collect();
+
+        if reordered.is_empty() {
+            return Err(PdfError::from("No valid pages in reorder mapping"));
+        }
+
+        // Get or build the Pages root
+        let pages_root_id = doc.get_pages().values().next().and_then(|&oid| {
+            doc.get_object(oid)
+                .ok()
+                .and_then(|o| o.as_dict().ok())
+                .and_then(|d| d.get(b"Parent").ok())
+                .and_then(|p| p.as_reference().ok())
+        });
+
+        if let Some(root_id) = pages_root_id {
+            // Update Kids array on the Pages root
+            if let Ok(lopdf::Object::Dictionary(dict)) = doc.get_object_mut(root_id) {
+                let kids: Vec<lopdf::Object> = reordered
+                    .iter()
+                    .map(|&id| lopdf::Object::Reference(id))
+                    .collect();
+                dict.set(b"Kids", lopdf::Object::Array(kids));
+                dict.set(b"Count", lopdf::Object::Integer(reordered.len() as i64));
+            }
+        }
+
+        doc.save(output_path)
+            .map_err(|e| PdfError::from(format!("Failed to save reordered PDF: {e}")))?;
+
+        Ok(output_path.to_string())
+    }
+
     pub fn split_pdf(
         &self,
         path: &str,

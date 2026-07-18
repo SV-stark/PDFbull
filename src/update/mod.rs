@@ -99,6 +99,10 @@ pub fn handle_message(app: &mut PdfBullApp, message: Message) -> Task<Message> {
         Message::AddBookmark | Message::RemoveBookmark(_) | Message::JumpToBookmark(_) => {
             bookmarks::handle_bookmark_message(app, message)
         }
+        Message::AnnotationTextChanged(text) => {
+            app.annotation_text = text;
+            Task::none()
+        }
         Message::SetAnnotationMode(_)
         | Message::AnnotationDragStart { .. }
         | Message::AnnotationDragUpdate { .. }
@@ -108,7 +112,8 @@ pub fn handle_message(app: &mut PdfBullApp, message: Message) -> Task<Message> {
         | Message::Redo
         | Message::SaveAnnotations
         | Message::AnnotationsSaved(_)
-        | Message::AnnotationsLoaded(_, _) => annotations::handle_annotation_message(app, message),
+        | Message::AnnotationsLoaded(_, _)
+        | Message::EditAnnotationText(_, _) => annotations::handle_annotation_message(app, message),
         Message::SetFilter(_)
         | Message::ToggleAutoCrop
         | Message::ViewportChanged(_, _)
@@ -150,6 +155,8 @@ pub fn handle_message(app: &mut PdfBullApp, message: Message) -> Task<Message> {
         | Message::ExportImage
         | Message::ImageExported(_)
         | Message::ExportImages
+        | Message::SaveOrganizedPDF
+        | Message::OrganizedPDFSaved(_)
         | Message::Print
         | Message::ListPrinters
         | Message::PrintersListed(_)
@@ -222,7 +229,7 @@ pub fn handle_message(app: &mut PdfBullApp, message: Message) -> Task<Message> {
             if !app.signature_lines.is_empty() {
                 app.saved_signature = Some(app.signature_lines.clone());
                 app.signature_stamp_active = true;
-                app.annotation_mode = Some(crate::models::PendingAnnotationKind::Highlight);
+                app.annotation_mode = Some(crate::models::PendingAnnotationKind::Line);
                 app.status_message = Some(
                     "Signature saved. Click anywhere on the PDF page to stamp it.".to_string(),
                 );
@@ -230,7 +237,6 @@ pub fn handle_message(app: &mut PdfBullApp, message: Message) -> Task<Message> {
             app.show_signature_creator = false;
             Task::none()
         }
-        Message::PlaceSignatureStamp(_page, _x, _y) => Task::none(),
         Message::TogglePageOrganizer(show) => {
             app.show_page_organizer = show;
             if show {
@@ -242,6 +248,8 @@ pub fn handle_message(app: &mut PdfBullApp, message: Message) -> Task<Message> {
         Message::OrganizerDeletePage(page_idx) => {
             if let Some(tab) = app.current_tab_mut() {
                 if page_idx < tab.page_mapping.len() {
+                    let actual_page = tab.page_mapping[page_idx];
+                    tab.page_rotations.remove(&actual_page);
                     tab.page_mapping.remove(page_idx);
                     if page_idx < tab.page_heights.len() {
                         tab.page_heights.remove(page_idx);
@@ -271,14 +279,16 @@ pub fn handle_message(app: &mut PdfBullApp, message: Message) -> Task<Message> {
         }
         Message::OrganizerMovePage(page_idx, direction) => {
             if let Some(tab) = app.current_tab_mut() {
-                let target_idx = (page_idx as isize + direction) as usize;
-                if page_idx < tab.page_mapping.len() && target_idx < tab.page_mapping.len() {
-                    tab.page_mapping.swap(page_idx, target_idx);
-                    if page_idx < tab.page_heights.len() && target_idx < tab.page_heights.len() {
-                        tab.page_heights.swap(page_idx, target_idx);
+                if let Ok(target_idx) = usize::try_from(page_idx as isize + direction) {
+                    if page_idx < tab.page_mapping.len() && target_idx < tab.page_mapping.len() {
+                        tab.page_mapping.swap(page_idx, target_idx);
+                        if page_idx < tab.page_heights.len() && target_idx < tab.page_heights.len()
+                        {
+                            tab.page_heights.swap(page_idx, target_idx);
+                        }
+                        tab.view_state.rendered_pages.clear();
+                        tab.view_state.thumbnails.clear();
                     }
-                    tab.view_state.rendered_pages.clear();
-                    tab.view_state.thumbnails.clear();
                 }
             }
             app.render_visible_pages()

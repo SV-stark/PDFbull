@@ -112,9 +112,12 @@ pub enum Message {
     SignatureDragEnd,
     ClearSignature,
     SaveSignature,
-    PlaceSignatureStamp(usize, f32, f32),
     TogglePageOrganizer(bool),
     OrganizerDeletePage(usize),
     OrganizerRotatePage(usize, i32),
     OrganizerMovePage(usize, isize),
+    AnnotationTextChanged(String),
+    SaveOrganizedPDF,
+    OrganizedPDFSaved(crate::models::PdfResult<String>),
+    EditAnnotationText(usize, String),
 }

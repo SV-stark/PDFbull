@@ -43,6 +43,7 @@ pub fn handle_annotation_message(app: &mut PdfBullApp, message: Message) -> Task
             let ann_color = app.annotation_color.clone();
             let ann_thickness = app.annotation_thickness;
             let ann_text_size = app.annotation_text_size;
+            let ann_text = app.annotation_text.clone();
 
             let is_stamp = app.signature_stamp_active;
             let sig_strokes = app.saved_signature.clone();
@@ -115,6 +116,7 @@ pub fn handle_annotation_message(app: &mut PdfBullApp, message: Message) -> Task
                                         height: sy2 - sy1,
                                     };
                                     tab.annotations.push(line_ann);
+                                    tab.annotations_dirty = true;
                                 }
                             }
                         }
@@ -164,7 +166,11 @@ pub fn handle_annotation_message(app: &mut PdfBullApp, message: Message) -> Task
                         }
                         crate::models::PendingAnnotationKind::Text => {
                             crate::models::AnnotationStyle::Text {
-                                text: "Text Annotation".to_string(),
+                                text: if ann_text.is_empty() {
+                                    "Text Annotation".to_string()
+                                } else {
+                                    ann_text.clone()
+                                },
                                 color: ann_color.clone(),
                                 font_size: ann_text_size as u32,
                             }
@@ -190,7 +196,11 @@ pub fn handle_annotation_message(app: &mut PdfBullApp, message: Message) -> Task
                         }
                         crate::models::PendingAnnotationKind::StickyNote => {
                             crate::models::AnnotationStyle::StickyNote {
-                                comment: "Sticky Note".to_string(),
+                                comment: if ann_text.is_empty() {
+                                    "Sticky Note".to_string()
+                                } else {
+                                    ann_text.clone()
+                                },
                                 color: "#ffeb3b".to_string(),
                             }
                         }
@@ -230,6 +240,7 @@ pub fn handle_annotation_message(app: &mut PdfBullApp, message: Message) -> Task
                         .push(crate::models::UndoableAction::AddAnnotation(ann.clone()));
                     tab.redo_stack.clear();
                     tab.annotations.push(ann);
+                    tab.annotations_dirty = true;
                 }
             } else if let Some(tab) = app.current_tab_mut() {
                 if let Some((page_idx, start, current)) = tab.selection_drag.take() {
@@ -292,6 +303,7 @@ pub fn handle_annotation_message(app: &mut PdfBullApp, message: Message) -> Task
                 tab.undo_stack
                     .push(crate::models::UndoableAction::DeleteAnnotation(idx, ann));
                 tab.redo_stack.clear();
+                tab.annotations_dirty = true;
             }
             Task::none()
         }
@@ -341,11 +353,19 @@ pub fn handle_annotation_message(app: &mut PdfBullApp, message: Message) -> Task
         }
         Message::SaveAnnotations => {
             let (doc_id, annotations, pdf_path) = match app.current_tab() {
-                Some(t) if !t.annotations.is_empty() => (
-                    t.id,
-                    t.annotations.clone(),
-                    t.path.to_string_lossy().to_string(),
-                ),
+                Some(t) if !t.annotations.is_empty() => {
+                    // Remap visual page indices to actual PDF page numbers via page_mapping.
+                    let annotations = t
+                        .annotations
+                        .iter()
+                        .map(|ann| {
+                            let mut ann = ann.clone();
+                            ann.page = t.page_mapping.get(ann.page).copied().unwrap_or(ann.page);
+                            ann
+                        })
+                        .collect::<Vec<_>>();
+                    (t.id, annotations, t.path.to_string_lossy().to_string())
+                }
                 _ => {
                     tracing::warn!("No annotations to save");
                     return Task::none();
@@ -377,7 +397,12 @@ pub fn handle_annotation_message(app: &mut PdfBullApp, message: Message) -> Task
         }
         Message::AnnotationsSaved(result) => {
             match result {
-                Ok(path) => app.status_message = Some(format!("Annotations saved to: {path}")),
+                Ok(path) => {
+                    if let Some(tab) = app.current_tab_mut() {
+                        tab.annotations_dirty = false;
+                    }
+                    app.status_message = Some(format!("Annotations saved to: {path}"));
+                }
                 Err(e) => {
                     tracing::error!("Error saving annotations: {e}");
                     app.status_message = Some(format!("Error saving annotations: {e}"));
@@ -390,6 +415,24 @@ pub fn handle_annotation_message(app: &mut PdfBullApp, message: Message) -> Task
                 tab.annotations = annotations;
             }
             app.render_visible_pages()
+        }
+        Message::EditAnnotationText(idx, new_text) => {
+            if let Some(tab) = app.current_tab_mut() {
+                if let Some(ann) = tab.annotations.get_mut(idx) {
+                    match &mut ann.style {
+                        crate::models::AnnotationStyle::Text { text, .. } => {
+                            *text = new_text;
+                            tab.annotations_dirty = true;
+                        }
+                        crate::models::AnnotationStyle::StickyNote { comment, .. } => {
+                            *comment = new_text;
+                            tab.annotations_dirty = true;
+                        }
+                        _ => {}
+                    }
+                }
+            }
+            Task::none()
         }
         _ => Task::none(),
     }

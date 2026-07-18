@@ -713,6 +713,64 @@ pub fn handle_export_message(app: &mut PdfBullApp, message: Message) -> Task<Mes
             }
             Task::none()
         }
+        Message::SaveOrganizedPDF => {
+            let Some(tab) = app.current_tab() else {
+                return Task::none();
+            };
+            let source_path = tab.path.to_string_lossy().to_string();
+            let page_order = tab.page_mapping.clone();
+
+            let Some(engine) = &app.engine else {
+                return Task::none();
+            };
+            let cmd_tx = engine.cmd_tx.clone();
+
+            Task::perform(
+                async move {
+                    let file = rfd::AsyncFileDialog::new()
+                        .add_filter("PDF", &["pdf"])
+                        .set_file_name("reorganized.pdf")
+                        .save_file()
+                        .await;
+
+                    match file {
+                        Some(f) => {
+                            let out_path = f.path().to_string_lossy().to_string();
+                            let (resp_tx, resp_rx) = tokio::sync::oneshot::channel();
+                            if let Err(e) = cmd_tx
+                                .send(PdfCommand::ReorderPages(
+                                    source_path,
+                                    page_order,
+                                    out_path,
+                                    resp_tx,
+                                ))
+                                .await
+                            {
+                                tracing::error!("Failed to send ReorderPages: {e}");
+                                return Err(crate::models::PdfError::EngineDied);
+                            }
+                            match resp_rx.await {
+                                Ok(r) => r,
+                                Err(_) => Err(crate::models::PdfError::EngineDied),
+                            }
+                        }
+                        None => Err(crate::models::PdfError::from("Cancelled")),
+                    }
+                },
+                Message::OrganizedPDFSaved,
+            )
+        }
+        Message::OrganizedPDFSaved(result) => {
+            match result {
+                Ok(path) => app.status_message = Some(format!("Reorganized PDF saved to: {path}")),
+                Err(e) => {
+                    if e != "Cancelled" {
+                        app.status_message = Some(format!("Failed to save: {e}"));
+                    }
+                }
+            }
+            Task::none()
+        }
         _ => Task::none(),
     }
 }

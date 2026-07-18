@@ -75,8 +75,15 @@ pub fn handle_app_message(app: &mut PdfBullApp, message: Message) -> Task<Messag
             Task::none()
         }
         Message::SetReadingMode(mode) => {
+            use crate::pdf_engine::RenderFilter;
             app.reading_mode = mode;
             if let Some(tab) = app.current_tab_mut() {
+                tab.render_filter = match mode {
+                    crate::models::ReadingMode::Default => RenderFilter::None,
+                    crate::models::ReadingMode::Inverted => RenderFilter::Inverted,
+                    crate::models::ReadingMode::Sepia => RenderFilter::Sepia,
+                    crate::models::ReadingMode::Grayscale => RenderFilter::Grayscale,
+                };
                 tab.view_state.rendered_pages.clear();
             }
             app.render_visible_pages()

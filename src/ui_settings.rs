@@ -263,6 +263,38 @@ pub fn settings_view(app: &crate::app::PdfBullApp) -> Element<'_, crate::message
         column![theme_buttons, filter_buttons].spacing(16),
     );
 
+    let reading_mode_section = custom_card(
+        text("Reading Mode")
+            .size(14)
+            .font(INTER_BOLD)
+            .style(|_theme| iced::widget::text::Style {
+                color: Some(Color::WHITE),
+            }),
+        row![
+            setting_btn(
+                "Default",
+                app.reading_mode == crate::models::ReadingMode::Default,
+                crate::message::Message::SetReadingMode(crate::models::ReadingMode::Default),
+            ),
+            setting_btn(
+                "Inverted",
+                app.reading_mode == crate::models::ReadingMode::Inverted,
+                crate::message::Message::SetReadingMode(crate::models::ReadingMode::Inverted),
+            ),
+            setting_btn(
+                "Sepia",
+                app.reading_mode == crate::models::ReadingMode::Sepia,
+                crate::message::Message::SetReadingMode(crate::models::ReadingMode::Sepia),
+            ),
+            setting_btn(
+                "Grayscale",
+                app.reading_mode == crate::models::ReadingMode::Grayscale,
+                crate::message::Message::SetReadingMode(crate::models::ReadingMode::Grayscale),
+            ),
+        ]
+        .spacing(8),
+    );
+
     let performance_card = custom_card(
         text("Performance")
             .size(18)
@@ -326,6 +358,8 @@ pub fn settings_view(app: &crate::app::PdfBullApp) -> Element<'_, crate::message
             .align_y(Alignment::Center)
             .padding(20),
             appearance_card,
+            Space::new().height(20),
+            reading_mode_section,
             Space::new().height(20),
             performance_card,
             Space::new().height(20),

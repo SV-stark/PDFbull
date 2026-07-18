@@ -213,12 +213,32 @@ pub fn render(app: &PdfBullApp) -> Element<'_, crate::message::Message> {
                             format!("Sticky: {}", &comment[..comment.len().min(20)])
                         }
                     };
-                    list_col = list_col.push(row![
-                        button(text(label))
-                            .on_press(crate::message::Message::JumpToPage(ann.page))
-                            .width(Length::Fill),
-                        button("×").on_press(crate::message::Message::DeleteAnnotation(idx))
-                    ]);
+                    let mut ann_row = row![].spacing(5).align_y(iced::Alignment::Center);
+
+                    if let AnnotationStyle::Text { text, .. }
+                    | AnnotationStyle::StickyNote { comment: text, .. } = &ann.style
+                    {
+                        ann_row = ann_row.push(
+                            text_input("Edit annotation...", text)
+                                .on_input(move |s| {
+                                    crate::message::Message::EditAnnotationText(idx, s)
+                                })
+                                .size(12)
+                                .padding([3, 6])
+                                .width(Length::Fill),
+                        );
+                    } else {
+                        ann_row = ann_row.push(
+                            button(text(label))
+                                .on_press(crate::message::Message::JumpToPage(ann.page))
+                                .width(Length::Fill),
+                        );
+                    }
+
+                    ann_row = ann_row
+                        .push(button("×").on_press(crate::message::Message::DeleteAnnotation(idx)));
+
+                    list_col = list_col.push(ann_row);
                 }
                 ann_col = ann_col.push(container(list_col.spacing(5)).padding(10));
             } else {

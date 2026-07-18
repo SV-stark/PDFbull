@@ -67,11 +67,11 @@ pub fn spawn_engine_thread(cache_size: u64, max_memory_mb: u64) -> EngineState {
                     let res = store.render_page(doc_id, page_num, options);
                     let _ = tx.send(res);
                 }
-                PdfCommand::RenderThumbnail(doc_id, page_num, scale, tx) => {
+                PdfCommand::RenderThumbnail(doc_id, page_num, scale, rotation, tx) => {
                     reload_if_needed(&mut store, &paths, doc_id);
                     let options = crate::pdf_engine::RenderOptions {
                         scale,
-                        rotation: 0,
+                        rotation,
                         filter: crate::pdf_engine::RenderFilter::None,
                         auto_crop: false,
                         quality: crate::pdf_engine::RenderQuality::Low,
@@ -179,6 +179,10 @@ pub fn spawn_engine_thread(cache_size: u64, max_memory_mb: u64) -> EngineState {
                 }
                 PdfCommand::Optimize(input, output, tx) => {
                     let res = store.optimize_pdf(&input, &output);
+                    let _ = tx.send(res);
+                }
+                PdfCommand::ReorderPages(input, page_order, output, tx) => {
+                    let res = store.reorder_pages(&input, &page_order, &output);
                     let _ = tx.send(res);
                 }
                 _ => {}

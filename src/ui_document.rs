@@ -474,13 +474,9 @@ fn render_annotations<'a>(
                 }
             };
 
-            let ann_idx = tab
-                .annotations
-                .iter()
-                .position(|a| a.id == ann.id)
-                .unwrap_or(0);
+            let ann_idx = tab.annotations.iter().position(|a| a.id == ann.id);
 
-            let delete_btn = button(
+            let mut delete_btn = button(
                 iced::widget::text("×")
                     .size(9)
                     .font(INTER_BOLD)
@@ -495,8 +491,10 @@ fn render_annotations<'a>(
                     ..Default::default()
                 },
                 ..Default::default()
-            })
-            .on_press(crate::message::Message::DeleteAnnotation(ann_idx));
+            });
+            if let Some(idx) = ann_idx {
+                delete_btn = delete_btn.on_press(crate::message::Message::DeleteAnnotation(idx));
+            }
 
             let delete_btn_overlay = container(delete_btn)
                 .width(Length::Fixed((ann.width * zoom).max(16.0)))

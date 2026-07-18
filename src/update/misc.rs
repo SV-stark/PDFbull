@@ -20,7 +20,7 @@ pub fn handle_misc_message(app: &mut PdfBullApp, message: Message) -> Task<Messa
         Message::IcedEvent(event) => {
             match event {
                 iced::Event::Window(iced::window::Event::CloseRequested) => {
-                    let has_dirty = app.tabs.iter().any(|t| !t.annotations.is_empty());
+                    let has_dirty = app.tabs.iter().any(|t| t.annotations_dirty);
                     if has_dirty {
                         return Task::perform(
                             async move {

@@ -308,6 +308,19 @@ fn organizer_view(app: &PdfBullApp) -> Element<'_, crate::message::Message> {
             ]
             .spacing(4),
             Space::new().width(Length::Fill),
+            button(text("💾 Export PDF").size(13).font(INTER_BOLD))
+                .on_press(crate::message::Message::SaveOrganizedPDF)
+                .padding([10, 20])
+                .style(|_theme, _status| button::Style {
+                    background: Some(theme::COLOR_ACCENT.into()),
+                    text_color: Color::WHITE,
+                    border: Border {
+                        radius: theme::BORDER_RADIUS_MD.into(),
+                        ..Default::default()
+                    },
+                    ..Default::default()
+                }),
+            Space::new().width(10),
             button(text("❌ Close Organizer").size(13).font(INTER_BOLD))
                 .on_press(crate::message::Message::TogglePageOrganizer(false))
                 .padding([10, 20])

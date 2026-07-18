@@ -3,6 +3,8 @@ use pdfbull::platform;
 
 fn main() -> iced::Result {
     if std::env::var("WGPU_BACKEND").is_err() {
+        // SAFETY: called before any threads are spawned; no concurrent env reads possible.
+        #[allow(unsafe_code)]
         unsafe {
             std::env::set_var("WGPU_BACKEND", "vulkan");
         }
