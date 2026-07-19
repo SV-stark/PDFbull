@@ -25,7 +25,15 @@ impl std::io::Write for DualWriter {
 }
 
 fn main() -> iced::Result {
-    std::panic::set_hook(Box::new(|info| {
+    let config_dir = pdfbull::storage::get_config_dir();
+    let _ = std::fs::create_dir_all(&config_dir);
+    let log_path = config_dir.join("pdfbull.log");
+    let panic_path = config_dir.join("panic_out.log");
+
+    let log_path_clone = log_path.clone();
+    let panic_path_clone = panic_path.clone();
+
+    std::panic::set_hook(Box::new(move |info| {
         let msg = if let Some(s) = info.payload().downcast_ref::<&str>() {
             *s
         } else if let Some(s) = info.payload().downcast_ref::<String>() {
@@ -42,11 +50,11 @@ fn main() -> iced::Result {
             "PANIC: {} at {}\nBacktrace:\n{:?}",
             msg, location, backtrace
         );
-        let _ = std::fs::write("panic_out.log", &panic_msg);
+        let _ = std::fs::write(&panic_path_clone, &panic_msg);
         if let Ok(mut f) = std::fs::OpenOptions::new()
             .create(true)
             .append(true)
-            .open("pdfbull.log")
+            .open(&log_path_clone)
         {
             use std::io::Write;
             let _ = f.write_all(panic_msg.as_bytes());
@@ -57,7 +65,7 @@ fn main() -> iced::Result {
         .create(true)
         .write(true)
         .truncate(true)
-        .open("pdfbull.log")
+        .open(&log_path)
         .expect("Failed to open pdfbull.log");
     let shared_file = std::sync::Arc::new(std::sync::Mutex::new(log_file));
 
