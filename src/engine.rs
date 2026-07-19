@@ -260,7 +260,6 @@ pub fn spawn_engine_thread(cache_size: u64, max_memory_mb: u64) -> EngineState {
                         let res = store.load_annotations(&path);
                         let _ = tx.send(res);
                     }
-
                 }
             }
         });

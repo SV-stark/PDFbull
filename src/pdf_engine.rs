@@ -229,13 +229,10 @@ impl DocumentStore {
 
     /// Load annotations previously saved with `save_annotations` from the PDF file.
     /// Returns an empty vec if there are no annotations or if the file cannot be read.
-    pub fn load_annotations(
-        &self,
-        path: &str,
-    ) -> PdfResult<Vec<Annotation>> {
-        let lopdf_doc = match Document::load(path) {
-            Ok(d) => d,
-            Err(_) => return Ok(Vec::new()),
+    #[allow(clippy::many_single_char_names, clippy::similar_names)]
+    pub fn load_annotations(&self, path: &str) -> PdfResult<Vec<Annotation>> {
+        let Ok(lopdf_doc) = Document::load(path) else {
+            return Ok(Vec::new());
         };
 
         let mut annotations = Vec::new();
@@ -265,10 +262,9 @@ impl DocumentStore {
                 .and_then(|o| o.as_dict().ok())
                 .and_then(|d| d.get(b"Annots").ok())
                 .and_then(|a| match a {
-                    Object::Reference(r) => lopdf_doc
-                        .objects
-                        .get(r)
-                        .and_then(|o| o.as_array().ok()),
+                    Object::Reference(r) => {
+                        lopdf_doc.objects.get(r).and_then(|o| o.as_array().ok())
+                    }
                     Object::Array(arr) => Some(arr),
                     _ => None,
                 })
@@ -280,9 +276,8 @@ impl DocumentStore {
                     Object::Reference(r) => lopdf_doc.objects.get(r),
                     _ => None,
                 };
-                let dict = match annot_obj.and_then(|o| o.as_dict().ok()) {
-                    Some(d) => d,
-                    None => continue,
+                let Some(dict) = annot_obj.and_then(|o| o.as_dict().ok()) else {
+                    continue;
                 };
 
                 let subtype = dict

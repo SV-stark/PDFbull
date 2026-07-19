@@ -50,10 +50,7 @@ pub fn handle_tab_message(app: &mut PdfBullApp, message: Message) -> Task<Messag
                             crate::models::DocumentId(0),
                             Err(crate::models::PdfError::Cancelled),
                         ),
-                        Err(e) => Message::DocumentOpened(
-                            crate::models::DocumentId(0),
-                            Err(e),
-                        ),
+                        Err(e) => Message::DocumentOpened(crate::models::DocumentId(0), Err(e)),
                     },
                 );
             }
