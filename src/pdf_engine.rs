@@ -128,10 +128,19 @@ impl DocumentStore {
     pub fn open_document(
         &mut self,
         path: &str,
+        password: Option<&str>,
         doc_id: DocumentId,
     ) -> PdfResult<crate::models::OpenResult> {
         let data = std::fs::read(path).map_err(|e| PdfError::OpenFailed(e.to_string()))?;
-        let doc = PdfDocument::open(data).map_err(|e| PdfError::OpenFailed(e.to_string()))?;
+        let doc = match PdfDocument::open_with_password(data, password.unwrap_or("").as_bytes()) {
+            Ok(doc) => doc,
+            Err(zpdf::Error::WrongPassword) => {
+                return Err(PdfError::PasswordRequired);
+            }
+            Err(e) => {
+                return Err(PdfError::OpenFailed(e.to_string()));
+            }
+        };
 
         let page_count = doc.page_count();
         let mut heights = Vec::with_capacity(page_count);
@@ -153,7 +162,9 @@ impl DocumentStore {
 
         let outline = self.get_outline_internal(&doc);
         let links = self.extract_links_internal(&doc);
-        let metadata = doc.info().map(|info| Self::doc_info_to_metadata(&info)).unwrap_or_default();
+        let info = doc.info();
+        let xmp = doc.xmp_metadata();
+        let metadata = Self::doc_info_to_metadata(info.as_ref(), xmp.as_ref());
 
         self.documents.insert(doc_id, doc);
         self.paths.insert(doc_id, path.to_string());
@@ -210,7 +221,9 @@ impl DocumentStore {
         let outline = self.get_outline_internal(doc);
         let links = self.extract_links_internal(doc);
 
-        let metadata = doc.info().map(|info| Self::doc_info_to_metadata(&info)).unwrap_or_default();
+        let info = doc.info();
+        let xmp = doc.xmp_metadata();
+        let metadata = Self::doc_info_to_metadata(info.as_ref(), xmp.as_ref());
 
         Ok(crate::models::DocumentMeta {
             outline,
@@ -1103,16 +1116,55 @@ impl DocumentStore {
         bookmarks
     }
 
-    fn doc_info_to_metadata(info: &zpdf::DocInfo) -> crate::models::DocumentMetadata {
+    fn doc_info_to_metadata(
+        info: Option<&zpdf::DocInfo>,
+        xmp: Option<&zpdf::XmpMetadata>,
+    ) -> crate::models::DocumentMetadata {
+        let title = xmp.and_then(|x| x.title.clone())
+            .or_else(|| info.and_then(|i| i.title.clone()));
+
+        let author = xmp.and_then(|x| {
+            if x.creators.is_empty() {
+                None
+            } else {
+                Some(x.creators.join(", "))
+            }
+        }).or_else(|| info.and_then(|i| i.author.clone()));
+
+        let subject = xmp.and_then(|x| {
+            x.description.clone().or_else(|| {
+                if x.subjects.is_empty() {
+                    None
+                } else {
+                    Some(x.subjects.join(", "))
+                }
+            })
+        }).or_else(|| info.and_then(|i| i.subject.clone()));
+
+        let keywords = xmp.and_then(|x| x.keywords.clone())
+            .or_else(|| info.and_then(|i| i.keywords.clone()));
+
+        let creator = xmp.and_then(|x| x.creator_tool.clone())
+            .or_else(|| info.and_then(|i| i.creator.clone()));
+
+        let producer = xmp.and_then(|x| x.producer.clone())
+            .or_else(|| info.and_then(|i| i.producer.clone()));
+
+        let creation_date = xmp.and_then(|x| x.create_date.clone())
+            .or_else(|| info.and_then(|i| i.creation_date.clone()));
+
+        let modification_date = xmp.and_then(|x| x.modify_date.clone())
+            .or_else(|| info.and_then(|i| i.mod_date.clone()));
+
         crate::models::DocumentMetadata {
-            title: info.title.clone(),
-            author: info.author.clone(),
-            subject: info.subject.clone(),
-            keywords: info.keywords.clone(),
-            creator: info.creator.clone(),
-            producer: info.producer.clone(),
-            creation_date: info.creation_date.clone(),
-            modification_date: info.mod_date.clone(),
+            title,
+            author,
+            subject,
+            keywords,
+            creator,
+            producer,
+            creation_date,
+            modification_date,
         }
     }
 
@@ -2335,7 +2387,7 @@ mod tests {
             path.push("test_document.pdf");
             let path_str = path.to_str().unwrap();
             let doc_id = DocumentId(1);
-            let open_res = store.open_document(path_str, doc_id).unwrap();
+            let open_res = store.open_document(path_str, None, doc_id).unwrap();
             assert!(open_res.page_count > 0);
             let render_options = RenderOptions {
                 scale: 1.0,

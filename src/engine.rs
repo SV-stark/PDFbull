@@ -18,7 +18,7 @@ fn reload_if_needed(
     if !store.has_document(doc_id) {
         if let Ok(guard) = paths.read() {
             if let Some(path) = guard.get(&doc_id).cloned() {
-                if let Err(e) = store.open_document(&path, doc_id) {
+                if let Err(e) = store.open_document(&path, None, doc_id) {
                     tracing::error!("Failed to reload document {doc_id:?} from path '{path}': {e:?}");
                 }
             }
@@ -64,12 +64,13 @@ pub fn spawn_engine_thread(cache_size: u64, max_memory_mb: u64) -> EngineState {
 
             while let Ok(cmd) = rx.recv() {
                 match cmd {
-                    PdfCommand::Open(path, doc_id, tx) => {
+                    PdfCommand::Open(path, password, doc_id, tx) => {
                         tracing::info!("Engine worker: opening {:?}", path);
                         let mut store_ref = std::panic::AssertUnwindSafe(&mut store);
                         let path_clone = path.clone();
+                        let pass_clone = password.clone();
                         let result = std::panic::catch_unwind(move || {
-                            store_ref.open_document(&path_clone, doc_id)
+                            store_ref.open_document(&path_clone, pass_clone.as_deref(), doc_id)
                         });
 
                         let res = match result {

@@ -7,7 +7,12 @@ use tokio::sync::oneshot;
 
 #[derive(Debug)]
 pub enum PdfCommand {
-    Open(String, DocumentId, oneshot::Sender<PdfResult<OpenResult>>),
+    Open(
+        String,
+        Option<String>,
+        DocumentId,
+        oneshot::Sender<PdfResult<OpenResult>>,
+    ),
     Render(
         DocumentId,
         usize,

@@ -29,7 +29,7 @@ pub fn handle_tab_message(app: &mut PdfBullApp, message: Message) -> Task<Messag
                             let (resp_tx, resp_rx) = tokio::sync::oneshot::channel();
                             let doc_id = crate::models::next_doc_id();
                             if let Err(e) = cmd_tx
-                                .send(crate::commands::PdfCommand::Open(path_s, doc_id, resp_tx))
+                                .send(crate::commands::PdfCommand::Open(path_s, None, doc_id, resp_tx))
                                 .await
                             {
                                 tracing::error!("Failed to send Open command: {e}");
@@ -203,7 +203,7 @@ pub fn handle_tab_message(app: &mut PdfBullApp, message: Message) -> Task<Messag
                     async move {
                         let (resp_tx, resp_rx) = tokio::sync::oneshot::channel();
                         if let Err(e) = cmd_tx
-                            .send(crate::commands::PdfCommand::Open(path_s, doc_id, resp_tx))
+                            .send(crate::commands::PdfCommand::Open(path_s, None, doc_id, resp_tx))
                             .await
                         {
                             tracing::error!("Failed to send Open command: {e}");
@@ -354,7 +354,7 @@ pub fn handle_tab_message(app: &mut PdfBullApp, message: Message) -> Task<Messag
                             let (resp_tx, resp_rx) = tokio::sync::oneshot::channel();
                             if let Err(e) = cmd_tx
                                 .send(crate::commands::PdfCommand::Open(
-                                    path_s, new_doc_id, resp_tx,
+                                    path_s, None, new_doc_id, resp_tx,
                                 ))
                                 .await
                             {

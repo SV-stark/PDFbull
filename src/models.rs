@@ -9,6 +9,8 @@ use thiserror::Error;
 pub enum PdfError {
     #[error("Failed to open document: {0}")]
     OpenFailed(String),
+    #[error("Password required or wrong password")]
+    PasswordRequired,
     #[error("Page {0} not found")]
     PageNotFound(usize),
     #[error("Render failed: {0}")]
