@@ -382,21 +382,18 @@ impl PdfBullApp {
     }
 
     pub fn subscription(&self) -> iced::Subscription<Message> {
-        let events = iced::event::listen_with(|event, _status, _id| {
-            match event {
-                iced::Event::Window(
-                    iced::window::Event::CloseRequested | iced::window::Event::FileDropped(_),
-                )
-                | iced::Event::Mouse(
-                    iced::mouse::Event::CursorMoved { .. }
-                    | iced::mouse::Event::WheelScrolled { .. },
-                )
-                | iced::Event::Keyboard(
-                    iced::keyboard::Event::ModifiersChanged(_)
-                    | iced::keyboard::Event::KeyPressed { .. },
-                ) => Some(Message::IcedEvent(event)),
-                _ => None,
-            }
+        let events = iced::event::listen_with(|event, _status, _id| match event {
+            iced::Event::Window(
+                iced::window::Event::CloseRequested | iced::window::Event::FileDropped(_),
+            )
+            | iced::Event::Mouse(
+                iced::mouse::Event::CursorMoved { .. } | iced::mouse::Event::WheelScrolled { .. },
+            )
+            | iced::Event::Keyboard(
+                iced::keyboard::Event::ModifiersChanged(_)
+                | iced::keyboard::Event::KeyPressed { .. },
+            ) => Some(Message::IcedEvent(event)),
+            _ => None,
         });
 
         let ipc_sub = iced::Subscription::run_with("ipc-stream", |_| {
