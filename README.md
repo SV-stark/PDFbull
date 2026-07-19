@@ -38,19 +38,19 @@ Measured using the `divan` benchmarking framework on a standard text-heavy test 
 | **PDF Parsing** (`bench_pdf_parse`) | **192.7 µs** | 165.9 µs | Parses document structure and catalog. |
 | **CPU Rendering** (`bench_pdf_render_cpu`) | **4.02 ms** | 3.163 ms | Software rasterization of display list commands. |
 
-#### ⚖️ Engine-to-Engine Comparison (Single Page Render)
-Typical performance metrics for rendering a standard text-heavy PDF page:
+#### ⚖️ Real-World Benchmark: PDFbull vs. SumatraPDF (MuPDF Backend)
+Cold-start launch and page rendering timings measured on Windows 11 across various document sizes:
 
-| Engine / Application | Runtime / Language | Page Render Time (Median) | Memory Footprint | Architecture Type |
-| :--- | :--- | :--- | :--- | :--- |
-| **PDFbull (`zpdf` CPU)** | Rust / Tiny-Skia | **4.02 ms** (measured) | **Very Low** (~30 MB) | Pure Rust Native |
-| **MuPDF** | C / Assembly | **~2 - 5 ms** | **Extremely Low** (<15 MB) | Native Binary |
-| **Chrome (PDFium)** | C++ | **~3 - 8 ms** | **High** (~120 MB+) | Sandbox Native (Chromium) |
-| **Adobe Acrobat** | C++ | **~5 - 12 ms** | **Very High** (~180 MB+) | Heavy Desktop Client |
-| **Firefox (pdf.js)** | JavaScript | **~15 - 50 ms** | **Moderate** (via Browser) | Web Canvas Interpreter |
+| Sample Document | File Size | Pages | PDFbull Open | PDFbull Page 1 Render | **PDFbull Total First View** | SumatraPDF (MuPDF) |
+| :--- | :---: | :---: | :---: | :---: | :---: | :---: |
+| **Small PDF** (`test_document.pdf`) | 26 KB | 1 | **2.60 ms** | 26.17 ms | **~28.77 ms** ⚡ | 164.86 ms |
+| **Medium PDF** (`Declaration.pdf`) | 945 KB | 4 | **14.80 ms** | 0.04 ms | **~14.84 ms** ⚡ | 190.76 ms |
+| **Large PDF** (`f-2.pdf`) | 5.9 MB | 45 | **147.28 ms** | 68.43 ms | **~215.71 ms** | 170.73 ms |
+| **Heavy PDF** (`FOREST3.pdf`) | 11.0 MB | 84 | **56.24 ms** | 184.92 ms | **~241.16 ms** | 129.39 ms |
+| **Giant PDF** (`forest 100.pdf`) | 54.6 MB | 412 | **191.28 ms** | 412.30 ms | **~603.58 ms** | 256.12 ms |
 
 > [!NOTE]
-> Native compiled backends (MuPDF, PDFium, and zpdf) achieve significantly faster rendering times and lower memory usage compared to browser sandbox environments like Firefox's JavaScript-based pdf.js. CPU rendering in zpdf leverages highly optimized SIMD instructions to rasterize paths and text with zero driver initialization latency.
+> PDFbull's native Rust architecture with `mimalloc` achieves sub-30ms first view times on small-to-medium documents (**6x to 12x faster** startup than SumatraPDF). For large multi-page documents (e.g. 54.6 MB with 412 pages), PDFbull parses all metadata, catalog trees, layer OCGs, digital signatures, and embedded attachments in under 200 milliseconds.
 
 ## 🛠️ Feature Suite
 
@@ -141,8 +141,11 @@ The following capabilities are partially present in the codebase or planned, but
 - [x] **Advanced Shapes (Circles/Lines/Arrows) & Sticky Notes** (interactive creation & vector rendering)
 - [x] **PDF Optimization** (built-in stream compression & metadata sanitization)
 - [x] **Session Restoration** (restores tabs, scroll positions, and crop modes)
+- [x] **Digital Signatures Verification** (Cryptographic verification & status badge)
+- [x] **Table Extraction & Bounding Box UI** (Automatic detection, interactive outlines & CSV/TSV copy actions)
+- [x] **Embedded Files & Attachments Panel** (Sidebar download manager for embedded attachments)
+- [x] **Optional Content (Layers) Config Manager** (Layer visibility toggling)
 - [ ] **OCR Capability**: Built-in Optical Character Recognition for scanned documents.
-- [ ] **Digital Signatures**: Professional cryptographic signing and verification.
 - [ ] **Mobile Layout**: Responsive UI for small-screen Windows tablets.
 - [ ] **Cross-Platform Support**: Native binaries for Linux and macOS (build targets are configured; runtime validation pending).
 
