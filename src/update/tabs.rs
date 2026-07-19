@@ -338,24 +338,21 @@ pub fn handle_tab_message(app: &mut PdfBullApp, message: Message) -> Task<Messag
             if let Some(idx) = app.tabs.iter().position(|t| t.path == path) {
                 let doc_id = app.tabs[idx].id;
                 if let Some(engine) = &app.engine {
-                    let cmd_tx_close = engine.cmd_tx.clone();
-                    let cmd_tx_open = engine.cmd_tx.clone();
-                    tokio::spawn(async move {
-                        let _ = cmd_tx_close
-                            .send(crate::commands::PdfCommand::Close(doc_id))
-                            .await;
-                    });
-
                     let new_tab = DocumentTab::new(path.clone());
                     let new_doc_id = new_tab.id;
                     app.tabs[idx] = new_tab;
                     app.active_tab = idx;
 
+                    let cmd_tx = engine.cmd_tx.clone();
                     let path_s = path.to_string_lossy().to_string();
                     return Task::perform(
                         async move {
+                            let _ = cmd_tx
+                                .send(crate::commands::PdfCommand::Close(doc_id))
+                                .await;
+
                             let (resp_tx, resp_rx) = tokio::sync::oneshot::channel();
-                            if let Err(e) = cmd_tx_open
+                            if let Err(e) = cmd_tx
                                 .send(crate::commands::PdfCommand::Open(
                                     path_s, new_doc_id, resp_tx,
                                 ))

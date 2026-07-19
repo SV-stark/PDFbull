@@ -694,6 +694,7 @@ impl DocumentStore {
 
                 let mut annot_dict = lopdf::Dictionary::new();
                 annot_dict.set("Type", Object::Name(b"Annot".to_vec()));
+                annot_dict.set("PDFbull", Object::Boolean(true));
 
                 match &ann.style {
                     AnnotationStyle::Highlight { color } => {
@@ -968,8 +969,27 @@ impl DocumentStore {
                 })
                 .cloned();
 
+            let mut annots_resolved = Vec::new();
+            if let Some(existing) = existing_annots {
+                for item in existing {
+                    let is_pdfbull_annot = match &item {
+                        Object::Reference(r) => {
+                            if let Some(Object::Dictionary(d)) = doc.objects.get(r) {
+                                d.get(b"PDFbull").is_ok()
+                            } else {
+                                false
+                            }
+                        }
+                        Object::Dictionary(d) => d.get(b"PDFbull").is_ok(),
+                        _ => false,
+                    };
+                    if !is_pdfbull_annot {
+                        annots_resolved.push(item);
+                    }
+                }
+            }
+
             if let Some(Object::Dictionary(page_dict)) = doc.objects.get_mut(&page_id) {
-                let mut annots_resolved = existing_annots.unwrap_or_default();
                 annots_resolved.extend(annot_refs);
                 page_dict.set("Annots", Object::Array(annots_resolved));
             }
@@ -1057,13 +1077,6 @@ impl DocumentStore {
     }
 
     pub fn search(&self, doc_id: DocumentId, query: &str) -> PdfResult<Vec<SearchResultItem>> {
-        let path = self
-            .paths
-            .get(&doc_id)
-            .ok_or(PdfError::EngineError(EngineErrorKind::DocumentPathNotFound))?;
-        let file_data = std::fs::read(path).map_err(|e| PdfError::OpenFailed(e.to_string()))?;
-        let shared_data: std::sync::Arc<[u8]> = std::sync::Arc::from(file_data.into_boxed_slice());
-
         let doc = self
             .documents
             .get(&doc_id)
@@ -1071,70 +1084,63 @@ impl DocumentStore {
         let total_pages = doc.page_count();
         let query_lower = query.to_lowercase();
 
-        let results: Vec<SearchResultItem> = (0..total_pages)
-            .into_par_iter()
-            .flat_map(|page_idx| {
-                let local_bytes = shared_data.to_vec();
-                let Ok(local_doc) = PdfDocument::open(local_bytes) else {
-                    return Vec::new();
-                };
-                let Ok(page) = local_doc.page(page_idx) else {
-                    return Vec::new();
-                };
-                let mut fonts = local_doc.load_page_fonts(&page);
-                let mut images = ImageCache::new();
-                let Ok(content) = local_doc.page_content_bytes(&page) else {
-                    return Vec::new();
-                };
+        let mut results = Vec::new();
 
-                let mut spans: Vec<zpdf::TextSpan> = Vec::new();
+        for page_idx in 0..total_pages {
+            let Ok(page) = doc.page(page_idx) else {
+                continue;
+            };
+            let mut fonts = doc.load_page_fonts(&page);
+            let mut images = ImageCache::new();
+            let Ok(content) = doc.page_content_bytes(&page) else {
+                continue;
+            };
+
+            let mut spans: Vec<zpdf::TextSpan> = Vec::new();
+            {
+                let interp = ContentInterpreter::new(page.effective_box())
+                    .with_fonts(&mut fonts)
+                    .with_document(doc.file(), &page.resources)
+                    .with_images(&mut images)
+                    .with_text_sink(&mut spans);
+                let _ = interp.interpret(&content);
+            }
+
+            let page_height = page.effective_box().height() as f32;
+            let mut full_text = String::new();
+            let mut span_offsets = Vec::new();
+
+            for (idx, span) in spans.iter().enumerate() {
+                let start = full_text.len();
+                full_text.push_str(&span.text);
+                let end = full_text.len();
+                span_offsets.push((start, end, idx));
+            }
+
+            let mut search_idx = 0;
+            while let Some(pos) = full_text.to_lowercase()[search_idx..].find(&query_lower) {
+                let match_start = search_idx + pos;
+                let match_end = match_start + query_lower.len();
+
+                if let Some(&(_, _, span_idx)) = span_offsets
+                    .iter()
+                    .find(|(s, e, _)| match_start >= *s && match_start < *e)
                 {
-                    let interp = ContentInterpreter::new(page.effective_box())
-                        .with_fonts(&mut fonts)
-                        .with_document(local_doc.file(), &page.resources)
-                        .with_images(&mut images)
-                        .with_text_sink(&mut spans);
-                    let _ = interp.interpret(&content);
+                    let first_span = &spans[span_idx];
+                    let y_top_down = page_height - first_span.y as f32 - first_span.size;
+                    results.push(SearchResultItem {
+                        page_index: page_idx,
+                        text: full_text[match_start..match_end].to_string(),
+                        y: y_top_down,
+                        x: first_span.x as f32,
+                        width: first_span.advance.abs() as f32,
+                        height: first_span.size,
+                    });
                 }
 
-                let page_height = page.effective_box().height() as f32;
-                let mut full_text = String::new();
-                let mut span_offsets = Vec::new();
-
-                for (idx, span) in spans.iter().enumerate() {
-                    let start = full_text.len();
-                    full_text.push_str(&span.text);
-                    let end = full_text.len();
-                    span_offsets.push((start, end, idx));
-                }
-
-                let mut page_results = Vec::new();
-                let mut search_idx = 0;
-                while let Some(pos) = full_text.to_lowercase()[search_idx..].find(&query_lower) {
-                    let match_start = search_idx + pos;
-                    let match_end = match_start + query_lower.len();
-
-                    if let Some(&(_, _, span_idx)) = span_offsets
-                        .iter()
-                        .find(|(s, e, _)| match_start >= *s && match_start < *e)
-                    {
-                        let first_span = &spans[span_idx];
-                        let y_top_down = page_height - first_span.y as f32 - first_span.size;
-                        page_results.push(SearchResultItem {
-                            page_index: page_idx,
-                            text: full_text[match_start..match_end].to_string(),
-                            y: y_top_down,
-                            x: first_span.x as f32,
-                            width: first_span.advance.abs() as f32,
-                            height: first_span.size,
-                        });
-                    }
-
-                    search_idx = match_start + 1;
-                }
-                page_results
-            })
-            .collect();
+                search_idx = match_start + 1;
+            }
+        }
 
         Ok(results)
     }
@@ -1384,9 +1390,10 @@ impl DocumentStore {
         output_dir: String,
     ) -> PdfResult<Vec<String>> {
         let mut created_paths = Vec::new();
+        let template_doc = Document::load(path).map_err(|e| PdfError::OpenFailed(e.to_string()))?;
 
         for &page_idx in &page_indices {
-            let mut doc = Document::load(path).map_err(|e| PdfError::OpenFailed(e.to_string()))?;
+            let mut doc = template_doc.clone();
 
             let page_count = doc.get_pages().len();
             let keep_page_1_based = (page_idx + 1) as u32;
@@ -1700,13 +1707,51 @@ impl DocumentStore {
             let mut all_contents = existing_contents;
             all_contents.push(Object::Reference(watermark_id));
 
+            let existing_res = doc.objects.get(&page_id)
+                .and_then(|o| o.as_dict().ok())
+                .and_then(|d| d.get(b"Resources").ok())
+                .cloned();
+
+            let mut merged_res = None;
+            if let Some(res) = existing_res {
+                let mut res_dict = match res {
+                    Object::Reference(r) => doc.objects.get(&r).and_then(|o| o.as_dict().ok()).cloned(),
+                    Object::Dictionary(d) => Some(d.clone()),
+                    _ => None,
+                };
+                if let Some(ref mut d) = res_dict {
+                    if let Some(existing_fonts) = d.get_mut(b"Font").ok() {
+                        let mut fonts_dict = match existing_fonts {
+                            Object::Reference(r) => doc.objects.get(r).and_then(|o| o.as_dict().ok()).cloned(),
+                            Object::Dictionary(fd) => Some(fd.clone()),
+                            _ => None,
+                        };
+                        if let Some(ref mut fd) = fonts_dict {
+                            fd.set("F1", Object::Reference(font_ref_id));
+                            d.set("Font", Object::Dictionary(fd.clone()));
+                        }
+                    } else {
+                        d.set(
+                            "Font",
+                            Object::Dictionary(lopdf::Dictionary::from_iter(vec![(
+                                "F1",
+                                Object::Reference(font_ref_id),
+                            )])),
+                        );
+                    }
+                    merged_res = Some(doc.add_object(Object::Dictionary(d.clone())));
+                }
+            }
+
+            let final_res_id = merged_res.unwrap_or(resources_id);
+
             let page_dict = doc
                 .objects
                 .get_mut(&page_id)
                 .and_then(|o| o.as_dict_mut().ok())
                 .ok_or_else(|| PdfError::EngineError("Invalid page object".into()))?;
             page_dict.set("Contents", Object::Array(all_contents));
-            page_dict.set("Resources", Object::Reference(resources_id));
+            page_dict.set("Resources", Object::Reference(final_res_id));
         }
 
         doc.save(output_path)
