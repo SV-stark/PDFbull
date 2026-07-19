@@ -43,46 +43,60 @@ Cold-start launch and page rendering timings measured on Windows 11 across vario
 
 | Sample Document | File Size | Pages | PDFbull Open | PDFbull Page 1 Render | **PDFbull Total First View** | SumatraPDF (MuPDF) |
 | :--- | :---: | :---: | :---: | :---: | :---: | :---: |
-| **Small PDF** (`test_document.pdf`) | 26 KB | 1 | **2.60 ms** | 26.17 ms | **~28.77 ms** ⚡ | 164.86 ms |
-| **Medium PDF** (`Declaration.pdf`) | 945 KB | 4 | **14.80 ms** | 0.04 ms | **~14.84 ms** ⚡ | 190.76 ms |
-| **Large PDF** (`f-2.pdf`) | 5.9 MB | 45 | **147.28 ms** | 68.43 ms | **~215.71 ms** | 170.73 ms |
-| **Heavy PDF** (`FOREST3.pdf`) | 11.0 MB | 84 | **56.24 ms** | 184.92 ms | **~241.16 ms** | 129.39 ms |
-| **Giant PDF** (`forest 100.pdf`) | 54.6 MB | 412 | **191.28 ms** | 412.30 ms | **~603.58 ms** | 256.12 ms |
+| **Small PDF** | 26 KB | 1 | **2.60 ms** | 26.17 ms | **~28.77 ms** ⚡ | 164.86 ms |
+| **Medium PDF** | 945 KB | 4 | **14.80 ms** | 0.04 ms | **~14.84 ms** ⚡ | 190.76 ms |
+| **Large PDF** | 5.9 MB | 45 | **147.28 ms** | 68.43 ms | **~215.71 ms** | 170.73 ms |
+| **Heavy PDF** | 11.0 MB | 84 | **56.24 ms** | 184.92 ms | **~241.16 ms** | 129.39 ms |
+| **Giant PDF** | 54.6 MB | 412 | **191.28 ms** | 412.30 ms | **~603.58 ms** | 256.12 ms |
 
 > [!NOTE]
 > PDFbull's native Rust architecture with `mimalloc` achieves sub-30ms first view times on small-to-medium documents (**6x to 12x faster** startup than SumatraPDF). For large multi-page documents (e.g. 54.6 MB with 412 pages), PDFbull parses all metadata, catalog trees, layer OCGs, digital signatures, and embedded attachments in under 200 milliseconds.
 
 ## 🛠️ Feature Suite
 
-### ✏️ Advanced Annotations
-- **Professional Tools**: Highlighting, Rectangles, Text Boxes, and Redaction.
-- **Robust History**: Basic Undo/Redo stack (`Ctrl+Z` / `Ctrl+Y`) for annotation lifecycle.
-- **Persistence**: Hybrid saving strategy with local storage fallbacks and manual `Ctrl+S` save (writes annotations back into the PDF).
+### 📊 Table Extraction & Data Export (Powered by `zpdf::detect_tables`)
+- **Automatic Grid Detection**: Leverages `zpdf` table structure detection algorithms to locate cell grids, borders, and text spans.
+- **Interactive Bounding Boxes**: Displays interactive vector bounding boxes around detected tables directly on rendered page canvases.
+- **1-Click Copy Actions**: Floating controls to export table content instantly as **CSV** or **TSV** for Excel and spreadsheet applications.
 
-### 📐 Productivity Utilities
-- **Fast Search**: Leverages zpdf's structured text engine for instantaneous document-wide searching with result navigation.
-- **Tabbed Interface**: Multi-document management with tab-based navigation.
-- **Recent Files**: Quick access dropdown for recently opened documents.
-- **Page Bookmarks**: Mark important pages via the bookmark button for quick reference and jump-to navigation. (PDF outline/bookmarks are also listed in the sidebar.)
-- **Smart Formatting**:
-    - **Auto-Crop**: Dynamically removes whitespace margins for optimized reading on smaller displays.
-- **Data Export**:
-    - **High-Fidelity Image Export**: Save any page as a crisp PNG.
-    - **Text Extraction**: One-click extraction of document text to `.txt` format.
-- **Form Filling**: Built-in form field detection (`get_form_fields`) and data entry/export (`fill_form`).
-- **Real-time Filters**: Professional document rendering filters — Grayscale, Inverted, Lighten, Eco, No Shadow, and Sepia.
+### ✍️ Digital Signatures Verification (Powered by `zpdf::signatures`)
+- **Cryptographic Validation**: Parses `/Sig` dictionaries and verifies digest hash integrity and certificate validity.
+- **Toolbar Status Badge**: Real-time visual indicator in the main toolbar (`✍️ Signed` or `⚠️ Signature Warning`).
+- **Interactive Details Modal**: Pop-up modal displaying Signer Common Name, Signing Date/Time, Location, Reason, and Hash Integrity.
 
-### 🎨 Visual Experience
-- **Adaptive Themes**: Seamlessly switch between Light and Dark modes with customizable accent colors.
-- **Fullscreen Mode**: Toggle immersive reading with `F11`.
-- **Page Virtualization**: Efficient rendering of large documents with on-demand page loading.
-- **Thumbnail Navigation**: Visual page overview in the left sidebar for quick navigation.
-- **Page Rotation**: Rotate pages in 90° increments for comfortable viewing.
+### 📎 Embedded Files & Attachments Manager (Powered by `zpdf::embedded_files`)
+- **`/EmbeddedFiles` Resolution**: Resolves the document attachment name tree from the catalog.
+- **Sidebar Attachment Panel**: Dedicated **Attachments (📎)** tab in the sidebar displaying file names, byte sizes, and descriptions.
+- **Asynchronous File Downloader**: Streams raw embedded attachment bytes directly to disk via native system save dialogs.
 
-### ⚙️ Customization & Settings
-- **Settings Dialog**: Fine-tune appearance, behavior, performance, and file handling.
-- **Keyboard Help Modal**: Built-in shortcut reference accessible via `?` or `F1`.
-- **Configurable Auto-Save**: Adjustable auto-save intervals for annotation safety.
+### 🥞 Optional Content Groups / Layers Manager (Powered by `zpdf::OcConfig`)
+- **OCG Layer Resolution**: Resolves `/OCProperties` for CAD drawings, multi-language overlays, and watermarks.
+- **Sidebar Layer Visibility**: Dedicated **Layers (🥞)** sidebar tab with checkboxes to toggle visibility per layer.
+- **Live Canvas Re-rendering**: Dynamically updates rendering streams upon layer visibility changes.
+
+### 📝 Spec-Compliant Form Filling (Powered by `zpdf::FormFiller`)
+- **Interactive Form Entry**: Fill text inputs, checkboxes, and selection lists.
+- **Spec-Compliant Appearance Streams**: Generates spec-compliant appearance streams via `zpdf::FormFiller`.
+- **Signature Preservation**: Uses `zpdf::IncrementalWriter` to save form entries without invalidating existing digital signatures.
+
+### 📖 Tagged PDF & Reading-Order Text (Powered by `zpdf::struct_tree`)
+- **Accessibility Tree Resolution**: Resolves `/StructTreeRoot` tagged PDF structures.
+- **Logical Reading Order**: Extracts text in structured reading order rather than raw geometric line ordering.
+
+### 🔒 Password-Protected PDF Support (Powered by `zpdf::open_with_password`)
+- **Secure Password Prompt**: Detects encrypted PDFs and presents a secure password entry dialog.
+- **AES & RC4 Decryption**: Supports standard PDF encryption security handlers.
+
+### ✏️ Advanced Annotations & Markup
+- **Professional Tools**: Highlighting, Rectangles, Text Boxes, and Redactions.
+- **History Stack**: Undo/Redo (`Ctrl+Z` / `Ctrl+Y`) for annotation workflows.
+- **Persistence**: Writes vector annotations back into PDF streams (`Ctrl+S`).
+
+### 🎨 Visual & Reading Experience
+- **Real-time Color Filters**: Grayscale, Inverted, Eco, Lighten, Sepia, and No Shadow modes.
+- **Smart Auto-Crop**: Dynamically trims page margins for optimized reading.
+- **High-Fidelity PNG Export**: Export rendered pages at crisp resolutions.
+- **Thumbnail & Outline Navigation**: Instant jump-to via visual sidebar thumbnails and PDF bookmark trees.
 
 ---
 
