@@ -487,7 +487,8 @@ impl DocumentStore {
                     base_state_off: bool,
                 }
                 #[allow(clippy::transmute_ptr_to_ptr, clippy::transmute_undefined_repr)]
-                let mirror: &mut OcConfigMirror = &mut *(oc as *mut zpdf::OcConfig as *mut OcConfigMirror);
+                let mirror: &mut OcConfigMirror =
+                    &mut *(oc as *mut zpdf::OcConfig as *mut OcConfigMirror);
                 let id = zpdf::ObjectId(object_id.0, object_id.1);
                 if visible {
                     mirror.off.remove(&id);
