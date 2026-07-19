@@ -12,6 +12,8 @@ permissions:
 jobs:
   release:
     runs-on: windows-latest
+    permissions:
+      contents: write
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -57,6 +59,7 @@ jobs:
       - name: Create Stable Release
         uses: softprops/action-gh-release@v2
         with:
+          token: ${{ secrets.GITHUB_TOKEN }}
           name: Release ${{ github.ref_name }}
           body: 'Stable release of PDFbull.'
           fail_on_unmatched_files: true
@@ -66,6 +69,5 @@ jobs:
             PDFbull-Portable.zip
           draft: false
           prerelease: false
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
 

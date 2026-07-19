@@ -2288,8 +2288,7 @@ mod tests {
         let handle = std::thread::spawn(move || {
             let mut store = DocumentStore::new(create_render_cache(10, 0));
             let mut path = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-            path.push("winprint-0.2.0");
-            path.push("test_data");
+            path.push("tests");
             path.push("test_document.pdf");
             let path_str = path.to_str().unwrap();
             let doc_id = DocumentId(1);

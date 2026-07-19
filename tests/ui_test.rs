@@ -144,7 +144,7 @@ async fn test_document_zoom() {
 async fn test_open_document_flow() {
     let mut app = PdfBullApp::default();
     app.loaded = true; // Prevent loading real session/settings in test
-    let test_path = std::path::PathBuf::from("winprint-0.2.0/test_data/test_document.pdf");
+    let test_path = std::path::PathBuf::from("tests/test_document.pdf");
 
     // Simulate what happens after the file is picked and loaded by the engine
     let doc_id = pdfbull::models::DocumentId(42);

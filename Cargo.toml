@@ -44,7 +44,7 @@ interprocess = { version = "2", features = ["tokio"] }
 crossbeam-channel = "0.5.15"
 
 [target.'cfg(windows)'.dependencies]
-winprint = { version = "0.2.0", default-features = false }
+winprint = { version = "0.2.1", default-features = false }
 windows = { version = "0.62.2", features = ["Win32_UI_Shell", "Win32_System_Com", "Win32_Foundation"] }
 
 [dev-dependencies]
@@ -76,6 +76,5 @@ inherits = "release"
 lto = "thin"
 strip = true
 
-[patch.crates-io]
-winprint = { path = "winprint-0.2.0" }
+
 

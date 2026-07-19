@@ -8,7 +8,7 @@ fn main() {
     divan::main();
 }
 
-const PDF_PATH: &str = "winprint-0.2.0/test_data/test_document.pdf";
+const PDF_PATH: &str = "tests/test_document.pdf";
 
 #[divan::bench]
 fn bench_pdf_parse() {
