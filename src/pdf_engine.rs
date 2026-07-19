@@ -2155,9 +2155,13 @@ mod tests {
     fn test_crash_investigation() {
         let handle = std::thread::spawn(move || {
             let mut store = DocumentStore::new(create_render_cache(10, 0));
-            let path = "E:\\PDFbull\\winprint-0.2.0\\test_data\\test_document.pdf";
+            let mut path = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+            path.push("winprint-0.2.0");
+            path.push("test_data");
+            path.push("test_document.pdf");
+            let path_str = path.to_str().unwrap();
             let doc_id = DocumentId(1);
-            let open_res = store.open_document(path, doc_id).unwrap();
+            let open_res = store.open_document(path_str, doc_id).unwrap();
             assert!(open_res.page_count > 0);
             let render_options = RenderOptions {
                 scale: 1.0,
