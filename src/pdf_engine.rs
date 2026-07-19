@@ -1277,59 +1277,73 @@ impl DocumentStore {
 
     #[allow(clippy::suboptimal_flops)]
     pub fn apply_filter(data: &mut [u8], filter: RenderFilter) {
-        data.par_chunks_exact_mut(4).for_each(|pixel| match filter {
+        match filter {
             RenderFilter::Inverted => {
-                pixel[0] = 255 - pixel[0];
-                pixel[1] = 255 - pixel[1];
-                pixel[2] = 255 - pixel[2];
+                data.par_chunks_exact_mut(4).for_each(|pixel| {
+                    pixel[0] = 255 - pixel[0];
+                    pixel[1] = 255 - pixel[1];
+                    pixel[2] = 255 - pixel[2];
+                });
             }
             RenderFilter::Eco => {
-                let avg = (pixel[0] as u32 + pixel[1] as u32 + pixel[2] as u32) / 3;
-                if avg > 200 {
-                    pixel[0] = 255;
-                    pixel[1] = 255;
-                    pixel[2] = 255;
-                }
+                data.par_chunks_exact_mut(4).for_each(|pixel| {
+                    let avg = (pixel[0] as u32 + pixel[1] as u32 + pixel[2] as u32) / 3;
+                    if avg > 200 {
+                        pixel[0] = 255;
+                        pixel[1] = 255;
+                        pixel[2] = 255;
+                    }
+                });
             }
             RenderFilter::BlackWhite => {
-                let avg = (pixel[0] as u32 + pixel[1] as u32 + pixel[2] as u32) / 3;
-                let val = if avg > 128 { 255 } else { 0 };
-                pixel[0] = val;
-                pixel[1] = val;
-                pixel[2] = val;
+                data.par_chunks_exact_mut(4).for_each(|pixel| {
+                    let avg = (pixel[0] as u32 + pixel[1] as u32 + pixel[2] as u32) / 3;
+                    let val = if avg > 128 { 255 } else { 0 };
+                    pixel[0] = val;
+                    pixel[1] = val;
+                    pixel[2] = val;
+                });
             }
             RenderFilter::Lighten => {
-                pixel[0] = pixel[0].saturating_add(20);
-                pixel[1] = pixel[1].saturating_add(20);
-                pixel[2] = pixel[2].saturating_add(20);
+                data.par_chunks_exact_mut(4).for_each(|pixel| {
+                    pixel[0] = pixel[0].saturating_add(20);
+                    pixel[1] = pixel[1].saturating_add(20);
+                    pixel[2] = pixel[2].saturating_add(20);
+                });
             }
             RenderFilter::NoShadow => {
-                if pixel[0] > NO_SHADOW_THRESHOLD
-                    && pixel[1] > NO_SHADOW_THRESHOLD
-                    && pixel[2] > NO_SHADOW_THRESHOLD
-                {
-                    pixel[0] = 255;
-                    pixel[1] = 255;
-                    pixel[2] = 255;
-                }
+                data.par_chunks_exact_mut(4).for_each(|pixel| {
+                    if pixel[0] > NO_SHADOW_THRESHOLD
+                        && pixel[1] > NO_SHADOW_THRESHOLD
+                        && pixel[2] > NO_SHADOW_THRESHOLD
+                    {
+                        pixel[0] = 255;
+                        pixel[1] = 255;
+                        pixel[2] = 255;
+                    }
+                });
             }
             RenderFilter::Sepia => {
-                let r = pixel[0] as f32;
-                let g = pixel[1] as f32;
-                let b = pixel[2] as f32;
-                pixel[0] = (r * 0.393 + g * 0.769 + b * 0.189).min(255.0) as u8;
-                pixel[1] = (r * 0.349 + g * 0.686 + b * 0.168).min(255.0) as u8;
-                pixel[2] = (r * 0.272 + g * 0.534 + b * 0.131).min(255.0) as u8;
+                data.par_chunks_exact_mut(4).for_each(|pixel| {
+                    let r = pixel[0] as f32;
+                    let g = pixel[1] as f32;
+                    let b = pixel[2] as f32;
+                    pixel[0] = (r * 0.393 + g * 0.769 + b * 0.189).min(255.0) as u8;
+                    pixel[1] = (r * 0.349 + g * 0.686 + b * 0.168).min(255.0) as u8;
+                    pixel[2] = (r * 0.272 + g * 0.534 + b * 0.131).min(255.0) as u8;
+                });
             }
             RenderFilter::Grayscale => {
-                let luma =
-                    (pixel[0] as u32 * 299 + pixel[1] as u32 * 587 + pixel[2] as u32 * 114) / 1000;
-                pixel[0] = luma as u8;
-                pixel[1] = luma as u8;
-                pixel[2] = luma as u8;
+                data.par_chunks_exact_mut(4).for_each(|pixel| {
+                    let luma =
+                        (pixel[0] as u32 * 299 + pixel[1] as u32 * 587 + pixel[2] as u32 * 114) / 1000;
+                    pixel[0] = luma as u8;
+                    pixel[1] = luma as u8;
+                    pixel[2] = luma as u8;
+                });
             }
             RenderFilter::None => {}
-        });
+        }
     }
 
     // apply_filter_parallel removed as it was just a misleading wrapper.
