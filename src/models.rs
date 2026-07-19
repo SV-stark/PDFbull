@@ -165,7 +165,7 @@ pub struct Hyperlink {
     pub destination_page: Option<usize>,
 }
 
-#[derive(Default, Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct DocumentId(pub u64);
 
 #[derive(Default, Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -541,12 +541,11 @@ impl DocumentTab {
         }
     }
 
-    pub fn get_visible_pages(&self) -> std::collections::HashSet<usize> {
-        (self.view_state.visible_range.0..self.view_state.visible_range.1).collect()
+    pub fn get_visible_pages(&self) -> std::ops::Range<usize> {
+        self.view_state.visible_range.0..self.view_state.visible_range.1
     }
 
-    pub fn get_visible_thumbnails(&self) -> std::collections::HashSet<usize> {
-        let mut visible = std::collections::HashSet::new();
+    pub fn get_visible_thumbnails(&self) -> std::ops::Range<usize> {
         let start_idx = (self.view_state.sidebar_viewport_y / crate::ui::theme::THUMBNAIL_HEIGHT)
             .max(0.0) as usize;
 
@@ -558,10 +557,7 @@ impl DocumentTab {
         let visible_count = (v_height / crate::ui::theme::THUMBNAIL_HEIGHT).ceil() as usize + 5;
         let end_idx = (start_idx + visible_count).min(self.total_pages);
 
-        for i in start_idx..end_idx {
-            visible.insert(i);
-        }
-        visible
+        start_idx..end_idx
     }
 
     pub fn cleanup_distant_pages(&mut self) {
@@ -659,11 +655,6 @@ mod tests {
         assert_ne!(id1, id3);
     }
 
-    #[test]
-    fn test_document_id_default() {
-        let id = DocumentId::default();
-        assert_eq!(id.0, 0);
-    }
 
     #[test]
     fn test_document_id_copy() {

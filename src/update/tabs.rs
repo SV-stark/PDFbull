@@ -217,7 +217,7 @@ pub fn handle_tab_message(app: &mut PdfBullApp, message: Message) -> Task<Messag
                     |res| match res {
                         Ok((id, r)) => Message::DocumentOpened(id, r),
                         Err(_) => Message::DocumentOpened(
-                            crate::models::DocumentId::default(),
+                            crate::models::DocumentId(0),
                             Err(crate::models::PdfError::EngineDied),
                         ),
                     },
@@ -369,7 +369,7 @@ pub fn handle_tab_message(app: &mut PdfBullApp, message: Message) -> Task<Messag
                         |res| match res {
                             Ok((id, r)) => Message::DocumentOpened(id, r),
                             Err(_) => Message::DocumentOpened(
-                                crate::models::DocumentId::default(),
+                                crate::models::DocumentId(0),
                                 Err(crate::models::PdfError::EngineDied),
                             ),
                         },

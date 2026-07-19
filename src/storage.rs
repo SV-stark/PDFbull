@@ -1,7 +1,7 @@
 use crate::models::{AppSettings, AppTheme, RecentFile, SessionData};
 use std::fs;
 use std::io::{self, Write};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use time::OffsetDateTime;
 
 pub fn time_ago(unix_secs: u64) -> String {
@@ -62,7 +62,7 @@ pub fn get_config_dir() -> PathBuf {
     new_dir
 }
 
-fn atomic_write(path: &PathBuf, data: &str) -> io::Result<()> {
+fn atomic_write(path: &Path, data: &str) -> io::Result<()> {
     use atomicwrites::{AllowOverwrite, AtomicFile};
     let af = AtomicFile::new(path, AllowOverwrite);
     af.write(|f| f.write_all(data.as_bytes()))

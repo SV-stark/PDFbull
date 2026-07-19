@@ -18,7 +18,9 @@ fn reload_if_needed(
     if !store.has_document(doc_id) {
         if let Ok(guard) = paths.read() {
             if let Some(path) = guard.get(&doc_id).cloned() {
-                let _ = store.open_document(&path, doc_id);
+                if let Err(e) = store.open_document(&path, doc_id) {
+                    tracing::error!("Failed to reload document {doc_id:?} from path '{path}': {e:?}");
+                }
             }
         }
     }

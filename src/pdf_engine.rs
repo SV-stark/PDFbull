@@ -106,7 +106,7 @@ pub struct DocumentStore {
     documents: HashMap<DocumentId, PdfDocument>,
     paths: HashMap<DocumentId, String>,
     render_cache: SharedRenderCache,
-    cache_keys: std::sync::Mutex<HashMap<DocumentId, Vec<RenderKey>>>,
+    cache_keys: HashMap<DocumentId, Vec<RenderKey>>,
 }
 
 // DocumentState wrapper removed as it was a single-field struct.
@@ -117,7 +117,7 @@ impl DocumentStore {
             documents: HashMap::new(),
             paths: HashMap::new(),
             render_cache: cache,
-            cache_keys: std::sync::Mutex::new(HashMap::new()),
+            cache_keys: HashMap::new(),
         }
     }
 
@@ -153,20 +153,7 @@ impl DocumentStore {
 
         let outline = self.get_outline_internal(&doc);
         let links = self.extract_links_internal(&doc);
-        let metadata = if let Some(info) = doc.info() {
-            crate::models::DocumentMetadata {
-                title: info.title.clone(),
-                author: info.author.clone(),
-                subject: info.subject.clone(),
-                keywords: info.keywords.clone(),
-                creator: info.creator.clone(),
-                producer: info.producer.clone(),
-                creation_date: info.creation_date.clone(),
-                modification_date: info.mod_date.clone(),
-            }
-        } else {
-            crate::models::DocumentMetadata::default()
-        };
+        let metadata = doc.info().map(|info| Self::doc_info_to_metadata(&info)).unwrap_or_default();
 
         self.documents.insert(doc_id, doc);
         self.paths.insert(doc_id, path.to_string());
@@ -223,20 +210,7 @@ impl DocumentStore {
         let outline = self.get_outline_internal(doc);
         let links = self.extract_links_internal(doc);
 
-        let metadata = if let Some(info) = doc.info() {
-            crate::models::DocumentMetadata {
-                title: info.title.clone(),
-                author: info.author.clone(),
-                subject: info.subject.clone(),
-                keywords: info.keywords.clone(),
-                creator: info.creator.clone(),
-                producer: info.producer.clone(),
-                creation_date: info.creation_date.clone(),
-                modification_date: info.mod_date.clone(),
-            }
-        } else {
-            crate::models::DocumentMetadata::default()
-        };
+        let metadata = doc.info().map(|info| Self::doc_info_to_metadata(&info)).unwrap_or_default();
 
         Ok(crate::models::DocumentMeta {
             outline,
@@ -248,11 +222,9 @@ impl DocumentStore {
     pub fn close_document(&mut self, doc_id: DocumentId) {
         self.documents.remove(&doc_id);
         self.paths.remove(&doc_id);
-        if let Ok(mut keys) = self.cache_keys.lock() {
-            if let Some(doc_keys) = keys.remove(&doc_id) {
-                for key in doc_keys {
-                    self.render_cache.remove(&key);
-                }
+        if let Some(doc_keys) = self.cache_keys.remove(&doc_id) {
+            for key in doc_keys {
+                self.render_cache.remove(&key);
             }
         }
     }
@@ -477,7 +449,7 @@ impl DocumentStore {
     }
 
     fn render_page_internal(
-        &self,
+        &mut self,
         doc_id: DocumentId,
         page_num: usize,
         options: RenderOptions,
@@ -568,9 +540,7 @@ impl DocumentStore {
             data: final_data.into(),
         };
 
-        if let Ok(mut keys) = self.cache_keys.lock() {
-            keys.entry(doc_id).or_default().push(cache_key.clone());
-        }
+        self.cache_keys.entry(doc_id).or_default().push(cache_key.clone());
         self.render_cache.put(cache_key, base.clone());
 
         if options.filter == RenderFilter::None {
@@ -691,7 +661,7 @@ impl DocumentStore {
         let mut doc = Document::load(pdf_path).map_err(|e| PdfError::OpenFailed(e.to_string()))?;
 
         // Group annotations by page
-        let mut page_annots: HashMap<usize, Vec<&Annotation>> = HashMap::new();
+        let mut page_annots: std::collections::BTreeMap<usize, Vec<&Annotation>> = std::collections::BTreeMap::new();
         for ann in annotations {
             page_annots.entry(ann.page).or_default().push(ann);
         }
@@ -1054,7 +1024,7 @@ impl DocumentStore {
         let cache_key = RenderKey {
             doc_id,
             page_num,
-            scale: (scale * 100.0) as u32,
+            scale: (scale * 100.0).round() as u32,
             auto_crop: false,
             quality: RenderQuality::Medium,
         };
@@ -1113,21 +1083,37 @@ impl DocumentStore {
         Ok(out_buf)
     }
 
-    fn flatten_outline(items: &[zpdf::OutlineItem], out: &mut Vec<Bookmark>) {
+    fn flatten_outline(items: &[zpdf::OutlineItem], out: &mut Vec<Bookmark>, depth: usize) {
+        if depth > 100 {
+            return;
+        }
         for item in items {
             let page_idx = item.dest.as_ref().and_then(|d| d.page).unwrap_or(0);
             out.push(Bookmark {
                 title: item.title.clone(),
-                page_index: page_idx as u16,
+                page_index: page_idx,
             });
-            Self::flatten_outline(&item.children, out);
+            Self::flatten_outline(&item.children, out, depth + 1);
         }
     }
 
     pub fn get_outline_internal(&self, doc: &PdfDocument) -> Vec<Bookmark> {
         let mut bookmarks = Vec::new();
-        Self::flatten_outline(&doc.outline(), &mut bookmarks);
+        Self::flatten_outline(&doc.outline(), &mut bookmarks, 0);
         bookmarks
+    }
+
+    fn doc_info_to_metadata(info: &zpdf::DocInfo) -> crate::models::DocumentMetadata {
+        crate::models::DocumentMetadata {
+            title: info.title.clone(),
+            author: info.author.clone(),
+            subject: info.subject.clone(),
+            keywords: info.keywords.clone(),
+            creator: info.creator.clone(),
+            producer: info.producer.clone(),
+            creation_date: info.creation_date.clone(),
+            modification_date: info.mod_date.clone(),
+        }
     }
 
     pub fn search(&self, doc_id: DocumentId, query: &str) -> PdfResult<Vec<SearchResultItem>> {
@@ -1171,20 +1157,41 @@ impl DocumentStore {
                 span_offsets.push((start, end, idx));
             }
 
+            let full_text_lower = full_text.to_lowercase();
+            let char_boundaries: Vec<usize> = full_text
+                .char_indices()
+                .map(|(idx, _)| idx)
+                .chain(std::iter::once(full_text.len()))
+                .collect();
+            let char_boundaries_lower: Vec<usize> = full_text_lower
+                .char_indices()
+                .map(|(idx, _)| idx)
+                .chain(std::iter::once(full_text_lower.len()))
+                .collect();
+
             let mut search_idx = 0;
-            while let Some(pos) = full_text.to_lowercase()[search_idx..].find(&query_lower) {
+            while let Some(pos) = full_text_lower[search_idx..].find(&query_lower) {
                 let match_start = search_idx + pos;
                 let match_end = match_start + query_lower.len();
 
+                // Get char index in full_text_lower:
+                let char_start = char_boundaries_lower.binary_search(&match_start).unwrap_or_else(|x| x);
+                let char_end = char_boundaries_lower.binary_search(&match_end).unwrap_or_else(|x| x);
+
+                // Map to byte index in original full_text:
+                let orig_start = char_boundaries.get(char_start).copied().unwrap_or(full_text.len());
+                let orig_end = char_boundaries.get(char_end).copied().unwrap_or(full_text.len());
+                let matched_text = full_text[orig_start..orig_end].to_string();
+
                 if let Some(&(_, _, span_idx)) = span_offsets
                     .iter()
-                    .find(|(s, e, _)| match_start >= *s && match_start < *e)
+                    .find(|(s, e, _)| orig_start >= *s && orig_start < *e)
                 {
                     let first_span = &spans[span_idx];
                     let y_top_down = page_height - first_span.y as f32 - first_span.size;
                     results.push(SearchResultItem {
                         page_index: page_idx,
-                        text: full_text[match_start..match_end].to_string(),
+                        text: matched_text,
                         y: y_top_down,
                         x: first_span.x as f32,
                         width: first_span.advance.abs() as f32,
@@ -1192,7 +1199,8 @@ impl DocumentStore {
                     });
                 }
 
-                search_idx = match_start + 1;
+                // Advance search_idx safely to the next character boundary in full_text_lower
+                search_idx = char_boundaries_lower.get(char_start + 1).copied().unwrap_or(full_text_lower.len());
             }
         }
 
@@ -1204,39 +1212,58 @@ impl DocumentStore {
         width: u32,
         height: u32,
     ) -> Option<(u32, u32, u32, u32)> {
-        let bbox = data
-            .par_chunks_exact(4)
-            .enumerate()
-            .fold(
-                || None::<(u32, u32, u32, u32)>,
-                |acc, (idx, pixel)| {
-                    if pixel[0] <= WHITE_THRESHOLD
-                        || pixel[1] <= WHITE_THRESHOLD
-                        || pixel[2] <= WHITE_THRESHOLD
-                    {
-                        let x = (idx as u32) % width;
-                        let y = (idx as u32) / width;
-                        if let Some((min_x, min_y, max_x, max_y)) = acc {
-                            Some((min_x.min(x), min_y.min(y), max_x.max(x), max_y.max(y)))
-                        } else {
-                            Some((x, y, x, y))
-                        }
+        let bbox = if data.len() < 64 * 1024 {
+            let mut acc: Option<(u32, u32, u32, u32)> = None;
+            for (idx, pixel) in data.chunks_exact(4).enumerate() {
+                if pixel[0] <= WHITE_THRESHOLD
+                    || pixel[1] <= WHITE_THRESHOLD
+                    || pixel[2] <= WHITE_THRESHOLD
+                {
+                    let x = (idx as u32) % width;
+                    let y = (idx as u32) / width;
+                    if let Some((min_x, min_y, max_x, max_y)) = acc {
+                        acc = Some((min_x.min(x), min_y.min(y), max_x.max(x), max_y.max(y)));
                     } else {
-                        acc
+                        acc = Some((x, y, x, y));
                     }
-                },
-            )
-            .reduce(
-                || None,
-                |a, b| match (a, b) {
-                    (Some(a), Some(b)) => {
-                        Some((a.0.min(b.0), a.1.min(b.1), a.2.max(b.2), a.3.max(b.3)))
-                    }
-                    (Some(a), None) => Some(a),
-                    (None, Some(b)) => Some(b),
-                    (None, None) => None,
-                },
-            );
+                }
+            }
+            acc
+        } else {
+            data
+                .par_chunks_exact(4)
+                .enumerate()
+                .fold(
+                    || None::<(u32, u32, u32, u32)>,
+                    |acc, (idx, pixel)| {
+                        if pixel[0] <= WHITE_THRESHOLD
+                            || pixel[1] <= WHITE_THRESHOLD
+                            || pixel[2] <= WHITE_THRESHOLD
+                        {
+                            let x = (idx as u32) % width;
+                            let y = (idx as u32) / width;
+                            if let Some((min_x, min_y, max_x, max_y)) = acc {
+                                Some((min_x.min(x), min_y.min(y), max_x.max(x), max_y.max(y)))
+                            } else {
+                                Some((x, y, x, y))
+                            }
+                        } else {
+                            acc
+                        }
+                    },
+                )
+                .reduce(
+                    || None,
+                    |a, b| match (a, b) {
+                        (Some(a), Some(b)) => {
+                            Some((a.0.min(b.0), a.1.min(b.1), a.2.max(b.2), a.3.max(b.3)))
+                        }
+                        (Some(a), None) => Some(a),
+                        (None, Some(b)) => Some(b),
+                        (None, None) => None,
+                    },
+                )
+        };
 
         bbox.map(|(min_x, min_y, max_x, max_y)| {
             (
@@ -1457,11 +1484,10 @@ impl DocumentStore {
     ) -> PdfResult<Vec<String>> {
         let mut created_paths = Vec::new();
         let template_doc = Document::load(path).map_err(|e| PdfError::OpenFailed(e.to_string()))?;
+        let page_count = template_doc.get_pages().len();
 
         for &page_idx in &page_indices {
             let mut doc = template_doc.clone();
-
-            let page_count = doc.get_pages().len();
             let keep_page_1_based = (page_idx + 1) as u32;
 
             let mut to_delete = Vec::new();
@@ -1579,7 +1605,11 @@ impl DocumentStore {
         field_ref: ObjectId,
         parent_name: &str,
         updates: &[FormField],
+        depth: usize,
     ) {
+        if depth > 100 {
+            return;
+        }
         let mut name = parent_name.to_string();
 
         let field_dict = match doc.get_object(field_ref) {
@@ -1602,7 +1632,7 @@ impl DocumentStore {
             if let Ok(kids_arr) = kids_obj.as_array() {
                 for kid in kids_arr {
                     if let Ok(kid_ref) = kid.as_reference() {
-                        Self::walk_lopdf_fields(doc, kid_ref, &name, updates);
+                        Self::walk_lopdf_fields(doc, kid_ref, &name, updates, depth + 1);
                     }
                 }
                 return;
@@ -1679,7 +1709,7 @@ impl DocumentStore {
                                 .filter_map(|f| f.as_reference().ok())
                                 .collect();
                             for r in fields_refs {
-                                Self::walk_lopdf_fields(&mut doc, r, "", &updates);
+                                Self::walk_lopdf_fields(&mut doc, r, "", &updates, 0);
                             }
                         }
                     }
@@ -1776,10 +1806,9 @@ impl DocumentStore {
         content.end_text();
         let watermark_stream =
             lopdf::Stream::new(lopdf::Dictionary::new(), content.finish().to_vec());
+        let watermark_id = doc.add_object(watermark_stream);
 
         for &page_id in &pages {
-            let watermark_id = doc.add_object(watermark_stream.clone());
-
             let existing_contents = doc
                 .get_page_contents(page_id)
                 .into_iter()
@@ -1865,7 +1894,7 @@ pub fn create_render_cache(cache_size: u64, max_memory_mb: u64) -> SharedRenderC
 #[derive(Clone, Debug)]
 pub struct Bookmark {
     pub title: String,
-    pub page_index: u16,
+    pub page_index: usize,
 }
 
 #[cfg(test)]
