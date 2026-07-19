@@ -53,7 +53,6 @@ pub fn handle_nav_message(app: &mut PdfBullApp, message: Message) -> Task<Messag
                 let new_zoom = (old_zoom * 1.1).min(5.0);
                 if (new_zoom - old_zoom).abs() > 0.001 {
                     tab.zoom = new_zoom;
-                    tab.view_state.rendered_pages.clear();
 
                     let relative_y = if let Some(pos) = cursor_pos {
                         let toolbar_height = 50.0;
@@ -80,7 +79,6 @@ pub fn handle_nav_message(app: &mut PdfBullApp, message: Message) -> Task<Messag
                 let new_zoom = (old_zoom / 1.1).max(0.25);
                 if (new_zoom - old_zoom).abs() > 0.001 {
                     tab.zoom = new_zoom;
-                    tab.view_state.rendered_pages.clear();
 
                     let relative_y = if let Some(pos) = cursor_pos {
                         let toolbar_height = 50.0;
@@ -107,7 +105,6 @@ pub fn handle_nav_message(app: &mut PdfBullApp, message: Message) -> Task<Messag
                 let new_zoom = zoom.clamp(0.25, 5.0);
                 if (new_zoom - old_zoom).abs() > 0.001 {
                     tab.zoom = new_zoom;
-                    tab.view_state.rendered_pages.clear();
 
                     let relative_y = if let Some(pos) = cursor_pos {
                         let toolbar_height = 50.0;

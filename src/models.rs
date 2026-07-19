@@ -570,13 +570,8 @@ impl DocumentTab {
         let keep_start = start.saturating_sub(buffer);
         let keep_end = (end + buffer).min(self.total_pages);
 
-        let current_zoom = self.zoom;
-        self.view_state.rendered_pages.retain(|&p, (scale, _)| {
-            if p >= keep_start && p < keep_end {
-                (*scale - current_zoom).abs() <= 0.01
-            } else {
-                false
-            }
+        self.view_state.rendered_pages.retain(|&p, _| {
+            p >= keep_start && p < keep_end
         });
 
         let thumb_start_idx = (self.view_state.sidebar_viewport_y
@@ -874,12 +869,19 @@ mod tests {
         tab.view_state
             .rendered_pages
             .insert(6, (1.0, iced::widget::image::Handle::from_bytes(vec![])));
+        tab.view_state
+            .rendered_pages
+            .insert(1, (1.0, iced::widget::image::Handle::from_bytes(vec![])));
 
         tab.zoom = 1.0;
         tab.cleanup_distant_pages();
 
+        // 6 is kept (correct scale, inside active range)
         assert!(tab.view_state.rendered_pages.contains_key(&6));
-        assert!(!tab.view_state.rendered_pages.contains_key(&5));
+        // 5 is kept (mismatched scale but inside active range for smooth zooming)
+        assert!(tab.view_state.rendered_pages.contains_key(&5));
+        // 1 is removed (outside active range)
+        assert!(!tab.view_state.rendered_pages.contains_key(&1));
     }
 
     #[test]

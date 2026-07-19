@@ -1029,11 +1029,15 @@ fn render_pdf_content(app: &PdfBullApp) -> Element<'_, crate::message::Message> 
 
     scrollable(
         container(pdf_column)
-            .width(Length::Fill)
+            .width(Length::Shrink)
             .center_x(Length::Fill),
     )
     .id("pdf_scroll")
     .auto_scroll(true)
+    .direction(iced::widget::scrollable::Direction::Both {
+        vertical: iced::widget::scrollable::Scrollbar::new(),
+        horizontal: iced::widget::scrollable::Scrollbar::new(),
+    })
     .on_scroll(|viewport| {
         crate::message::Message::ViewportChanged(
             viewport.absolute_offset().y,

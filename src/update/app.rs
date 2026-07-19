@@ -8,7 +8,6 @@ pub fn handle_app_message(app: &mut PdfBullApp, message: Message) -> Task<Messag
         Message::ResetZoom => {
             if let Some(tab) = app.current_tab_mut() {
                 tab.zoom = 1.0;
-                tab.view_state.rendered_pages.clear();
             }
             app.render_visible_pages()
         }
