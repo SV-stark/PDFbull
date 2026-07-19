@@ -33,21 +33,26 @@ pub fn handle_tab_message(app: &mut PdfBullApp, message: Message) -> Task<Messag
                                 .await
                             {
                                 tracing::error!("Failed to send Open command: {e}");
-                                return None;
+                                return Err(crate::models::PdfError::ChannelClosed);
                             }
                             match resp_rx.await {
-                                Ok(Ok(data)) => Some((path, data)),
-                                _ => None,
+                                Ok(Ok(data)) => Ok(Some((path, data))),
+                                Ok(Err(e)) => Err(e),
+                                Err(_) => Err(crate::models::PdfError::EngineDied),
                             }
                         } else {
-                            None
+                            Ok(None)
                         }
                     },
                     |result| match result {
-                        Some((path, data)) => Message::DocumentOpenedWithPath((path, data)),
-                        None => Message::DocumentOpened(
-                            crate::models::DocumentId(0), // Dummy ID for cancelled
-                            Err(crate::models::PdfError::OpenFailed("Cancelled".into())),
+                        Ok(Some((path, data))) => Message::DocumentOpenedWithPath((path, data)),
+                        Ok(None) => Message::DocumentOpened(
+                            crate::models::DocumentId(0),
+                            Err(crate::models::PdfError::Cancelled),
+                        ),
+                        Err(e) => Message::DocumentOpened(
+                            crate::models::DocumentId(0),
+                            Err(e),
                         ),
                     },
                 );

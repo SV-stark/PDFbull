@@ -252,7 +252,15 @@ pub fn spawn_engine_thread(cache_size: u64, max_memory_mb: u64) -> EngineState {
                         let res = store.reorder_pages(&input, &page_order, &output);
                         let _ = tx.send(res);
                     }
-                    _ => {}
+                    PdfCommand::LoadAnnotations(doc_id, path, tx) => {
+                        // Load annotations stored in the PDF at `path`.
+                        // `doc_id` is unused here since we load directly from the path,
+                        // but kept for API symmetry and potential future caching.
+                        let _ = doc_id; // suppress unused warning
+                        let res = store.load_annotations(&path);
+                        let _ = tx.send(res);
+                    }
+
                 }
             }
         });

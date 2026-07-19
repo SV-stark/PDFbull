@@ -227,6 +227,230 @@ impl DocumentStore {
         self.paths.remove(&doc_id);
     }
 
+    /// Load annotations previously saved with `save_annotations` from the PDF file.
+    /// Returns an empty vec if there are no annotations or if the file cannot be read.
+    pub fn load_annotations(
+        &self,
+        path: &str,
+    ) -> PdfResult<Vec<Annotation>> {
+        let lopdf_doc = match Document::load(path) {
+            Ok(d) => d,
+            Err(_) => return Ok(Vec::new()),
+        };
+
+        let mut annotations = Vec::new();
+        let pages = lopdf_doc.get_pages();
+
+        for (&page_num, &page_id) in &pages {
+            let page_idx = (page_num as usize).saturating_sub(1);
+
+            // Get page height for coordinate conversion (PDF coords: bottom-left origin)
+            let page_height = lopdf_doc
+                .objects
+                .get(&page_id)
+                .and_then(|o| o.as_dict().ok())
+                .and_then(|d| d.get(b"MediaBox").ok())
+                .and_then(|o| o.as_array().ok())
+                .and_then(|a| a.get(3))
+                .and_then(|o| match o {
+                    Object::Real(v) => Some(*v as f32),
+                    Object::Integer(v) => Some(*v as f32),
+                    _ => None,
+                })
+                .unwrap_or(792.0_f32);
+
+            let annots_array = lopdf_doc
+                .objects
+                .get(&page_id)
+                .and_then(|o| o.as_dict().ok())
+                .and_then(|d| d.get(b"Annots").ok())
+                .and_then(|a| match a {
+                    Object::Reference(r) => lopdf_doc
+                        .objects
+                        .get(r)
+                        .and_then(|o| o.as_array().ok()),
+                    Object::Array(arr) => Some(arr),
+                    _ => None,
+                })
+                .cloned()
+                .unwrap_or_default();
+
+            for annot_ref in &annots_array {
+                let annot_obj = match annot_ref {
+                    Object::Reference(r) => lopdf_doc.objects.get(r),
+                    _ => None,
+                };
+                let dict = match annot_obj.and_then(|o| o.as_dict().ok()) {
+                    Some(d) => d,
+                    None => continue,
+                };
+
+                let subtype = dict
+                    .get(b"Subtype")
+                    .ok()
+                    .and_then(|o| o.as_name().ok())
+                    .map(|b| String::from_utf8_lossy(b).into_owned())
+                    .unwrap_or_default();
+
+                // Skip Link annotations (those are hyperlinks, not user annotations)
+                if subtype == "Link" {
+                    continue;
+                }
+
+                // Parse Rect [x0, y0, x1, y1] in PDF coords
+                let rect = dict
+                    .get(b"Rect")
+                    .ok()
+                    .and_then(|o| o.as_array().ok())
+                    .cloned();
+                let (pdf_x0, pdf_y0, pdf_x1, pdf_y1) = match rect.as_deref() {
+                    Some([a, b, c, d]) => {
+                        let to_f32 = |o: &Object| match o {
+                            Object::Real(v) => *v as f32,
+                            Object::Integer(v) => *v as f32,
+                            _ => 0.0_f32,
+                        };
+                        (to_f32(a), to_f32(b), to_f32(c), to_f32(d))
+                    }
+                    _ => continue,
+                };
+
+                // Convert from PDF bottom-left origin to screen top-left origin
+                let x = pdf_x0;
+                let w = (pdf_x1 - pdf_x0).abs();
+                let h = (pdf_y1 - pdf_y0).abs();
+                let y = page_height - pdf_y0 - h;
+
+                // Parse color
+                let color_str = dict
+                    .get(b"C")
+                    .ok()
+                    .and_then(|o| o.as_array().ok())
+                    .cloned()
+                    .and_then(|arr| {
+                        let to_f32 = |o: &Object| match o {
+                            Object::Real(v) => *v as f32,
+                            Object::Integer(v) => *v as f32,
+                            _ => 0.0_f32,
+                        };
+                        match arr.as_slice() {
+                            [r, g, b] => Some(format!(
+                                "#{:02X}{:02X}{:02X}",
+                                (to_f32(r) * 255.0) as u8,
+                                (to_f32(g) * 255.0) as u8,
+                                (to_f32(b) * 255.0) as u8,
+                            )),
+                            _ => None,
+                        }
+                    })
+                    .unwrap_or_else(|| "#408cff".to_string());
+
+                let has_fill = dict.get(b"IC").is_ok();
+                let thickness = dict
+                    .get(b"BS")
+                    .ok()
+                    .and_then(|o| o.as_dict().ok())
+                    .and_then(|d| d.get(b"W").ok())
+                    .and_then(|o| match o {
+                        Object::Real(v) => Some(*v as f32),
+                        Object::Integer(v) => Some(*v as f32),
+                        _ => None,
+                    })
+                    .unwrap_or(2.0_f32);
+
+                let style = match subtype.as_str() {
+                    "Highlight" => Some(AnnotationStyle::Highlight { color: color_str }),
+                    "Square" if has_fill => Some(AnnotationStyle::Rectangle {
+                        color: color_str,
+                        thickness,
+                        fill: true,
+                    }),
+                    "Square" => Some(AnnotationStyle::Rectangle {
+                        color: color_str,
+                        thickness,
+                        fill: false,
+                    }),
+                    "Circle" if has_fill => Some(AnnotationStyle::Circle {
+                        color: color_str,
+                        thickness,
+                        fill: true,
+                    }),
+                    "Circle" => Some(AnnotationStyle::Circle {
+                        color: color_str,
+                        thickness,
+                        fill: false,
+                    }),
+                    "FreeText" => {
+                        let text = dict
+                            .get(b"Contents")
+                            .ok()
+                            .and_then(|o| o.as_str().ok())
+                            .map(|b| String::from_utf8_lossy(b).to_string())
+                            .unwrap_or_default();
+                        Some(AnnotationStyle::Text {
+                            text,
+                            color: color_str,
+                            font_size: 12,
+                        })
+                    }
+                    "Text" => {
+                        let comment = dict
+                            .get(b"Contents")
+                            .ok()
+                            .and_then(|o| o.as_str().ok())
+                            .map(|b| String::from_utf8_lossy(b).to_string())
+                            .unwrap_or_default();
+                        Some(AnnotationStyle::StickyNote {
+                            comment,
+                            color: color_str,
+                        })
+                    }
+                    "Line" => {
+                        let is_arrow = dict
+                            .get(b"LE")
+                            .ok()
+                            .and_then(|o| o.as_array().ok())
+                            .map(|a| {
+                                a.iter().any(|o| {
+                                    o.as_name()
+                                        .ok()
+                                        .map(|s| String::from_utf8_lossy(s).contains("Arrow"))
+                                        .unwrap_or(false)
+                                })
+                            })
+                            .unwrap_or(false);
+                        if is_arrow {
+                            Some(AnnotationStyle::Arrow {
+                                color: color_str,
+                                thickness,
+                            })
+                        } else {
+                            Some(AnnotationStyle::Line {
+                                color: color_str,
+                                thickness,
+                            })
+                        }
+                    }
+                    _ => None,
+                };
+
+                if let Some(style) = style {
+                    annotations.push(Annotation {
+                        id: crate::models::next_annotation_id(),
+                        page: page_idx,
+                        x,
+                        y,
+                        width: w,
+                        height: h,
+                        style,
+                    });
+                }
+            }
+        }
+
+        Ok(annotations)
+    }
+
     fn render_page_internal(
         &self,
         doc_id: DocumentId,
