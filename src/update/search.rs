@@ -108,7 +108,15 @@ pub fn handle_search_message(app: &mut PdfBullApp, message: Message) -> Task<Mes
             };
 
             if let Some((page, idx)) = res {
-                app.page_input = (page + 1).to_string();
+                let label = if let Some(tab) = app.current_tab() {
+                    tab.page_labels
+                        .get(page)
+                        .cloned()
+                        .unwrap_or_else(|| (page + 1).to_string())
+                } else {
+                    (page + 1).to_string()
+                };
+                app.page_input = label;
                 if let Some(tab) = app.current_tab_mut() {
                     return crate::update::scroll_to_search_result(tab, idx);
                 }
@@ -133,7 +141,15 @@ pub fn handle_search_message(app: &mut PdfBullApp, message: Message) -> Task<Mes
             };
 
             if let Some((page, idx)) = res {
-                app.page_input = (page + 1).to_string();
+                let label = if let Some(tab) = app.current_tab() {
+                    tab.page_labels
+                        .get(page)
+                        .cloned()
+                        .unwrap_or_else(|| (page + 1).to_string())
+                } else {
+                    (page + 1).to_string()
+                };
+                app.page_input = label;
                 if let Some(tab) = app.current_tab_mut() {
                     return crate::update::scroll_to_search_result(tab, idx);
                 }

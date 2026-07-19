@@ -151,6 +151,31 @@ pub fn handle_render_message(app: &mut PdfBullApp, message: Message) -> Task<Mes
                                 ));
                             }
                         }
+
+                        if app.table_mode_active
+                            && !tab.view_state.detected_tables.contains_key(&page_idx)
+                        {
+                            if let Some(engine) = &app.engine {
+                                let cmd_tx = engine.cmd_tx.clone();
+                                text_tasks.push(Task::perform(
+                                    async move {
+                                        let (resp_tx, resp_rx) = tokio::sync::oneshot::channel();
+                                        let _ = cmd_tx
+                                            .send(crate::commands::PdfCommand::DetectTables(
+                                                doc_id, page_idx, resp_tx,
+                                            ))
+                                            .await;
+                                        match resp_rx.await {
+                                            Ok(r) => (doc_id, page_idx, r),
+                                            Err(_) => {
+                                                (doc_id, page_idx, Err(PdfError::ChannelClosed))
+                                            }
+                                        }
+                                    },
+                                    |(d, p, r)| Message::TablesDetected(d, p, r),
+                                ));
+                            }
+                        }
                     }
                     Err(e) => {
                         tracing::error!(
@@ -190,6 +215,14 @@ pub fn handle_render_message(app: &mut PdfBullApp, message: Message) -> Task<Mes
             if let Ok(items) = result {
                 if let Some(tab) = app.tabs.iter_mut().find(|t| t.id == doc_id) {
                     tab.view_state.text_layers.insert(page_idx, items);
+                }
+            }
+            Task::none()
+        }
+        Message::TablesDetected(doc_id, page_idx, result) => {
+            if let Ok(tables) = result {
+                if let Some(tab) = app.tabs.iter_mut().find(|t| t.id == doc_id) {
+                    tab.view_state.detected_tables.insert(page_idx, tables);
                 }
             }
             Task::none()

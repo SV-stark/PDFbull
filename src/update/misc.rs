@@ -115,8 +115,9 @@ pub fn handle_misc_message(app: &mut PdfBullApp, message: Message) -> Task<Messa
                             _ => {}
                         },
                         Key::Named(iced::keyboard::key::Named::Escape)
-                            if app.annotation_mode.is_some() =>
+                            if app.annotation_mode.is_some() || app.markup_active =>
                         {
+                            app.markup_active = false;
                             return app.update(Message::SetAnnotationMode(None));
                         }
                         _ => {}

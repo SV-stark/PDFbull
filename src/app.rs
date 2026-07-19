@@ -78,6 +78,7 @@ pub struct PdfBullApp {
     pub annotation_text: String,
 
     // Tools state
+    pub markup_active: bool,
     pub show_watermark_prompt: bool,
     pub watermark_input: String,
     pub show_signature_creator: bool,
@@ -86,6 +87,12 @@ pub struct PdfBullApp {
     pub saved_signature: Option<Vec<Vec<(f32, f32)>>>,
     pub signature_stamp_active: bool,
     pub show_page_organizer: bool,
+    pub show_password_prompt: bool,
+    pub password_input: String,
+    pub password_prompt_path: Option<std::path::PathBuf>,
+    pub password_prompt_doc_id: Option<crate::models::DocumentId>,
+    pub show_signatures_detail: bool,
+    pub table_mode_active: bool,
 }
 
 impl Default for PdfBullApp {
@@ -125,6 +132,7 @@ impl Default for PdfBullApp {
             annotation_text: String::new(),
 
             // Tools default initialization
+            markup_active: false,
             show_watermark_prompt: false,
             watermark_input: "CONFIDENTIAL".to_string(),
             show_signature_creator: false,
@@ -133,6 +141,12 @@ impl Default for PdfBullApp {
             saved_signature: None,
             signature_stamp_active: false,
             show_page_organizer: false,
+            show_password_prompt: false,
+            password_input: String::new(),
+            password_prompt_path: None,
+            password_prompt_doc_id: None,
+            show_signatures_detail: false,
+            table_mode_active: false,
         }
     }
 }

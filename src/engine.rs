@@ -19,7 +19,9 @@ fn reload_if_needed(
         if let Ok(guard) = paths.read() {
             if let Some(path) = guard.get(&doc_id).cloned() {
                 if let Err(e) = store.open_document(&path, None, doc_id) {
-                    tracing::error!("Failed to reload document {doc_id:?} from path '{path}': {e:?}");
+                    tracing::error!(
+                        "Failed to reload document {doc_id:?} from path '{path}': {e:?}"
+                    );
                 }
             }
         }
@@ -261,6 +263,20 @@ pub fn spawn_engine_thread(cache_size: u64, max_memory_mb: u64) -> EngineState {
                         // but kept for API symmetry and potential future caching.
                         let _ = doc_id; // suppress unused warning
                         let res = store.load_annotations(&path);
+                        let _ = tx.send(res);
+                    }
+                    PdfCommand::ToggleLayer(doc_id, object_id, visible) => {
+                        reload_if_needed(&mut store, &paths, doc_id);
+                        store.toggle_layer(doc_id, object_id, visible);
+                    }
+                    PdfCommand::GetAttachmentBytes(doc_id, object_id, tx) => {
+                        reload_if_needed(&mut store, &paths, doc_id);
+                        let res = store.get_attachment_bytes(doc_id, object_id);
+                        let _ = tx.send(res);
+                    }
+                    PdfCommand::DetectTables(doc_id, page_num, tx) => {
+                        reload_if_needed(&mut store, &paths, doc_id);
+                        let res = store.detect_tables_on_page(doc_id, page_num);
                         let _ = tx.send(res);
                     }
                 }

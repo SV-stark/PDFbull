@@ -1,6 +1,6 @@
 use crate::models::{
-    Annotation, DocumentId, DocumentMeta, FormField, OpenResult, PdfResult, RenderResult,
-    SearchResultItem, TextItem,
+    Annotation, DetectedTable, DocumentId, DocumentMeta, FormField, OpenResult, PdfResult,
+    RenderResult, SearchResultItem, TextItem,
 };
 use crate::pdf_engine::RenderOptions;
 use tokio::sync::oneshot;
@@ -83,5 +83,12 @@ pub enum PdfCommand {
         Vec<usize>,
         String,
         oneshot::Sender<PdfResult<String>>,
+    ),
+    ToggleLayer(DocumentId, (u32, u16), bool),
+    GetAttachmentBytes(DocumentId, (u32, u16), oneshot::Sender<PdfResult<Vec<u8>>>),
+    DetectTables(
+        DocumentId,
+        usize,
+        oneshot::Sender<PdfResult<Vec<DetectedTable>>>,
     ),
 }

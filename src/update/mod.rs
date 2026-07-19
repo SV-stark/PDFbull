@@ -155,6 +155,8 @@ pub fn handle_message(app: &mut PdfBullApp, message: Message) -> Task<Message> {
         | Message::SetAnnotationColor(_)
         | Message::SetAnnotationThickness(_)
         | Message::SetAnnotationTextSize(_)
+        | Message::ToggleMarkupBar
+        | Message::ToggleTableMode
         | Message::ClearRecentFiles => app::handle_app_message(app, message),
         Message::AddBookmark | Message::RemoveBookmark(_) | Message::JumpToBookmark(_) => {
             bookmarks::handle_bookmark_message(app, message)
@@ -181,7 +183,8 @@ pub fn handle_message(app: &mut PdfBullApp, message: Message) -> Task<Message> {
         | Message::RequestRender(_)
         | Message::PageRendered(_, _, _, _)
         | Message::ThumbnailRendered(_, _, _, _)
-        | Message::TextItemsLoaded(_, _, _) => render::handle_render_message(app, message),
+        | Message::TextItemsLoaded(_, _, _)
+        | Message::TablesDetected(_, _, _) => render::handle_render_message(app, message),
         Message::OpenDocument
         | Message::DocumentOpenedWithPath(_)
         | Message::DocumentOpened(_, _)
@@ -192,7 +195,14 @@ pub fn handle_message(app: &mut PdfBullApp, message: Message) -> Task<Message> {
         | Message::SwitchTab(_)
         | Message::TabReordered(_)
         | Message::DocumentModifiedExternally(_)
-        | Message::ReloadDocument(_) => tabs::handle_tab_message(app, message),
+        | Message::ReloadDocument(_)
+        | Message::PasswordInputChanged(_)
+        | Message::SubmitPassword
+        | Message::CancelPasswordPrompt
+        | Message::SaveAttachment(_)
+        | Message::AttachmentSaved(_)
+        | Message::ToggleLayer(_, _)
+        | Message::LayerToggled => tabs::handle_tab_message(app, message),
         Message::NextPage
         | Message::PrevPage
         | Message::ZoomIn
@@ -241,6 +251,10 @@ pub fn handle_message(app: &mut PdfBullApp, message: Message) -> Task<Message> {
                 app.show_signature_creator = false;
                 app.show_page_organizer = false;
             }
+            Task::none()
+        }
+        Message::ToggleSignaturesDetail(show) => {
+            app.show_signatures_detail = show;
             Task::none()
         }
         Message::WatermarkInputChanged(input) => {

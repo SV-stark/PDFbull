@@ -18,7 +18,15 @@ pub fn handle_nav_message(app: &mut PdfBullApp, message: Message) -> Task<Messag
             };
 
             if let Some(page) = next_page {
-                app.page_input = (page + 1).to_string();
+                let label = if let Some(tab) = app.current_tab() {
+                    tab.page_labels
+                        .get(page)
+                        .cloned()
+                        .unwrap_or_else(|| (page + 1).to_string())
+                } else {
+                    (page + 1).to_string()
+                };
+                app.page_input = label;
                 if let Some(tab) = app.current_tab_mut() {
                     return scroll_to_page(tab, page);
                 }
@@ -38,7 +46,15 @@ pub fn handle_nav_message(app: &mut PdfBullApp, message: Message) -> Task<Messag
             };
 
             if let Some(page) = prev_page {
-                app.page_input = (page + 1).to_string();
+                let label = if let Some(tab) = app.current_tab() {
+                    tab.page_labels
+                        .get(page)
+                        .cloned()
+                        .unwrap_or_else(|| (page + 1).to_string())
+                } else {
+                    (page + 1).to_string()
+                };
+                app.page_input = label;
                 if let Some(tab) = app.current_tab_mut() {
                     return scroll_to_page(tab, page);
                 }
@@ -136,7 +152,15 @@ pub fn handle_nav_message(app: &mut PdfBullApp, message: Message) -> Task<Messag
             };
 
             if let Some(p) = jump_page {
-                app.page_input = (p + 1).to_string();
+                let label = if let Some(tab) = app.current_tab() {
+                    tab.page_labels
+                        .get(p)
+                        .cloned()
+                        .unwrap_or_else(|| (p + 1).to_string())
+                } else {
+                    (p + 1).to_string()
+                };
+                app.page_input = label;
                 if let Some(tab) = app.current_tab_mut() {
                     return scroll_to_page(tab, p);
                 }
@@ -148,11 +172,28 @@ pub fn handle_nav_message(app: &mut PdfBullApp, message: Message) -> Task<Messag
             Task::none()
         }
         Message::PageInputSubmitted => {
-            if let Ok(page) = app.page_input.trim().parse::<usize>() {
-                return app.update(Message::JumpToPage(page.saturating_sub(1)));
-            }
             if let Some(tab) = app.current_tab() {
-                app.page_input = (tab.current_page + 1).to_string();
+                let cleaned = app.page_input.trim();
+                let target_page = if let Some(idx) = tab
+                    .page_labels
+                    .iter()
+                    .position(|l| l.eq_ignore_ascii_case(cleaned))
+                {
+                    Some(idx)
+                } else {
+                    cleaned.parse::<usize>().ok().map(|p| p.saturating_sub(1))
+                };
+
+                if let Some(page) = target_page {
+                    return app.update(Message::JumpToPage(page));
+                }
+
+                let current_label = tab
+                    .page_labels
+                    .get(tab.current_page)
+                    .cloned()
+                    .unwrap_or_else(|| (tab.current_page + 1).to_string());
+                app.page_input = current_label;
             }
             Task::none()
         }

@@ -3,9 +3,9 @@ use crate::app::{INTER_BOLD, INTER_REGULAR, LUCIDE, icons};
 use crate::models::{AnnotationStyle, DocumentTab, PendingAnnotationKind};
 use crate::ui::theme::{self, hex_to_rgb};
 use iced::widget::{
-    Space, Stack, button, canvas, column, container, mouse_area, row, scrollable, text, text_input,
+    Space, Stack, button, canvas, column, container, mouse_area, row, scrollable, text,
 };
-use iced::{Alignment, Color, Element, Length, Padding, Rectangle};
+use iced::{Alignment, Border, Color, Element, Length, Padding, Rectangle};
 
 use crate::ui::{sidebar, tabs, toolbar};
 
@@ -266,120 +266,6 @@ impl<'a> canvas::Program<crate::message::Message> for AnnotationCanvas<'a> {
 
         vec![frame.into_geometry()]
     }
-}
-
-fn render_page_nav(app: &PdfBullApp) -> Element<'_, crate::message::Message> {
-    let Some(tab) = app.current_tab() else {
-        return container(row![]).into();
-    };
-
-    let rendering_count = app.rendering_set.len();
-    let loading_indicator = if rendering_count > 0 {
-        row![
-            container(text(format!("{rendering_count}")).font(INTER_BOLD).size(11))
-                .padding([2, 5])
-                .style(|_| iced::widget::container::Style {
-                    background: Some(theme::COLOR_ACCENT.into()),
-                    text_color: Some(Color::WHITE),
-                    border: iced::Border {
-                        radius: theme::BORDER_RADIUS_FULL.into(),
-                        ..Default::default()
-                    },
-                    ..Default::default()
-                }),
-            text("Rendering...")
-                .size(12)
-                .font(INTER_REGULAR)
-                .style(|_theme| iced::widget::text::Style {
-                    color: Some(theme::COLOR_TEXT_DIM)
-                })
-        ]
-        .spacing(6)
-        .align_y(Alignment::Center)
-    } else {
-        row![]
-    };
-
-    container(
-        row![
-            loading_indicator,
-            Space::new().width(Length::Fill),
-            row![
-                button(text(icons::PREV).size(14).font(LUCIDE))
-                    .on_press(crate::message::Message::PrevPage)
-                    .style(theme::button_ghost)
-                    .padding(8),
-                container(
-                    row![
-                        text_input("", &app.page_input)
-                            .on_input(|input| {
-                                if input.is_empty() || input.parse::<usize>().is_ok() {
-                                    crate::message::Message::PageInputChanged(input)
-                                } else {
-                                    crate::message::Message::PageInputChanged(
-                                        app.page_input.clone(),
-                                    )
-                                }
-                            })
-                            .on_submit(crate::message::Message::PageInputSubmitted)
-                            .font(INTER_BOLD)
-                            .size(13)
-                            .width(36)
-                            .align_x(iced::alignment::Horizontal::Center),
-                        text(format!(" / {}", tab.total_pages.max(1)))
-                            .size(13)
-                            .font(INTER_REGULAR)
-                            .style(|_| iced::widget::text::Style {
-                                color: Some(theme::COLOR_TEXT_DIM)
-                            })
-                    ]
-                    .padding([2, 8])
-                    .align_y(Alignment::Center)
-                )
-                .style(theme::input_field),
-                button(text(icons::NEXT).size(14).font(LUCIDE))
-                    .on_press(crate::message::Message::NextPage)
-                    .style(theme::button_ghost)
-                    .padding(8),
-            ]
-            .spacing(4)
-            .align_y(Alignment::Center),
-            Space::new().width(Length::Fill),
-            container(
-                row![
-                    text(icons::SEARCH).font(LUCIDE).size(14).style(|_| {
-                        iced::widget::text::Style {
-                            color: Some(theme::COLOR_TEXT_SECONDARY),
-                        }
-                    }),
-                    text_input("Search in document...", &app.search_query)
-                        .on_input(crate::message::Message::Search)
-                        .on_submit(crate::message::Message::NextSearchResult)
-                        .font(INTER_REGULAR)
-                        .size(13)
-                        .width(180)
-                ]
-                .spacing(8)
-                .align_y(Alignment::Center)
-                .padding([0, 12])
-            )
-            .style(theme::input_field),
-        ]
-        .align_y(Alignment::Center),
-    )
-    .width(Length::Fill)
-    .height(Length::Fixed(theme::NAV_HEIGHT))
-    .padding([0, 20])
-    .style(|_theme| iced::widget::container::Style {
-        background: Some(theme::COLOR_BG_SIDEBAR.into()),
-        border: iced::Border {
-            width: 1.0,
-            color: Color::from_rgb(0.05, 0.05, 0.05),
-            ..Default::default()
-        },
-        ..Default::default()
-    })
-    .into()
 }
 
 fn render_annotations<'a>(
@@ -882,6 +768,112 @@ fn render_accessibility_layer<'a>(
         .unwrap_or_default()
 }
 
+fn render_table_overlays<'a>(
+    page_idx: usize,
+    tab: &'a DocumentTab,
+    zoom: f32,
+    app: &'a PdfBullApp,
+) -> Vec<Element<'a, crate::message::Message>> {
+    if !app.table_mode_active {
+        return vec![];
+    }
+
+    tab.view_state
+        .detected_tables
+        .get(&page_idx)
+        .map(|tables| {
+            let actual_page = tab.page_mapping.get(page_idx).copied().unwrap_or(page_idx);
+            let page_rotation = tab
+                .page_rotations
+                .get(&actual_page)
+                .copied()
+                .unwrap_or(tab.rotation);
+            let original_height = tab.page_heights.get(page_idx).copied().unwrap_or(800.0);
+
+            tables
+                .iter()
+                .map(|table| {
+                    let (rx, ry, rw, rh) = crate::models::rotate_coords(
+                        table.bbox.0,
+                        table.bbox.1,
+                        table.bbox.2,
+                        table.bbox.3,
+                        tab.page_width,
+                        original_height,
+                        page_rotation,
+                    );
+
+                    let buttons = row![
+                        button(text("Copy CSV").size(10).font(INTER_BOLD))
+                            .padding([4, 8])
+                            .style(|_theme, _status| button::Style {
+                                background: Some(theme::COLOR_ACCENT.into()),
+                                text_color: Color::WHITE,
+                                border: Border {
+                                    radius: theme::BORDER_RADIUS_SM.into(),
+                                    ..Default::default()
+                                },
+                                ..Default::default()
+                            })
+                            .on_press(crate::message::Message::CopyToClipboard(table.csv.clone())),
+                        button(text("Copy TSV").size(10).font(INTER_BOLD))
+                            .padding([4, 8])
+                            .style(|_theme, _status| button::Style {
+                                background: Some(theme::COLOR_ACCENT.into()),
+                                text_color: Color::WHITE,
+                                border: Border {
+                                    radius: theme::BORDER_RADIUS_SM.into(),
+                                    ..Default::default()
+                                },
+                                ..Default::default()
+                            })
+                            .on_press(crate::message::Message::CopyToClipboard(table.tsv.clone())),
+                    ]
+                    .spacing(6);
+
+                    let table_overlay = container(column![
+                        row![
+                            Space::new().width(Length::Fill),
+                            container(buttons).padding(4).style(|_| {
+                                iced::widget::container::Style {
+                                    background: Some(
+                                        Color::from_rgba(0.08, 0.08, 0.09, 0.9).into(),
+                                    ),
+                                    border: Border {
+                                        radius: theme::BORDER_RADIUS_MD.into(),
+                                        ..Default::default()
+                                    },
+                                    ..Default::default()
+                                }
+                            })
+                        ],
+                        Space::new().height(Length::Fill),
+                    ])
+                    .width(Length::Fixed(rw * zoom))
+                    .height(Length::Fixed(rh * zoom))
+                    .style(move |_| iced::widget::container::Style {
+                        border: Border {
+                            color: Color::from_rgba(0.25, 0.55, 1.0, 0.8), // Vibrant blue
+                            width: 2.0,
+                            radius: theme::BORDER_RADIUS_MD.into(),
+                        },
+                        background: Some(Color::from_rgba(0.25, 0.55, 1.0, 0.08).into()),
+                        ..Default::default()
+                    });
+
+                    container(table_overlay)
+                        .padding(Padding {
+                            top: ry * zoom,
+                            left: rx * zoom,
+                            ..Default::default()
+                        })
+                        .into()
+                })
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
 fn render_page_canvas<'a>(
     page_idx: usize,
     tab: &'a DocumentTab,
@@ -942,6 +934,9 @@ fn render_page_canvas<'a>(
             page_stack = page_stack.push(el);
         }
         for el in render_hyperlinks(page_idx, tab, zoom) {
+            page_stack = page_stack.push(el);
+        }
+        for el in render_table_overlays(page_idx, tab, zoom, app) {
             page_stack = page_stack.push(el);
         }
         for el in render_active_drag(page_idx, zoom, app) {
@@ -1149,7 +1144,6 @@ pub fn document_view<'a>(app: &'a PdfBullApp) -> Element<'a, crate::message::Mes
         column![
             tabs::render(app),
             toolbar::render(app),
-            render_page_nav(app),
             container(content).style(|_| iced::widget::container::Style {
                 background: Some(theme::COLOR_BG_APP.into()),
                 ..Default::default()

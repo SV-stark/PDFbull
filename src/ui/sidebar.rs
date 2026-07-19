@@ -90,6 +90,16 @@ pub fn render(app: &PdfBullApp) -> Element<'_, crate::message::Message> {
         button(text("🔍").size(14))
             .style(sidebar_tab_style(app.sidebar_mode == SidebarMode::Search))
             .on_press(crate::message::Message::SetSidebarMode(SidebarMode::Search)),
+        button(text("📎").size(14))
+            .style(sidebar_tab_style(
+                app.sidebar_mode == SidebarMode::Attachments
+            ))
+            .on_press(crate::message::Message::SetSidebarMode(
+                SidebarMode::Attachments
+            )),
+        button(text("🥞").size(14))
+            .style(sidebar_tab_style(app.sidebar_mode == SidebarMode::Layers))
+            .on_press(crate::message::Message::SetSidebarMode(SidebarMode::Layers)),
     ]
     .spacing(4)
     .padding([5, 10]);
@@ -128,8 +138,13 @@ pub fn render(app: &PdfBullApp) -> Element<'_, crate::message::Message> {
                     thumbnail_col = thumbnail_col
                         .push(button(img).on_press(crate::message::Message::JumpToPage(page_idx)));
                 } else {
+                    let page_label = tab
+                        .page_labels
+                        .get(page_idx)
+                        .cloned()
+                        .unwrap_or_else(|| (page_idx + 1).to_string());
                     thumbnail_col = thumbnail_col.push(
-                        button(text(format!("Page {}", page_idx + 1)).font(INTER_REGULAR))
+                        button(text(format!("Page {}", page_label)).font(INTER_REGULAR))
                             .on_press(crate::message::Message::JumpToPage(page_idx))
                             .width(Length::Fixed(theme::THUMBNAIL_WIDTH)),
                     );
@@ -353,6 +368,118 @@ pub fn render(app: &PdfBullApp) -> Element<'_, crate::message::Message> {
             }
 
             scrollable(search_col)
+                .width(Length::Fixed(theme::SIDEBAR_WIDTH))
+                .into()
+        }
+        SidebarMode::Attachments => {
+            let mut attach_col = column![].spacing(10).padding(5);
+            attach_col = attach_col.push(section_title("Attachments"));
+
+            if tab.attachments.is_empty() {
+                attach_col = attach_col.push(
+                    container(text("No attachments found").size(12).style(|_| {
+                        iced::widget::text::Style {
+                            color: Some(theme::COLOR_TEXT_SECONDARY),
+                        }
+                    }))
+                    .padding(15),
+                );
+            } else {
+                let mut list_col = column![].spacing(8);
+                for (idx, att) in tab.attachments.iter().enumerate() {
+                    let desc = att.description.as_deref().unwrap_or("No description");
+                    let size_str = att
+                        .size
+                        .map(|s| format!(" ({:.1} KB)", s as f64 / 1024.0))
+                        .unwrap_or_default();
+
+                    let card = container(
+                        column![
+                            row![
+                                text(format!("📎 {}", att.name))
+                                    .font(INTER_BOLD)
+                                    .size(12)
+                                    .style(|_| text::Style {
+                                        color: Some(Color::WHITE)
+                                    }),
+                                text(size_str).font(INTER_REGULAR).size(10).style(|_| {
+                                    text::Style {
+                                        color: Some(theme::COLOR_TEXT_DIM),
+                                    }
+                                }),
+                            ]
+                            .spacing(4),
+                            text(desc)
+                                .font(INTER_REGULAR)
+                                .size(11)
+                                .style(|_| text::Style {
+                                    color: Some(theme::COLOR_TEXT_SECONDARY)
+                                }),
+                        ]
+                        .spacing(2),
+                    )
+                    .padding(8)
+                    .style(|_| container::Style {
+                        background: Some(theme::COLOR_BG_WIDGET.into()),
+                        border: Border {
+                            radius: theme::BORDER_RADIUS_MD.into(),
+                            width: 1.0,
+                            color: Color::from_rgb(0.2, 0.2, 0.22),
+                        },
+                        ..Default::default()
+                    });
+
+                    list_col = list_col.push(
+                        button(card)
+                            .on_press(crate::message::Message::SaveAttachment(idx))
+                            .style(|_, _| iced::widget::button::Style {
+                                background: None,
+                                border: Border::default(),
+                                ..Default::default()
+                            })
+                            .width(Length::Fill),
+                    );
+                }
+                attach_col = attach_col.push(list_col);
+            }
+
+            scrollable(attach_col)
+                .width(Length::Fixed(theme::SIDEBAR_WIDTH))
+                .into()
+        }
+        SidebarMode::Layers => {
+            let mut layers_col = column![].spacing(10).padding(5);
+            layers_col = layers_col.push(section_title("Layers"));
+
+            if tab.layers.is_empty() {
+                layers_col = layers_col.push(
+                    container(text("No optional content layers").size(12).style(|_| {
+                        iced::widget::text::Style {
+                            color: Some(theme::COLOR_TEXT_SECONDARY),
+                        }
+                    }))
+                    .padding(15),
+                );
+            } else {
+                let mut list_col = column![].spacing(10);
+                for (idx, layer) in tab.layers.iter().enumerate() {
+                    list_col = list_col.push(
+                        row![
+                            checkbox(layer.visible)
+                                .on_toggle(move |val| crate::message::Message::ToggleLayer(
+                                    idx, val
+                                ))
+                                .size(14),
+                            text(&layer.name).size(12).font(INTER_REGULAR),
+                        ]
+                        .spacing(8)
+                        .align_y(iced::Alignment::Center),
+                    );
+                }
+                layers_col = layers_col.push(container(list_col).padding(10));
+            }
+
+            scrollable(layers_col)
                 .width(Length::Fixed(theme::SIDEBAR_WIDTH))
                 .into()
         }

@@ -41,7 +41,15 @@ pub fn handle_bookmark_message(app: &mut PdfBullApp, message: Message) -> Task<M
             };
 
             if let Some(p) = jump_page {
-                app.page_input = (p + 1).to_string();
+                let label = if let Some(tab) = app.current_tab() {
+                    tab.page_labels
+                        .get(p)
+                        .cloned()
+                        .unwrap_or_else(|| (p + 1).to_string())
+                } else {
+                    (p + 1).to_string()
+                };
+                app.page_input = label;
                 if let Some(tab) = app.current_tab_mut() {
                     return scroll_to_page(tab, p);
                 }

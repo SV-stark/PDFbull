@@ -191,6 +191,83 @@ fn watermark_prompt_view(app: &PdfBullApp) -> Element<'_, crate::message::Messag
         .into()
 }
 
+// ── Overlay Modal: Password Prompt ───────────────────────────────────────────
+fn password_prompt_view(app: &PdfBullApp) -> Element<'_, crate::message::Message> {
+    let modal_content = container(
+        column![
+            text("🔑 Enter Password")
+                .size(18)
+                .font(INTER_BOLD)
+                .style(|_| text::Style {
+                    color: Some(Color::WHITE)
+                }),
+            Space::new().height(6),
+            text("This document is password-protected. Please enter the password:")
+                .size(13)
+                .font(INTER_REGULAR)
+                .style(|_| text::Style {
+                    color: Some(theme::COLOR_TEXT_DIM)
+                }),
+            Space::new().height(12),
+            text_input("Password", &app.password_input)
+                .on_input(crate::message::Message::PasswordInputChanged)
+                .on_submit(crate::message::Message::SubmitPassword)
+                .secure(true)
+                .padding(10)
+                .size(14),
+            Space::new().height(16),
+            row![
+                button(text("Cancel").size(13).font(INTER_REGULAR))
+                    .on_press(crate::message::Message::CancelPasswordPrompt)
+                    .style(theme::button_ghost)
+                    .padding([8, 16]),
+                Space::new().width(Length::Fill),
+                button(text("Open").size(13).font(INTER_BOLD))
+                    .on_press(crate::message::Message::SubmitPassword)
+                    .padding([8, 16])
+                    .style(|_theme, _status| button::Style {
+                        background: Some(theme::COLOR_ACCENT.into()),
+                        text_color: Color::WHITE,
+                        border: Border {
+                            radius: theme::BORDER_RADIUS_MD.into(),
+                            ..Default::default()
+                        },
+                        ..Default::default()
+                    }),
+            ]
+            .align_y(Alignment::Center)
+        ]
+        .spacing(10),
+    )
+    .padding(25)
+    .width(Length::Fixed(440.0))
+    .style(|_| container::Style {
+        background: Some(Color::from_rgb8(30, 32, 36).into()),
+        border: Border {
+            radius: theme::BORDER_RADIUS_LG.into(),
+            width: 1.0,
+            color: Color::from_rgb8(54, 56, 62),
+        },
+        shadow: Shadow {
+            color: Color::from_rgba(0.0, 0.0, 0.0, 0.45),
+            offset: Vector::new(0.0, 8.0),
+            blur_radius: 18.0,
+        },
+        ..Default::default()
+    });
+
+    container(modal_content)
+        .width(Length::Fill)
+        .height(Length::Fill)
+        .center_x(Length::Fill)
+        .center_y(Length::Fill)
+        .style(|_| container::Style {
+            background: Some(Color::from_rgba(0.0, 0.0, 0.0, 0.65).into()),
+            ..Default::default()
+        })
+        .into()
+}
+
 // ── Overlay Modal: Signature Creator ─────────────────────────────────────────
 fn signature_creator_view(app: &PdfBullApp) -> Element<'_, crate::message::Message> {
     let sig_canvas = canvas(SignatureCanvasProgram {
@@ -472,6 +549,194 @@ fn organizer_view(app: &PdfBullApp) -> Element<'_, crate::message::Message> {
         .into()
 }
 
+// ── Overlay Modal: Signatures Detail ──────────────────────────────────────────
+fn signatures_detail_view(app: &PdfBullApp) -> Element<'_, crate::message::Message> {
+    let mut sig_list = column![].spacing(15);
+
+    if let Some(tab) = app.current_tab() {
+        for (idx, sig) in tab.signatures.iter().enumerate() {
+            let digest_status = if sig.digest_verified {
+                "Intact (Verified)"
+            } else {
+                "Altered (Mismatch)"
+            };
+            let crypto_status = if sig.crypto_valid {
+                "Valid"
+            } else {
+                "Invalid or Untrusted"
+            };
+
+            sig_list = sig_list.push(
+                container(
+                    column![
+                        text(format!("Signature #{}: {}", idx + 1, sig.field_name))
+                            .font(INTER_BOLD)
+                            .size(13)
+                            .style(|_| text::Style {
+                                color: Some(Color::WHITE)
+                            }),
+                        Space::new().height(4),
+                        row![
+                            text("Signer: ")
+                                .font(INTER_BOLD)
+                                .size(11)
+                                .style(|_| text::Style {
+                                    color: Some(theme::COLOR_TEXT_SECONDARY)
+                                }),
+                            text(sig.signer_name.as_deref().unwrap_or("Unknown"))
+                                .font(INTER_REGULAR)
+                                .size(11)
+                                .style(|_| text::Style {
+                                    color: Some(Color::WHITE)
+                                }),
+                        ],
+                        row![
+                            text("Date: ")
+                                .font(INTER_BOLD)
+                                .size(11)
+                                .style(|_| text::Style {
+                                    color: Some(theme::COLOR_TEXT_SECONDARY)
+                                }),
+                            text(sig.signing_time.as_deref().unwrap_or("Unknown"))
+                                .font(INTER_REGULAR)
+                                .size(11)
+                                .style(|_| text::Style {
+                                    color: Some(Color::WHITE)
+                                }),
+                        ],
+                        row![
+                            text("Reason: ")
+                                .font(INTER_BOLD)
+                                .size(11)
+                                .style(|_| text::Style {
+                                    color: Some(theme::COLOR_TEXT_SECONDARY)
+                                }),
+                            text(sig.reason.as_deref().unwrap_or("None"))
+                                .font(INTER_REGULAR)
+                                .size(11)
+                                .style(|_| text::Style {
+                                    color: Some(Color::WHITE)
+                                }),
+                        ],
+                        row![
+                            text("Document Integrity: ")
+                                .font(INTER_BOLD)
+                                .size(11)
+                                .style(|_| text::Style {
+                                    color: Some(theme::COLOR_TEXT_SECONDARY)
+                                }),
+                            text(digest_status)
+                                .font(INTER_REGULAR)
+                                .size(11)
+                                .style(move |_| text::Style {
+                                    color: Some(if sig.digest_verified {
+                                        Color::from_rgb(0.2, 0.8, 0.4)
+                                    } else {
+                                        Color::from_rgb(0.9, 0.3, 0.3)
+                                    })
+                                }),
+                        ],
+                        row![
+                            text("Signature Cryptography: ")
+                                .font(INTER_BOLD)
+                                .size(11)
+                                .style(|_| text::Style {
+                                    color: Some(theme::COLOR_TEXT_SECONDARY)
+                                }),
+                            text(crypto_status)
+                                .font(INTER_REGULAR)
+                                .size(11)
+                                .style(move |_| text::Style {
+                                    color: Some(if sig.crypto_valid {
+                                        Color::from_rgb(0.2, 0.8, 0.4)
+                                    } else {
+                                        Color::from_rgb(0.9, 0.3, 0.3)
+                                    })
+                                }),
+                        ],
+                    ]
+                    .spacing(2),
+                )
+                .padding(12)
+                .style(|_| container::Style {
+                    background: Some(Color::from_rgb8(20, 21, 23).into()),
+                    border: Border {
+                        radius: theme::BORDER_RADIUS_MD.into(),
+                        width: 1.0,
+                        color: Color::from_rgb8(50, 52, 56),
+                    },
+                    ..Default::default()
+                }),
+            );
+        }
+    }
+
+    let modal_content = container(
+        column![
+            text("✍️ Digital Signatures")
+                .size(18)
+                .font(INTER_BOLD)
+                .style(|_| text::Style {
+                    color: Some(Color::WHITE)
+                }),
+            Space::new().height(6),
+            text("Cryptographic status of digital signatures found in this document:")
+                .size(13)
+                .font(INTER_REGULAR)
+                .style(|_| text::Style {
+                    color: Some(theme::COLOR_TEXT_DIM)
+                }),
+            Space::new().height(12),
+            scrollable(sig_list).height(Length::Fixed(240.0)),
+            Space::new().height(16),
+            row![
+                Space::new().width(Length::Fill),
+                button(text("Close").size(13).font(INTER_BOLD))
+                    .on_press(crate::message::Message::ToggleSignaturesDetail(false))
+                    .padding([8, 16])
+                    .style(|_theme, _status| button::Style {
+                        background: Some(theme::COLOR_ACCENT.into()),
+                        text_color: Color::WHITE,
+                        border: Border {
+                            radius: theme::BORDER_RADIUS_MD.into(),
+                            ..Default::default()
+                        },
+                        ..Default::default()
+                    }),
+            ]
+            .align_y(Alignment::Center)
+        ]
+        .spacing(10),
+    )
+    .padding(25)
+    .width(Length::Fixed(500.0))
+    .style(|_| container::Style {
+        background: Some(Color::from_rgb8(30, 32, 36).into()),
+        border: Border {
+            radius: theme::BORDER_RADIUS_LG.into(),
+            width: 1.0,
+            color: Color::from_rgb8(54, 56, 62),
+        },
+        shadow: Shadow {
+            color: Color::from_rgba(0.0, 0.0, 0.0, 0.45),
+            offset: Vector::new(0.0, 8.0),
+            blur_radius: 18.0,
+        },
+        ..Default::default()
+    });
+
+    container(modal_content)
+        .width(Length::Fill)
+        .height(Length::Fill)
+        .center_x(Length::Fill)
+        .center_y(Length::Fill)
+        .style(|_| container::Style {
+            background: Some(Color::from_rgba(0.0, 0.0, 0.0, 0.65).into()),
+            ..Default::default()
+        })
+        .into()
+}
+
 // ── Central UI View Coordinator ──────────────────────────────────────────────
 pub fn view(app: &PdfBullApp) -> Element<'_, crate::message::Message> {
     if app.show_keyboard_help {
@@ -502,6 +767,14 @@ pub fn view(app: &PdfBullApp) -> Element<'_, crate::message::Message> {
 
     if app.show_metadata {
         base_stack = base_stack.push(metadata_view(app));
+    }
+
+    if app.show_password_prompt {
+        base_stack = base_stack.push(password_prompt_view(app));
+    }
+
+    if app.show_signatures_detail {
+        base_stack = base_stack.push(signatures_detail_view(app));
     }
 
     base_stack.into()

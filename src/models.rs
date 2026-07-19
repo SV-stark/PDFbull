@@ -102,6 +102,42 @@ pub struct DocumentMetadata {
     pub modification_date: Option<String>,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct SignatureInfo {
+    pub field_name: String,
+    pub signer_name: Option<String>,
+    pub signing_time: Option<String>,
+    pub location: Option<String>,
+    pub reason: Option<String>,
+    pub digest_verified: bool,
+    pub crypto_valid: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct AttachmentInfo {
+    pub name: String,
+    pub description: Option<String>,
+    pub size: Option<i64>,
+    pub creation_date: Option<String>,
+    pub mod_date: Option<String>,
+    pub object_id: Option<(u32, u16)>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct LayerInfo {
+    pub name: String,
+    pub object_id: (u32, u16),
+    pub visible: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct DetectedTable {
+    pub bbox: (f32, f32, f32, f32), // (x, y, w, h) in layout space
+    pub csv: String,
+    pub tsv: String,
+    pub cells: Vec<Vec<String>>,
+}
+
 #[derive(Debug, Clone)]
 pub struct OpenResult {
     pub id: DocumentId,
@@ -111,6 +147,12 @@ pub struct OpenResult {
     pub outline: Vec<crate::pdf_engine::Bookmark>,
     pub links: Vec<Hyperlink>,
     pub metadata: DocumentMetadata,
+    pub page_labels: Vec<String>,
+    pub is_encrypted: bool,
+    pub signatures: Vec<SignatureInfo>,
+    pub attachments: Vec<AttachmentInfo>,
+    pub layers: Vec<LayerInfo>,
+    pub oc_config: Option<zpdf::OcConfig>,
 }
 
 #[derive(Debug, Clone)]
@@ -118,6 +160,12 @@ pub struct DocumentMeta {
     pub outline: Vec<crate::pdf_engine::Bookmark>,
     pub links: Vec<Hyperlink>,
     pub metadata: DocumentMetadata,
+    pub page_labels: Vec<String>,
+    pub is_encrypted: bool,
+    pub signatures: Vec<SignatureInfo>,
+    pub attachments: Vec<AttachmentInfo>,
+    pub layers: Vec<LayerInfo>,
+    pub oc_config: Option<zpdf::OcConfig>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -185,6 +233,8 @@ pub enum SidebarMode {
     Outline,
     Annotations,
     Search,
+    Attachments,
+    Layers,
 }
 
 #[derive(Debug, Clone, Copy, serde::Serialize, serde::Deserialize, PartialEq, Eq, Default)]
@@ -386,6 +436,7 @@ pub struct TabViewState {
     pub rendered_pages: std::collections::HashMap<usize, (f32, iced_image::Handle)>,
     pub thumbnails: std::collections::HashMap<usize, iced_image::Handle>,
     pub text_layers: std::collections::HashMap<usize, Vec<TextItem>>,
+    pub detected_tables: std::collections::HashMap<usize, Vec<DetectedTable>>,
     pub viewport_y: f32,
     pub viewport_height: f32,
     pub sidebar_viewport_y: f32,
@@ -400,6 +451,7 @@ impl Default for TabViewState {
             rendered_pages: std::collections::HashMap::new(),
             thumbnails: std::collections::HashMap::new(),
             text_layers: std::collections::HashMap::new(),
+            detected_tables: std::collections::HashMap::new(),
             viewport_y: 0.0,
             viewport_height: 800.0,
             sidebar_viewport_y: 0.0,
@@ -442,6 +494,12 @@ pub struct DocumentTab {
     pub selected_text: Option<String>,
     pub selected_boxes: Vec<(f32, f32, f32, f32)>,
     pub annotations_dirty: bool,
+    pub page_labels: Vec<String>,
+    pub is_encrypted: bool,
+    pub signatures: Vec<SignatureInfo>,
+    pub attachments: Vec<AttachmentInfo>,
+    pub layers: Vec<LayerInfo>,
+    pub oc_config: Option<zpdf::OcConfig>,
 }
 
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -491,6 +549,12 @@ impl DocumentTab {
             selected_text: None,
             selected_boxes: Vec::new(),
             annotations_dirty: false,
+            page_labels: Vec::new(),
+            is_encrypted: false,
+            signatures: Vec::new(),
+            attachments: Vec::new(),
+            layers: Vec::new(),
+            oc_config: None,
         }
     }
 
@@ -568,9 +632,9 @@ impl DocumentTab {
         let keep_start = start.saturating_sub(buffer);
         let keep_end = (end + buffer).min(self.total_pages);
 
-        self.view_state.rendered_pages.retain(|&p, _| {
-            p >= keep_start && p < keep_end
-        });
+        self.view_state
+            .rendered_pages
+            .retain(|&p, _| p >= keep_start && p < keep_end);
 
         let thumb_start_idx = (self.view_state.sidebar_viewport_y
             / crate::ui::theme::THUMBNAIL_HEIGHT)
@@ -656,7 +720,6 @@ mod tests {
         assert_eq!(id1, id2);
         assert_ne!(id1, id3);
     }
-
 
     #[test]
     fn test_document_id_copy() {
@@ -1137,6 +1200,12 @@ mod tests {
             outline: vec![],
             links: vec![],
             metadata: DocumentMetadata::default(),
+            page_labels: vec![],
+            is_encrypted: false,
+            signatures: vec![],
+            attachments: vec![],
+            layers: vec![],
+            oc_config: None,
         };
         let cloned = result.clone();
         assert_eq!(cloned.page_count, 10);
@@ -1155,5 +1224,23 @@ mod tests {
         };
         let cloned = result.clone();
         assert_eq!(cloned.text, "found");
+    }
+
+    #[test]
+    fn test_detected_table_serialization() {
+        let table = DetectedTable {
+            bbox: (10.0, 20.0, 300.0, 150.0),
+            csv: "a,b\n1,2".to_string(),
+            tsv: "a\tb\n1\t2".to_string(),
+            cells: vec![
+                vec!["a".to_string(), "b".to_string()],
+                vec!["1".to_string(), "2".to_string()],
+            ],
+        };
+        let json = serde_json::to_string(&table).unwrap();
+        let deserialized: DetectedTable = serde_json::from_str(&json).unwrap();
+        assert_eq!(deserialized.bbox, (10.0, 20.0, 300.0, 150.0));
+        assert_eq!(deserialized.csv, "a,b\n1,2");
+        assert_eq!(deserialized.cells.len(), 2);
     }
 }

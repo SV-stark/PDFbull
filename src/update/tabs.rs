@@ -29,7 +29,9 @@ pub fn handle_tab_message(app: &mut PdfBullApp, message: Message) -> Task<Messag
                             let (resp_tx, resp_rx) = tokio::sync::oneshot::channel();
                             let doc_id = crate::models::next_doc_id();
                             if let Err(e) = cmd_tx
-                                .send(crate::commands::PdfCommand::Open(path_s, None, doc_id, resp_tx))
+                                .send(crate::commands::PdfCommand::Open(
+                                    path_s, None, doc_id, resp_tx,
+                                ))
                                 .await
                             {
                                 tracing::error!("Failed to send Open command: {e}");
@@ -90,6 +92,12 @@ pub fn handle_tab_message(app: &mut PdfBullApp, message: Message) -> Task<Messag
                     tab.page_width = width;
                     tab.outline = outline;
                     tab.links = links;
+                    tab.page_labels = res.page_labels.clone();
+                    tab.is_encrypted = res.is_encrypted;
+                    tab.signatures = res.signatures.clone();
+                    tab.attachments = res.attachments.clone();
+                    tab.layers = res.layers.clone();
+                    tab.oc_config = res.oc_config.clone();
                     tab.view_state.is_loading = false;
                     tab.page_mapping = (0..count).collect();
 
@@ -157,20 +165,34 @@ pub fn handle_tab_message(app: &mut PdfBullApp, message: Message) -> Task<Messag
                 Task::batch(vec![Task::batch(tasks), scroll_task])
             }
             Err(e) => {
-                if e == "Engine died" || e == "Channel closed" {
-                    tracing::error!("Error opening document: {e}");
-                    app.engine = None;
-                    app.status_message = Some(
-                        "PDF engine crashed. Please try your action again to restart it.".into(),
-                    );
-                } else if e != "Cancelled" {
-                    tracing::error!("Error opening document: {e}");
-                    app.status_message = Some(format!("Error opening document: {e}"));
+                if e == crate::models::PdfError::PasswordRequired {
+                    let path = app
+                        .tabs
+                        .iter()
+                        .find(|t| t.id == doc_id)
+                        .map(|t| t.path.clone());
+                    app.show_password_prompt = true;
+                    app.password_input.clear();
+                    app.password_prompt_path = path;
+                    app.password_prompt_doc_id = Some(doc_id);
+                    Task::none()
+                } else {
+                    if e == "Engine died" || e == "Channel closed" {
+                        tracing::error!("Error opening document: {e}");
+                        app.engine = None;
+                        app.status_message = Some(
+                            "PDF engine crashed. Please try your action again to restart it."
+                                .into(),
+                        );
+                    } else if e != "Cancelled" {
+                        tracing::error!("Error opening document: {e}");
+                        app.status_message = Some(format!("Error opening document: {e}"));
+                    }
+                    if let Some(pos) = app.tabs.iter().position(|t| t.id == doc_id) {
+                        app.tabs.remove(pos);
+                    }
+                    Task::none()
                 }
-                if let Some(pos) = app.tabs.iter().position(|t| t.id == doc_id) {
-                    app.tabs.remove(pos);
-                }
-                Task::none()
             }
         },
         Message::DocumentMetaLoaded(doc_id, result) => {
@@ -179,6 +201,12 @@ pub fn handle_tab_message(app: &mut PdfBullApp, message: Message) -> Task<Messag
                     tab.outline = meta.outline;
                     tab.links = meta.links;
                     tab.metadata = meta.metadata;
+                    tab.page_labels = meta.page_labels;
+                    tab.is_encrypted = meta.is_encrypted;
+                    tab.signatures = meta.signatures;
+                    tab.attachments = meta.attachments;
+                    tab.layers = meta.layers;
+                    tab.oc_config = meta.oc_config;
                 }
             }
             Task::none()
@@ -203,7 +231,9 @@ pub fn handle_tab_message(app: &mut PdfBullApp, message: Message) -> Task<Messag
                     async move {
                         let (resp_tx, resp_rx) = tokio::sync::oneshot::channel();
                         if let Err(e) = cmd_tx
-                            .send(crate::commands::PdfCommand::Open(path_s, None, doc_id, resp_tx))
+                            .send(crate::commands::PdfCommand::Open(
+                                path_s, None, doc_id, resp_tx,
+                            ))
                             .await
                         {
                             tracing::error!("Failed to send Open command: {e}");
@@ -378,6 +408,163 @@ pub fn handle_tab_message(app: &mut PdfBullApp, message: Message) -> Task<Messag
             }
             Task::none()
         }
+        Message::PasswordInputChanged(input) => {
+            app.password_input = input;
+            Task::none()
+        }
+        Message::SubmitPassword => {
+            app.show_password_prompt = false;
+            let path = app.password_prompt_path.take();
+            let doc_id = app.password_prompt_doc_id.take();
+            let password = app.password_input.clone();
+            app.password_input.clear();
+
+            if let (Some(path), Some(doc_id), Some(engine)) = (path, doc_id, &app.engine) {
+                let cmd_tx = engine.cmd_tx.clone();
+                let path_s = path.to_string_lossy().to_string();
+                return Task::perform(
+                    async move {
+                        let (resp_tx, resp_rx) = tokio::sync::oneshot::channel();
+                        if let Err(e) = cmd_tx
+                            .send(crate::commands::PdfCommand::Open(
+                                path_s,
+                                Some(password),
+                                doc_id,
+                                resp_tx,
+                            ))
+                            .await
+                        {
+                            tracing::error!("Failed to send Open command: {e}");
+                            return Err(crate::models::PdfError::EngineDied);
+                        }
+                        let res = resp_rx
+                            .await
+                            .unwrap_or(Err(crate::models::PdfError::EngineDied));
+                        Ok((doc_id, res))
+                    },
+                    |res| match res {
+                        Ok((id, r)) => Message::DocumentOpened(id, r),
+                        Err(_) => Message::DocumentOpened(
+                            crate::models::DocumentId(0),
+                            Err(crate::models::PdfError::EngineDied),
+                        ),
+                    },
+                );
+            }
+            Task::none()
+        }
+        Message::CancelPasswordPrompt => {
+            app.show_password_prompt = false;
+            let doc_id = app.password_prompt_doc_id.take();
+            app.password_prompt_path = None;
+            app.password_input.clear();
+
+            if let Some(doc_id) = doc_id {
+                if let Some(pos) = app.tabs.iter().position(|t| t.id == doc_id) {
+                    app.tabs.remove(pos);
+                    if app.active_tab >= app.tabs.len() && !app.tabs.is_empty() {
+                        app.active_tab = app.tabs.len() - 1;
+                    }
+                }
+            }
+            Task::none()
+        }
+        Message::SaveAttachment(idx) => {
+            let Some(tab) = app.current_tab() else {
+                return Task::none();
+            };
+            let Some(att) = tab.attachments.get(idx) else {
+                return Task::none();
+            };
+            let att_clone = att.clone();
+            let doc_id = tab.id;
+            let engine = app.engine.clone();
+
+            if let Some(engine) = engine {
+                let cmd_tx = engine.cmd_tx.clone();
+                return Task::perform(
+                    async move {
+                        let file_handle = rfd::AsyncFileDialog::new()
+                            .set_file_name(&att_clone.name)
+                            .save_file()
+                            .await;
+                        let Some(file_handle) = file_handle else {
+                            return Err(crate::models::PdfError::Cancelled);
+                        };
+
+                        let target_path = file_handle.path().to_path_buf();
+                        let (resp_tx, resp_rx) = tokio::sync::oneshot::channel();
+                        let obj_id = att_clone.object_id.ok_or_else(|| {
+                            crate::models::PdfError::EngineError(
+                                crate::models::EngineErrorKind::Generic(
+                                    "Invalid object ID".to_string(),
+                                ),
+                            )
+                        })?;
+                        if let Err(_) = cmd_tx
+                            .send(crate::commands::PdfCommand::GetAttachmentBytes(
+                                doc_id, obj_id, resp_tx,
+                            ))
+                            .await
+                        {
+                            return Err(crate::models::PdfError::EngineDied);
+                        }
+
+                        let bytes = resp_rx
+                            .await
+                            .unwrap_or(Err(crate::models::PdfError::EngineDied))?;
+
+                        tokio::fs::write(&target_path, bytes)
+                            .await
+                            .map_err(|e| crate::models::PdfError::IoError(e.to_string()))?;
+                        Ok(target_path.to_string_lossy().to_string())
+                    },
+                    crate::message::Message::AttachmentSaved,
+                );
+            }
+            Task::none()
+        }
+        Message::AttachmentSaved(res) => {
+            match res {
+                Ok(path) => {
+                    app.status_message = Some(format!("Attachment saved successfully to: {path}"));
+                }
+                Err(crate::models::PdfError::Cancelled) => {}
+                Err(e) => {
+                    app.status_message = Some(format!("Error saving attachment: {e}"));
+                }
+            }
+            Task::none()
+        }
+        Message::ToggleLayer(idx, visible) => {
+            let Some(tab) = app.current_tab_mut() else {
+                return Task::none();
+            };
+            if let Some(layer) = tab.layers.get_mut(idx) {
+                layer.visible = visible;
+                let obj_id = layer.object_id;
+                let doc_id = tab.id;
+
+                tab.view_state.rendered_pages.clear();
+                tab.view_state.thumbnails.clear();
+
+                if let Some(engine) = &app.engine {
+                    let cmd_tx = engine.cmd_tx.clone();
+                    return Task::perform(
+                        async move {
+                            let _ = cmd_tx
+                                .send(crate::commands::PdfCommand::ToggleLayer(
+                                    doc_id, obj_id, visible,
+                                ))
+                                .await;
+                        },
+                        |_| crate::message::Message::LayerToggled,
+                    );
+                }
+            }
+            Task::none()
+        }
+        Message::LayerToggled => app.render_visible_pages(),
         _ => Task::none(),
     }
 }

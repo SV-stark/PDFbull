@@ -8,8 +8,9 @@ use rayon::prelude::*;
 use std::collections::HashMap;
 use std::sync::Arc;
 use zpdf::{
-    ContentInterpreter, FieldKind, FieldValue, ImageCache, PdfDocument, RenderBackend,
-    cpu::CpuRenderer, spans_to_text,
+    ContentInterpreter, FieldKind, FieldValue, FormFiller, ImageCache, IncrementalWriter,
+    PdfDocument, RenderBackend, cpu::CpuRenderer, detect_tables, spans_to_text,
+    struct_ordered_text,
 };
 use zune_image::codecs::ImageFormat;
 use zune_image::image::Image;
@@ -107,6 +108,7 @@ pub struct DocumentStore {
     paths: HashMap<DocumentId, String>,
     render_cache: SharedRenderCache,
     cache_keys: HashMap<DocumentId, Vec<RenderKey>>,
+    oc_configs: HashMap<DocumentId, zpdf::OcConfig>,
 }
 
 // DocumentState wrapper removed as it was a single-field struct.
@@ -118,6 +120,7 @@ impl DocumentStore {
             paths: HashMap::new(),
             render_cache: cache,
             cache_keys: HashMap::new(),
+            oc_configs: HashMap::new(),
         }
     }
 
@@ -166,6 +169,113 @@ impl DocumentStore {
         let xmp = doc.xmp_metadata();
         let metadata = Self::doc_info_to_metadata(info.as_ref(), xmp.as_ref());
 
+        let page_labels_obj = doc.page_labels();
+        let page_labels: Vec<String> = (0..page_count)
+            .map(|i| {
+                page_labels_obj
+                    .as_ref()
+                    .and_then(|pl| pl.label(i))
+                    .unwrap_or_else(|| (i + 1).to_string())
+            })
+            .collect();
+        let is_encrypted = doc.is_encrypted();
+        let signatures = doc
+            .signatures()
+            .into_iter()
+            .map(|sig| crate::models::SignatureInfo {
+                field_name: sig.field_name,
+                signer_name: sig.signer_common_name.or(sig.name),
+                signing_time: sig.signing_time,
+                location: sig.location,
+                reason: sig.reason,
+                digest_verified: matches!(sig.digest, zpdf::DigestStatus::Verified),
+                crypto_valid: matches!(sig.crypto, zpdf::CryptoStatus::Valid),
+            })
+            .collect();
+
+        let attachments = doc
+            .embedded_files()
+            .into_iter()
+            .map(|ef| crate::models::AttachmentInfo {
+                name: ef.name,
+                description: ef.description,
+                size: ef.size,
+                creation_date: ef.creation_date,
+                mod_date: ef.mod_date,
+                object_id: ef.stream.map(|id| (id.0, id.1)),
+            })
+            .collect();
+
+        let oc_config = doc.oc_config();
+        let mut layers = Vec::new();
+        if let Some(oc) = &oc_config {
+            if let Ok(root_ref) = doc.file().trailer.get_ref("Root") {
+                if let Ok(root) = doc.file().resolve(root_ref) {
+                    if let Ok(root_dict) = root.as_dict() {
+                        if let Some(ocp_obj) = root_dict.get("OCProperties") {
+                            let resolved_ocp = match ocp_obj {
+                                zpdf::PdfObject::Ref(r) => doc.file().resolve(*r).ok(),
+                                other => Some(other.clone()),
+                            };
+                            if let Some(zpdf::PdfObject::Dict(ocp_dict)) = &resolved_ocp {
+                                if let Some(ocgs_obj) = ocp_dict.get("OCGs") {
+                                    let resolved_ocgs = match ocgs_obj {
+                                        zpdf::PdfObject::Ref(r) => doc.file().resolve(*r).ok(),
+                                        other => Some(other.clone()),
+                                    };
+                                    if let Some(zpdf::PdfObject::Array(ocgs_arr)) = &resolved_ocgs {
+                                        for item in ocgs_arr {
+                                            if let zpdf::PdfObject::Ref(r) = item {
+                                                if let Ok(ocg_obj) = doc.file().resolve(*r) {
+                                                    if let Ok(ocg_dict) = ocg_obj.as_dict() {
+                                                        let name_opt =
+                                                            ocg_dict.get("Name").and_then(|n| {
+                                                                let resolved = match n {
+                                                                    zpdf::PdfObject::Ref(
+                                                                        ref_id,
+                                                                    ) => doc
+                                                                        .file()
+                                                                        .resolve(*ref_id)
+                                                                        .ok()?,
+                                                                    other => other.clone(),
+                                                                };
+                                                                resolved
+                                                                    .as_name()
+                                                                    .map(ToString::to_string)
+                                                                    .or_else(|_| {
+                                                                        resolved.as_str().map(|s| {
+                                                                            String::from_utf8_lossy(
+                                                                                &s.0,
+                                                                            )
+                                                                            .to_string()
+                                                                        })
+                                                                    })
+                                                                    .ok()
+                                                            });
+                                                        if let Some(name) = name_opt {
+                                                            let visible = oc.group_visible(*r);
+                                                            layers.push(crate::models::LayerInfo {
+                                                                name,
+                                                                object_id: (r.0, r.1),
+                                                                visible,
+                                                            });
+                                                        }
+                                                    }
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        if let Some(oc) = &oc_config {
+            self.oc_configs.insert(doc_id, oc.clone());
+        }
         self.documents.insert(doc_id, doc);
         self.paths.insert(doc_id, path.to_string());
 
@@ -177,6 +287,12 @@ impl DocumentStore {
             outline,
             links,
             metadata,
+            page_labels,
+            is_encrypted,
+            signatures,
+            attachments,
+            layers,
+            oc_config,
         })
     }
 
@@ -212,7 +328,10 @@ impl DocumentStore {
         all_links
     }
 
-    pub fn load_document_meta(&self, doc_id: DocumentId) -> PdfResult<crate::models::DocumentMeta> {
+    pub fn load_document_meta(
+        &mut self,
+        doc_id: DocumentId,
+    ) -> PdfResult<crate::models::DocumentMeta> {
         let doc = self
             .documents
             .get(&doc_id)
@@ -225,21 +344,187 @@ impl DocumentStore {
         let xmp = doc.xmp_metadata();
         let metadata = Self::doc_info_to_metadata(info.as_ref(), xmp.as_ref());
 
+        let page_count = doc.page_count();
+        let page_labels_obj = doc.page_labels();
+        let page_labels: Vec<String> = (0..page_count)
+            .map(|i| {
+                page_labels_obj
+                    .as_ref()
+                    .and_then(|pl| pl.label(i))
+                    .unwrap_or_else(|| (i + 1).to_string())
+            })
+            .collect();
+        let is_encrypted = doc.is_encrypted();
+        let signatures = doc
+            .signatures()
+            .into_iter()
+            .map(|sig| crate::models::SignatureInfo {
+                field_name: sig.field_name,
+                signer_name: sig.signer_common_name.or(sig.name),
+                signing_time: sig.signing_time,
+                location: sig.location,
+                reason: sig.reason,
+                digest_verified: matches!(sig.digest, zpdf::DigestStatus::Verified),
+                crypto_valid: matches!(sig.crypto, zpdf::CryptoStatus::Valid),
+            })
+            .collect();
+
+        let attachments = doc
+            .embedded_files()
+            .into_iter()
+            .map(|ef| crate::models::AttachmentInfo {
+                name: ef.name,
+                description: ef.description,
+                size: ef.size,
+                creation_date: ef.creation_date,
+                mod_date: ef.mod_date,
+                object_id: ef.stream.map(|id| (id.0, id.1)),
+            })
+            .collect();
+
+        let oc_config = doc.oc_config();
+        let mut layers = Vec::new();
+        if let Some(oc) = &oc_config {
+            if let Ok(root_ref) = doc.file().trailer.get_ref("Root") {
+                if let Ok(root) = doc.file().resolve(root_ref) {
+                    if let Ok(root_dict) = root.as_dict() {
+                        if let Some(ocp_obj) = root_dict.get("OCProperties") {
+                            let resolved_ocp = match ocp_obj {
+                                zpdf::PdfObject::Ref(r) => doc.file().resolve(*r).ok(),
+                                other => Some(other.clone()),
+                            };
+                            if let Some(zpdf::PdfObject::Dict(ocp_dict)) = &resolved_ocp {
+                                if let Some(ocgs_obj) = ocp_dict.get("OCGs") {
+                                    let resolved_ocgs = match ocgs_obj {
+                                        zpdf::PdfObject::Ref(r) => doc.file().resolve(*r).ok(),
+                                        other => Some(other.clone()),
+                                    };
+                                    if let Some(zpdf::PdfObject::Array(ocgs_arr)) = &resolved_ocgs {
+                                        for item in ocgs_arr {
+                                            if let zpdf::PdfObject::Ref(r) = item {
+                                                if let Ok(ocg_obj) = doc.file().resolve(*r) {
+                                                    if let Ok(ocg_dict) = ocg_obj.as_dict() {
+                                                        let name_opt =
+                                                            ocg_dict.get("Name").and_then(|n| {
+                                                                let resolved = match n {
+                                                                    zpdf::PdfObject::Ref(
+                                                                        ref_id,
+                                                                    ) => doc
+                                                                        .file()
+                                                                        .resolve(*ref_id)
+                                                                        .ok()?,
+                                                                    other => other.clone(),
+                                                                };
+                                                                resolved
+                                                                    .as_name()
+                                                                    .map(ToString::to_string)
+                                                                    .or_else(|_| {
+                                                                        resolved.as_str().map(|s| {
+                                                                            String::from_utf8_lossy(
+                                                                                &s.0,
+                                                                            )
+                                                                            .to_string()
+                                                                        })
+                                                                    })
+                                                                    .ok()
+                                                            });
+                                                        if let Some(name) = name_opt {
+                                                            let visible = oc.group_visible(*r);
+                                                            layers.push(crate::models::LayerInfo {
+                                                                name,
+                                                                object_id: (r.0, r.1),
+                                                                visible,
+                                                            });
+                                                        }
+                                                    }
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        if let Some(oc) = &oc_config {
+            self.oc_configs.insert(doc_id, oc.clone());
+        }
+
         Ok(crate::models::DocumentMeta {
             outline,
             links,
             metadata,
+            page_labels,
+            is_encrypted,
+            signatures,
+            attachments,
+            layers,
+            oc_config,
         })
     }
 
     pub fn close_document(&mut self, doc_id: DocumentId) {
         self.documents.remove(&doc_id);
         self.paths.remove(&doc_id);
+        self.oc_configs.remove(&doc_id);
         if let Some(doc_keys) = self.cache_keys.remove(&doc_id) {
             for key in doc_keys {
                 self.render_cache.remove(&key);
             }
         }
+    }
+
+    pub fn toggle_layer(&mut self, doc_id: DocumentId, object_id: (u32, u16), visible: bool) {
+        if let Some(oc) = self.oc_configs.get_mut(&doc_id) {
+            unsafe {
+                struct OcConfigMirror {
+                    off: std::collections::HashSet<zpdf::ObjectId>,
+                    on: std::collections::HashSet<zpdf::ObjectId>,
+                    #[allow(dead_code)]
+                    base_state_off: bool,
+                }
+                #[allow(clippy::transmute_ptr_to_ptr, clippy::transmute_undefined_repr)]
+                let mirror: &mut OcConfigMirror = &mut *(oc as *mut zpdf::OcConfig as *mut OcConfigMirror);
+                let id = zpdf::ObjectId(object_id.0, object_id.1);
+                if visible {
+                    mirror.off.remove(&id);
+                    mirror.on.insert(id);
+                } else {
+                    mirror.on.remove(&id);
+                    mirror.off.insert(id);
+                }
+            }
+            if let Some(keys) = self.cache_keys.get(&doc_id) {
+                for key in keys {
+                    self.render_cache.remove(key);
+                }
+            }
+        }
+    }
+
+    pub fn get_attachment_bytes(
+        &self,
+        doc_id: DocumentId,
+        object_id: (u32, u16),
+    ) -> PdfResult<Vec<u8>> {
+        let doc = self
+            .documents
+            .get(&doc_id)
+            .ok_or(PdfError::EngineError(EngineErrorKind::DocumentNotFound))?;
+
+        let efs = doc.embedded_files();
+        let target_ef = efs
+            .iter()
+            .find(|ef| ef.stream.map(|id| (id.0, id.1)) == Some(object_id))
+            .ok_or_else(|| {
+                PdfError::EngineError(EngineErrorKind::Generic("Attachment not found".to_string()))
+            })?;
+
+        doc.embedded_file_bytes(target_ef)
+            .map_err(|e| PdfError::EngineError(EngineErrorKind::Generic(e.to_string())))
     }
 
     /// Load annotations previously saved with `save_annotations` from the PDF file.
@@ -513,12 +798,17 @@ impl DocumentStore {
             .map_err(|e| PdfError::RenderFailed(e.to_string()))?;
 
         // Incorporate custom option rotation into the display list rotation
-        let display_list = ContentInterpreter::new(page.effective_box())
+        let mut interp = ContentInterpreter::new(page.effective_box())
             .with_page_rotation(page.rotate + options.rotation)
             .with_fonts(&mut fonts)
             .with_document(doc.file(), &page.resources)
-            .with_images(&mut images)
-            .interpret(&content);
+            .with_images(&mut images);
+
+        if let Some(oc) = self.oc_configs.get(&doc_id) {
+            interp = interp.with_optional_content(oc);
+        }
+
+        let display_list = interp.interpret(&content);
 
         let mut renderer = CpuRenderer::new().with_fonts(&fonts).with_images(&images);
         let page_img = renderer
@@ -553,7 +843,10 @@ impl DocumentStore {
             data: final_data.into(),
         };
 
-        self.cache_keys.entry(doc_id).or_default().push(cache_key.clone());
+        self.cache_keys
+            .entry(doc_id)
+            .or_default()
+            .push(cache_key.clone());
         self.render_cache.put(cache_key, base.clone());
 
         if options.filter == RenderFilter::None {
@@ -610,7 +903,15 @@ impl DocumentStore {
                 .with_text_sink(&mut spans);
             let _ = interp.interpret(&content);
         }
-        let text = spans_to_text(spans, 2.0);
+        let text = if doc.is_tagged() {
+            if let Some(tree) = doc.struct_tree() {
+                struct_ordered_text(&spans, page_num, &tree)
+            } else {
+                spans_to_text(spans, 2.0)
+            }
+        } else {
+            spans_to_text(spans, 2.0)
+        };
         Ok(text)
     }
 
@@ -659,6 +960,61 @@ impl DocumentStore {
         Ok(text_items)
     }
 
+    pub fn detect_tables_on_page(
+        &self,
+        doc_id: DocumentId,
+        page_num: usize,
+    ) -> PdfResult<Vec<crate::models::DetectedTable>> {
+        let doc = self
+            .documents
+            .get(&doc_id)
+            .ok_or(PdfError::EngineError(EngineErrorKind::DocumentNotFound))?;
+        let page = doc
+            .page(page_num)
+            .map_err(|_| PdfError::PageNotFound(page_num))?;
+        let mut fonts = doc.load_page_fonts(&page);
+        let mut images = ImageCache::new();
+        let content = doc
+            .page_content_bytes(&page)
+            .map_err(|e| PdfError::SearchError(e.to_string()))?;
+
+        let mut spans = Vec::new();
+        {
+            let interp = ContentInterpreter::new(page.effective_box())
+                .with_fonts(&mut fonts)
+                .with_document(doc.file(), &page.resources)
+                .with_images(&mut images)
+                .with_text_sink(&mut spans);
+            let _ = interp.interpret(&content);
+        }
+
+        let tables = detect_tables(&spans);
+        let page_height = page.effective_box().height() as f32;
+
+        let detected = tables
+            .into_iter()
+            .map(|t| {
+                let (x0, y0, x1, y1) = t.bbox();
+                // Coordinate conversion to y-down layout space:
+                // x = x0, y = page_height - y1, w = x1 - x0, h = y1 - y0
+                let bbox = (
+                    x0 as f32,
+                    page_height - y1 as f32,
+                    (x1 - x0) as f32,
+                    (y1 - y0) as f32,
+                );
+                crate::models::DetectedTable {
+                    bbox,
+                    csv: t.to_csv(),
+                    tsv: t.to_tsv(),
+                    cells: t.cells,
+                }
+            })
+            .collect();
+
+        Ok(detected)
+    }
+
     #[allow(clippy::suboptimal_flops)]
     pub fn save_annotations(
         &mut self,
@@ -674,7 +1030,8 @@ impl DocumentStore {
         let mut doc = Document::load(pdf_path).map_err(|e| PdfError::OpenFailed(e.to_string()))?;
 
         // Group annotations by page
-        let mut page_annots: std::collections::BTreeMap<usize, Vec<&Annotation>> = std::collections::BTreeMap::new();
+        let mut page_annots: std::collections::BTreeMap<usize, Vec<&Annotation>> =
+            std::collections::BTreeMap::new();
         for ann in annotations {
             page_annots.entry(ann.page).or_default().push(ann);
         }
@@ -1120,40 +1477,50 @@ impl DocumentStore {
         info: Option<&zpdf::DocInfo>,
         xmp: Option<&zpdf::XmpMetadata>,
     ) -> crate::models::DocumentMetadata {
-        let title = xmp.and_then(|x| x.title.clone())
+        let title = xmp
+            .and_then(|x| x.title.clone())
             .or_else(|| info.and_then(|i| i.title.clone()));
 
-        let author = xmp.and_then(|x| {
-            if x.creators.is_empty() {
-                None
-            } else {
-                Some(x.creators.join(", "))
-            }
-        }).or_else(|| info.and_then(|i| i.author.clone()));
-
-        let subject = xmp.and_then(|x| {
-            x.description.clone().or_else(|| {
-                if x.subjects.is_empty() {
+        let author = xmp
+            .and_then(|x| {
+                if x.creators.is_empty() {
                     None
                 } else {
-                    Some(x.subjects.join(", "))
+                    Some(x.creators.join(", "))
                 }
             })
-        }).or_else(|| info.and_then(|i| i.subject.clone()));
+            .or_else(|| info.and_then(|i| i.author.clone()));
 
-        let keywords = xmp.and_then(|x| x.keywords.clone())
+        let subject = xmp
+            .and_then(|x| {
+                x.description.clone().or_else(|| {
+                    if x.subjects.is_empty() {
+                        None
+                    } else {
+                        Some(x.subjects.join(", "))
+                    }
+                })
+            })
+            .or_else(|| info.and_then(|i| i.subject.clone()));
+
+        let keywords = xmp
+            .and_then(|x| x.keywords.clone())
             .or_else(|| info.and_then(|i| i.keywords.clone()));
 
-        let creator = xmp.and_then(|x| x.creator_tool.clone())
+        let creator = xmp
+            .and_then(|x| x.creator_tool.clone())
             .or_else(|| info.and_then(|i| i.creator.clone()));
 
-        let producer = xmp.and_then(|x| x.producer.clone())
+        let producer = xmp
+            .and_then(|x| x.producer.clone())
             .or_else(|| info.and_then(|i| i.producer.clone()));
 
-        let creation_date = xmp.and_then(|x| x.create_date.clone())
+        let creation_date = xmp
+            .and_then(|x| x.create_date.clone())
             .or_else(|| info.and_then(|i| i.creation_date.clone()));
 
-        let modification_date = xmp.and_then(|x| x.modify_date.clone())
+        let modification_date = xmp
+            .and_then(|x| x.modify_date.clone())
             .or_else(|| info.and_then(|i| i.mod_date.clone()));
 
         crate::models::DocumentMetadata {
@@ -1227,12 +1594,22 @@ impl DocumentStore {
                 let match_end = match_start + query_lower.len();
 
                 // Get char index in full_text_lower:
-                let char_start = char_boundaries_lower.binary_search(&match_start).unwrap_or_else(|x| x);
-                let char_end = char_boundaries_lower.binary_search(&match_end).unwrap_or_else(|x| x);
+                let char_start = char_boundaries_lower
+                    .binary_search(&match_start)
+                    .unwrap_or_else(|x| x);
+                let char_end = char_boundaries_lower
+                    .binary_search(&match_end)
+                    .unwrap_or_else(|x| x);
 
                 // Map to byte index in original full_text:
-                let orig_start = char_boundaries.get(char_start).copied().unwrap_or(full_text.len());
-                let orig_end = char_boundaries.get(char_end).copied().unwrap_or(full_text.len());
+                let orig_start = char_boundaries
+                    .get(char_start)
+                    .copied()
+                    .unwrap_or(full_text.len());
+                let orig_end = char_boundaries
+                    .get(char_end)
+                    .copied()
+                    .unwrap_or(full_text.len());
                 let matched_text = full_text[orig_start..orig_end].to_string();
 
                 if let Some(&(_, _, span_idx)) = span_offsets
@@ -1252,7 +1629,10 @@ impl DocumentStore {
                 }
 
                 // Advance search_idx safely to the next character boundary in full_text_lower
-                search_idx = char_boundaries_lower.get(char_start + 1).copied().unwrap_or(full_text_lower.len());
+                search_idx = char_boundaries_lower
+                    .get(char_start + 1)
+                    .copied()
+                    .unwrap_or(full_text_lower.len());
             }
         }
 
@@ -1282,8 +1662,7 @@ impl DocumentStore {
             }
             acc
         } else {
-            data
-                .par_chunks_exact(4)
+            data.par_chunks_exact(4)
                 .enumerate()
                 .fold(
                     || None::<(u32, u32, u32, u32)>,
@@ -1388,7 +1767,8 @@ impl DocumentStore {
             RenderFilter::Grayscale => {
                 data.par_chunks_exact_mut(4).for_each(|pixel| {
                     let luma =
-                        (pixel[0] as u32 * 299 + pixel[1] as u32 * 587 + pixel[2] as u32 * 114) / 1000;
+                        (pixel[0] as u32 * 299 + pixel[1] as u32 * 587 + pixel[2] as u32 * 114)
+                            / 1000;
                     pixel[0] = luma as u8;
                     pixel[1] = luma as u8;
                     pixel[2] = luma as u8;
@@ -1666,63 +2046,34 @@ impl DocumentStore {
         fields
     }
 
-    fn walk_lopdf_fields(
-        doc: &mut Document,
-        field_ref: ObjectId,
-        parent_name: &str,
-        updates: &[FormField],
-        depth: usize,
-    ) {
-        if depth > 100 {
-            return;
-        }
-        let mut name = parent_name.to_string();
+    pub fn fill_form(
+        &mut self,
+        path: &str,
+        updates: Vec<FormField>,
+        output_path: String,
+    ) -> PdfResult<String> {
+        let data = std::fs::read(path).map_err(|e| PdfError::IoError(e.to_string()))?;
+        let mut writer =
+            IncrementalWriter::new(data).map_err(|e| PdfError::IoError(e.to_string()))?;
 
-        let field_dict = match doc.get_object(field_ref) {
-            Ok(Object::Dictionary(dict)) => dict.clone(),
-            _ => return,
-        };
-
-        if let Ok(partial_name_obj) = field_dict.get(b"T") {
-            if let Ok(partial_name) = partial_name_obj.as_str() {
-                let partial_str = String::from_utf8_lossy(partial_name).into_owned();
-                if name.is_empty() {
-                    name = partial_str;
-                } else {
-                    name = format!("{name}.{partial_str}");
-                }
-            }
-        }
-
-        if let Ok(kids_obj) = field_dict.get(b"Kids") {
-            if let Ok(kids_arr) = kids_obj.as_array() {
-                for kid in kids_arr {
-                    if let Ok(kid_ref) = kid.as_reference() {
-                        Self::walk_lopdf_fields(doc, kid_ref, &name, updates, depth + 1);
-                    }
-                }
-                return;
-            }
-        }
-
-        if let Some(update) = updates.iter().find(|u| u.name == name) {
-            if let Some(Object::Dictionary(dict)) = doc.objects.get_mut(&field_ref) {
-                match &update.variant {
-                    FormFieldVariant::Text { value } => {
-                        dict.set("V", Object::string_literal(value.clone()));
-                    }
+        {
+            let mut filler =
+                FormFiller::new(&mut writer).map_err(|e| PdfError::IoError(e.to_string()))?;
+            for update in updates {
+                let val_str = match &update.variant {
+                    FormFieldVariant::Text { value } => value.clone(),
                     FormFieldVariant::Checkbox { is_checked } => {
-                        let name_val = if *is_checked { "Yes" } else { "Off" };
-                        dict.set("V", Object::Name(name_val.as_bytes().to_vec()));
-                        dict.set("AS", Object::Name(name_val.as_bytes().to_vec()));
+                        if *is_checked {
+                            "Yes".to_string()
+                        } else {
+                            "Off".to_string()
+                        }
                     }
                     FormFieldVariant::RadioButton { is_selected, .. } => {
                         if *is_selected {
-                            dict.set("V", Object::Name(b"Yes".to_vec()));
-                            dict.set("AS", Object::Name(b"Yes".to_vec()));
+                            "Yes".to_string()
                         } else {
-                            dict.set("V", Object::Name(b"Off".to_vec()));
-                            dict.set("AS", Object::Name(b"Off".to_vec()));
+                            "Off".to_string()
                         }
                     }
                     FormFieldVariant::ComboBox {
@@ -1730,60 +2081,25 @@ impl DocumentStore {
                         options,
                     } => {
                         if let Some(idx) = selected_index {
-                            if let Some(opt_text) = options.get(*idx) {
-                                dict.set("V", Object::string_literal(opt_text.clone()));
-                            }
+                            options.get(*idx).cloned().unwrap_or_default()
+                        } else {
+                            String::new()
                         }
                     }
-                }
-                if let Ok(catalog) = doc.catalog_mut() {
-                    let acro_ref = catalog
-                        .get(b"AcroForm")
-                        .ok()
-                        .and_then(|o| o.as_reference().ok());
-                    let _ = catalog;
-                    if let Some(acro_ref) = acro_ref {
-                        if let Some(Object::Dictionary(acro)) = doc.objects.get_mut(&acro_ref) {
-                            acro.set("NeedAppearances", Object::Boolean(true));
-                        }
-                    }
+                };
+                if let Err(e) = filler.set(&update.name, &val_str) {
+                    tracing::warn!("Failed to set field {}: {}", update.name, e);
                 }
             }
-        }
-    }
-
-    pub fn fill_form(
-        &mut self,
-        path: &str,
-        updates: Vec<FormField>,
-        output_path: String,
-    ) -> PdfResult<String> {
-        let mut doc = Document::load(path).map_err(|e| PdfError::OpenFailed(e.to_string()))?;
-
-        if let Ok(catalog) = doc.catalog_mut() {
-            let acro_ref = catalog
-                .get(b"AcroForm")
-                .ok()
-                .and_then(|o| o.as_reference().ok());
-            let _ = catalog;
-            if let Some(acro_ref) = acro_ref {
-                if let Some(Object::Dictionary(acro)) = doc.objects.get_mut(&acro_ref) {
-                    if let Ok(fields_obj) = acro.get(b"Fields") {
-                        if let Ok(fields_arr) = fields_obj.as_array() {
-                            let fields_refs: Vec<ObjectId> = fields_arr
-                                .iter()
-                                .filter_map(|f| f.as_reference().ok())
-                                .collect();
-                            for r in fields_refs {
-                                Self::walk_lopdf_fields(&mut doc, r, "", &updates, 0);
-                            }
-                        }
-                    }
-                }
-            }
+            filler
+                .finish()
+                .map_err(|e| PdfError::IoError(e.to_string()))?;
         }
 
-        doc.save(&output_path)
+        let mut file =
+            std::fs::File::create(&output_path).map_err(|e| PdfError::IoError(e.to_string()))?;
+        writer
+            .write(&mut file)
             .map_err(|e| PdfError::IoError(e.to_string()))?;
 
         Ok(output_path)

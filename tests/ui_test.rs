@@ -156,6 +156,12 @@ async fn test_open_document_flow() {
         outline: Vec::new(),
         links: Vec::new(),
         metadata: pdfbull::models::DocumentMetadata::default(),
+        page_labels: Vec::new(),
+        is_encrypted: false,
+        signatures: Vec::new(),
+        attachments: Vec::new(),
+        layers: Vec::new(),
+        oc_config: None,
     };
 
     // Send DocumentOpenedWithPath message
