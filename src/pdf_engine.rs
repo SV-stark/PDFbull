@@ -145,6 +145,23 @@ impl DocumentStore {
             }
         }
 
+        let outline = self.get_outline_internal(&doc);
+        let links = self.extract_links_internal(&doc);
+        let metadata = if let Some(info) = doc.info() {
+            crate::models::DocumentMetadata {
+                title: info.title.clone(),
+                author: info.author.clone(),
+                subject: info.subject.clone(),
+                keywords: info.keywords.clone(),
+                creator: info.creator.clone(),
+                producer: info.producer.clone(),
+                creation_date: info.creation_date.clone(),
+                modification_date: info.mod_date.clone(),
+            }
+        } else {
+            crate::models::DocumentMetadata::default()
+        };
+
         self.documents.insert(doc_id, doc);
         self.paths.insert(doc_id, path.to_string());
 
@@ -153,9 +170,9 @@ impl DocumentStore {
             page_count,
             page_heights: heights,
             max_width,
-            outline: Vec::new(),
-            links: Vec::new(),
-            metadata: crate::models::DocumentMetadata::default(),
+            outline,
+            links,
+            metadata,
         })
     }
 
@@ -1284,7 +1301,18 @@ impl DocumentStore {
         let mut merged_objects = std::collections::BTreeMap::new();
 
         for doc in &documents {
-            merged_objects.extend(doc.objects.clone());
+            for (id, object) in &doc.objects {
+                let is_catalog_or_pages = match object {
+                    Object::Dictionary(d) => {
+                        let type_name = d.get(b"Type").and_then(|o| o.as_name()).ok();
+                        type_name == Some(b"Catalog" as &[u8]) || type_name == Some(b"Pages" as &[u8])
+                    }
+                    _ => false,
+                };
+                if !is_catalog_or_pages {
+                    merged_objects.insert(*id, object.clone());
+                }
+            }
             let pages = doc.get_pages();
             for (_, page_id) in pages {
                 merged_kids.push(Object::Reference(page_id));

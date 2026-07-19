@@ -543,32 +543,36 @@ pub fn handle_export_message(app: &mut PdfBullApp, message: Message) -> Task<Mes
                 }
                 Ok(printers) => Task::perform(
                     async move {
-                        // Build a numbered prompt so the user can pick by name
-                        let menu = printers
+                        let printer_args = printers
                             .iter()
-                            .enumerate()
-                            .map(|(i, p)| format!("{}. {}", i + 1, p))
+                            .map(|p| format!("'{}'", p.replace('\'', "''")))
                             .collect::<Vec<_>>()
-                            .join("\n");
-                        let prompt = format!("Select a printer:\n\n{menu}");
+                            .join(",");
 
-                        // Use rfd to show a simple dialog; the user either cancels or proceeds.
-                        // Because rfd on Windows doesn't have a native list-picker, we present
-                        // the list in the description and ask for the printer number via input.
-                        let choice = rfd::AsyncMessageDialog::new()
-                            .set_level(rfd::MessageLevel::Info)
-                            .set_title("Select Printer")
-                            .set_description(&prompt)
-                            .set_buttons(rfd::MessageButtons::OkCancel)
-                            .show()
+                        let cmd = format!(
+                            "$printers = @({printer_args}); $choice = $printers | Out-GridView -Title 'Select Printer' -OutputMode Single; if ($choice) {{ Write-Output $choice }}"
+                        );
+
+                        let output = tokio::process::Command::new("powershell")
+                            .arg("-NoProfile")
+                            .arg("-Command")
+                            .arg(&cmd)
+                            .output()
                             .await;
 
-                        if choice == rfd::MessageDialogResult::Ok {
-                            // Default to the first printer when the user clicks OK
-                            Some((path, printers.into_iter().next().unwrap_or_default()))
-                        } else {
-                            None
-                        }
+                        let selected_printer = match output {
+                            Ok(out) if out.status.success() => {
+                                let stdout = String::from_utf8_lossy(&out.stdout).trim().to_string();
+                                if stdout.is_empty() {
+                                    None
+                                } else {
+                                    Some(stdout)
+                                }
+                            }
+                            _ => None,
+                        };
+
+                        selected_printer.map(|printer| (path, printer))
                     },
                     |opt| match opt {
                         Some((path, printer)) => {
