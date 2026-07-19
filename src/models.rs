@@ -508,7 +508,7 @@ impl DocumentTab {
             2000.0
         };
 
-        let margin = v_height * 1.5;
+        let margin = v_height * 0.5;
         let viewport_top = (self.view_state.viewport_y - margin).max(0.0);
         let viewport_bottom = self.view_state.viewport_y + v_height + margin;
 

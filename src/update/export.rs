@@ -562,7 +562,8 @@ pub fn handle_export_message(app: &mut PdfBullApp, message: Message) -> Task<Mes
 
                         let selected_printer = match output {
                             Ok(out) if out.status.success() => {
-                                let stdout = String::from_utf8_lossy(&out.stdout).trim().to_string();
+                                let stdout =
+                                    String::from_utf8_lossy(&out.stdout).trim().to_string();
                                 if stdout.is_empty() {
                                     None
                                 } else {

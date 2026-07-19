@@ -196,8 +196,6 @@ impl PdfBullApp {
             filter,
             auto_crop,
             page_width,
-            page_mapping,
-            page_rotations_map,
         ) = {
             let Some(tab) = self.current_tab_mut() else {
                 return Task::none();
@@ -212,8 +210,6 @@ impl PdfBullApp {
                 tab.render_filter,
                 tab.auto_crop,
                 tab.page_width,
-                tab.page_mapping.clone(),
-                tab.page_rotations.clone(),
             )
         };
 
@@ -229,35 +225,30 @@ impl PdfBullApp {
         let mut tasks = Vec::new();
         let quality = self.settings.render_quality;
 
-        let rendered_pages = {
-            let Some(tab) = self.current_tab() else {
-                return Task::none();
-            };
-            tab.view_state
-                .rendered_pages
-                .iter()
-                .map(|(&p, &(s, _))| (p, s))
-                .collect::<std::collections::HashMap<usize, f32>>()
-        };
-
         for page_idx in visible_pages {
             let target = RenderTarget::Page(doc_id, page_idx);
 
-            let is_rendered = rendered_pages
-                .get(&page_idx)
-                .is_some_and(|&s| (s - zoom).abs() < 0.001);
+            let is_rendered = self
+                .current_tab()
+                .and_then(|tab| tab.view_state.rendered_pages.get(&page_idx))
+                .is_some_and(|&(s, _)| (s - zoom).abs() < 0.001);
 
             if is_rendered || self.rendering_set.contains(&target) {
                 continue;
             }
 
             // Translate visual page index to actual source page via page_mapping.
-            let actual_page = page_mapping.get(page_idx).copied().unwrap_or(page_idx);
-            // Per-page rotation from the organizer overrides the global tab rotation.
-            let page_rotation = page_rotations_map
-                .get(&actual_page)
-                .copied()
-                .unwrap_or(rotation);
+            let (actual_page, page_rotation) = if let Some(tab) = self.current_tab() {
+                let actual_page = tab.page_mapping.get(page_idx).copied().unwrap_or(page_idx);
+                let rot = tab
+                    .page_rotations
+                    .get(&actual_page)
+                    .copied()
+                    .unwrap_or(rotation);
+                (actual_page, rot)
+            } else {
+                (page_idx, rotation)
+            };
 
             let options = crate::pdf_engine::RenderOptions {
                 scale: zoom,
@@ -292,36 +283,26 @@ impl PdfBullApp {
         }
 
         if self.show_sidebar {
-            let rendered_thumbnails = {
-                let Some(tab) = self.current_tab() else {
-                    return Task::none();
-                };
-                tab.view_state
-                    .thumbnails
-                    .keys()
-                    .copied()
-                    .collect::<std::collections::HashSet<usize>>()
-            };
-
-            let page_mapping_thumb = page_mapping.clone();
-            let page_rotations_thumb = page_rotations_map.clone();
-
             for page_idx in visible_thumbnails {
                 let target = RenderTarget::Thumbnail(doc_id, page_idx);
-                let is_thumb_rendered = rendered_thumbnails.contains(&page_idx);
+                let is_thumb_rendered = self
+                    .current_tab()
+                    .map(|tab| tab.view_state.thumbnails.contains_key(&page_idx))
+                    .unwrap_or(false);
 
                 if is_thumb_rendered || self.rendering_set.contains(&target) {
                     continue;
                 }
                 let thumb_zoom = (120.0 / page_width.max(1.0)).min(5.0);
-                let thumb_actual = page_mapping_thumb
-                    .get(page_idx)
-                    .copied()
-                    .unwrap_or(page_idx);
-                let thumb_rotation = page_rotations_thumb
-                    .get(&thumb_actual)
-                    .copied()
-                    .unwrap_or(0);
+
+                let (thumb_actual, thumb_rotation) = if let Some(tab) = self.current_tab() {
+                    let actual_page = tab.page_mapping.get(page_idx).copied().unwrap_or(page_idx);
+                    let rot = tab.page_rotations.get(&actual_page).copied().unwrap_or(0);
+                    (actual_page, rot)
+                } else {
+                    (page_idx, 0)
+                };
+
                 self.rendering_set.insert(target);
                 let tx = cmd_tx.clone();
                 let doc_id_cloned = doc_id;
@@ -403,19 +384,22 @@ impl PdfBullApp {
     pub fn subscription(&self) -> iced::Subscription<Message> {
         let events = iced::event::listen_with(|event, _status, _id| {
             match event {
-                iced::Event::Window(iced::window::Event::CloseRequested)
-                | iced::Event::Window(iced::window::Event::FileDropped(_))
-                | iced::Event::Mouse(iced::mouse::Event::CursorMoved { .. })
-                | iced::Event::Mouse(iced::mouse::Event::WheelScrolled { .. })
-                | iced::Event::Keyboard(iced::keyboard::Event::ModifiersChanged(_))
-                | iced::Event::Keyboard(iced::keyboard::Event::KeyPressed { .. }) => {
-                    Some(Message::IcedEvent(event))
-                }
+                iced::Event::Window(
+                    iced::window::Event::CloseRequested | iced::window::Event::FileDropped(_),
+                )
+                | iced::Event::Mouse(
+                    iced::mouse::Event::CursorMoved { .. }
+                    | iced::mouse::Event::WheelScrolled { .. },
+                )
+                | iced::Event::Keyboard(
+                    iced::keyboard::Event::ModifiersChanged(_)
+                    | iced::keyboard::Event::KeyPressed { .. },
+                ) => Some(Message::IcedEvent(event)),
                 _ => None,
             }
         });
 
-        let ipc_sub = iced::Subscription::run(|| {
+        let ipc_sub = iced::Subscription::run_with("ipc-stream", |_| {
             iced::stream::channel(
                 10,
                 move |mut output: iced::futures::channel::mpsc::Sender<Message>| async move {

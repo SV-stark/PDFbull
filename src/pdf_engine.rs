@@ -66,6 +66,10 @@ impl RenderCache {
     pub fn put(&self, key: RenderKey, result: crate::models::RenderResult) {
         self.cache.insert(key, result);
     }
+
+    pub fn remove(&self, key: &RenderKey) {
+        self.cache.remove(key);
+    }
 }
 
 pub type SharedRenderCache = Arc<RenderCache>;
@@ -102,6 +106,7 @@ pub struct DocumentStore {
     documents: HashMap<DocumentId, PdfDocument>,
     paths: HashMap<DocumentId, String>,
     render_cache: SharedRenderCache,
+    cache_keys: std::sync::Mutex<HashMap<DocumentId, Vec<RenderKey>>>,
 }
 
 // DocumentState wrapper removed as it was a single-field struct.
@@ -112,6 +117,7 @@ impl DocumentStore {
             documents: HashMap::new(),
             paths: HashMap::new(),
             render_cache: cache,
+            cache_keys: std::sync::Mutex::new(HashMap::new()),
         }
     }
 
@@ -242,6 +248,13 @@ impl DocumentStore {
     pub fn close_document(&mut self, doc_id: DocumentId) {
         self.documents.remove(&doc_id);
         self.paths.remove(&doc_id);
+        if let Ok(mut keys) = self.cache_keys.lock() {
+            if let Some(doc_keys) = keys.remove(&doc_id) {
+                for key in doc_keys {
+                    self.render_cache.remove(&key);
+                }
+            }
+        }
     }
 
     /// Load annotations previously saved with `save_annotations` from the PDF file.
@@ -555,6 +568,9 @@ impl DocumentStore {
             data: final_data.into(),
         };
 
+        if let Ok(mut keys) = self.cache_keys.lock() {
+            keys.entry(doc_id).or_default().push(cache_key.clone());
+        }
         self.render_cache.put(cache_key, base.clone());
 
         if options.filter == RenderFilter::None {
@@ -1035,6 +1051,27 @@ impl DocumentStore {
         page_num: usize,
         scale: f32,
     ) -> PdfResult<Vec<u8>> {
+        let cache_key = RenderKey {
+            doc_id,
+            page_num,
+            scale: (scale * 100.0) as u32,
+            auto_crop: false,
+            quality: RenderQuality::Medium,
+        };
+
+        if let Some(cached_res) = self.render_cache.get(&cache_key) {
+            let image = Image::from_u8(
+                &cached_res.data,
+                cached_res.width as usize,
+                cached_res.height as usize,
+                zune_core::colorspace::ColorSpace::RGBA,
+            );
+            let out_buf = image
+                .write_to_vec(ImageFormat::PNG)
+                .map_err(|e| PdfError::RenderFailed(format!("{e:?}")))?;
+            return Ok(out_buf);
+        }
+
         let doc = self
             .documents
             .get(&doc_id)
@@ -1274,8 +1311,8 @@ impl DocumentStore {
         let mut doc =
             Document::load(input_path).map_err(|e| PdfError::OpenFailed(e.to_string()))?;
         doc.compress();
-        doc.prune_objects();
         let _ = doc.trailer.remove(b"Info");
+        doc.prune_objects();
         doc.save(output_path)
             .map_err(|e| PdfError::IoError(e.to_string()))?;
         Ok(output_path.to_string())
@@ -1305,7 +1342,8 @@ impl DocumentStore {
                 let is_catalog_or_pages = match object {
                     Object::Dictionary(d) => {
                         let type_name = d.get(b"Type").and_then(|o| o.as_name()).ok();
-                        type_name == Some(b"Catalog" as &[u8]) || type_name == Some(b"Pages" as &[u8])
+                        type_name == Some(b"Catalog" as &[u8])
+                            || type_name == Some(b"Pages" as &[u8])
                     }
                     _ => false,
                 };
@@ -1450,9 +1488,24 @@ impl DocumentStore {
     }
 
     pub fn get_form_fields(&mut self, path: &str) -> PdfResult<Vec<FormField>> {
+        let doc_id = self
+            .paths
+            .iter()
+            .find(|(_, p)| *p == path)
+            .map(|(id, _)| *id);
+
+        if let Some(id) = doc_id {
+            if let Some(doc) = self.documents.get(&id) {
+                return Ok(self.extract_form_fields_from_doc(doc));
+            }
+        }
+
         let data = std::fs::read(path).map_err(|e| PdfError::OpenFailed(e.to_string()))?;
         let doc = PdfDocument::open(data).map_err(|e| PdfError::OpenFailed(e.to_string()))?;
+        Ok(self.extract_form_fields_from_doc(&doc))
+    }
 
+    fn extract_form_fields_from_doc(&self, doc: &PdfDocument) -> Vec<FormField> {
         let mut fields = Vec::new();
         if let Some(acro) = doc.acro_form() {
             for f in &acro.fields {
@@ -1518,7 +1571,7 @@ impl DocumentStore {
                 });
             }
         }
-        Ok(fields)
+        fields
     }
 
     fn walk_lopdf_fields(
@@ -1735,7 +1788,9 @@ impl DocumentStore {
             let mut all_contents = existing_contents;
             all_contents.push(Object::Reference(watermark_id));
 
-            let existing_res = doc.objects.get(&page_id)
+            let existing_res = doc
+                .objects
+                .get(&page_id)
                 .and_then(|o| o.as_dict().ok())
                 .and_then(|d| d.get(b"Resources").ok())
                 .cloned();
@@ -1743,14 +1798,18 @@ impl DocumentStore {
             let mut merged_res = None;
             if let Some(res) = existing_res {
                 let mut res_dict = match res {
-                    Object::Reference(r) => doc.objects.get(&r).and_then(|o| o.as_dict().ok()).cloned(),
+                    Object::Reference(r) => {
+                        doc.objects.get(&r).and_then(|o| o.as_dict().ok()).cloned()
+                    }
                     Object::Dictionary(d) => Some(d.clone()),
                     _ => None,
                 };
                 if let Some(ref mut d) = res_dict {
-                    if let Some(existing_fonts) = d.get_mut(b"Font").ok() {
+                    if let Ok(existing_fonts) = d.get_mut(b"Font") {
                         let mut fonts_dict = match existing_fonts {
-                            Object::Reference(r) => doc.objects.get(r).and_then(|o| o.as_dict().ok()).cloned(),
+                            Object::Reference(r) => {
+                                doc.objects.get(r).and_then(|o| o.as_dict().ok()).cloned()
+                            }
                             Object::Dictionary(fd) => Some(fd.clone()),
                             _ => None,
                         };
