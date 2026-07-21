@@ -54,7 +54,7 @@ pub fn spawn_engine_thread(cache_size: u64, max_memory_mb: u64) -> EngineState {
     let num_workers = std::thread::available_parallelism()
         .map(std::num::NonZero::get)
         .unwrap_or(4)
-        .clamp(2, 8);
+        .clamp(2, 4);
 
     for _ in 0..num_workers {
         let rx = worker_rx.clone();

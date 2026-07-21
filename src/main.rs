@@ -77,7 +77,7 @@ fn main() -> iced::Result {
     tracing_subscriber::fmt()
         .with_env_filter(
             tracing_subscriber::EnvFilter::try_from_default_env()
-                .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("debug")),
+                .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("warn")),
         )
         .with_writer(make_writer)
         .init();
@@ -94,7 +94,11 @@ fn main() -> iced::Result {
         return Ok(());
     }
 
-    let icon = iced::window::icon::from_file_data(include_bytes!("../PDFbull.png"), None).ok();
+    let icon = iced::window::icon::from_file_data(
+        include_bytes!("../PDFbull.ico"),
+        Some(image::ImageFormat::Ico),
+    )
+    .ok();
 
     let res = iced::application(
         app::PdfBullApp::default,
@@ -105,7 +109,6 @@ fn main() -> iced::Result {
     .font(include_bytes!("../src/assets/fonts/Inter-Regular.ttf"))
     .font(include_bytes!("../src/assets/fonts/Inter-Bold.ttf"))
     .font(include_bytes!("../src/assets/fonts/lucide.ttf"))
-    .font(include_bytes!("../src/assets/fonts/Phosphor.ttf"))
     .theme(|app: &app::PdfBullApp| match app.settings.theme {
         pdfbull::models::AppTheme::Dark => iced::Theme::Dark,
         pdfbull::models::AppTheme::Light | pdfbull::models::AppTheme::System => iced::Theme::Light,
