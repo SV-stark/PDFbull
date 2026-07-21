@@ -1,16 +1,33 @@
 use pdfbull::models::DocumentId;
-use pdfbull::pdf_engine::{create_render_cache, DocumentStore, RenderFilter, RenderOptions, RenderQuality};
+use pdfbull::pdf_engine::{
+    DocumentStore, RenderFilter, RenderOptions, RenderQuality, create_render_cache,
+};
 use std::path::PathBuf;
 use std::time::Instant;
 
 #[test]
 fn benchmark_pdfbull_open_and_render() {
     let test_files = vec![
-        ("Small PDF (26 KB)", PathBuf::from(r"E:\PDFbull\tests\test_document.pdf")),
-        ("Medium PDF (0.9 MB)", PathBuf::from(r"C:\Users\suyas\Documents\Declaration cum affidaavit.pdf")),
-        ("Large PDF (5.9 MB)", PathBuf::from(r"C:\Users\suyas\Documents\f-2.pdf")),
-        ("Heavy PDF (11.0 MB)", PathBuf::from(r"C:\Users\suyas\Documents\FOREST3.pdf")),
-        ("Giant PDF (54.6 MB)", PathBuf::from(r"C:\Users\suyas\Documents\forest 100.pdf")),
+        (
+            "Small PDF (26 KB)",
+            PathBuf::from(r"E:\PDFbull\tests\test_document.pdf"),
+        ),
+        (
+            "Medium PDF (0.9 MB)",
+            PathBuf::from(r"C:\Users\suyas\Documents\Declaration cum affidaavit.pdf"),
+        ),
+        (
+            "Large PDF (5.9 MB)",
+            PathBuf::from(r"C:\Users\suyas\Documents\f-2.pdf"),
+        ),
+        (
+            "Heavy PDF (11.0 MB)",
+            PathBuf::from(r"C:\Users\suyas\Documents\FOREST3.pdf"),
+        ),
+        (
+            "Giant PDF (54.6 MB)",
+            PathBuf::from(r"C:\Users\suyas\Documents\forest 100.pdf"),
+        ),
     ];
 
     println!("\n========================================================");

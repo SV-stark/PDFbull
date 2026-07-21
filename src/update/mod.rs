@@ -151,6 +151,7 @@ pub fn handle_message(app: &mut PdfBullApp, message: Message) -> Task<Message> {
         | Message::SetAnnotationColor(_)
         | Message::SetAnnotationThickness(_)
         | Message::SetAnnotationTextSize(_)
+        | Message::SetRibbonTab(_)
         | Message::ToggleMarkupBar
         | Message::ToggleTableMode
         | Message::ClearRecentFiles => app::handle_app_message(app, message),

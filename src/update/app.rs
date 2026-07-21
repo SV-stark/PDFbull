@@ -99,6 +99,16 @@ pub fn handle_app_message(app: &mut PdfBullApp, message: Message) -> Task<Messag
             app.annotation_text_size = size;
             Task::none()
         }
+        Message::SetRibbonTab(tab) => {
+            app.active_ribbon_tab = tab;
+            if tab == crate::models::RibbonTab::Annotate {
+                app.markup_active = true;
+                if app.annotation_mode.is_none() {
+                    app.annotation_mode = Some(crate::models::PendingAnnotationKind::Highlight);
+                }
+            }
+            Task::none()
+        }
         Message::ToggleMarkupBar => {
             app.markup_active = !app.markup_active;
             if app.markup_active {

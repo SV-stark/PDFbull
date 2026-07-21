@@ -3,62 +3,113 @@ use crate::app::{INTER_BOLD, INTER_REGULAR};
 use crate::models::{AnnotationStyle, FormFieldVariant, SidebarMode};
 use crate::ui::theme;
 use iced::widget::{
-    Space, button, checkbox, column, container, pick_list, radio, row, scrollable, text, text_input,
+    Space, button, checkbox, column, container, pick_list, radio, row, scrollable, text,
+    text_input, tooltip,
 };
-use iced::{Border, Color, Element, Length};
+use iced::{Alignment, Border, Color, Element, Length};
 
-fn section_title<'a>(label: &'a str) -> Element<'a, crate::message::Message> {
-    container(
-        text(label)
-            .size(14)
-            .font(INTER_BOLD)
-            .style(|_| iced::widget::text::Style {
-                color: Some(Color::from_rgb(0.2, 0.4, 0.6)),
+fn section_header<'a>(
+    label: &'a str,
+    count_info: Option<String>,
+) -> Element<'a, crate::message::Message> {
+    let mut header = row![text(label).size(13).font(INTER_BOLD).style(|_| {
+        text::Style {
+            color: Some(theme::COLOR_TEXT_PRIMARY),
+        }
+    })]
+    .spacing(8)
+    .align_y(Alignment::Center);
+
+    if let Some(count) = count_info {
+        header = header.push(
+            container(
+                text(count)
+                    .size(10)
+                    .font(INTER_BOLD)
+                    .style(|_| text::Style {
+                        color: Some(Color::WHITE),
+                    }),
+            )
+            .padding([2, 6])
+            .style(|_| container::Style {
+                background: Some(theme::COLOR_ACCENT.into()),
+                border: Border {
+                    radius: theme::BORDER_RADIUS_FULL.into(),
+                    ..Default::default()
+                },
+                ..Default::default()
             }),
-    )
-    .padding([5, 0])
-    .into()
-}
+        );
+    }
 
-fn sidebar_tab_style(
-    active: bool,
-) -> impl Fn(&iced::Theme, iced::widget::button::Status) -> iced::widget::button::Style {
-    move |_theme, status| {
-        let base_bg = if active {
-            Some(theme::COLOR_BG_WIDGET.into())
-        } else {
-            None
-        };
-        let border_color = if active {
-            theme::COLOR_ACCENT
-        } else {
-            Color::TRANSPARENT
-        };
-
-        let base = iced::widget::button::Style {
-            background: base_bg,
-            text_color: if active {
-                Color::WHITE
-            } else {
-                theme::COLOR_TEXT_DIM
-            },
+    container(header)
+        .padding([8, 12])
+        .width(Length::Fill)
+        .style(|_| container::Style {
+            background: Some(theme::COLOR_BG_HEADER.into()),
             border: Border {
-                radius: theme::BORDER_RADIUS_SM.into(),
                 width: 1.0,
-                color: border_color,
+                color: Color::from_rgb(0.12, 0.14, 0.18),
+                ..Default::default()
             },
             ..Default::default()
-        };
+        })
+        .into()
+}
 
-        match status {
-            iced::widget::button::Status::Hovered if !active => iced::widget::button::Style {
-                background: Some(theme::COLOR_BG_WIDGET_HOVER.into()),
-                text_color: theme::COLOR_TEXT_PRIMARY,
-                ..base
-            },
-            _ => base,
-        }
-    }
+fn sidebar_tab_button<'a>(
+    icon: &'a str,
+    label: &'a str,
+    mode: SidebarMode,
+    current_mode: SidebarMode,
+) -> Element<'a, crate::message::Message> {
+    let is_active = mode == current_mode;
+    tooltip(
+        button(text(icon).size(15).style(move |_| text::Style {
+            color: Some(if is_active {
+                theme::COLOR_ACCENT
+            } else {
+                theme::COLOR_TEXT_DIM
+            }),
+        }))
+        .style(move |_theme, status| {
+            let base_bg = if is_active {
+                Some(theme::COLOR_BG_WIDGET.into())
+            } else {
+                None
+            };
+            let border_color = if is_active {
+                theme::COLOR_ACCENT
+            } else {
+                Color::TRANSPARENT
+            };
+
+            let base = iced::widget::button::Style {
+                background: base_bg,
+                border: Border {
+                    radius: theme::BORDER_RADIUS_MD.into(),
+                    width: if is_active { 1.0 } else { 0.0 },
+                    color: border_color,
+                },
+                ..Default::default()
+            };
+
+            match status {
+                iced::widget::button::Status::Hovered if !is_active => {
+                    iced::widget::button::Style {
+                        background: Some(theme::COLOR_BG_WIDGET_HOVER.into()),
+                        ..base
+                    }
+                }
+                _ => base,
+            }
+        })
+        .on_press(crate::message::Message::SetSidebarMode(mode))
+        .padding([6, 8]),
+        label,
+        tooltip::Position::Bottom,
+    )
+    .into()
 }
 
 #[allow(clippy::if_not_else)]
@@ -67,60 +118,55 @@ pub fn render(app: &PdfBullApp) -> Element<'_, crate::message::Message> {
         return container(column![]).into();
     };
 
-    let tab_row = row![
-        button(text("📂").size(14))
-            .style(sidebar_tab_style(
-                app.sidebar_mode == SidebarMode::Thumbnails
-            ))
-            .on_press(crate::message::Message::SetSidebarMode(
-                SidebarMode::Thumbnails
-            )),
-        button(text("🔖").size(14))
-            .style(sidebar_tab_style(app.sidebar_mode == SidebarMode::Outline))
-            .on_press(crate::message::Message::SetSidebarMode(
-                SidebarMode::Outline
-            )),
-        button(text("📝").size(14))
-            .style(sidebar_tab_style(
-                app.sidebar_mode == SidebarMode::Annotations
-            ))
-            .on_press(crate::message::Message::SetSidebarMode(
-                SidebarMode::Annotations
-            )),
-        button(text("🔍").size(14))
-            .style(sidebar_tab_style(app.sidebar_mode == SidebarMode::Search))
-            .on_press(crate::message::Message::SetSidebarMode(SidebarMode::Search)),
-        button(text("📎").size(14))
-            .style(sidebar_tab_style(
-                app.sidebar_mode == SidebarMode::Attachments
-            ))
-            .on_press(crate::message::Message::SetSidebarMode(
-                SidebarMode::Attachments
-            )),
-        button(text("🥞").size(14))
-            .style(sidebar_tab_style(app.sidebar_mode == SidebarMode::Layers))
-            .on_press(crate::message::Message::SetSidebarMode(SidebarMode::Layers)),
+    let mode_tabs = row![
+        sidebar_tab_button(
+            "🖼️",
+            "Thumbnails",
+            SidebarMode::Thumbnails,
+            app.sidebar_mode
+        ),
+        sidebar_tab_button("🔖", "Bookmarks", SidebarMode::Outline, app.sidebar_mode),
+        sidebar_tab_button(
+            "📝",
+            "Annotations",
+            SidebarMode::Annotations,
+            app.sidebar_mode
+        ),
+        sidebar_tab_button("🔍", "Search", SidebarMode::Search, app.sidebar_mode),
+        sidebar_tab_button(
+            "📎",
+            "Attachments",
+            SidebarMode::Attachments,
+            app.sidebar_mode
+        ),
+        sidebar_tab_button("🥞", "Layers", SidebarMode::Layers, app.sidebar_mode),
     ]
     .spacing(4)
-    .padding([5, 10]);
+    .padding([6, 8])
+    .align_y(Alignment::Center);
 
-    let main_sidebar = column![tab_row].spacing(10);
+    let mode_strip = container(mode_tabs)
+        .width(Length::Fill)
+        .style(|_| container::Style {
+            background: Some(theme::COLOR_BG_SIDEBAR.into()),
+            border: Border {
+                width: 1.0,
+                color: Color::from_rgb(0.12, 0.14, 0.18),
+                ..Default::default()
+            },
+            ..Default::default()
+        });
+
+    let main_sidebar = column![mode_strip].spacing(0);
 
     let content_scroll: Element<'_, crate::message::Message> = match app.sidebar_mode {
         SidebarMode::Thumbnails => {
-            let mut thumbnail_col = column![].spacing(10).padding(5);
+            let mut thumbnail_col = column![].spacing(12).padding(8).align_x(Alignment::Center);
 
-            thumbnail_col = thumbnail_col.push(
-                container(
-                    text(format!("Pages ({})", tab.total_pages))
-                        .size(14)
-                        .font(INTER_BOLD)
-                        .style(|_| iced::widget::text::Style {
-                            color: Some(Color::from_rgb(0.2, 0.4, 0.6)),
-                        }),
-                )
-                .padding([5, 0]),
-            );
+            thumbnail_col = thumbnail_col.push(section_header(
+                "Page Thumbnails",
+                Some(format!("{}", tab.total_pages)),
+            ));
 
             let start_idx =
                 (tab.view_state.sidebar_viewport_y / theme::THUMBNAIL_HEIGHT).max(0.0) as usize;
@@ -132,23 +178,77 @@ pub fn render(app: &PdfBullApp) -> Element<'_, crate::message::Message> {
             }
 
             for page_idx in start_idx..end_idx {
-                if let Some(handle) = tab.view_state.thumbnails.get(&page_idx) {
-                    let img = iced::widget::Image::new(handle.clone())
-                        .width(Length::Fixed(theme::THUMBNAIL_WIDTH));
-                    thumbnail_col = thumbnail_col
-                        .push(button(img).on_press(crate::message::Message::JumpToPage(page_idx)));
-                } else {
-                    let page_label = tab
-                        .page_labels
-                        .get(page_idx)
-                        .cloned()
-                        .unwrap_or_else(|| (page_idx + 1).to_string());
-                    thumbnail_col = thumbnail_col.push(
-                        button(text(format!("Page {}", page_label)).font(INTER_REGULAR))
-                            .on_press(crate::message::Message::JumpToPage(page_idx))
-                            .width(Length::Fixed(theme::THUMBNAIL_WIDTH)),
-                    );
-                }
+                let is_current = page_idx == tab.current_page;
+                let page_label = tab
+                    .page_labels
+                    .get(page_idx)
+                    .cloned()
+                    .unwrap_or_else(|| (page_idx + 1).to_string());
+
+                let thumb_widget: Element<'_, crate::message::Message> =
+                    if let Some(handle) = tab.view_state.thumbnails.get(&page_idx) {
+                        iced::widget::Image::new(handle.clone())
+                            .width(Length::Fixed(160.0))
+                            .into()
+                    } else {
+                        container(
+                            text("📄")
+                                .size(24)
+                                .align_x(iced::alignment::Horizontal::Center)
+                                .align_y(iced::alignment::Vertical::Center),
+                        )
+                        .width(Length::Fixed(160.0))
+                        .height(Length::Fixed(200.0))
+                        .style(|_| container::Style {
+                            background: Some(theme::COLOR_BG_WIDGET.into()),
+                            ..Default::default()
+                        })
+                        .into()
+                    };
+
+                let card = container(
+                    column![
+                        container(thumb_widget).padding(2),
+                        Space::new().height(4),
+                        text(format!("Page {}", page_label))
+                            .size(11)
+                            .font(INTER_BOLD)
+                            .align_x(iced::alignment::Horizontal::Center)
+                            .style(move |_| text::Style {
+                                color: Some(if is_current {
+                                    theme::COLOR_ACCENT
+                                } else {
+                                    theme::COLOR_TEXT_DIM
+                                }),
+                            }),
+                    ]
+                    .align_x(Alignment::Center),
+                )
+                .padding(6)
+                .style(move |_| container::Style {
+                    background: Some(if is_current {
+                        theme::COLOR_BG_WIDGET_HOVER.into()
+                    } else {
+                        theme::COLOR_BG_WIDGET.into()
+                    }),
+                    border: Border {
+                        radius: theme::BORDER_RADIUS_MD.into(),
+                        width: if is_current { 2.0 } else { 1.0 },
+                        color: if is_current {
+                            theme::COLOR_ACCENT
+                        } else {
+                            Color::from_rgb(0.18, 0.20, 0.25)
+                        },
+                    },
+                    ..Default::default()
+                });
+
+                thumbnail_col = thumbnail_col.push(
+                    button(card)
+                        .on_press(crate::message::Message::JumpToPage(page_idx))
+                        .style(|_, _| iced::widget::button::Style::default())
+                        .width(Length::Fixed(174.0)),
+                );
             }
 
             let remaining = tab.total_pages.saturating_sub(end_idx);
@@ -166,42 +266,82 @@ pub fn render(app: &PdfBullApp) -> Element<'_, crate::message::Message> {
                 .into()
         }
         SidebarMode::Outline => {
-            let mut outline_col = column![].spacing(10).padding(5);
+            let mut outline_col = column![].spacing(10).padding(8);
 
             if !tab.outline.is_empty() {
-                let mut list_col = column![section_title("Outline")];
+                outline_col = outline_col.push(section_header(
+                    "Document Outline",
+                    Some(format!("{}", tab.outline.len())),
+                ));
+                let mut list_col = column![].spacing(4);
                 for bookmark in &tab.outline {
                     list_col = list_col.push(
-                        button(text(&bookmark.title))
-                            .on_press(crate::message::Message::JumpToPage(
-                                bookmark.page_index as usize,
-                            ))
-                            .width(Length::Fill),
+                        button(
+                            row![
+                                text("🔖").size(12),
+                                text(&bookmark.title)
+                                    .size(12)
+                                    .font(INTER_REGULAR)
+                                    .style(|_| text::Style {
+                                        color: Some(theme::COLOR_TEXT_PRIMARY)
+                                    }),
+                            ]
+                            .spacing(6)
+                            .align_y(Alignment::Center),
+                        )
+                        .on_press(crate::message::Message::JumpToPage(
+                            bookmark.page_index as usize,
+                        ))
+                        .style(theme::button_ghost)
+                        .padding([6, 8])
+                        .width(Length::Fill),
                     );
                 }
-                outline_col = outline_col.push(container(list_col.spacing(5)).padding(10));
+                outline_col = outline_col.push(list_col);
             } else {
-                outline_col = outline_col.push(
-                    container(text("No outline bookmarks found").size(12).style(|_| {
-                        iced::widget::text::Style {
-                            color: Some(theme::COLOR_TEXT_SECONDARY),
-                        }
-                    }))
-                    .padding(15),
-                );
+                outline_col = outline_col.push(section_header("Document Outline", None));
+                outline_col =
+                    outline_col.push(
+                        container(text("No outline bookmarks found").size(12).style(|_| {
+                            text::Style {
+                                color: Some(theme::COLOR_TEXT_SECONDARY),
+                            }
+                        }))
+                        .padding(12),
+                    );
             }
 
             if !tab.bookmarks.is_empty() {
-                let mut bookmarks_col = column![section_title("Bookmarks")];
+                outline_col = outline_col.push(section_header(
+                    "User Bookmarks",
+                    Some(format!("{}", tab.bookmarks.len())),
+                ));
+                let mut bookmarks_col = column![].spacing(4);
                 for (idx, bookmark) in tab.bookmarks.iter().enumerate() {
-                    bookmarks_col = bookmarks_col.push(row![
-                        button(text(&bookmark.label))
+                    bookmarks_col = bookmarks_col.push(
+                        row![
+                            button(
+                                row![
+                                    text("📌").size(12),
+                                    text(&bookmark.label).size(12).font(INTER_REGULAR),
+                                ]
+                                .spacing(6)
+                                .align_y(Alignment::Center),
+                            )
                             .on_press(crate::message::Message::JumpToBookmark(idx))
+                            .style(theme::button_ghost)
+                            .padding([6, 8])
                             .width(Length::Fill),
-                        button("×").on_press(crate::message::Message::RemoveBookmark(idx))
-                    ]);
+                            button("×")
+                                .on_press(crate::message::Message::RemoveBookmark(idx))
+                                .style(theme::button_ghost)
+                                .padding([4, 8])
+                        ]
+                        .spacing(4)
+                        .align_y(Alignment::Center),
+                    );
                 }
-                outline_col = outline_col.push(container(bookmarks_col.spacing(5)).padding(10));
+                outline_col = outline_col.push(bookmarks_col);
             }
 
             scrollable(outline_col)
@@ -209,61 +349,91 @@ pub fn render(app: &PdfBullApp) -> Element<'_, crate::message::Message> {
                 .into()
         }
         SidebarMode::Annotations => {
-            let mut ann_col = column![].spacing(10).padding(5);
+            let mut ann_col = column![].spacing(10).padding(8);
+
+            ann_col = ann_col.push(section_header(
+                "Annotations List",
+                Some(format!("{}", tab.annotations.len())),
+            ));
 
             if !tab.annotations.is_empty() {
-                let mut list_col = column![section_title("Annotations")];
+                let mut list_col = column![].spacing(6);
                 for (idx, ann) in tab.annotations.iter().enumerate() {
                     let label = match &ann.style {
-                        AnnotationStyle::Highlight { .. } => format!("Highlight P{}", ann.page + 1),
-                        AnnotationStyle::Rectangle { .. } => format!("Rect P{}", ann.page + 1),
-                        AnnotationStyle::Text { text, .. } => {
-                            format!("Text: {}", &text[..text.len().min(20)])
+                        AnnotationStyle::Highlight { .. } => {
+                            format!("Highlight Page {}", ann.page + 1)
                         }
-                        AnnotationStyle::Redact { .. } => format!("Redact P{}", ann.page + 1),
-                        AnnotationStyle::Circle { .. } => format!("Circle P{}", ann.page + 1),
-                        AnnotationStyle::Line { .. } => format!("Line P{}", ann.page + 1),
-                        AnnotationStyle::Arrow { .. } => format!("Arrow P{}", ann.page + 1),
+                        AnnotationStyle::Rectangle { .. } => format!("Rect Page {}", ann.page + 1),
+                        AnnotationStyle::Text { text, .. } => {
+                            format!("Text: {}", &text[..text.len().min(18)])
+                        }
+                        AnnotationStyle::Redact { .. } => format!("Redact Page {}", ann.page + 1),
+                        AnnotationStyle::Circle { .. } => format!("Circle Page {}", ann.page + 1),
+                        AnnotationStyle::Line { .. } => format!("Line Page {}", ann.page + 1),
+                        AnnotationStyle::Arrow { .. } => format!("Arrow Page {}", ann.page + 1),
                         AnnotationStyle::StickyNote { comment, .. } => {
-                            format!("Sticky: {}", &comment[..comment.len().min(20)])
+                            format!("Sticky: {}", &comment[..comment.len().min(18)])
                         }
                     };
-                    let mut ann_row = row![].spacing(5).align_y(iced::Alignment::Center);
 
-                    if let AnnotationStyle::Text { text, .. }
-                    | AnnotationStyle::StickyNote { comment: text, .. } = &ann.style
-                    {
-                        ann_row = ann_row.push(
-                            text_input("Edit annotation...", text)
-                                .on_input(move |s| {
-                                    crate::message::Message::EditAnnotationText(idx, s)
-                                })
+                    let icon = match &ann.style {
+                        AnnotationStyle::Highlight { .. } => "🖍️",
+                        AnnotationStyle::Rectangle { .. } => "🔲",
+                        AnnotationStyle::Text { .. } => "🔤",
+                        AnnotationStyle::Redact { .. } => "⬛",
+                        AnnotationStyle::Circle { .. } => "⭕",
+                        AnnotationStyle::Line { .. } => "📏",
+                        AnnotationStyle::Arrow { .. } => "➡️",
+                        AnnotationStyle::StickyNote { .. } => "📌",
+                    };
+
+                    let card = container(
+                        row![
+                            text(icon).size(12),
+                            text(label)
                                 .size(12)
-                                .padding([3, 6])
-                                .width(Length::Fill),
-                        );
-                    } else {
-                        ann_row = ann_row.push(
-                            button(text(label))
-                                .on_press(crate::message::Message::JumpToPage(ann.page))
-                                .width(Length::Fill),
-                        );
-                    }
+                                .font(INTER_REGULAR)
+                                .style(|_| text::Style {
+                                    color: Some(theme::COLOR_TEXT_PRIMARY),
+                                }),
+                            Space::new().width(Length::Fill),
+                            button("×")
+                                .on_press(crate::message::Message::DeleteAnnotation(idx))
+                                .style(theme::button_ghost)
+                                .padding([2, 6])
+                        ]
+                        .spacing(6)
+                        .align_y(Alignment::Center),
+                    )
+                    .padding(8)
+                    .style(|_| container::Style {
+                        background: Some(theme::COLOR_BG_WIDGET.into()),
+                        border: Border {
+                            radius: theme::BORDER_RADIUS_MD.into(),
+                            width: 1.0,
+                            color: Color::from_rgb(0.18, 0.20, 0.25),
+                        },
+                        ..Default::default()
+                    });
 
-                    ann_row = ann_row
-                        .push(button("×").on_press(crate::message::Message::DeleteAnnotation(idx)));
-
-                    list_col = list_col.push(ann_row);
+                    list_col = list_col.push(
+                        button(card)
+                            .on_press(crate::message::Message::JumpToPage(ann.page))
+                            .style(|_, _| iced::widget::button::Style::default())
+                            .width(Length::Fill),
+                    );
                 }
-                ann_col = ann_col.push(container(list_col.spacing(5)).padding(10));
+                ann_col = ann_col.push(list_col);
             } else {
                 ann_col = ann_col.push(
-                    container(text("No annotations found").size(12).style(|_| {
-                        iced::widget::text::Style {
-                            color: Some(theme::COLOR_TEXT_SECONDARY),
-                        }
-                    }))
-                    .padding(15),
+                    container(
+                        text("No annotations found")
+                            .size(12)
+                            .style(|_| text::Style {
+                                color: Some(theme::COLOR_TEXT_SECONDARY),
+                            }),
+                    )
+                    .padding(12),
                 );
             }
 
@@ -272,74 +442,62 @@ pub fn render(app: &PdfBullApp) -> Element<'_, crate::message::Message> {
                 .into()
         }
         SidebarMode::Search => {
-            let mut search_col = column![].spacing(10).padding(5);
+            let mut search_col = column![].spacing(10).padding(8);
 
-            search_col = search_col.push(section_title("Search"));
+            search_col = search_col.push(section_header(
+                "Search Results",
+                if tab.search_results.is_empty() {
+                    None
+                } else {
+                    Some(format!("{}", tab.search_results.len()))
+                },
+            ));
 
             search_col = search_col.push(
-                text_input("Search term...", &app.search_query)
-                    .on_input(crate::message::Message::Search)
-                    .padding(8),
+                container(
+                    row![
+                        text("🔍").size(12),
+                        text_input("Type term to search...", &app.search_query)
+                            .on_input(crate::message::Message::Search)
+                            .padding([4, 6])
+                            .size(12)
+                    ]
+                    .spacing(6)
+                    .align_y(Alignment::Center),
+                )
+                .padding(4)
+                .style(theme::input_field),
             );
 
             if tab.search_results.is_empty() {
                 if !app.search_query.is_empty() {
                     search_col = search_col.push(
-                        container(text("No matches found").size(12).style(|_| {
-                            iced::widget::text::Style {
-                                color: Some(theme::COLOR_TEXT_SECONDARY),
-                            }
+                        container(text("No matches found").size(12).style(|_| text::Style {
+                            color: Some(theme::COLOR_TEXT_SECONDARY),
                         }))
-                        .padding(15),
-                    );
-                } else {
-                    search_col = search_col.push(
-                        container(
-                            text("Type a query to search standard document text")
-                                .size(12)
-                                .style(|_| iced::widget::text::Style {
-                                    color: Some(theme::COLOR_TEXT_SECONDARY),
-                                }),
-                        )
-                        .padding(15),
+                        .padding(12),
                     );
                 }
             } else {
-                search_col = search_col.push(
-                    text(format!("{} matches found", tab.search_results.len()))
-                        .size(11)
-                        .style(|_| iced::widget::text::Style {
-                            color: Some(theme::COLOR_TEXT_DIM),
-                        }),
-                );
-
-                let mut results_col = column![].spacing(8);
+                let mut results_col = column![].spacing(6);
                 for (idx, res) in tab.search_results.iter().enumerate() {
                     let is_current = tab.current_search_index == idx;
-                    let border_color = if is_current {
-                        theme::COLOR_ACCENT
-                    } else {
-                        Color::from_rgb(0.2, 0.2, 0.22)
-                    };
-
                     let card = container(
                         column![
                             text(format!("Page {}", res.page + 1))
                                 .size(11)
                                 .font(INTER_BOLD)
-                                .style(|_| iced::widget::text::Style {
+                                .style(|_| text::Style {
                                     color: Some(theme::COLOR_ACCENT)
                                 }),
-                            text(res.text.clone())
-                                .size(12)
-                                .style(|_| iced::widget::text::Style {
-                                    color: Some(theme::COLOR_TEXT_PRIMARY)
-                                }),
+                            text(res.text.clone()).size(11).style(|_| text::Style {
+                                color: Some(theme::COLOR_TEXT_PRIMARY)
+                            }),
                         ]
                         .spacing(2),
                     )
                     .padding(8)
-                    .style(move |_| iced::widget::container::Style {
+                    .style(move |_| container::Style {
                         background: Some(if is_current {
                             theme::COLOR_BG_WIDGET_HOVER.into()
                         } else {
@@ -348,7 +506,11 @@ pub fn render(app: &PdfBullApp) -> Element<'_, crate::message::Message> {
                         border: Border {
                             radius: theme::BORDER_RADIUS_MD.into(),
                             width: 1.0,
-                            color: border_color,
+                            color: if is_current {
+                                theme::COLOR_ACCENT
+                            } else {
+                                Color::from_rgb(0.18, 0.20, 0.25)
+                            },
                         },
                         ..Default::default()
                     });
@@ -356,11 +518,7 @@ pub fn render(app: &PdfBullApp) -> Element<'_, crate::message::Message> {
                     results_col = results_col.push(
                         button(card)
                             .on_press(crate::message::Message::JumpToPage(res.page))
-                            .style(move |_, _| iced::widget::button::Style {
-                                background: None,
-                                border: Border::default(),
-                                ..Default::default()
-                            })
+                            .style(|_, _| iced::widget::button::Style::default())
                             .width(Length::Fill),
                     );
                 }
@@ -372,20 +530,25 @@ pub fn render(app: &PdfBullApp) -> Element<'_, crate::message::Message> {
                 .into()
         }
         SidebarMode::Attachments => {
-            let mut attach_col = column![].spacing(10).padding(5);
-            attach_col = attach_col.push(section_title("Attachments"));
+            let mut attach_col = column![].spacing(10).padding(8);
+            attach_col = attach_col.push(section_header(
+                "Attachments",
+                Some(format!("{}", tab.attachments.len())),
+            ));
 
             if tab.attachments.is_empty() {
                 attach_col = attach_col.push(
-                    container(text("No attachments found").size(12).style(|_| {
-                        iced::widget::text::Style {
-                            color: Some(theme::COLOR_TEXT_SECONDARY),
-                        }
-                    }))
-                    .padding(15),
+                    container(
+                        text("No attachments found")
+                            .size(12)
+                            .style(|_| text::Style {
+                                color: Some(theme::COLOR_TEXT_SECONDARY),
+                            }),
+                    )
+                    .padding(12),
                 );
             } else {
-                let mut list_col = column![].spacing(8);
+                let mut list_col = column![].spacing(6);
                 for (idx, att) in tab.attachments.iter().enumerate() {
                     let desc = att.description.as_deref().unwrap_or("No description");
                     let size_str = att
@@ -424,7 +587,7 @@ pub fn render(app: &PdfBullApp) -> Element<'_, crate::message::Message> {
                         border: Border {
                             radius: theme::BORDER_RADIUS_MD.into(),
                             width: 1.0,
-                            color: Color::from_rgb(0.2, 0.2, 0.22),
+                            color: Color::from_rgb(0.18, 0.20, 0.25),
                         },
                         ..Default::default()
                     });
@@ -432,11 +595,7 @@ pub fn render(app: &PdfBullApp) -> Element<'_, crate::message::Message> {
                     list_col = list_col.push(
                         button(card)
                             .on_press(crate::message::Message::SaveAttachment(idx))
-                            .style(|_, _| iced::widget::button::Style {
-                                background: None,
-                                border: Border::default(),
-                                ..Default::default()
-                            })
+                            .style(|_, _| iced::widget::button::Style::default())
                             .width(Length::Fill),
                     );
                 }
@@ -448,20 +607,24 @@ pub fn render(app: &PdfBullApp) -> Element<'_, crate::message::Message> {
                 .into()
         }
         SidebarMode::Layers => {
-            let mut layers_col = column![].spacing(10).padding(5);
-            layers_col = layers_col.push(section_title("Layers"));
+            let mut layers_col = column![].spacing(10).padding(8);
+            layers_col = layers_col.push(section_header(
+                "Content Layers",
+                Some(format!("{}", tab.layers.len())),
+            ));
 
             if tab.layers.is_empty() {
-                layers_col = layers_col.push(
-                    container(text("No optional content layers").size(12).style(|_| {
-                        iced::widget::text::Style {
-                            color: Some(theme::COLOR_TEXT_SECONDARY),
-                        }
-                    }))
-                    .padding(15),
-                );
+                layers_col =
+                    layers_col.push(
+                        container(text("No optional content layers").size(12).style(|_| {
+                            text::Style {
+                                color: Some(theme::COLOR_TEXT_SECONDARY),
+                            }
+                        }))
+                        .padding(12),
+                    );
             } else {
-                let mut list_col = column![].spacing(10);
+                let mut list_col = column![].spacing(8);
                 for (idx, layer) in tab.layers.iter().enumerate() {
                     list_col = list_col.push(
                         row![
@@ -473,10 +636,10 @@ pub fn render(app: &PdfBullApp) -> Element<'_, crate::message::Message> {
                             text(&layer.name).size(12).font(INTER_REGULAR),
                         ]
                         .spacing(8)
-                        .align_y(iced::Alignment::Center),
+                        .align_y(Alignment::Center),
                     );
                 }
-                layers_col = layers_col.push(container(list_col).padding(10));
+                layers_col = layers_col.push(container(list_col).padding(8));
             }
 
             scrollable(layers_col)
@@ -490,20 +653,20 @@ pub fn render(app: &PdfBullApp) -> Element<'_, crate::message::Message> {
 
 pub fn render_forms(app: &PdfBullApp) -> Element<'_, crate::message::Message> {
     let mut fields_col = column![
-        section_title("Interactive Form"),
-        text("Fill out the fields below and save as a new PDF.")
-            .size(12)
-            .style(|_| iced::widget::text::Style {
+        section_header("Interactive Form Filler", None),
+        text("Fill out form fields and save updated PDF.")
+            .size(11)
+            .style(|_| text::Style {
                 color: Some(theme::COLOR_TEXT_DIM)
             }),
-        Space::new().height(10),
+        Space::new().height(8),
     ]
-    .spacing(10)
-    .padding(15);
+    .spacing(8)
+    .padding(10);
 
     if app.form_fields.is_empty() {
         fields_col =
-            fields_col.push(text("No interactive fields found in this document.").size(13));
+            fields_col.push(text("No interactive form fields found in this document.").size(12));
     } else {
         for field in &app.form_fields {
             let field_widget: Element<_> = match &field.variant {
@@ -517,7 +680,7 @@ pub fn render_forms(app: &PdfBullApp) -> Element<'_, crate::message::Message> {
                             )
                         }
                     })
-                    .padding(8)
+                    .padding(6)
                     .into(),
                 FormFieldVariant::Checkbox { is_checked } => checkbox(*is_checked)
                     .on_toggle({
@@ -575,7 +738,7 @@ pub fn render_forms(app: &PdfBullApp) -> Element<'_, crate::message::Message> {
         }
 
         fields_col = fields_col.push(
-            button(text("Save Filled Form").font(INTER_BOLD))
+            button(text("💾 Save Filled Form").font(INTER_BOLD).size(12))
                 .on_press(crate::message::Message::FillForm(app.form_fields.clone()))
                 .width(Length::Fill)
                 .padding(10)
@@ -583,7 +746,7 @@ pub fn render_forms(app: &PdfBullApp) -> Element<'_, crate::message::Message> {
                     background: Some(theme::COLOR_ACCENT.into()),
                     text_color: Color::WHITE,
                     border: Border {
-                        radius: 8.0.into(),
+                        radius: theme::BORDER_RADIUS_MD.into(),
                         ..Default::default()
                     },
                     ..Default::default()

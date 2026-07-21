@@ -148,4 +148,5 @@ pub enum Message {
         usize,
         crate::models::PdfResult<Vec<crate::models::DetectedTable>>,
     ),
+    SetRibbonTab(crate::models::RibbonTab),
 }

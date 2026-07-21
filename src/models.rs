@@ -227,6 +227,15 @@ pub enum AppTheme {
 }
 
 #[derive(Debug, Clone, Copy, serde::Serialize, serde::Deserialize, PartialEq, Eq, Default)]
+pub enum RibbonTab {
+    #[default]
+    Home,
+    View,
+    Annotate,
+    Tools,
+}
+
+#[derive(Debug, Clone, Copy, serde::Serialize, serde::Deserialize, PartialEq, Eq, Default)]
 pub enum SidebarMode {
     #[default]
     Thumbnails,

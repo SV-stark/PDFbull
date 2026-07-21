@@ -93,6 +93,7 @@ pub struct PdfBullApp {
     pub password_prompt_doc_id: Option<crate::models::DocumentId>,
     pub show_signatures_detail: bool,
     pub table_mode_active: bool,
+    pub active_ribbon_tab: crate::models::RibbonTab,
 }
 
 impl Default for PdfBullApp {
@@ -147,6 +148,7 @@ impl Default for PdfBullApp {
             password_prompt_doc_id: None,
             show_signatures_detail: false,
             table_mode_active: false,
+            active_ribbon_tab: crate::models::RibbonTab::default(),
         }
     }
 }

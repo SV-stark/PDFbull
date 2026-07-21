@@ -5,7 +5,7 @@ use crate::ui::theme::{self, hex_to_rgb};
 use iced::widget::{
     Space, Stack, button, canvas, column, container, mouse_area, row, scrollable, text,
 };
-use iced::{Alignment, Border, Color, Element, Length, Padding, Rectangle};
+use iced::{Alignment, Border, Color, Element, Length, Padding, Rectangle, Shadow, Vector};
 
 use crate::ui::{sidebar, tabs, toolbar};
 
@@ -1126,7 +1126,7 @@ pub fn document_view<'a>(app: &'a PdfBullApp) -> Element<'a, crate::message::Mes
         column![
             content,
             row![
-                button("Exit Fullscreen (F)").on_press(crate::message::Message::ToggleFullscreen),
+                button("Exit Fullscreen (F11)").on_press(crate::message::Message::ToggleFullscreen),
                 container(text(format!(
                     "Page {} of {}",
                     tab.current_page + 1,
@@ -1141,13 +1141,93 @@ pub fn document_view<'a>(app: &'a PdfBullApp) -> Element<'a, crate::message::Mes
         ]
         .into()
     } else {
+        let floating_dock = container(
+            row![
+                button(text(icons::PREV).size(12).font(LUCIDE))
+                    .on_press(crate::message::Message::PrevPage)
+                    .style(theme::button_ghost)
+                    .padding([4, 6]),
+                text(format!(
+                    "Page {} of {}",
+                    tab.current_page + 1,
+                    tab.total_pages.max(1)
+                ))
+                .size(12)
+                .font(INTER_BOLD)
+                .style(|_| text::Style {
+                    color: Some(theme::COLOR_TEXT_PRIMARY),
+                }),
+                button(text(icons::NEXT).size(12).font(LUCIDE))
+                    .on_press(crate::message::Message::NextPage)
+                    .style(theme::button_ghost)
+                    .padding([4, 6]),
+                container(Space::new().width(1.0).height(16.0)).style(|_| {
+                    iced::widget::container::Style {
+                        background: Some(Color::from_rgb(0.25, 0.28, 0.35).into()),
+                        ..Default::default()
+                    }
+                }),
+                button(text(icons::ZOOM_OUT).size(12).font(LUCIDE))
+                    .on_press(crate::message::Message::ZoomOut)
+                    .style(theme::button_ghost)
+                    .padding([4, 6]),
+                text(format!("{}%", (tab.zoom * 100.0) as u32))
+                    .size(12)
+                    .font(INTER_BOLD)
+                    .style(|_| text::Style {
+                        color: Some(theme::COLOR_TEXT_PRIMARY),
+                    }),
+                button(text(icons::ZOOM_IN).size(12).font(LUCIDE))
+                    .on_press(crate::message::Message::ZoomIn)
+                    .style(theme::button_ghost)
+                    .padding([4, 6]),
+                button(text("100%").size(10).font(INTER_BOLD))
+                    .on_press(crate::message::Message::ResetZoom)
+                    .style(theme::button_ghost)
+                    .padding([2, 6]),
+            ]
+            .spacing(8)
+            .padding([6, 14])
+            .align_y(Alignment::Center),
+        )
+        .style(|_| iced::widget::container::Style {
+            background: Some(Color::from_rgba(0.09, 0.11, 0.14, 0.92).into()),
+            border: Border {
+                radius: theme::BORDER_RADIUS_FULL.into(),
+                width: 1.0,
+                color: Color::from_rgb(0.22, 0.26, 0.34),
+            },
+            shadow: Shadow {
+                color: Color::from_rgba(0.0, 0.0, 0.0, 0.4),
+                offset: Vector::new(0.0, 4.0),
+                blur_radius: 12.0,
+            },
+            ..Default::default()
+        });
+
+        let doc_with_floating_dock = Stack::new()
+            .push(
+                container(content)
+                    .width(Length::Fill)
+                    .height(Length::Fill)
+                    .style(|_| iced::widget::container::Style {
+                        background: Some(theme::COLOR_BG_APP.into()),
+                        ..Default::default()
+                    }),
+            )
+            .push(
+                container(floating_dock)
+                    .width(Length::Fill)
+                    .height(Length::Fill)
+                    .padding(20)
+                    .align_x(iced::alignment::Horizontal::Center)
+                    .align_y(iced::alignment::Vertical::Bottom),
+            );
+
         column![
             tabs::render(app),
             toolbar::render(app),
-            container(content).style(|_| iced::widget::container::Style {
-                background: Some(theme::COLOR_BG_APP.into()),
-                ..Default::default()
-            })
+            doc_with_floating_dock,
         ]
         .into()
     }

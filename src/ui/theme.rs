@@ -15,23 +15,71 @@ pub const BORDER_RADIUS_MD: f32 = 8.0;
 pub const BORDER_RADIUS_LG: f32 = 12.0;
 pub const BORDER_RADIUS_FULL: f32 = 999.0;
 
-// Colors - Dark Neutrals
-pub const COLOR_BG_APP: Color = Color::from_rgb(0.08, 0.08, 0.09); // Deepest
-pub const COLOR_BG_HEADER: Color = Color::from_rgb(0.12, 0.12, 0.14);
-pub const COLOR_BG_SIDEBAR: Color = Color::from_rgb(0.10, 0.10, 0.11);
-pub const COLOR_BG_WIDGET: Color = Color::from_rgb(0.16, 0.16, 0.18);
-pub const COLOR_BG_WIDGET_HOVER: Color = Color::from_rgb(0.20, 0.20, 0.22);
+// Colors - Dark Neutrals (PDFgear Slate Theme)
+pub const COLOR_BG_APP: Color = Color::from_rgb(0.06, 0.07, 0.09); // #0F1117 Deepest Slate
+pub const COLOR_BG_HEADER: Color = Color::from_rgb(0.09, 0.11, 0.14); // #171B24 Sleek Header Surface
+pub const COLOR_BG_SIDEBAR: Color = Color::from_rgb(0.08, 0.09, 0.12); // #14171F Sidebar Dark
+pub const COLOR_BG_WIDGET: Color = Color::from_rgb(0.12, 0.14, 0.18); // #1F242E Elevated Surface
+pub const COLOR_BG_WIDGET_HOVER: Color = Color::from_rgb(0.16, 0.19, 0.24); // #29303D Hover State
+pub const COLOR_BG_RIBBON_ACTIVE: Color = Color::from_rgb(0.15, 0.18, 0.23); // #262E3B Active Ribbon
 
-// Colors - Brand / Accent
-pub const COLOR_ACCENT: Color = Color::from_rgb(0.25, 0.55, 1.0); // Vibrant Blue
-pub const COLOR_ACCENT_DIM: Color = Color::from_rgb(0.25, 0.55, 1.0); // Simplified for now, can be alpha-fied in use
+// Colors - Brand / Accent (PDFgear Electric Blue)
+pub const COLOR_ACCENT: Color = Color::from_rgb(0.23, 0.51, 0.96); // #3B82F6 Vibrant Accent
+pub const COLOR_ACCENT_HOVER: Color = Color::from_rgb(0.15, 0.39, 0.92); // #2563EB Darker Accent
+pub const COLOR_ACCENT_DIM: Color = Color::from_rgb(0.23, 0.51, 0.96);
 
 // Colors - Text
-pub const COLOR_TEXT_PRIMARY: Color = Color::from_rgb(0.95, 0.95, 0.98);
-pub const COLOR_TEXT_DIM: Color = Color::from_rgb(0.60, 0.60, 0.65);
-pub const COLOR_TEXT_SECONDARY: Color = Color::from_rgb(0.45, 0.45, 0.48);
+pub const COLOR_TEXT_PRIMARY: Color = Color::from_rgb(0.95, 0.96, 0.98); // #F3F4F6 Crisp White-Gray
+pub const COLOR_TEXT_DIM: Color = Color::from_rgb(0.61, 0.64, 0.69); // #9CA3AF Readable Slate Gray
+pub const COLOR_TEXT_SECONDARY: Color = Color::from_rgb(0.42, 0.45, 0.50); // #6B7280 Muted Gray
+
+// Colors - Status Badges
+pub const COLOR_SUCCESS: Color = Color::from_rgb(0.06, 0.73, 0.49); // #10B981 Emerald Green
+pub const COLOR_WARNING: Color = Color::from_rgb(0.96, 0.62, 0.04); // #F59E0B Amber Warning
 
 // Reusable Styles
+pub fn button_ribbon_tab(
+    active: bool,
+) -> impl Fn(&iced::Theme, iced::widget::button::Status) -> iced::widget::button::Style {
+    move |_theme, status| {
+        let base_bg = if active {
+            Some(COLOR_BG_RIBBON_ACTIVE.into())
+        } else {
+            None
+        };
+        let base_text = if active { COLOR_ACCENT } else { COLOR_TEXT_DIM };
+        let border_color = if active {
+            COLOR_ACCENT
+        } else {
+            Color::TRANSPARENT
+        };
+
+        let base = iced::widget::button::Style {
+            background: base_bg,
+            text_color: base_text,
+            border: iced::Border {
+                radius: BORDER_RADIUS_MD.into(),
+                width: if active { 1.0 } else { 0.0 },
+                color: border_color,
+            },
+            ..Default::default()
+        };
+
+        match status {
+            iced::widget::button::Status::Hovered if !active => iced::widget::button::Style {
+                background: Some(COLOR_BG_WIDGET_HOVER.into()),
+                text_color: COLOR_TEXT_PRIMARY,
+                ..base
+            },
+            iced::widget::button::Status::Pressed => iced::widget::button::Style {
+                background: Some(COLOR_BG_WIDGET.into()),
+                ..base
+            },
+            _ => base,
+        }
+    }
+}
+
 pub fn button_ghost(
     _theme: &iced::Theme,
     status: iced::widget::button::Status,
@@ -88,7 +136,7 @@ pub fn button_tool(
 
         match status {
             iced::widget::button::Status::Hovered if !active => iced::widget::button::Style {
-                background: Some(COLOR_BG_WIDGET.into()),
+                background: Some(COLOR_BG_WIDGET_HOVER.into()),
                 text_color: COLOR_TEXT_PRIMARY,
                 ..base
             },
@@ -103,11 +151,11 @@ pub fn button_tool(
 
 pub fn input_field(_theme: &iced::Theme) -> iced::widget::container::Style {
     iced::widget::container::Style {
-        background: Some(COLOR_BG_HEADER.into()),
+        background: Some(COLOR_BG_SIDEBAR.into()),
         border: iced::Border {
             radius: BORDER_RADIUS_MD.into(),
             width: 1.0,
-            color: Color::from_rgb(0.2, 0.2, 0.22),
+            color: Color::from_rgb(0.18, 0.20, 0.25),
         },
         ..Default::default()
     }
