@@ -98,6 +98,29 @@ Cold-start launch and page rendering timings measured on Windows 11 across vario
 - **High-Fidelity PNG Export**: Export rendered pages at crisp resolutions.
 - **Thumbnail & Outline Navigation**: Instant jump-to via visual sidebar thumbnails and PDF bookmark trees.
 
+### 🔐 PDF Encryption on Save (Powered by `zpdf::EncryptionConfig`)
+- **AES-256 & RC4-128 Security**: Encrypt saved PDFs with V5/R6 (AES-256) or V2/R3 (RC4-128) standard security handlers.
+- **Dual Passwords**: Set custom User (read access) and Owner (permissions access) passwords.
+
+### 📋 PDF/A Conformance Validation (Powered by `zpdf::pdfa`)
+- **PDF/A-1b & PDF/A-2b Standard Checking**: Validates documents against archival standards (encryption, ID presence, font embedding, transparency).
+- **Detailed Violation Reports**: Returns exact rule IDs and human-readable violation descriptions.
+
+### 🛡️ Signature Trust Chain Verification (Powered by `zpdf::trust`)
+- **Certificate Chain Validation**: Validates signature X.509 certificate chains against custom PEM/DER trust anchors.
+- **Detailed Chain Status**: Identifies `Trusted`, `Untrusted`, or `Unsupported` status for embedded digital signatures.
+
+### ⚡ Linearization & Fast Web View (Powered by `zpdf::linearize_pdf`)
+- **ISO 32000-1 Annex F Optimization**: Reorganizes PDF object structures, xref tables, and hint streams for web streaming.
+
+### 📄 Multi-Format Export & Conversion (Powered by `zpdf::convert_pdf`)
+- **Markdown, HTML5 & TXT Conversion**: Converts PDF documents into structured Markdown, semantic HTML5, or clean TXT.
+- **Rich & TextOnly Modes**: Supports text-only extraction or full rich extraction with image placement.
+
+### 🖼️ Structural Optimization & Image Downsampling (Powered by `zpdf::RewriteOptions`)
+- **Automatic Downsampling**: Downsamples large embedded Flate/raw images to max 2400px during optimization passes.
+- **Stream Compression**: Deduplicates and compresses uncompressed streams for minimum file sizes.
+
 ---
 
 ## ⌨️ Professional Shortcuts
@@ -125,25 +148,6 @@ Cold-start launch and page rendering timings measured on Windows 11 across vario
 
 ---
 
-## 🚧 Work in Progress (WIP)
-
-The following capabilities are partially present in the codebase or planned, but are **not yet fully functional** and should be considered experimental:
-
-
-
-### ✏️ Advanced Annotations
-- **Layer Management**: Independent visibility toggles and z-index ordering for annotations — **planned**.
-
-### 📐 Productivity
-- **Batch Mode**: Infrastructure for processing multiple documents simultaneously — **planned**.
-
-### 🎨 Visuals & UX
-- **High-Contrast Theme**: Specialized high-contrast mode for accessibility — **planned**.
-- **True Virtual Scrolling**: Enhanced engine for infinite-feeling scrolling in massive documents — **planned**.
-- **Drag & Drop**: Native file and tab drag-and-drop support — **planned**.
-
----
-
 ## 🗺️ Roadmap
 
 - [x] **High-Performance Rendering Engine** (Tokio + Rayon integration)
@@ -153,7 +157,12 @@ The following capabilities are partially present in the codebase or planned, but
 - [x] **Form Field Detection & Filling**
 - [x] **GPU / WebGPU Rendering** (wire up `zpdf-render-wgpu`)
 - [x] **Advanced Shapes (Circles/Lines/Arrows) & Sticky Notes** (interactive creation & vector rendering)
-- [x] **PDF Optimization** (built-in stream compression & metadata sanitization)
+- [x] **PDF Optimization & Image Downsampling** (built-in stream compression, deduplication & downsampling)
+- [x] **PDF Encryption on Save** (AES-256 & RC4-128 password protection)
+- [x] **PDF/A Conformance Validation** (PDF/A-1b & PDF/A-2b compliance suite)
+- [x] **Digital Signature Trust Chain Verification** (X.509 certificate chain validation against root anchors)
+- [x] **Linearization / Fast Web View** (ISO 32000-1 Annex F web streaming stream optimization)
+- [x] **Multi-Format Document Conversion** (Markdown, HTML5, and TXT export)
 - [x] **Session Restoration** (restores tabs, scroll positions, and crop modes)
 - [x] **Digital Signatures Verification** (Cryptographic verification & status badge)
 - [x] **Table Extraction & Bounding Box UI** (Automatic detection, interactive outlines & CSV/TSV copy actions)
@@ -168,7 +177,7 @@ The following capabilities are partially present in the codebase or planned, but
 ## 📦 Installation & Development
 
 ### Release Builds
-Download the latest binaries from the [Releases Page](https://github.com/SV-stark/PDFbull/releases). The current release tag is **`pdfbull-v0.8.0`**.
+Download the latest binaries from the [Releases Page](https://github.com/SV-stark/PDFbull/releases). The current release tag is **`v0.10.0`**.
 
 ### Building from Source
 
@@ -192,7 +201,7 @@ cargo build --release
 PDFbull uses [cargo-dist](https://github.com/axodotdev/cargo-dist) for release artifacts. Configured targets include `x86_64-pc-windows-msvc`, `aarch64-apple-darwin`, `x86_64-apple-darwin`, `aarch64-unknown-linux-gnu`, and `x86_64-unknown-linux-gnu`. To plan a release:
 
 ```bash
-dist host --steps=create --tag=pdfbull-v0.8.0 --output-format=json
+dist host --steps=create --tag=v0.10.0 --output-format=json
 ```
 
 ---

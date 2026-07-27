@@ -138,6 +138,26 @@ pub struct DetectedTable {
     pub cells: Vec<Vec<String>>,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct PdfaViolation {
+    pub rule: String,
+    pub message: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct PdfaValidationReport {
+    pub profile: String,
+    pub conforms: bool,
+    pub claimed: Option<(String, String)>,
+    pub violations: Vec<PdfaViolation>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct SigTrustResult {
+    pub field_name: String,
+    pub status: String,
+}
+
 #[derive(Debug, Clone)]
 pub struct OpenResult {
     pub id: DocumentId,

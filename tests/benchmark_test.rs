@@ -73,7 +73,7 @@ fn benchmark_pdfbull_open_and_render() {
                 );
             }
             Err(e) => {
-                println!("{:<22} | Open Failed: {:?}", name, e);
+                println!("{name:<22} | Open Failed: {e:?}");
             }
         }
     }

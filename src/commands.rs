@@ -91,4 +91,24 @@ pub enum PdfCommand {
         usize,
         oneshot::Sender<PdfResult<Vec<DetectedTable>>>,
     ),
+    EncryptPdf(
+        String,
+        String,
+        String,
+        String,
+        String,
+        oneshot::Sender<PdfResult<String>>,
+    ),
+    LinearizePdf(String, String, oneshot::Sender<PdfResult<String>>),
+    ValidatePdfA(
+        String,
+        String,
+        oneshot::Sender<PdfResult<crate::models::PdfaValidationReport>>,
+    ),
+    VerifySignatureTrust(
+        DocumentId,
+        Vec<u8>,
+        oneshot::Sender<PdfResult<Vec<crate::models::SigTrustResult>>>,
+    ),
+    ConvertPdf(String, String, String, oneshot::Sender<PdfResult<String>>),
 }

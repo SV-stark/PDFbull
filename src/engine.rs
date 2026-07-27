@@ -279,6 +279,27 @@ pub fn spawn_engine_thread(cache_size: u64, max_memory_mb: u64) -> EngineState {
                         let res = store.detect_tables_on_page(doc_id, page_num);
                         let _ = tx.send(res);
                     }
+                    PdfCommand::EncryptPdf(input, output, user, owner, algo, tx) => {
+                        let res = store.encrypt_pdf(&input, &output, &user, &owner, &algo);
+                        let _ = tx.send(res);
+                    }
+                    PdfCommand::LinearizePdf(input, output, tx) => {
+                        let res = store.linearize_pdf(&input, &output);
+                        let _ = tx.send(res);
+                    }
+                    PdfCommand::ValidatePdfA(path, profile, tx) => {
+                        let res = store.validate_pdfa(&path, &profile);
+                        let _ = tx.send(res);
+                    }
+                    PdfCommand::VerifySignatureTrust(doc_id, anchors, tx) => {
+                        reload_if_needed(&mut store, &paths, doc_id);
+                        let res = store.verify_signature_trust(doc_id, &anchors);
+                        let _ = tx.send(res);
+                    }
+                    PdfCommand::ConvertPdf(path, mode, format, tx) => {
+                        let res = store.convert_pdf_doc(&path, &mode, &format);
+                        let _ = tx.send(res);
+                    }
                 }
             }
         });
