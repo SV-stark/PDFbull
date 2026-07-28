@@ -183,8 +183,10 @@ pub enum Message {
     CmykValueChanged(usize, f64),
 
     // ── Feature 6: OCR Text Recognition ──────────────────────────────────────
+    /// Select target script language for OCR (Latin or Devanagari)
+    SelectOcrScript(crate::ocr::OcrScript),
     /// Trigger OCR analysis on the currently active document page
-    TriggerOcrCurrentPage,
+    TriggerOcrCurrentPage(crate::ocr::OcrScript),
     /// Engine returned OCR extraction result for page
     OcrPageCompleted(
         crate::models::DocumentId,

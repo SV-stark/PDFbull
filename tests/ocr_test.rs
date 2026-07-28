@@ -32,3 +32,19 @@ fn test_ocr_empty_page_result() {
     assert!(empty_res.is_empty());
     assert_eq!(empty_res.full_text(), "");
 }
+
+#[test]
+fn test_ocr_script_selection() {
+    use pdfbull::ocr::OcrScript;
+
+    let latin = OcrScript::Latin;
+    assert_eq!(latin.rec_model_filename(), "text-recognition.rten");
+    assert_eq!(latin.name(), "Latin / English");
+
+    let devanagari = OcrScript::Devanagari;
+    assert_eq!(
+        devanagari.rec_model_filename(),
+        "devanagari_PP-OCRv4_rec.rten"
+    );
+    assert_eq!(devanagari.name(), "Devanagari (Hindi, Marathi, Sanskrit)");
+}

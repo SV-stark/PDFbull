@@ -694,7 +694,7 @@ pub fn render(app: &PdfBullApp) -> Element<'_, crate::message::Message> {
                 tool_button_emoji(
                     "\u{1f50d}",
                     "OCR Page",
-                    crate::message::Message::TriggerOcrCurrentPage,
+                    crate::message::Message::TriggerOcrCurrentPage(app.selected_ocr_script),
                     app.ocr_pending,
                     "Recognize text & bounding boxes on scanned PDF pages (ocrs + rten pure-Rust engine)"
                 ),

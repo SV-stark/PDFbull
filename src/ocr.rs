@@ -24,6 +24,35 @@ pub struct OcrPageResult {
     pub lines: Vec<OcrLine>,
 }
 
+/// Target script/language family for OCR recognition.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
+pub enum OcrScript {
+    #[default]
+    Latin,
+    Devanagari,
+}
+
+impl OcrScript {
+    pub fn name(&self) -> &'static str {
+        match self {
+            Self::Latin => "Latin / English",
+            Self::Devanagari => "Devanagari (Hindi, Marathi, Sanskrit)",
+        }
+    }
+
+    /// Model filename for recognition
+    pub fn rec_model_filename(&self) -> &'static str {
+        match self {
+            Self::Latin => "text-recognition.rten",
+            Self::Devanagari => "devanagari_PP-OCRv4_rec.rten",
+        }
+    }
+
+    pub fn det_model_filename(&self) -> &'static str {
+        "text-detection.rten"
+    }
+}
+
 impl OcrPageResult {
     pub fn new(page_num: usize, lines: Vec<OcrLine>) -> Self {
         Self { page_num, lines }

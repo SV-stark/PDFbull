@@ -198,7 +198,7 @@ Cold-start launch and page rendering timings measured on Windows 11 across vario
 ## 📦 Installation & Development
 
 ### Release Builds
-Download the latest binaries from the [Releases Page](https://github.com/SV-stark/PDFbull/releases). The current release tag is **`v0.10.3`**.
+Download the latest binaries from the [Releases Page](https://github.com/SV-stark/PDFbull/releases). The current release tag is **`v0.10.4`**.
 
 ### Building from Source
 

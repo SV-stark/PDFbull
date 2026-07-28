@@ -972,7 +972,12 @@ pub fn handle_export_message(app: &mut PdfBullApp, message: Message) -> Task<Mes
         }
 
         // ── Feature 6: OCR Text Recognition ──────────────────────────────────────
-        Message::TriggerOcrCurrentPage => {
+        Message::SelectOcrScript(script) => {
+            app.selected_ocr_script = script;
+            app.status_message = Some(format!("OCR script set to: {}", script.name()));
+            Task::none()
+        }
+        Message::TriggerOcrCurrentPage(script) => {
             let Some(tab) = app.current_tab() else {
                 return Task::none();
             };
@@ -983,13 +988,17 @@ pub fn handle_export_message(app: &mut PdfBullApp, message: Message) -> Task<Mes
             let page_num = tab.current_page;
             let cmd_tx = engine.cmd_tx.clone();
             app.ocr_pending = true;
-            app.status_message = Some(format!("Running OCR analysis on Page {}...", page_num + 1));
+            app.status_message = Some(format!(
+                "Running OCR ({}) on Page {}...",
+                script.name(),
+                page_num + 1
+            ));
             Task::perform(
                 async move {
                     let (resp_tx, resp_rx) = tokio::sync::oneshot::channel();
                     if let Err(e) = cmd_tx
                         .send(crate::commands::PdfCommand::OcrPage(
-                            doc_id, page_num, resp_tx,
+                            doc_id, page_num, script, resp_tx,
                         ))
                         .await
                     {

@@ -106,6 +106,7 @@ pub struct PdfBullApp {
     /// Feature 6: OCR state
     pub ocr_pending: bool,
     pub show_ocr_overlay: bool,
+    pub selected_ocr_script: crate::ocr::OcrScript,
     pub ocr_results:
         std::collections::HashMap<(crate::models::DocumentId, usize), crate::ocr::OcrPageResult>,
 }
@@ -170,6 +171,7 @@ impl Default for PdfBullApp {
             cmyk_values: [0.0, 0.0, 0.0, 1.0],
             ocr_pending: false,
             show_ocr_overlay: false,
+            selected_ocr_script: crate::ocr::OcrScript::default(),
             ocr_results: std::collections::HashMap::new(),
         }
     }

@@ -2439,6 +2439,7 @@ impl DocumentStore {
         &self,
         doc_id: DocumentId,
         page_num: usize,
+        script: crate::ocr::OcrScript,
     ) -> PdfResult<crate::ocr::OcrPageResult> {
         let doc = self
             .documents
@@ -2496,7 +2497,12 @@ impl DocumentStore {
             }
         }
 
-        tracing::info!("OCR completed for doc_id {:?}, page {}", doc_id, page_num);
+        tracing::info!(
+            "OCR completed for doc_id {:?}, page {} using script {}",
+            doc_id,
+            page_num,
+            script.name()
+        );
         Ok(crate::ocr::OcrPageResult::new(page_num, lines))
     }
 }
