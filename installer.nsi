@@ -21,6 +21,10 @@ Section "Install"
     
     File "release_dist\pdfbull.exe"
     
+    SetOutPath "$INSTDIR\models"
+    File /nonfatal /r "models\*.*"
+    SetOutPath "$INSTDIR"
+    
     WriteUninstaller "$INSTDIR\Uninstall.exe"
     
     CreateDirectory "$SMPROGRAMS\PDFbull"
@@ -39,6 +43,7 @@ SectionEnd
 Section "Uninstall"
     Delete "$INSTDIR\pdfbull.exe"
     Delete "$INSTDIR\Uninstall.exe"
+    RMDir /r "$INSTDIR\models"
     RMDir "$INSTDIR"
     
     Delete "$SMPROGRAMS\PDFbull\PDFbull.lnk"
