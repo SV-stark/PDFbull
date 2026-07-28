@@ -158,6 +158,33 @@ pub struct SigTrustResult {
     pub status: String,
 }
 
+/// Geospatial annotation metadata extracted from a PDF annotation's /Measure dictionary.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct GeoAnnotation {
+    pub page: usize,
+    /// Coordinate system name (e.g. "WGS 1984")
+    pub coordinate_system: Option<String>,
+    /// Map projection name (e.g. "UTM Zone 32N")
+    pub projection_name: Option<String>,
+    /// Scale denominator (e.g. 50000 → 1:50,000)
+    pub scale_denominator: Option<f64>,
+    /// Unit of measurement (e.g. "metre")
+    pub unit_name: Option<String>,
+}
+
+/// Embedded ICC color profile and print output intent information.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ColorProfileInfo {
+    /// Output intent name (e.g. "FOGRA39", "sRGB IEC61966-2.1")
+    pub output_intent_name: Option<String>,
+    /// Human-readable output condition (e.g. "Coated FOGRA39")
+    pub output_condition: Option<String>,
+    /// Whether the document declares a CMYK ICC device profile
+    pub has_cmyk_profile: bool,
+    /// Whether any ICC-Based colour space was found in the document
+    pub has_icc_profile: bool,
+}
+
 #[derive(Debug, Clone)]
 pub struct OpenResult {
     pub id: DocumentId,
@@ -173,6 +200,10 @@ pub struct OpenResult {
     pub attachments: Vec<AttachmentInfo>,
     pub layers: Vec<LayerInfo>,
     pub oc_config: Option<zpdf::OcConfig>,
+    /// Geospatial annotations parsed from /Measure dictionaries (`GeoPDF` support)
+    pub geo_annotations: Vec<GeoAnnotation>,
+    /// Embedded ICC color profile and print output intent summary
+    pub color_profile: Option<ColorProfileInfo>,
 }
 
 #[derive(Debug, Clone)]
@@ -186,6 +217,8 @@ pub struct DocumentMeta {
     pub attachments: Vec<AttachmentInfo>,
     pub layers: Vec<LayerInfo>,
     pub oc_config: Option<zpdf::OcConfig>,
+    pub geo_annotations: Vec<GeoAnnotation>,
+    pub color_profile: Option<ColorProfileInfo>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -529,6 +562,10 @@ pub struct DocumentTab {
     pub attachments: Vec<AttachmentInfo>,
     pub layers: Vec<LayerInfo>,
     pub oc_config: Option<zpdf::OcConfig>,
+    /// Geospatial annotation data from /Measure dictionaries (`GeoPDF`)
+    pub geo_annotations: Vec<GeoAnnotation>,
+    /// CMYK/ICC color profile and output intent summary
+    pub color_profile: Option<ColorProfileInfo>,
 }
 
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -584,6 +621,8 @@ impl DocumentTab {
             attachments: Vec::new(),
             layers: Vec::new(),
             oc_config: None,
+            geo_annotations: Vec::new(),
+            color_profile: None,
         }
     }
 
@@ -1235,6 +1274,8 @@ mod tests {
             attachments: vec![],
             layers: vec![],
             oc_config: None,
+            geo_annotations: vec![],
+            color_profile: None,
         };
         let cloned = result.clone();
         assert_eq!(cloned.page_count, 10);

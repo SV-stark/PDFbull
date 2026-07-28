@@ -162,6 +162,8 @@ async fn test_open_document_flow() {
         attachments: Vec::new(),
         layers: Vec::new(),
         oc_config: None,
+        geo_annotations: Vec::new(),
+        color_profile: None,
     };
 
     // Send DocumentOpenedWithPath message

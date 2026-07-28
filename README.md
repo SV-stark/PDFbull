@@ -118,7 +118,23 @@ Cold-start launch and page rendering timings measured on Windows 11 across vario
 - **Rich & TextOnly Modes**: Supports text-only extraction or full rich extraction with image placement.
 
 ### 🖼️ Structural Optimization & Image Downsampling (Powered by `zpdf::RewriteOptions`)
-- **Automatic Downsampling**: Downsamples large embedded Flate/raw images to max 2400px during optimization passes.
+- **Stream Compression & Sanitization**: Garbage-collects unreferenced PDF objects and re-compresses content streams.
+- **Automatic Downsampling**: Downsamples embedded raster images to `max_image_dimension(2400)` for smaller file sizes.
+
+### 📄 Blank PDF Creator (Powered by `zpdf::builder::DocumentBuilder`)
+- **A4 Document Authoring**: Create brand-new blank PDF documents with custom text layouts programmatically (`npx` / ribbon trigger).
+
+### 🔒 Digital Certificate Signing (Powered by `zpdf::sign::SigningKey`)
+- **PKCS#8 / PKCS#12 Signing**: Sign PDF documents cryptographically with `.p12`, `.pfx`, or DER-encoded private keys and certificates.
+
+### 🏷️ Rubber Stamp Annotations (Powered by `zpdf::stamp::StampItem`)
+- **Spec-Compliant Stamps**: Apply colored vector rubber stamps (`APPROVED`, `CONFIDENTIAL`, `DRAFT`, `REJECTED`, `FINAL`) directly to any page.
+
+### 📍 Geospatial GIS Metadata Panel (Powered by `zpdf::measure::Measure`)
+- **GeoPDF Inspection**: Parse `/Measure` and `/GCS` dictionaries on mapping annotations, displaying EPSG codes, WKT projections, and distance units.
+
+### 🎨 CMYK & Prepress Color Inspector (Powered by `zpdf::output_intent_cmyk_profile`)
+- **ICC Profile Inspection**: Inspect embedded ICC color profile output intents and run live CMYK ↔ RGB conversions with maximum GCR.
 - **Stream Compression**: Deduplicates and compresses uncompressed streams for minimum file sizes.
 
 ---

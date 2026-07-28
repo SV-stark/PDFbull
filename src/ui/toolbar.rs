@@ -19,7 +19,7 @@ pub fn render(app: &PdfBullApp) -> Element<'_, crate::message::Message> {
             .style(|_| text::Style {
                 color: Some(theme::COLOR_TEXT_PRIMARY),
             }),
-        text("v0.9.0")
+        text(concat!("v", env!("CARGO_PKG_VERSION")))
             .size(10)
             .font(INTER_REGULAR)
             .style(|_| text::Style {
@@ -542,10 +542,56 @@ pub fn render(app: &PdfBullApp) -> Element<'_, crate::message::Message> {
                 ..Default::default()
             });
 
+            // Feature 3: Stamps dropdown
+            let stamps_section: Element<'_, crate::message::Message> = {
+                const STAMPS: &[&str] = &["APPROVED", "CONFIDENTIAL", "DRAFT", "REJECTED", "FINAL"];
+                let stamp_buttons = STAMPS.iter().map(|label| {
+                    let (emoji, col) = match *label {
+                        "APPROVED" => ("\u{2705}", Color::from_rgb(0.0, 0.6, 0.2)),
+                        "REJECTED" => ("\u{274c}", Color::from_rgb(0.8, 0.1, 0.1)),
+                        "CONFIDENTIAL" => ("\u{1f512}", Color::from_rgb(0.6, 0.0, 0.7)),
+                        "DRAFT" => ("\u{1f4dd}", Color::from_rgb(0.8, 0.4, 0.0)),
+                        _ => ("\u{2714}", Color::from_rgb(0.1, 0.4, 0.9)), // FINAL
+                    };
+                    let lbl = *label;
+                    button(
+                        row![text(emoji).size(13), text(lbl).size(11).font(INTER_BOLD),]
+                            .spacing(4)
+                            .align_y(Alignment::Center),
+                    )
+                    .on_press(crate::message::Message::ApplyStamp(lbl.to_string()))
+                    .padding([4, 8])
+                    .style(move |_, _| iced::widget::button::Style {
+                        background: Some(col.scale_alpha(0.15).into()),
+                        text_color: col,
+                        border: iced::Border {
+                            radius: theme::BORDER_RADIUS_SM.into(),
+                            width: 1.0,
+                            color: col.scale_alpha(0.5),
+                        },
+                        ..Default::default()
+                    })
+                    .into()
+                });
+                column![
+                    text("Stamps")
+                        .size(10)
+                        .font(INTER_BOLD)
+                        .style(|_| iced::widget::text::Style {
+                            color: Some(Color::from_rgb(0.5, 0.5, 0.5)),
+                        }),
+                    row(stamp_buttons).spacing(4).align_y(Alignment::Center),
+                ]
+                .spacing(3)
+                .into()
+            };
+
             container(
                 row![
                     markup_tools,
                     style_section,
+                    v_sep(),
+                    stamps_section,
                     Space::new().width(Length::Fill),
                     save_btn,
                 ]
@@ -618,11 +664,32 @@ pub fn render(app: &PdfBullApp) -> Element<'_, crate::message::Message> {
                     "Extract or split pages into separate PDF files"
                 ),
                 tool_button_emoji(
-                    "⚡",
+                    "\u{26a1}",
                     "Optimize",
                     crate::message::Message::OptimizePDF,
                     false,
                     "Compress streams & sanitize document metadata"
+                ),
+                tool_button_emoji(
+                    "\u{1f4c4}",
+                    "New Doc",
+                    crate::message::Message::CreateBlankDocument,
+                    false,
+                    "Create a new blank PDF document from scratch (A4 format)"
+                ),
+                tool_button_emoji(
+                    "\u{1f510}",
+                    "Sign Cert",
+                    crate::message::Message::ToggleCertSigner(!app.show_cert_signer),
+                    app.show_cert_signer,
+                    "Apply a cryptographic PKCS#12 digital signature (.p12/.pfx certificate)"
+                ),
+                tool_button_emoji(
+                    "\u{1f3a8}",
+                    "CMYK",
+                    crate::message::Message::ToggleCmykInspector(!app.show_cmyk_inspector),
+                    app.show_cmyk_inspector,
+                    "Live CMYK \u{2194} RGB color converter using zpdf_core naive subtractive model"
                 ),
             ]
             .spacing(8)

@@ -56,6 +56,7 @@ pub mod pdf_engine;
 pub mod platform;
 pub mod storage;
 pub mod ui;
+pub mod ui_cmyk;
 pub mod ui_document;
 pub mod ui_keyboard_help;
 pub mod ui_metadata;

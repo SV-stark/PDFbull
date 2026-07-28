@@ -98,6 +98,8 @@ pub fn handle_tab_message(app: &mut PdfBullApp, message: Message) -> Task<Messag
                     tab.attachments = res.attachments.clone();
                     tab.layers = res.layers.clone();
                     tab.oc_config = res.oc_config.clone();
+                    tab.geo_annotations = res.geo_annotations.clone();
+                    tab.color_profile = res.color_profile.clone();
                     tab.view_state.is_loading = false;
                     tab.page_mapping = (0..count).collect();
 
@@ -207,6 +209,8 @@ pub fn handle_tab_message(app: &mut PdfBullApp, message: Message) -> Task<Messag
                     tab.attachments = meta.attachments;
                     tab.layers = meta.layers;
                     tab.oc_config = meta.oc_config;
+                    tab.geo_annotations = meta.geo_annotations;
+                    tab.color_profile = meta.color_profile;
                 }
             }
             Task::none()

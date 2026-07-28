@@ -300,6 +300,21 @@ pub fn spawn_engine_thread(cache_size: u64, max_memory_mb: u64) -> EngineState {
                         let res = store.convert_pdf_doc(&path, &mode, &format);
                         let _ = tx.send(res);
                     }
+                    PdfCommand::CreateBlankDocument(output_path, tx) => {
+                        let res =
+                            crate::pdf_engine::DocumentStore::create_blank_document(&output_path);
+                        let _ = tx.send(res);
+                    }
+                    PdfCommand::SignDocumentWithCert(doc_id, cert_path, output_path, tx) => {
+                        reload_if_needed(&mut store, &paths, doc_id);
+                        let res = store.sign_with_certificate(doc_id, &cert_path, &output_path);
+                        let _ = tx.send(res);
+                    }
+                    PdfCommand::ApplyStamp(doc_id, page_num, label, output_path, tx) => {
+                        reload_if_needed(&mut store, &paths, doc_id);
+                        let res = store.apply_stamp(doc_id, page_num, &label, &output_path);
+                        let _ = tx.send(res);
+                    }
                 }
             }
         });

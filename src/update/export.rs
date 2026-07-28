@@ -776,6 +776,201 @@ pub fn handle_export_message(app: &mut PdfBullApp, message: Message) -> Task<Mes
             }
             Task::none()
         }
+
+        // ── Feature 1: New Blank Document ────────────────────────────────────
+        Message::CreateBlankDocument => {
+            let Some(engine) = &app.engine else {
+                return Task::none();
+            };
+            let cmd_tx = engine.cmd_tx.clone();
+            Task::perform(
+                async move {
+                    let file = rfd::AsyncFileDialog::new()
+                        .add_filter("PDF", &["pdf"])
+                        .set_file_name("New Document.pdf")
+                        .save_file()
+                        .await;
+                    match file {
+                        Some(f) => {
+                            let output = f.path().to_string_lossy().to_string();
+                            let (resp_tx, resp_rx) = tokio::sync::oneshot::channel();
+                            if let Err(e) = cmd_tx
+                                .send(crate::commands::PdfCommand::CreateBlankDocument(
+                                    output, resp_tx,
+                                ))
+                                .await
+                            {
+                                tracing::error!("Failed to send CreateBlankDocument: {e}");
+                                return Err(crate::models::PdfError::EngineDied);
+                            }
+                            match resp_rx.await {
+                                Ok(r) => r,
+                                Err(_) => Err(crate::models::PdfError::EngineDied),
+                            }
+                        }
+                        None => Err(crate::models::PdfError::from("Cancelled")),
+                    }
+                },
+                Message::BlankDocumentCreated,
+            )
+        }
+        Message::BlankDocumentCreated(result) => match result {
+            Ok(path) => {
+                let pb = std::path::PathBuf::from(&path);
+                app.status_message = Some(format!("Blank document created: {path}"));
+                app.update(Message::OpenFile(pb))
+            }
+            Err(e) => {
+                if e != "Cancelled" {
+                    app.status_message = Some(format!("Failed to create document: {e}"));
+                }
+                Task::none()
+            }
+        },
+
+        // ── Feature 2: Digital Certificate Signing ───────────────────────────
+        Message::ToggleCertSigner(show) => {
+            app.show_cert_signer = show;
+            Task::none()
+        }
+        Message::PickCertificate => Task::perform(
+            async {
+                rfd::AsyncFileDialog::new()
+                    .add_filter("Certificate", &["p12", "pfx"])
+                    .set_title("Select PKCS#12 Certificate")
+                    .pick_file()
+                    .await
+                    .map(|f| f.path().to_path_buf())
+            },
+            |opt| match opt {
+                Some(path) => Message::CertPathSelected(path),
+                None => Message::ToggleCertSigner(true), // keep panel open
+            },
+        ),
+        Message::CertPathSelected(path) => {
+            app.cert_signer_path = Some(path);
+            Task::none()
+        }
+        Message::SignWithCertificate => {
+            let Some(tab) = app.current_tab() else {
+                return Task::none();
+            };
+            let Some(engine) = &app.engine else {
+                return Task::none();
+            };
+            let Some(cert_path) = app.cert_signer_path.clone() else {
+                app.status_message = Some("Please select a certificate (.p12/.pfx) first.".into());
+                return Task::none();
+            };
+            let doc_id = tab.id;
+            let tab_path = tab.path.to_string_lossy().to_string();
+            let cmd_tx = engine.cmd_tx.clone();
+            app.show_cert_signer = false;
+            Task::perform(
+                async move {
+                    let stem = std::path::Path::new(&tab_path)
+                        .file_stem()
+                        .map(|s| s.to_string_lossy().to_string())
+                        .unwrap_or_else(|| "document".to_string());
+                    let output = format!(
+                        "{}_signed.pdf",
+                        std::path::Path::new(&tab_path)
+                            .parent()
+                            .map(|p| p.join(&stem).to_string_lossy().to_string())
+                            .unwrap_or(stem)
+                    );
+                    let cert_str = cert_path.to_string_lossy().to_string();
+                    let (resp_tx, resp_rx) = tokio::sync::oneshot::channel();
+                    if let Err(e) = cmd_tx
+                        .send(crate::commands::PdfCommand::SignDocumentWithCert(
+                            doc_id, cert_str, output, resp_tx,
+                        ))
+                        .await
+                    {
+                        tracing::error!("Failed to send SignDocumentWithCert: {e}");
+                        return Err(crate::models::PdfError::EngineDied);
+                    }
+                    match resp_rx.await {
+                        Ok(r) => r,
+                        Err(_) => Err(crate::models::PdfError::EngineDied),
+                    }
+                },
+                Message::CertSigningDone,
+            )
+        }
+        Message::CertSigningDone(result) => {
+            match result {
+                Ok(path) => {
+                    app.status_message = Some(format!("Signed PDF saved: {path}"));
+                    app.cert_signer_path = None;
+                }
+                Err(e) => {
+                    app.status_message = Some(format!("Signing failed: {e}"));
+                }
+            }
+            Task::none()
+        }
+
+        // ── Feature 3: Rubber Stamp Annotations ──────────────────────────────
+        Message::ShowStampMenu(show) => {
+            app.show_stamp_menu = show;
+            Task::none()
+        }
+        Message::ApplyStamp(label) => {
+            let Some(tab) = app.current_tab() else {
+                return Task::none();
+            };
+            let Some(engine) = &app.engine else {
+                return Task::none();
+            };
+            let tab_path = tab.path.to_string_lossy().to_string();
+            let page_num = tab.current_page;
+            let doc_id = tab.id;
+            let cmd_tx = engine.cmd_tx.clone();
+            app.show_stamp_menu = false;
+            Task::perform(
+                async move {
+                    let stem = std::path::Path::new(&tab_path)
+                        .file_stem()
+                        .map(|s| s.to_string_lossy().to_string())
+                        .unwrap_or_else(|| "document".to_string());
+                    let output = format!(
+                        "{}_stamped.pdf",
+                        std::path::Path::new(&tab_path)
+                            .parent()
+                            .map(|p| p.join(&stem).to_string_lossy().to_string())
+                            .unwrap_or(stem)
+                    );
+                    let (resp_tx, resp_rx) = tokio::sync::oneshot::channel();
+                    if let Err(e) = cmd_tx
+                        .send(crate::commands::PdfCommand::ApplyStamp(
+                            doc_id, page_num, label, output, resp_tx,
+                        ))
+                        .await
+                    {
+                        tracing::error!("Failed to send ApplyStamp: {e}");
+                        return Err(crate::models::PdfError::EngineDied);
+                    }
+                    match resp_rx.await {
+                        Ok(r) => r,
+                        Err(_) => Err(crate::models::PdfError::EngineDied),
+                    }
+                },
+                Message::StampApplied,
+            )
+        }
+        Message::StampApplied(result) => {
+            match result {
+                Ok(path) => {
+                    app.status_message = Some(format!("Stamp applied and saved: {path}"));
+                }
+                Err(e) => {
+                    app.status_message = Some(format!("Stamp failed: {e}"));
+                }
+            }
+            Task::none()
+        }
+
         _ => Task::none(),
     }
 }

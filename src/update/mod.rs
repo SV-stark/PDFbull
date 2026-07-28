@@ -241,7 +241,31 @@ pub fn handle_message(app: &mut PdfBullApp, message: Message) -> Task<Message> {
         | Message::FormFieldsLoaded(_)
         | Message::FormFieldChanged(_, _)
         | Message::FillForm(_)
-        | Message::FormFilled(_) => export::handle_export_message(app, message),
+        | Message::FormFilled(_)
+        // Feature 1: New Blank Document
+        | Message::CreateBlankDocument
+        | Message::BlankDocumentCreated(_)
+        // Feature 2: Certificate Signing
+        | Message::PickCertificate
+        | Message::CertPathSelected(_)
+        | Message::SignWithCertificate
+        | Message::CertSigningDone(_)
+        | Message::ToggleCertSigner(_)
+        // Feature 3: Stamp Tool
+        | Message::ShowStampMenu(_)
+        | Message::ApplyStamp(_)
+        | Message::StampApplied(_) => export::handle_export_message(app, message),
+        // Feature 5: CMYK ↔ RGB Color Inspector (pure, no engine needed)
+        Message::ToggleCmykInspector(show) => {
+            app.show_cmyk_inspector = show;
+            Task::none()
+        }
+        Message::CmykValueChanged(channel, value) => {
+            if channel < 4 {
+                app.cmyk_values[channel] = value.clamp(0.0, 1.0);
+            }
+            Task::none()
+        }
         Message::ToggleWatermarkPrompt(show) => {
             app.show_watermark_prompt = show;
             if show {

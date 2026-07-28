@@ -149,4 +149,36 @@ pub enum Message {
         crate::models::PdfResult<Vec<crate::models::DetectedTable>>,
     ),
     SetRibbonTab(crate::models::RibbonTab),
+
+    // ── Feature 1: New Blank Document ────────────────────────────────────────
+    /// User triggered "File → New Document"
+    CreateBlankDocument,
+    /// Engine returned the path of the newly created blank PDF
+    BlankDocumentCreated(crate::models::PdfResult<String>),
+
+    // ── Feature 2: Digital Certificate Signing ───────────────────────────────
+    /// Open file picker to select a .p12/.pfx certificate
+    PickCertificate,
+    /// Certificate path was selected by the file picker
+    CertPathSelected(PathBuf),
+    /// Start the signing operation with the stored cert path
+    SignWithCertificate,
+    /// Engine returned the path of the signed PDF
+    CertSigningDone(crate::models::PdfResult<String>),
+    /// Toggle the certificate-signing panel open/closed
+    ToggleCertSigner(bool),
+
+    // ── Feature 3: Stamp Tool ────────────────────────────────────────────────
+    /// Toggle the stamps dropdown in the Annotate ribbon
+    ShowStampMenu(bool),
+    /// Apply a named stamp to the current page
+    ApplyStamp(String),
+    /// Engine returned the path of the stamped PDF
+    StampApplied(crate::models::PdfResult<String>),
+
+    // ── Feature 5: CMYK ↔ RGB Color Inspector ────────────────────────────────
+    /// Toggle the CMYK color inspector panel
+    ToggleCmykInspector(bool),
+    /// One CMYK channel changed: (`channel_index` 0-3, `new_value` 0.0..=1.0)
+    CmykValueChanged(usize, f64),
 }

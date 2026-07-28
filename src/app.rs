@@ -94,6 +94,15 @@ pub struct PdfBullApp {
     pub show_signatures_detail: bool,
     pub table_mode_active: bool,
     pub active_ribbon_tab: crate::models::RibbonTab,
+    /// Feature 2: Certificate signing panel state
+    pub show_cert_signer: bool,
+    pub cert_signer_path: Option<std::path::PathBuf>,
+    /// Feature 3: Stamp tool dropdown state
+    pub show_stamp_menu: bool,
+    /// Feature 5: CMYK ↔ RGB live color inspector
+    pub show_cmyk_inspector: bool,
+    /// CMYK channel values in 0.0..=1.0 (Cyan, Magenta, Yellow, Key/Black)
+    pub cmyk_values: [f64; 4],
 }
 
 impl Default for PdfBullApp {
@@ -149,6 +158,11 @@ impl Default for PdfBullApp {
             show_signatures_detail: false,
             table_mode_active: false,
             active_ribbon_tab: crate::models::RibbonTab::default(),
+            show_cert_signer: false,
+            cert_signer_path: None,
+            show_stamp_menu: false,
+            show_cmyk_inspector: false,
+            cmyk_values: [0.0, 0.0, 0.0, 1.0],
         }
     }
 }

@@ -191,6 +191,129 @@ fn watermark_prompt_view(app: &PdfBullApp) -> Element<'_, crate::message::Messag
         .into()
 }
 
+// ── Overlay Modal: Cert Signer (Feature 2) ────────────────────────────────────
+fn cert_signer_view(app: &PdfBullApp) -> Element<'_, crate::message::Message> {
+    let cert_label: String = app
+        .cert_signer_path
+        .as_ref()
+        .map(|p| {
+            p.file_name()
+                .map(|n| n.to_string_lossy().to_string())
+                .unwrap_or_default()
+        })
+        .unwrap_or_else(|| "No certificate selected".to_string());
+
+    let modal_content = container(
+        column![
+            text("\u{1f510} Sign with PKCS#12 Certificate")
+                .size(18)
+                .font(INTER_BOLD)
+                .style(|_| text::Style {
+                    color: Some(Color::WHITE)
+                }),
+            Space::new().height(6),
+            text("Select your .p12/.pfx certificate to apply a cryptographic digital signature.")
+                .size(13)
+                .font(INTER_REGULAR)
+                .style(|_| text::Style {
+                    color: Some(theme::COLOR_TEXT_DIM)
+                }),
+            Space::new().height(14),
+            row![
+                container(
+                    text(cert_label)
+                        .size(13)
+                        .font(INTER_REGULAR)
+                        .style(|_| text::Style {
+                            color: Some(Color::from_rgb8(180, 200, 255))
+                        })
+                )
+                .padding([8, 12])
+                .style(|_| container::Style {
+                    background: Some(Color::from_rgb8(25, 27, 32).into()),
+                    border: Border {
+                        radius: 6.0.into(),
+                        width: 1.0,
+                        color: Color::from_rgb8(54, 56, 62),
+                    },
+                    ..Default::default()
+                })
+                .width(Length::Fill),
+                Space::new().width(8),
+                button(text("Browse...").size(13).font(INTER_BOLD))
+                    .on_press(crate::message::Message::PickCertificate)
+                    .padding([8, 14])
+                    .style(|_theme, _status| button::Style {
+                        background: Some(Color::from_rgb8(50, 55, 70).into()),
+                        text_color: Color::WHITE,
+                        border: Border {
+                            radius: theme::BORDER_RADIUS_MD.into(),
+                            ..Default::default()
+                        },
+                        ..Default::default()
+                    }),
+            ]
+            .align_y(Alignment::Center),
+            Space::new().height(20),
+            row![
+                button(text("Cancel").size(13).font(INTER_REGULAR))
+                    .on_press(crate::message::Message::ToggleCertSigner(false))
+                    .style(theme::button_ghost)
+                    .padding([8, 16]),
+                Space::new().width(Length::Fill),
+                button(
+                    row![
+                        text("\u{1f510}").size(13),
+                        text("Sign Document").size(13).font(INTER_BOLD),
+                    ]
+                    .spacing(6)
+                    .align_y(Alignment::Center)
+                )
+                .on_press(crate::message::Message::SignWithCertificate)
+                .padding([8, 16])
+                .style(|_theme, _status| button::Style {
+                    background: Some(Color::from_rgb8(70, 120, 220).into()),
+                    text_color: Color::WHITE,
+                    border: Border {
+                        radius: theme::BORDER_RADIUS_MD.into(),
+                        ..Default::default()
+                    },
+                    ..Default::default()
+                }),
+            ]
+            .align_y(Alignment::Center),
+        ]
+        .spacing(10),
+    )
+    .padding(25)
+    .width(Length::Fixed(480.0))
+    .style(|_| container::Style {
+        background: Some(Color::from_rgb8(30, 32, 36).into()),
+        border: Border {
+            radius: theme::BORDER_RADIUS_LG.into(),
+            width: 1.0,
+            color: Color::from_rgb8(70, 120, 220),
+        },
+        shadow: Shadow {
+            color: Color::from_rgba(0.0, 0.0, 0.0, 0.5),
+            offset: Vector::new(0.0, 10.0),
+            blur_radius: 22.0,
+        },
+        ..Default::default()
+    });
+
+    container(modal_content)
+        .width(Length::Fill)
+        .height(Length::Fill)
+        .center_x(Length::Fill)
+        .center_y(Length::Fill)
+        .style(|_| container::Style {
+            background: Some(Color::from_rgba(0.0, 0.0, 0.0, 0.65).into()),
+            ..Default::default()
+        })
+        .into()
+}
+
 // ── Overlay Modal: Password Prompt ───────────────────────────────────────────
 fn password_prompt_view(app: &PdfBullApp) -> Element<'_, crate::message::Message> {
     let modal_content = container(
@@ -775,6 +898,14 @@ pub fn view(app: &PdfBullApp) -> Element<'_, crate::message::Message> {
 
     if app.show_signatures_detail {
         base_stack = base_stack.push(signatures_detail_view(app));
+    }
+
+    if app.show_cert_signer {
+        base_stack = base_stack.push(cert_signer_view(app));
+    }
+
+    if app.show_cmyk_inspector {
+        base_stack = base_stack.push(crate::ui_cmyk::cmyk_inspector_view(app));
     }
 
     base_stack.into()

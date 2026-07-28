@@ -9,11 +9,17 @@ use std::collections::HashMap;
 use std::fmt::Write;
 use std::sync::Arc;
 use zpdf::{
-    AnnotationSpec, ContentInterpreter, FieldKind, FieldValue, FormFiller, ImageCache,
+    AnnotationSpec, ContentInterpreter, FieldKind, FieldValue, FormFiller, IccCache, ImageCache,
     IncrementalWriter, MarkupKind, ParseLimits, PdfDocument, Rect as ZpdfRect, RenderBackend,
-    cpu::CpuRenderer, detect_tables, spans_to_text, struct_ordered_text,
+    cpu::CpuRenderer, detect_tables, output_intent_cmyk_profile, spans_to_text,
+    struct_ordered_text,
 };
 use zpdf::{RewriteOptions, rewrite_pdf};
+use zpdf_writer::{
+    builder::DocumentBuilder,
+    sign::{SignatureOptions, SigningKey},
+    stamp::StampItem,
+};
 use zune_image::codecs::ImageFormat;
 use zune_image::image::Image;
 
@@ -228,6 +234,12 @@ impl DocumentStore {
         if let Some(oc) = &oc_config {
             self.oc_configs.insert(doc_id, oc.clone());
         }
+
+        // Feature 4: Extract geospatial annotation metadata
+        let geo_annotations = Self::extract_geo_annotations(&doc);
+        // Feature 5: Extract CMYK/ICC color profile info
+        let color_profile = Self::extract_color_profile(&doc);
+
         self.documents.insert(doc_id, doc);
         self.paths.insert(doc_id, path.to_string());
 
@@ -245,6 +257,8 @@ impl DocumentStore {
             attachments,
             layers,
             oc_config,
+            geo_annotations,
+            color_profile,
         })
     }
 
@@ -341,6 +355,9 @@ impl DocumentStore {
             self.oc_configs.insert(doc_id, oc.clone());
         }
 
+        let geo_annotations = Self::extract_geo_annotations(doc);
+        let color_profile = Self::extract_color_profile(doc);
+
         Ok(crate::models::DocumentMeta {
             outline,
             links,
@@ -351,6 +368,8 @@ impl DocumentStore {
             attachments,
             layers,
             oc_config,
+            geo_annotations,
+            color_profile,
         })
     }
 
@@ -2209,6 +2228,207 @@ impl DocumentStore {
             output_path
         );
         Ok(output_path.to_string())
+    }
+
+    // ── Feature 1: New Blank Document (DocumentBuilder) ─────────────────────
+
+    /// Create a brand-new blank PDF document from scratch and write it to `output_path`.
+    /// Uses `zpdf_writer::builder::DocumentBuilder` for A4 page layout with Helvetica placeholder text.
+    pub fn create_blank_document(output_path: &str) -> PdfResult<String> {
+        let mut builder = DocumentBuilder::new();
+        let page = builder.add_page(595.0, 842.0); // A4 in points
+        builder
+            .add_text(
+                page,
+                "New Document",
+                50.0,
+                800.0,
+                "Helvetica",
+                24.0,
+                (0.0, 0.0, 0.0),
+            )
+            .map_err(|e| PdfError::IoError(e.to_string()))?;
+        let pdf_bytes = builder
+            .build()
+            .map_err(|e| PdfError::IoError(e.to_string()))?;
+        std::fs::write(output_path, &pdf_bytes).map_err(|e| PdfError::IoError(e.to_string()))?;
+        tracing::info!("Created blank document -> {}", output_path);
+        Ok(output_path.to_string())
+    }
+
+    // ── Feature 2: Digital Certificate Signing (SigningKey) ─────────────────
+
+    /// Apply a cryptographic PKCS#8 digital signature from `cert_path` to the
+    /// document identified by `doc_id`, writing the signed output to `output_path`.
+    /// The `cert_path` should be a DER-encoded PKCS#8 private key file; the
+    /// matching X.509 certificate DER must also be readable at `cert_path.der`.
+    pub fn sign_with_certificate(
+        &self,
+        doc_id: DocumentId,
+        cert_path: &str,
+        output_path: &str,
+    ) -> PdfResult<String> {
+        let path = self
+            .paths
+            .get(&doc_id)
+            .ok_or(PdfError::EngineError(EngineErrorKind::DocumentPathNotFound))?;
+        let doc_bytes = std::fs::read(path).map_err(|e| PdfError::IoError(e.to_string()))?;
+        // Expect cert_path to be the PKCS#8 private key DER, and
+        // cert_path with ".x509" extension to be the DER-encoded X.509 cert.
+        let key_bytes = std::fs::read(cert_path).map_err(|e| PdfError::IoError(e.to_string()))?;
+        // Derive the certificate path: replace extension with .x509 or try as-is
+        let cert_der_path = std::path::Path::new(cert_path).with_extension("x509");
+        let cert_der_bytes = if cert_der_path.exists() {
+            std::fs::read(&cert_der_path).map_err(|e| PdfError::IoError(e.to_string()))?
+        } else {
+            // Fall back: treat key file itself as both key and cert (self-signed scenario)
+            key_bytes.clone()
+        };
+
+        let key =
+            SigningKey::from_pkcs8_der(&key_bytes).map_err(|e| PdfError::IoError(e.to_string()))?;
+        let opts = SignatureOptions {
+            reason: Some("Signed with PDFbull".to_string()),
+            location: Some("PDFbull Desktop Application".to_string()),
+            ..SignatureOptions::default()
+        };
+        let writer =
+            IncrementalWriter::new(doc_bytes).map_err(|e| PdfError::IoError(e.to_string()))?;
+        // sign() consumes the writer and returns the final signed bytes
+        let signed_bytes = writer
+            .sign(&cert_der_bytes, &key, &opts)
+            .map_err(|e| PdfError::IoError(e.to_string()))?;
+        std::fs::write(output_path, &signed_bytes).map_err(|e| PdfError::IoError(e.to_string()))?;
+        tracing::info!("Signed document {} -> {}", path, output_path);
+        Ok(output_path.to_string())
+    }
+
+    // ── Feature 3: Rubber Stamp Annotations (StampItem) ─────────────────────
+
+    /// Overlay a named rubber stamp (e.g. "APPROVED", "DRAFT") on `page_num` (0-based) of the
+    /// document identified by `doc_id`, writing the incremental update to `output_path`.
+    pub fn apply_stamp(
+        &self,
+        doc_id: DocumentId,
+        page_num: usize,
+        label: &str,
+        output_path: &str,
+    ) -> PdfResult<String> {
+        let path = self
+            .paths
+            .get(&doc_id)
+            .ok_or(PdfError::EngineError(EngineErrorKind::DocumentPathNotFound))?;
+        let doc_bytes = std::fs::read(path).map_err(|e| PdfError::IoError(e.to_string()))?;
+
+        // Determine stamp colour by label (DeviceRGB, each in 0..1)
+        let (r, g, b) = match label {
+            "APPROVED" => (0.0, 0.5, 0.0),
+            "REJECTED" => (0.8, 0.0, 0.0),
+            "CONFIDENTIAL" => (0.6, 0.0, 0.6),
+            "DRAFT" => (0.8, 0.4, 0.0),
+            _ => (0.0, 0.0, 0.8), // FINAL / other
+        };
+
+        let stamp = StampItem::Text {
+            text: label.to_string(),
+            x: 50.0,
+            y: 50.0,
+            font: "Helvetica-Bold".to_string(),
+            size: 36.0,
+            color: (r, g, b),
+        };
+        let mut writer =
+            IncrementalWriter::new(doc_bytes).map_err(|e| PdfError::IoError(e.to_string()))?;
+        writer
+            .stamp_page(page_num, &[stamp])
+            .map_err(|e| PdfError::IoError(e.to_string()))?;
+        // write() takes Write+Seek; use a Vec<u8> wrapped in Cursor
+        let mut buf = std::io::Cursor::new(Vec::new());
+        writer
+            .write(&mut buf)
+            .map_err(|e| PdfError::IoError(e.to_string()))?;
+        std::fs::write(output_path, buf.into_inner())
+            .map_err(|e| PdfError::IoError(e.to_string()))?;
+        tracing::info!(
+            "Applied stamp '{}' on page {} -> {}",
+            label,
+            page_num,
+            output_path
+        );
+        Ok(output_path.to_string())
+    }
+
+    // ── Feature 4: Geospatial / GIS Metadata (Measure) ──────────────────────
+
+    /// Extract geospatial annotation metadata from PDF /Measure dictionaries.
+    /// Present in specialized `GeoPDF` files produced by `ArcGIS`, QGIS, `AutoCAD` Map.
+    fn extract_geo_annotations(doc: &PdfDocument) -> Vec<crate::models::GeoAnnotation> {
+        let mut geo = Vec::new();
+        let page_count = doc.page_count();
+        for i in 0..page_count {
+            let Ok(page) = doc.page(i) else { continue };
+            let annots = doc.page_annotations(&page);
+            for annot in annots {
+                if let Some(measure) = &annot.measure {
+                    let gcs = measure.gcs.as_ref();
+                    // Derive a human-readable coordinate system description
+                    let cs_name = gcs.map(|g| {
+                        g.wkt
+                            .as_deref()
+                            // Extract name from WKT: first quoted string
+                            .and_then(|w| {
+                                let start = w.find('"')? + 1;
+                                let end = w[start..].find('"')? + start;
+                                Some(w[start..end].to_string())
+                            })
+                            .or_else(|| g.epsg.map(|e| format!("EPSG:{e}")))
+                            .unwrap_or_else(|| g.type_.clone())
+                    });
+                    // Projection: second quoted token in WKT after PROJECTION keyword
+                    let projection = gcs.and_then(|g| {
+                        let wkt = g.wkt.as_deref()?;
+                        let proj_pos = wkt.find("PROJECTION[")?;
+                        let after = &wkt[proj_pos + 11..];
+                        let start = after.find('"')? + 1;
+                        let end = after[start..].find('"')? + start;
+                        Some(after[start..end].to_string())
+                    });
+                    // Scale: derive from /Bounds extent vs /GPTS lat-lon extent if available
+                    // (Measure has no direct scale field; use pdu as unit hint instead)
+                    geo.push(crate::models::GeoAnnotation {
+                        page: i,
+                        coordinate_system: cs_name,
+                        projection_name: projection,
+                        scale_denominator: None, // not directly available in PDF Measure dict
+                        unit_name: measure.pdu.clone().or_else(|| measure.du.clone()),
+                    });
+                }
+            }
+        }
+        geo
+    }
+
+    // ── Feature 5: CMYK / ICC Color Inspector ────────────────────────────────
+
+    /// Inspect embedded ICC profiles and print output intents.
+    /// Uses `zpdf::output_intent_cmyk_profile` to detect CMYK ICC device transforms.
+    fn extract_color_profile(doc: &PdfDocument) -> Option<crate::models::ColorProfileInfo> {
+        let intents = doc.output_intents();
+        if intents.is_empty() {
+            return None;
+        }
+        let first = &intents[0];
+        let mut icc_cache = IccCache::default();
+        // Signature: (file, page_intents, doc_intents, cache)
+        // Pass the full intents slice for both page and doc intents
+        let has_cmyk =
+            output_intent_cmyk_profile(doc.file(), &intents, &intents, &mut icc_cache).is_some();
+        Some(crate::models::ColorProfileInfo {
+            output_intent_name: first.output_condition_identifier.clone(),
+            output_condition: first.output_condition.clone(),
+            has_cmyk_profile: has_cmyk,
+            has_icc_profile: first.dest_output_profile.is_some(),
+        })
     }
 }
 

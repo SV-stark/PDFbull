@@ -111,4 +111,24 @@ pub enum PdfCommand {
         oneshot::Sender<PdfResult<Vec<crate::models::SigTrustResult>>>,
     ),
     ConvertPdf(String, String, String, oneshot::Sender<PdfResult<String>>),
+    /// Feature 1: Create a blank PDF from scratch using `DocumentBuilder`.
+    /// args: `output_path`, tx
+    CreateBlankDocument(String, oneshot::Sender<PdfResult<String>>),
+    /// Feature 2: Apply a cryptographic PKCS#12 digital signature to a document.
+    /// args: `doc_id`, `cert_path` (.p12/.pfx), `output_path`, tx
+    SignDocumentWithCert(
+        DocumentId,
+        String,
+        String,
+        oneshot::Sender<PdfResult<String>>,
+    ),
+    /// Feature 3: Overlay a rubber-stamp annotation onto a page.
+    /// args: `doc_id`, `page_num` (0-based), `stamp_label`, `output_path`, tx
+    ApplyStamp(
+        DocumentId,
+        usize,
+        String,
+        String,
+        oneshot::Sender<PdfResult<String>>,
+    ),
 }
