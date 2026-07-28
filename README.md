@@ -4,7 +4,8 @@
   <img src="PDFbull.png" width="200" alt="PDFbull Logo">
 </p>
 
-<p align="center">
+  <a href="https://crates.io/crates/pdfbull"><img src="https://img.shields.io/crates/v/pdfbull.svg" alt="Crates.io"></a>
+  <a href="https://crates.io/crates/pdfbull"><img src="https://img.shields.io/crates/d/pdfbull.svg" alt="Crates.io Downloads"></a>
   <a href="https://github.com/SV-stark/PDFbull/releases/tag/nightly"><img src="https://github.com/SV-stark/PDFbull/actions/workflows/release.yml/badge.svg" alt="Nightly Release"></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/License-MIT-green.svg" alt="License: MIT"></a>
   <a href="https://iced.rs/"><img src="https://img.shields.io/badge/Built%20with-Iced-blue" alt="Built with Iced"></a>
