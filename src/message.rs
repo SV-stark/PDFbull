@@ -181,4 +181,16 @@ pub enum Message {
     ToggleCmykInspector(bool),
     /// One CMYK channel changed: (`channel_index` 0-3, `new_value` 0.0..=1.0)
     CmykValueChanged(usize, f64),
+
+    // ── Feature 6: OCR Text Recognition ──────────────────────────────────────
+    /// Trigger OCR analysis on the currently active document page
+    TriggerOcrCurrentPage,
+    /// Engine returned OCR extraction result for page
+    OcrPageCompleted(
+        crate::models::DocumentId,
+        usize,
+        crate::models::PdfResult<crate::ocr::OcrPageResult>,
+    ),
+    /// Toggle visibility of OCR bounding box overlay on current page
+    ToggleOcrResultsOverlay(bool),
 }

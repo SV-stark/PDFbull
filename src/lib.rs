@@ -52,6 +52,7 @@ pub mod commands;
 pub mod engine;
 pub mod message;
 pub mod models;
+pub mod ocr;
 pub mod pdf_engine;
 pub mod platform;
 pub mod storage;

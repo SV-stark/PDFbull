@@ -1,6 +1,6 @@
 [package]
 name = "pdfbull"
-version = "0.10.2"
+version = "0.10.3"
 description = "A lightweight PDF reader"
 authors = ["SV-stark"]
 edition = "2024"
@@ -44,6 +44,8 @@ notify = "8"
 notify-debouncer-full = "0.7"
 interprocess = { version = "2", features = ["tokio"] }
 crossbeam-channel = "0.5.15"
+ocrs = "0.12.2"
+rten = "0.24.0"
 
 [target.'cfg(windows)'.dependencies]
 winprint = { version = "0.2.1", default-features = false }

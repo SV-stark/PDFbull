@@ -254,7 +254,11 @@ pub fn handle_message(app: &mut PdfBullApp, message: Message) -> Task<Message> {
         // Feature 3: Stamp Tool
         | Message::ShowStampMenu(_)
         | Message::ApplyStamp(_)
-        | Message::StampApplied(_) => export::handle_export_message(app, message),
+        | Message::StampApplied(_)
+        // Feature 6: OCR Text Recognition
+        | Message::TriggerOcrCurrentPage
+        | Message::OcrPageCompleted(_, _, _)
+        | Message::ToggleOcrResultsOverlay(_) => export::handle_export_message(app, message),
         // Feature 5: CMYK ↔ RGB Color Inspector (pure, no engine needed)
         Message::ToggleCmykInspector(show) => {
             app.show_cmyk_inspector = show;

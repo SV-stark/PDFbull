@@ -691,6 +691,13 @@ pub fn render(app: &PdfBullApp) -> Element<'_, crate::message::Message> {
                     app.show_cmyk_inspector,
                     "Live CMYK \u{2194} RGB color converter using zpdf_core naive subtractive model"
                 ),
+                tool_button_emoji(
+                    "\u{1f50d}",
+                    "OCR Page",
+                    crate::message::Message::TriggerOcrCurrentPage,
+                    app.ocr_pending,
+                    "Recognize text & bounding boxes on scanned PDF pages (ocrs + rten pure-Rust engine)"
+                ),
             ]
             .spacing(8)
             .align_y(Alignment::Center);

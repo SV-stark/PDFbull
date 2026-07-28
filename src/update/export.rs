@@ -971,6 +971,63 @@ pub fn handle_export_message(app: &mut PdfBullApp, message: Message) -> Task<Mes
             Task::none()
         }
 
+        // ── Feature 6: OCR Text Recognition ──────────────────────────────────────
+        Message::TriggerOcrCurrentPage => {
+            let Some(tab) = app.current_tab() else {
+                return Task::none();
+            };
+            let Some(engine) = &app.engine else {
+                return Task::none();
+            };
+            let doc_id = tab.id;
+            let page_num = tab.current_page;
+            let cmd_tx = engine.cmd_tx.clone();
+            app.ocr_pending = true;
+            app.status_message = Some(format!("Running OCR analysis on Page {}...", page_num + 1));
+            Task::perform(
+                async move {
+                    let (resp_tx, resp_rx) = tokio::sync::oneshot::channel();
+                    if let Err(e) = cmd_tx
+                        .send(crate::commands::PdfCommand::OcrPage(
+                            doc_id, page_num, resp_tx,
+                        ))
+                        .await
+                    {
+                        tracing::error!("Failed to send OcrPage: {e}");
+                        return (doc_id, page_num, Err(crate::models::PdfError::EngineDied));
+                    }
+                    match resp_rx.await {
+                        Ok(res) => (doc_id, page_num, res),
+                        Err(_) => (doc_id, page_num, Err(crate::models::PdfError::EngineDied)),
+                    }
+                },
+                |(id, page, res)| Message::OcrPageCompleted(id, page, res),
+            )
+        }
+        Message::OcrPageCompleted(doc_id, page_num, result) => {
+            app.ocr_pending = false;
+            match result {
+                Ok(ocr_res) => {
+                    let count = ocr_res.lines.len();
+                    app.ocr_results.insert((doc_id, page_num), ocr_res);
+                    app.show_ocr_overlay = true;
+                    app.status_message = Some(format!(
+                        "OCR completed: recognized {} text line(s) on Page {}",
+                        count,
+                        page_num + 1
+                    ));
+                }
+                Err(e) => {
+                    app.status_message = Some(format!("OCR failed: {e}"));
+                }
+            }
+            Task::none()
+        }
+        Message::ToggleOcrResultsOverlay(show) => {
+            app.show_ocr_overlay = show;
+            Task::none()
+        }
+
         _ => Task::none(),
     }
 }

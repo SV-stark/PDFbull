@@ -131,4 +131,11 @@ pub enum PdfCommand {
         String,
         oneshot::Sender<PdfResult<String>>,
     ),
+    /// Feature 6: OCR text recognition for scanned pages.
+    /// args: `doc_id`, `page_num` (0-based), tx
+    OcrPage(
+        DocumentId,
+        usize,
+        oneshot::Sender<PdfResult<crate::ocr::OcrPageResult>>,
+    ),
 }

@@ -103,6 +103,11 @@ pub struct PdfBullApp {
     pub show_cmyk_inspector: bool,
     /// CMYK channel values in 0.0..=1.0 (Cyan, Magenta, Yellow, Key/Black)
     pub cmyk_values: [f64; 4],
+    /// Feature 6: OCR state
+    pub ocr_pending: bool,
+    pub show_ocr_overlay: bool,
+    pub ocr_results:
+        std::collections::HashMap<(crate::models::DocumentId, usize), crate::ocr::OcrPageResult>,
 }
 
 impl Default for PdfBullApp {
@@ -163,6 +168,9 @@ impl Default for PdfBullApp {
             show_stamp_menu: false,
             show_cmyk_inspector: false,
             cmyk_values: [0.0, 0.0, 0.0, 1.0],
+            ocr_pending: false,
+            show_ocr_overlay: false,
+            ocr_results: std::collections::HashMap::new(),
         }
     }
 }

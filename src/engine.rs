@@ -315,6 +315,11 @@ pub fn spawn_engine_thread(cache_size: u64, max_memory_mb: u64) -> EngineState {
                         let res = store.apply_stamp(doc_id, page_num, &label, &output_path);
                         let _ = tx.send(res);
                     }
+                    PdfCommand::OcrPage(doc_id, page_num, tx) => {
+                        reload_if_needed(&mut store, &paths, doc_id);
+                        let res = store.ocr_page(doc_id, page_num);
+                        let _ = tx.send(res);
+                    }
                 }
             }
         });

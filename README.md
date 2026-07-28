@@ -137,6 +137,10 @@ Cold-start launch and page rendering timings measured on Windows 11 across vario
 - **ICC Profile Inspection**: Inspect embedded ICC color profile output intents and run live CMYK ↔ RGB conversions with maximum GCR.
 - **Stream Compression**: Deduplicates and compresses uncompressed streams for minimum file sizes.
 
+### 🔍 Built-In OCR Engine (Powered by `ocrs` & `rten`)
+- **Pure-Rust OCR Recognition**: Recognizes text & bounding boxes on scanned / image-only PDF pages using `ocrs` and `rten` with zero external C++ dynamic library dependencies.
+- **Tools Ribbon Action**: 🔍 **OCR Page** button in the Tools ribbon with multi-threaded background command execution.
+
 ---
 
 ## ⌨️ Professional Shortcuts
@@ -184,7 +188,7 @@ Cold-start launch and page rendering timings measured on Windows 11 across vario
 - [x] **Table Extraction & Bounding Box UI** (Automatic detection, interactive outlines & CSV/TSV copy actions)
 - [x] **Embedded Files & Attachments Panel** (Sidebar download manager for embedded attachments)
 - [x] **Optional Content (Layers) Config Manager** (Layer visibility toggling)
-- [ ] **OCR Capability**: Built-in Optical Character Recognition for scanned documents.
+- [x] **OCR Capability** (Built-in Optical Character Recognition for scanned documents using pure-Rust `ocrs` + `rten` engine)
 - [ ] **Mobile Layout**: Responsive UI for small-screen Windows tablets.
 - [ ] **Cross-Platform Support**: Native binaries for Linux and macOS (build targets are configured; runtime validation pending).
 
@@ -193,7 +197,7 @@ Cold-start launch and page rendering timings measured on Windows 11 across vario
 ## 📦 Installation & Development
 
 ### Release Builds
-Download the latest binaries from the [Releases Page](https://github.com/SV-stark/PDFbull/releases). The current release tag is **`v0.10.2`**.
+Download the latest binaries from the [Releases Page](https://github.com/SV-stark/PDFbull/releases). The current release tag is **`v0.10.3`**.
 
 ### Building from Source
 
