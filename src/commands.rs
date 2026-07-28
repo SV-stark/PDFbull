@@ -110,7 +110,12 @@ pub enum PdfCommand {
         Vec<u8>,
         oneshot::Sender<PdfResult<Vec<crate::models::SigTrustResult>>>,
     ),
-    ConvertPdf(DocumentId, String, String, oneshot::Sender<PdfResult<String>>),
+    ConvertPdf(
+        DocumentId,
+        String,
+        String,
+        oneshot::Sender<PdfResult<String>>,
+    ),
     /// Feature 1: Create a blank PDF from scratch using `DocumentBuilder`.
     /// args: `output_path`, tx
     CreateBlankDocument(String, oneshot::Sender<PdfResult<String>>),

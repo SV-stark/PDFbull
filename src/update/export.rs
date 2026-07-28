@@ -1109,7 +1109,8 @@ pub fn handle_export_message(app: &mut PdfBullApp, message: Message) -> Task<Mes
                     app.status_message = Some(format!("Document successfully exported to: {path}"));
                 }
                 Err(e) => {
-                    if !matches!(e, crate::models::PdfError::OpenFailed(ref s) if s == "Export cancelled") {
+                    if !matches!(e, crate::models::PdfError::OpenFailed(ref s) if s == "Export cancelled")
+                    {
                         app.status_message = Some(format!("Document export failed: {e}"));
                     }
                 }
