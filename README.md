@@ -139,6 +139,7 @@ Cold-start launch and page rendering timings measured on Windows 11 across vario
 
 ### 🔍 Built-In OCR Engine (Powered by `ocrs` & `rten`)
 - **Pure-Rust OCR Recognition**: Recognizes text & bounding boxes on scanned / image-only PDF pages using `ocrs` and `rten` with zero external C++ dynamic library dependencies.
+- **Multilingual Script Support**: Out-of-the-box text line recognition for **Devanagari** (Hindi, Marathi, Sanskrit, Nepali) and **Latin** (English, European languages) scripts.
 - **Tools Ribbon Action**: 🔍 **OCR Page** button in the Tools ribbon with multi-threaded background command execution.
 
 ---
