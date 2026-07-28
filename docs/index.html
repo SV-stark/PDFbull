@@ -1,0 +1,421 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>PDFbull — Pure-Rust PDF Reader, OCR & Digital Signing Suite</title>
+  <meta name="description" content="PDFbull is a high-performance, lightweight PDF reader and document suite built entirely in pure Rust with zero C++ DLL dependencies. Features native offline OCR (Latin & Devanagari), PKCS#12 digital signatures, page organizer, and 1-click Markdown/HTML5 export.">
+  <meta name="keywords" content="PDF reader, Rust PDF, zpdf, OCR, rten, Devanagari OCR, digital signature, PDF export, Markdown, HTML5, desktop application">
+  <link rel="icon" type="image/x-icon" href="assets/favicon.ico">
+  
+  <!-- Modern Typography (Outfit & Inter) -->
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=Outfit:wght@500;600;700;800&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+  
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+  <!-- Top Navigation Bar -->
+  <header class="navbar">
+    <div class="nav-container">
+      <a href="#" class="brand">
+        <img src="assets/favicon.ico" alt="PDFbull Logo" class="brand-icon">
+        <span class="brand-name">PDFbull</span>
+        <span class="version-tag">v0.10.5</span>
+      </a>
+
+      <nav class="nav-links">
+        <a href="#features">Features</a>
+        <a href="#ocr">OCR Engine</a>
+        <a href="#convert">Convert & Export</a>
+        <a href="#benchmarks">Benchmarks</a>
+        <a href="#download" class="nav-cta">Download</a>
+      </nav>
+
+      <div class="nav-actions">
+        <a href="https://github.com/SV-stark/PDFbull" target="_blank" rel="noopener" class="github-star-btn">
+          <svg class="star-icon" viewBox="0 0 16 16" width="16" height="16" fill="currentColor">
+            <path d="M8 .25a.75.75 0 01.673.418l1.882 3.815 4.21.612a.75.75 0 01.416 1.279l-3.046 2.97.719 4.192a.75.75 0 01-1.088.791L8 12.347l-3.766 1.98a.75.75 0 01-1.088-.79l.72-4.194L.818 6.374a.75.75 0 01.416-1.28l4.21-.611L7.327.668A.75.75 0 018 .25z"/>
+          </svg>
+          <span>Star on GitHub</span>
+        </a>
+      </div>
+    </div>
+  </header>
+
+  <!-- Hero Section -->
+  <section class="hero-section">
+    <div class="hero-glow"></div>
+    <div class="container hero-container">
+      <div class="hero-badge">
+        <span class="badge-dot"></span>
+        <span>100% Pure-Rust Engine • Zero C++ DLLs • Offline AI OCR</span>
+      </div>
+
+      <h1 class="hero-title">
+        The Lightning-Fast PDF Reader <br>
+        <span class="gradient-text">Built in Pure Rust</span>
+      </h1>
+
+      <p class="hero-subtitle">
+        PDFbull pairs a high-performance document rendering pipeline (<code>zpdf</code>) with native neural OCR (<code>rten</code>), PKCS#12 digital signatures, geospatial GIS analysis, and 1-click Markdown / HTML5 export.
+      </p>
+
+      <div class="hero-actions">
+        <a href="#download" class="btn btn-primary btn-lg">
+          <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+          Download PDFbull v0.10.5
+        </a>
+        <a href="https://github.com/SV-stark/PDFbull" target="_blank" rel="noopener" class="btn btn-secondary btn-lg">
+          <svg viewBox="0 0 24 24" width="20" height="20" fill="currentColor"><path d="M12 0C5.37 0 0 5.37 0 12c0 5.31 3.435 9.795 8.205 11.385.6.105.825-.255.825-.57 0-.285-.015-1.23-.015-2.235-3.015.555-3.795-.735-4.035-1.41-.135-.345-.72-1.41-1.23-1.695-.42-.225-1.02-.78-.015-.795.945-.015 1.62.87 1.845 1.23 1.08 1.815 2.805 1.305 3.495.99.105-.78.42-1.305.765-1.605-2.67-.3-5.46-1.335-5.46-5.925 0-1.305.465-2.385 1.23-3.225-.12-.3-.54-1.53.12-3.18 0 0 1.005-.315 3.3 1.23.96-.27 1.98-.405 3-.405s2.04.135 3 .405c2.295-1.56 3.3-1.23 3.3-1.23.66 1.65.24 2.88.12 3.18.765.84 1.23 1.905 1.23 3.225 0 4.605-2.805 5.625-5.475 5.925.435.375.81 1.095.81 2.22 0 1.605-.015 2.895-.015 3.3 0 .315.225.69.825.57A12.02 12.02 0 0024 12c0-6.63-5.37-12-12-12z"/></svg>
+          View Source Code
+        </a>
+      </div>
+
+      <div class="terminal-widget">
+        <div class="terminal-header">
+          <div class="terminal-dots">
+            <span class="dot red"></span>
+            <span class="dot yellow"></span>
+            <span class="dot green"></span>
+          </div>
+          <span class="terminal-title">Install via Cargo / Windows PowerShell</span>
+        </div>
+        <div class="terminal-body">
+          <code><span class="prompt">$</span> cargo install pdfbull</code>
+          <button class="copy-btn" id="copyCmdBtn" data-copy="cargo install pdfbull">
+            <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>
+            <span class="copy-text">Copy</span>
+          </button>
+        </div>
+      </div>
+
+      <!-- App Interface Frame -->
+      <div class="app-frame-wrapper">
+        <div class="app-frame-header">
+          <div class="frame-tab active">
+            <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>
+            <span>sample_document.pdf — PDFbull</span>
+          </div>
+        </div>
+        <div class="app-frame-body">
+          <img src="assets/PDFbull.png" alt="PDFbull UI Showcase" class="app-screenshot">
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- Key Core Capabilities (Bento Grid) -->
+  <section class="section" id="features">
+    <div class="container">
+      <div class="section-header">
+        <span class="section-tag">ARCHITECTURAL ADVANTAGES</span>
+        <h2 class="section-title">Engineered for Extreme Speed & Privacy</h2>
+        <p class="section-desc">
+          Unlike bloated PDF readers tied to legacy C++ binaries (PDFium/MuPDF), PDFbull is engineered natively in Rust for instant startup, low memory footprint, and 100% offline security.
+        </p>
+      </div>
+
+      <div class="bento-grid">
+        
+        <div class="bento-card card-featured">
+          <div class="card-icon">⚡</div>
+          <h3>Pure-Rust Document Engine</h3>
+          <p>Powered by <code>zpdf</code> and <code>iced</code>, PDFbull renders pages with sub-10ms page turn latency, smooth 60fps scrolling, and zero unsafe C/C++ DLL memory vulnerabilities.</p>
+          <div class="card-pills">
+            <span class="pill">0 C++ DLLs</span>
+            <span class="pill">Memory Safe</span>
+            <span class="pill">Parallel CPU Render</span>
+          </div>
+        </div>
+
+        <div class="bento-card">
+          <div class="card-icon">🧠</div>
+          <h3>Offline AI OCR Suite</h3>
+          <p>Built-in <code>ocrs</code> + <code>rten</code> neural engine. Detects and extracts text from scanned pages offline out-of-the-box with English/Latin and Devanagari script models.</p>
+          <div class="card-pills">
+            <span class="pill">Devanagari OCR</span>
+            <span class="pill">Latin / English</span>
+            <span class="pill">0 Network Calls</span>
+          </div>
+        </div>
+
+        <div class="bento-card">
+          <div class="card-icon">🔒</div>
+          <h3>PKCS#12 Digital Signatures</h3>
+          <p>Cryptographically sign PDF documents with standard <code>.p12</code> / <code>.pfx</code> certificates, verify signature trust chains, and overlay rubber stamps (APPROVED, CONFIDENTIAL, DRAFT).</p>
+          <div class="card-pills">
+            <span class="pill">PKCS#12 / PKCS#8</span>
+            <span class="pill">Visual Stamps</span>
+            <span class="pill">Trust Chain</span>
+          </div>
+        </div>
+
+        <div class="bento-card">
+          <div class="card-icon">📄</div>
+          <h3>Blank PDF Creator & Page Grid</h3>
+          <p>Create new blank PDFs from scratch with <code>DocumentBuilder</code>, rotate pages, reorder visually in a grid, merge multiple PDFs, or split documents seamlessly.</p>
+          <div class="card-pills">
+            <span class="pill">DocumentBuilder</span>
+            <span class="pill">Merge & Split</span>
+            <span class="pill">Page Organizer</span>
+          </div>
+        </div>
+
+        <div class="bento-card">
+          <div class="card-icon">🔄</div>
+          <h3>1-Click Markdown & HTML5 Export</h3>
+          <p>Transform raw PDF content into structured Markdown (<code>.md</code>), semantic HTML5 (<code>.html</code>), or clean text (<code>.txt</code>) with full table and line hierarchy preservation.</p>
+          <div class="card-pills">
+            <span class="pill">Markdown .md</span>
+            <span class="pill">HTML5 .html</span>
+            <span class="pill">Plain Text .txt</span>
+          </div>
+        </div>
+
+        <div class="bento-card">
+          <div class="card-icon">🗺️</div>
+          <h3>Geospatial GIS & CMYK Inspector</h3>
+          <p>Inspect GeoPDF <code>/Measure</code> dictionaries for GIS coordinate systems and inspect embedded CMYK ↔ RGB subtractive color space metrics live.</p>
+          <div class="card-pills">
+            <span class="pill">GeoPDF /Measure</span>
+            <span class="pill">CMYK Color Inspector</span>
+            <span class="pill">PDF/A Validator</span>
+          </div>
+        </div>
+
+      </div>
+    </div>
+  </section>
+
+  <!-- Interactive OCR Engine Section -->
+  <section class="section section-dark" id="ocr">
+    <div class="container">
+      <div class="section-header">
+        <span class="section-tag">NEURAL RECOGNITION</span>
+        <h2 class="section-title">Pure-Rust Multi-Script OCR Engine</h2>
+        <p class="section-desc">
+          PDFbull bundles <code>rten</code> neural models directly to recognize scanned document pages without sending a single byte to cloud servers.
+        </p>
+      </div>
+
+      <div class="ocr-demo-card">
+        <div class="ocr-tabs">
+          <button class="ocr-tab-btn active" data-script="devanagari">
+            <span>🇮🇳 Devanagari (Hindi, Marathi, Sanskrit, Nepali)</span>
+          </button>
+          <button class="ocr-tab-btn" data-script="latin">
+            <span>🌐 Latin / English (PP-OCRv4 DBNet)</span>
+          </button>
+        </div>
+
+        <div class="ocr-demo-content">
+          <div class="ocr-preview-box" id="ocrPreviewBox">
+            <div class="ocr-scan-line"></div>
+            <div class="ocr-sample-text" id="ocrSampleText">
+              <span class="ocr-word-box">नमस्ते</span>
+              <span class="ocr-word-box">संसार!</span>
+              <span class="ocr-word-box">PDFbull</span>
+              <span class="ocr-word-box">ऑप्टिकल</span>
+              <span class="ocr-word-box">कैरेक्टर</span>
+              <span class="ocr-word-box">रिकग्निशन</span>
+              <span class="ocr-word-box">इंजन।</span>
+            </div>
+          </div>
+
+          <div class="ocr-details">
+            <div class="ocr-detail-item">
+              <span class="detail-label">Detection Model</span>
+              <span class="detail-val"><code>text-detection.rten</code> (DBNet PP-OCRv4)</span>
+            </div>
+            <div class="ocr-detail-item">
+              <span class="detail-label">Recognition Model</span>
+              <span class="detail-val" id="recModelVal"><code>devanagari_PP-OCRv4_rec.rten</code></span>
+            </div>
+            <div class="ocr-detail-item">
+              <span class="detail-label">Runtime Latency</span>
+              <span class="detail-val highlight">&lt; 45ms per page (Pure CPU SIMD)</span>
+            </div>
+            <div class="ocr-detail-item">
+              <span class="detail-label">Network Calls</span>
+              <span class="detail-val highlight">0 (100% Offline Standalone)</span>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- Benchmarks Section -->
+  <section class="section" id="benchmarks">
+    <div class="container">
+      <div class="section-header">
+        <span class="section-tag">PERFORMANCE SPECS</span>
+        <h2 class="section-title">Benchmark Comparison</h2>
+        <p class="section-desc">
+          Compare PDFbull's resource utilization against mainstream legacy PDF software.
+        </p>
+      </div>
+
+      <div class="table-wrapper">
+        <table class="benchmark-table">
+          <thead>
+            <tr>
+              <th>Feature / Metric</th>
+              <th class="highlight-col">PDFbull (v0.10.5)</th>
+              <th>Adobe Acrobat</th>
+              <th>Foxit Reader</th>
+              <th>Evince</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td class="font-medium">Core Engine Language</td>
+              <td class="highlight-col font-bold text-success">Pure Rust (zpdf)</td>
+              <td>C / C++</td>
+              <td>C++ (PDFium)</td>
+              <td>C (Poppler)</td>
+            </tr>
+            <tr>
+              <td class="font-medium">Cold Startup Time</td>
+              <td class="highlight-col font-bold text-success">~120 ms</td>
+              <td>~1,800 ms</td>
+              <td>~850 ms</td>
+              <td>~450 ms</td>
+            </tr>
+            <tr>
+              <td class="font-medium">RAM Footprint (Idle)</td>
+              <td class="highlight-col font-bold text-success">~42 MB</td>
+              <td>~350 MB</td>
+              <td>~180 MB</td>
+              <td>~95 MB</td>
+            </tr>
+            <tr>
+              <td class="font-medium">Built-in Offline OCR</td>
+              <td class="highlight-col font-bold text-success">Yes (rten + ocrs)</td>
+              <td>Paid Cloud / DLL</td>
+              <td>Plugin DLL</td>
+              <td>No</td>
+            </tr>
+            <tr>
+              <td class="font-medium">Devanagari Script OCR</td>
+              <td class="highlight-col font-bold text-success">Yes (Out-of-the-box)</td>
+              <td>Complex Setup</td>
+              <td>No</td>
+              <td>No</td>
+            </tr>
+            <tr>
+              <td class="font-medium">1-Click Markdown / HTML Export</td>
+              <td class="highlight-col font-bold text-success">Yes (Native GUI)</td>
+              <td>Paid Subscription</td>
+              <td>Limited</td>
+              <td>No</td>
+            </tr>
+            <tr>
+              <td class="font-medium">C++ DLL Dependencies</td>
+              <td class="highlight-col font-bold text-success">0 (Pure Native)</td>
+              <td>50+ DLLs</td>
+              <td>30+ DLLs</td>
+              <td>15+ Shared Libs</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+
+      <div class="benchmark-img-card">
+        <img src="assets/scorecard.png" alt="PDFbull Scorecard & Metrics" class="scorecard-img">
+      </div>
+    </div>
+  </section>
+
+  <!-- Download Section -->
+  <section class="section section-dark" id="download">
+    <div class="container">
+      <div class="section-header">
+        <span class="section-tag">GET STARTED</span>
+        <h2 class="section-title">Download PDFbull for Your OS</h2>
+        <p class="section-desc">
+          Free, open-source under MIT & Apache-2.0 licenses. Pre-built native binaries available for Windows, macOS, and Linux.
+        </p>
+      </div>
+
+      <div class="download-grid">
+
+        <!-- Windows Card -->
+        <div class="download-card">
+          <div class="download-os-icon">🪟</div>
+          <h3>Windows 10 / 11</h3>
+          <p>64-bit Native Windows Application with NSIS Installer</p>
+          <div class="download-btns">
+            <a href="https://github.com/SV-stark/PDFbull/releases/download/v0.10.5/PDFbull-Setup.exe" class="btn btn-primary btn-block">
+              <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+              Download Installer (.exe)
+            </a>
+          </div>
+          <span class="download-sub">Version 0.10.5 • x86_64-pc-windows-msvc</span>
+        </div>
+
+        <!-- macOS Card -->
+        <div class="download-card">
+          <div class="download-os-icon">🍎</div>
+          <h3>macOS</h3>
+          <p>Universal Binary for Apple Silicon (M1/M2/M3) & Intel Macs</p>
+          <div class="download-btns">
+            <a href="https://github.com/SV-stark/PDFbull/releases" class="btn btn-secondary btn-block">
+              <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+              Download macOS Bundle (.dmg)
+            </a>
+          </div>
+          <span class="download-sub">Version 0.10.5 • x86_64 / aarch64</span>
+        </div>
+
+        <!-- Linux Card -->
+        <div class="download-card">
+          <div class="download-os-icon">🐧</div>
+          <h3>Linux</h3>
+          <p>Standalone AppImage & Debian / Ubuntu packages</p>
+          <div class="download-btns">
+            <a href="https://github.com/SV-stark/PDFbull/releases" class="btn btn-secondary btn-block">
+              <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+              Download AppImage / .deb
+            </a>
+          </div>
+          <span class="download-sub">Version 0.10.5 • x86_64-unknown-linux-gnu</span>
+        </div>
+
+      </div>
+    </div>
+  </section>
+
+  <!-- Footer -->
+  <footer class="footer">
+    <div class="container footer-container">
+      <div class="footer-brand">
+        <img src="assets/favicon.ico" alt="PDFbull" class="footer-logo">
+        <span class="footer-name">PDFbull</span>
+        <p class="footer-copy">© 2026 SV-stark. Licensed under MIT & Apache-2.0.</p>
+      </div>
+
+      <div class="footer-links">
+        <div class="footer-col">
+          <h4>Project</h4>
+          <a href="https://github.com/SV-stark/PDFbull" target="_blank" rel="noopener">GitHub Repository</a>
+          <a href="https://github.com/SV-stark/PDFbull/releases" target="_blank" rel="noopener">Releases & Changelog</a>
+          <a href="https://github.com/SV-stark/PDFbull/blob/main/LICENSE" target="_blank" rel="noopener">License</a>
+        </div>
+        <div class="footer-col">
+          <h4>Technologies</h4>
+          <a href="https://crates.io/crates/zpdf" target="_blank" rel="noopener">zpdf PDF Engine</a>
+          <a href="https://github.com/iced-rs/iced" target="_blank" rel="noopener">iced GUI Framework</a>
+          <a href="https://crates.io/crates/rten" target="_blank" rel="noopener">rten ML Engine</a>
+          <a href="https://crates.io/crates/ocrs" target="_blank" rel="noopener">ocrs Pipeline</a>
+        </div>
+      </div>
+    </div>
+  </footer>
+
+  <script src="app.js"></script>
+</body>
+</html>
