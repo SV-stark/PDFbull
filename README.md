@@ -177,7 +177,7 @@ Cold-start launch and page rendering timings measured on Windows 11 across vario
 ## 📦 Installation & Development
 
 ### Release Builds
-Download the latest binaries from the [Releases Page](https://github.com/SV-stark/PDFbull/releases). The current release tag is **`v0.10.0`**.
+Download the latest binaries from the [Releases Page](https://github.com/SV-stark/PDFbull/releases). The current release tag is **`v0.10.1`**.
 
 ### Building from Source
 
@@ -201,7 +201,7 @@ cargo build --release
 PDFbull uses [cargo-dist](https://github.com/axodotdev/cargo-dist) for release artifacts. Configured targets include `x86_64-pc-windows-msvc`, `aarch64-apple-darwin`, `x86_64-apple-darwin`, `aarch64-unknown-linux-gnu`, and `x86_64-unknown-linux-gnu`. To plan a release:
 
 ```bash
-dist host --steps=create --tag=v0.10.0 --output-format=json
+dist host --steps=create --tag=v0.10.1 --output-format=json
 ```
 
 ---

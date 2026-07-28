@@ -94,11 +94,8 @@ fn main() -> iced::Result {
         return Ok(());
     }
 
-    let icon = iced::window::icon::from_file_data(
-        include_bytes!("../PDFbull.ico"),
-        Some(image::ImageFormat::Ico),
-    )
-    .ok();
+    const ICON_RGBA: &[u8] = include_bytes!("assets/icon_32x32.rgba");
+    let icon = iced::window::icon::from_rgba(ICON_RGBA.to_vec(), 32, 32).ok();
 
     let res = iced::application(
         app::PdfBullApp::default,
