@@ -1357,8 +1357,10 @@ impl DocumentStore {
             };
 
             let mut spans: Vec<zpdf::TextSpan> = Vec::new();
+            let eff_box = page.effective_box();
             {
-                let interp = ContentInterpreter::new(page.effective_box())
+                let interp = ContentInterpreter::new(eff_box)
+                    .with_page_rotation(page.rotate)
                     .with_fonts(&mut fonts)
                     .with_document(doc.file(), &page.resources)
                     .with_images(&mut images)
@@ -1366,7 +1368,6 @@ impl DocumentStore {
                 let _ = interp.interpret(&content);
             }
 
-            let page_height = page.effective_box().height() as f32;
             let mut full_text = String::new();
             let mut span_offsets = Vec::new();
 
@@ -1418,14 +1419,18 @@ impl DocumentStore {
                     .find(|(s, e, _)| orig_start >= *s && orig_start < *e)
                 {
                     let first_span = &spans[span_idx];
-                    let y_top_down = page_height - first_span.y as f32 - first_span.size;
+                    let y_top_down = (eff_box.y1 - first_span.y - first_span.size as f64) as f32;
+                    let x_left = (first_span.x - eff_box.x0) as f32;
+                    let span_w = (first_span.advance.abs() as f32).max(12.0);
+                    let span_h = (first_span.size).max(12.0);
+
                     results.push(SearchResultItem {
                         page_index: page_idx,
                         text: matched_text,
                         y: y_top_down,
-                        x: first_span.x as f32,
-                        width: first_span.advance.abs() as f32,
-                        height: first_span.size,
+                        x: x_left,
+                        width: span_w,
+                        height: span_h,
                     });
                 }
 
@@ -1683,6 +1688,70 @@ impl DocumentStore {
             });
         }
         Ok(results)
+    }
+
+    pub fn convert_pdf_doc_by_id(
+        &self,
+        doc_id: DocumentId,
+        mode: &str,
+        format: &str,
+    ) -> PdfResult<String> {
+        let doc = self
+            .documents
+            .get(&doc_id)
+            .ok_or(PdfError::EngineError(EngineErrorKind::DocumentNotFound))?;
+        let page_indices: Vec<usize> = (0..doc.page_count()).collect();
+        let conv_mode = if mode.eq_ignore_ascii_case("rich") {
+            zpdf::ConversionMode::Rich
+        } else {
+            zpdf::ConversionMode::TextOnly
+        };
+        let opts = zpdf::ConversionOptions {
+            mode: conv_mode,
+            use_structure: true,
+        };
+        let converted = zpdf::convert_pdf(doc, &page_indices, opts).map_err(|e| {
+            PdfError::EngineError(EngineErrorKind::Generic(format!(
+                "Conversion failed: {e:?}"
+            )))
+        })?;
+
+        match format.to_lowercase().as_str() {
+            "md" | "markdown" => {
+                let mut out = String::new();
+                for page in &converted.pages {
+                    let _ = writeln!(out, "## Page {}\n\n{}\n", page.index + 1, page.text);
+                }
+                Ok(out)
+            }
+            "html" => {
+                let mut out = String::from(
+                    "<!DOCTYPE html>\n<html>\n<head>\n<meta charset=\"utf-8\">\n<title>Converted PDF</title>\n</head>\n<body>\n",
+                );
+                for page in &converted.pages {
+                    let escaped = page
+                        .text
+                        .replace('&', "&amp;")
+                        .replace('<', "&lt;")
+                        .replace('>', "&gt;");
+                    let _ = writeln!(
+                        out,
+                        "<section><h2>Page {}</h2><pre>{}</pre></section>",
+                        page.index + 1,
+                        escaped
+                    );
+                }
+                out.push_str("</body>\n</html>\n");
+                Ok(out)
+            }
+            _ => {
+                let mut out = String::new();
+                for page in &converted.pages {
+                    let _ = writeln!(out, "--- Page {} ---\n\n{}\n", page.index + 1, page.text);
+                }
+                Ok(out)
+            }
+        }
     }
 
     pub fn convert_pdf_doc(&self, path: &str, mode: &str, format: &str) -> PdfResult<String> {

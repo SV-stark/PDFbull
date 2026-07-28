@@ -286,6 +286,7 @@ pub enum RibbonTab {
     View,
     Annotate,
     Tools,
+    Convert,
 }
 
 #[derive(Debug, Clone, Copy, serde::Serialize, serde::Deserialize, PartialEq, Eq, Default)]

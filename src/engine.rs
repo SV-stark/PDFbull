@@ -296,8 +296,9 @@ pub fn spawn_engine_thread(cache_size: u64, max_memory_mb: u64) -> EngineState {
                         let res = store.verify_signature_trust(doc_id, &anchors);
                         let _ = tx.send(res);
                     }
-                    PdfCommand::ConvertPdf(path, mode, format, tx) => {
-                        let res = store.convert_pdf_doc(&path, &mode, &format);
+                    PdfCommand::ConvertPdf(doc_id, mode, format, tx) => {
+                        reload_if_needed(&mut store, &paths, doc_id);
+                        let res = store.convert_pdf_doc_by_id(doc_id, &mode, &format);
                         let _ = tx.send(res);
                     }
                     PdfCommand::CreateBlankDocument(output_path, tx) => {

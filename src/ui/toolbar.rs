@@ -76,6 +76,19 @@ pub fn render(app: &PdfBullApp) -> Element<'_, crate::message::Message> {
         .style(theme::button_ribbon_tab(
             app.active_ribbon_tab == RibbonTab::Tools
         )),
+        button(
+            row![
+                text("🔄").size(13),
+                text("Convert").size(12).font(INTER_BOLD)
+            ]
+            .spacing(6)
+            .align_y(Alignment::Center)
+        )
+        .on_press(crate::message::Message::SetRibbonTab(RibbonTab::Convert))
+        .padding([6, 14])
+        .style(theme::button_ribbon_tab(
+            app.active_ribbon_tab == RibbonTab::Convert
+        )),
     ]
     .spacing(4)
     .align_y(Alignment::Center);
@@ -704,6 +717,52 @@ pub fn render(app: &PdfBullApp) -> Element<'_, crate::message::Message> {
 
             container(
                 row![tool_action_buttons, Space::new().width(Length::Fill)]
+                    .spacing(12)
+                    .padding([0, 16])
+                    .align_y(Alignment::Center),
+            )
+            .width(Length::Fill)
+            .height(Length::Fixed(48.0))
+            .style(|_| iced::widget::container::Style {
+                background: Some(theme::COLOR_BG_SIDEBAR.into()),
+                border: Border {
+                    width: 1.0,
+                    color: Color::from_rgb(0.12, 0.14, 0.18),
+                    ..Default::default()
+                },
+                ..Default::default()
+            })
+            .into()
+        }
+        RibbonTab::Convert => {
+            let convert_buttons = row![
+                tool_button_emoji(
+                    "📝",
+                    "To Markdown",
+                    crate::message::Message::ExportDocumentMarkdown,
+                    false,
+                    "Export entire PDF to structured Markdown (.md)"
+                ),
+                tool_button_emoji(
+                    "🌐",
+                    "To HTML5",
+                    crate::message::Message::ExportDocumentHtml,
+                    false,
+                    "Export entire PDF to semantic HTML5 (.html)"
+                ),
+                tool_button_emoji(
+                    "📄",
+                    "To Plain Text",
+                    crate::message::Message::ExportDocumentTxt,
+                    false,
+                    "Export entire PDF to plain text (.txt)"
+                ),
+            ]
+            .spacing(8)
+            .align_y(Alignment::Center);
+
+            container(
+                row![convert_buttons, Space::new().width(Length::Fill)]
                     .spacing(12)
                     .padding([0, 16])
                     .align_y(Alignment::Center),

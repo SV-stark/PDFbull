@@ -52,7 +52,7 @@ impl OcrScript {
         "text-detection.rten"
     }
 
-    /// Resolve model directory path from executable location, local workspace, or AppData storage
+    /// Resolve model directory path from executable location, local workspace, or `AppData` storage
     pub fn resolve_model_dir() -> std::path::PathBuf {
         let exe_dir = std::env::current_exe()
             .ok()

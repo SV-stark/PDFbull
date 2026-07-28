@@ -1037,6 +1037,86 @@ pub fn handle_export_message(app: &mut PdfBullApp, message: Message) -> Task<Mes
             Task::none()
         }
 
+        // ── Document Export & Conversion (Markdown, HTML5, Plain Text) ─────────
+        Message::ExportDocumentMarkdown
+        | Message::ExportDocumentHtml
+        | Message::ExportDocumentTxt => {
+            let Some(tab) = app.current_tab() else {
+                return Task::none();
+            };
+            let doc_id = tab.id;
+            let Some(engine) = &app.engine else {
+                return Task::none();
+            };
+            let cmd_tx = engine.cmd_tx.clone();
+
+            let (ext, filter_label, mode, format) = match message {
+                Message::ExportDocumentMarkdown => ("md", "Markdown Document", "Rich", "Markdown"),
+                Message::ExportDocumentHtml => ("html", "HTML5 Document", "Rich", "HTML"),
+                _ => ("txt", "Plain Text", "TextOnly", "TXT"),
+            };
+
+            let default_name = format!("export.{}", ext);
+            app.status_message = Some(format!("Exporting document to {}...", filter_label));
+
+            Task::perform(
+                async move {
+                    let file = rfd::AsyncFileDialog::new()
+                        .add_filter(filter_label, &[ext])
+                        .set_file_name(&default_name)
+                        .save_file()
+                        .await;
+
+                    let Some(f) = file else {
+                        return Err(crate::models::PdfError::from("Export cancelled"));
+                    };
+
+                    let out_path = f.path().to_path_buf();
+                    let (resp_tx, resp_rx) = tokio::sync::oneshot::channel();
+                    if let Err(e) = cmd_tx
+                        .send(PdfCommand::ConvertPdf(
+                            doc_id,
+                            mode.to_string(),
+                            format.to_string(),
+                            resp_tx,
+                        ))
+                        .await
+                    {
+                        tracing::error!("Failed to send ConvertPdf command: {e}");
+                        return Err(crate::models::PdfError::EngineDied);
+                    }
+
+                    match resp_rx.await {
+                        Ok(Ok(converted_text)) => {
+                            if let Err(e) = std::fs::write(&out_path, converted_text) {
+                                Err(crate::models::PdfError::from(format!(
+                                    "Failed to write exported file: {e}"
+                                )))
+                            } else {
+                                Ok(out_path.to_string_lossy().to_string())
+                            }
+                        }
+                        Ok(Err(e)) => Err(e),
+                        Err(_) => Err(crate::models::PdfError::EngineDied),
+                    }
+                },
+                Message::DocumentExported,
+            )
+        }
+        Message::DocumentExported(res) => {
+            match res {
+                Ok(path) => {
+                    app.status_message = Some(format!("Document successfully exported to: {path}"));
+                }
+                Err(e) => {
+                    if !matches!(e, crate::models::PdfError::OpenFailed(ref s) if s == "Export cancelled") {
+                        app.status_message = Some(format!("Document export failed: {e}"));
+                    }
+                }
+            }
+            Task::none()
+        }
+
         _ => Task::none(),
     }
 }

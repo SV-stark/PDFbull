@@ -195,4 +195,14 @@ pub enum Message {
     ),
     /// Toggle visibility of OCR bounding box overlay on current page
     ToggleOcrResultsOverlay(bool),
+
+    // ── Document Export & Conversion ─────────────────────────────────────────
+    /// Export active PDF to Markdown (.md)
+    ExportDocumentMarkdown,
+    /// Export active PDF to HTML5 (.html)
+    ExportDocumentHtml,
+    /// Export active PDF to Plain Text (.txt)
+    ExportDocumentTxt,
+    /// Document conversion/export finished with output path or error
+    DocumentExported(crate::models::PdfResult<String>),
 }
