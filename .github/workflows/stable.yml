@@ -32,11 +32,28 @@ jobs:
       - name: Build PDFbull (Release)
         run: cargo build --release
 
+      - name: Fetch OCR Models (.rten)
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force -Path "models"
+          Invoke-WebRequest -Uri "https://ocrs-models.s3-accelerate.amazonaws.com/text-detection.rten" -OutFile "models/text-detection.rten"
+          Invoke-WebRequest -Uri "https://ocrs-models.s3-accelerate.amazonaws.com/text-recognition.rten" -OutFile "models/text-recognition.rten"
+          
+          # Attempt downloading genuine Devanagari PP-OCRv4 model from repo release assets
+          $devUrl = "https://github.com/SV-stark/PDFbull/releases/download/models/devanagari_PP-OCRv4_rec.rten"
+          try {
+              Invoke-WebRequest -Uri $devUrl -OutFile "models/devanagari_PP-OCRv4_rec.rten" -ErrorAction Stop
+          } catch {
+              Write-Warning "Genuine Devanagari model not found at $devUrl; using text-recognition fallback."
+              Copy-Item "models/text-recognition.rten" "models/devanagari_PP-OCRv4_rec.rten"
+          }
+
       - name: Prepare Release Artifacts
         shell: pwsh
         run: |
-          mkdir release_dist
+          New-Item -ItemType Directory -Force -Path "release_dist/models"
           Copy-Item -Path "target/release/pdfbull.exe" -Destination "release_dist/"
+          Copy-Item -Path "models/*" -Destination "release_dist/models/"
           Compress-Archive -Path release_dist/* -DestinationPath "PDFbull-Portable.zip"
 
       - name: Install NSIS
@@ -45,6 +62,47 @@ jobs:
           choco install nsis -y --no-progress
           # Persist NSIS to PATH for all subsequent steps via GITHUB_PATH
           "C:\Program Files (x86)\NSIS" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+
+      - name: Generate NSIS GUI Assets
+        shell: pwsh
+        run: |
+          python -c "
+          from PIL import Image, ImageDraw
+          import os
+
+          os.makedirs('installer_assets', exist_ok=True)
+          wbmp = Image.new('RGB', (164, 314), color=(15, 17, 26))
+          draw = ImageDraw.Draw(wbmp)
+          for y in range(314):
+              r = int(15 + (35 - 15) * (y / 314))
+              g = int(17 + (40 - 17) * (y / 314))
+              b = int(26 + (65 - 26) * (y / 314))
+              draw.line([(0, y), (164, y)], fill=(r, g, b))
+          draw.line([(0, 0), (164, 0)], fill=(99, 102, 241), width=3)
+          draw.line([(0, 313), (164, 313)], fill=(16, 185, 129), width=2)
+
+          if os.path.exists('PDFbull.png'):
+              logo = Image.open('PDFbull.png').convert('RGBA')
+              logo.thumbnail((96, 96), Image.Resampling.LANCZOS)
+              wbmp.paste(logo, ((164 - logo.width) // 2, 40), logo)
+
+          wbmp.save('installer_assets/welcome.bmp', 'BMP')
+
+          hbmp = Image.new('RGB', (150, 57), color=(22, 27, 34))
+          hdraw = ImageDraw.Draw(hbmp)
+          for x in range(150):
+              r = int(22 + (40 - 22) * (x / 150))
+              g = int(27 + (45 - 27) * (x / 150))
+              b = int(34 + (70 - 34) * (x / 150))
+              hdraw.line([(x, 0), (x, 57)], fill=(r, g, b))
+
+          if os.path.exists('PDFbull.png'):
+              hlogo = Image.open('PDFbull.png').convert('RGBA')
+              hlogo.thumbnail((44, 44), Image.Resampling.LANCZOS)
+              hbmp.paste(hlogo, (150 - hlogo.width - 6, (57 - hlogo.height) // 2), hlogo)
+
+          hbmp.save('installer_assets/header.bmp', 'BMP')
+          "
 
       - name: Build NSIS Installer
         shell: pwsh

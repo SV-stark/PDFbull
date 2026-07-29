@@ -5,12 +5,29 @@ OutFile "PDFbull-Setup.exe"
 InstallDir "$PROGRAMFILES64\PDFbull"
 RequestExecutionLevel admin
 
-!define MUI_ICON "${NSISDIR}\Contrib\Graphics\Icons\modern-install.ico"
-!define MUI_UNICON "${NSISDIR}\Contrib\Graphics\Icons\modern-uninstall.ico"
+; Branding and Graphics
+BrandingText "PDFbull - Pure-Rust PDF & Neural OCR"
+!define MUI_ICON "PDFbull.ico"
+!define MUI_UNICON "PDFbull.ico"
+
+!define MUI_HEADERIMAGE
+!define MUI_HEADERIMAGE_BITMAP "installer_assets\header.bmp"
+!define MUI_HEADERIMAGE_RIGHT
+
+!define MUI_WELCOMEFINISHPAGE_BITMAP "installer_assets\welcome.bmp"
+!define MUI_UNWELCOMEFINISHPAGE_BITMAP "installer_assets\welcome.bmp"
+
+; Welcome Page Customization
+!define MUI_WELCOMEPAGE_TITLE "Welcome to PDFbull Setup"
+!define MUI_WELCOMEPAGE_TEXT "PDFbull is a high-performance PDF reader and workspace powered by pure-Rust rendering (zpdf) and built-in neural OCR (rten).\r\n\r\nThis setup wizard will install PDFbull along with Latin and Devanagari neural OCR models.\r\n\r\nClick Next to continue."
 
 !insertmacro MUI_PAGE_WELCOME
 !insertmacro MUI_PAGE_DIRECTORY
 !insertmacro MUI_PAGE_INSTFILES
+
+; Finish Page Customization
+!define MUI_FINISHPAGE_RUN "$INSTDIR\pdfbull.exe"
+!define MUI_FINISHPAGE_RUN_TEXT "Launch PDFbull Now"
 !insertmacro MUI_PAGE_FINISH
 
 !insertmacro MUI_UNPAGE_CONFIRM
@@ -20,6 +37,7 @@ Section "Install"
     SetOutPath "$INSTDIR"
     
     File "release_dist\pdfbull.exe"
+    File /nonfatal "PDFbull.ico"
     
     SetOutPath "$INSTDIR\models"
     File /nonfatal /r "models\*.*"
@@ -28,9 +46,9 @@ Section "Install"
     WriteUninstaller "$INSTDIR\Uninstall.exe"
     
     CreateDirectory "$SMPROGRAMS\PDFbull"
-    CreateShortcut "$SMPROGRAMS\PDFbull\PDFbull.lnk" "$INSTDIR\pdfbull.exe"
+    CreateShortcut "$SMPROGRAMS\PDFbull\PDFbull.lnk" "$INSTDIR\pdfbull.exe" "" "$INSTDIR\PDFbull.ico"
     CreateShortcut "$SMPROGRAMS\PDFbull\Uninstall.lnk" "$INSTDIR\Uninstall.exe"
-    CreateShortcut "$DESKTOP\PDFbull.lnk" "$INSTDIR\pdfbull.exe"
+    CreateShortcut "$DESKTOP\PDFbull.lnk" "$INSTDIR\pdfbull.exe" "" "$INSTDIR\PDFbull.ico"
     
     WriteRegStr HKLM "Software\Microsoft\Windows\CurrentVersion\Uninstall\PDFbull" "DisplayName" "PDFbull"
     WriteRegStr HKLM "Software\Microsoft\Windows\CurrentVersion\Uninstall\PDFbull" "UninstallString" "$\"$INSTDIR\Uninstall.exe$\""
@@ -42,6 +60,7 @@ SectionEnd
 
 Section "Uninstall"
     Delete "$INSTDIR\pdfbull.exe"
+    Delete "$INSTDIR\PDFbull.ico"
     Delete "$INSTDIR\Uninstall.exe"
     RMDir /r "$INSTDIR\models"
     RMDir "$INSTDIR"
@@ -56,5 +75,4 @@ Section "Uninstall"
     
     RMDir /r "$APPDATA\pdfbull"
     RMDir /r "$LOCALAPPDATA\pdfbull"
-    
 SectionEnd
