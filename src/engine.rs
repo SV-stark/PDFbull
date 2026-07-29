@@ -249,6 +249,12 @@ pub fn spawn_engine_thread(cache_size: u64, max_memory_mb: u64) -> EngineState {
                             crate::pdf_engine::DocumentStore::add_watermark(&input, &text, &output);
                         let _ = tx.send(res);
                     }
+                    PdfCommand::AddHeaderFooter(input, header, footer, output, tx) => {
+                        let res = crate::pdf_engine::DocumentStore::add_header_footer(
+                            &input, &header, &footer, &output,
+                        );
+                        let _ = tx.send(res);
+                    }
                     PdfCommand::Optimize(input, output, tx) => {
                         let res = store.optimize_pdf(&input, &output);
                         let _ = tx.send(res);

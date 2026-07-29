@@ -2299,6 +2299,88 @@ impl DocumentStore {
         Ok(output_path.to_string())
     }
 
+    /// Feature: Add Header & Footer Page Numbers ("Page X of Y")
+    #[allow(clippy::literal_string_with_formatting_args)]
+    pub fn add_header_footer(
+        input_path: &str,
+        header_text: &str,
+        footer_format: &str,
+        output_path: &str,
+    ) -> PdfResult<String> {
+        let mut doc =
+            Document::load(input_path).map_err(|e| PdfError::OpenFailed(e.to_string()))?;
+
+        let pages: Vec<ObjectId> = doc.get_pages().into_values().collect();
+        let page_count = pages.len();
+
+        let font_ref_id = doc.add_object(Object::Dictionary(lopdf::Dictionary::from_iter(vec![
+            ("Type", Object::Name(b"Font".to_vec())),
+            ("Subtype", Object::Name(b"Type1".to_vec())),
+            ("BaseFont", Object::Name(b"Helvetica".to_vec())),
+        ])));
+
+        for (idx, &page_id) in pages.iter().enumerate() {
+            let page_num = idx + 1;
+            let formatted_footer = footer_format
+                .replace("{page}", &page_num.to_string())
+                .replace("{pages}", &page_count.to_string());
+
+            let mut content = pdf_writer::Content::new();
+            content.begin_text();
+            content.set_font(pdf_writer::Name(b"F1"), 10.0);
+            content.set_fill_rgb(0.2, 0.2, 0.2);
+
+            if !header_text.is_empty() {
+                content.set_text_matrix([1.0, 0.0, 0.0, 1.0, 50.0, 760.0]);
+                content.show(pdf_writer::Str(header_text.as_bytes()));
+            }
+
+            if !formatted_footer.is_empty() {
+                content.set_text_matrix([1.0, 0.0, 0.0, 1.0, 50.0, 30.0]);
+                content.show(pdf_writer::Str(formatted_footer.as_bytes()));
+            }
+
+            content.end_text();
+
+            let hf_stream = lopdf::Stream::new(lopdf::Dictionary::new(), content.finish().to_vec());
+            let hf_id = doc.add_object(hf_stream);
+
+            let existing_contents = doc
+                .get_page_contents(page_id)
+                .into_iter()
+                .map(Object::Reference)
+                .collect::<Vec<_>>();
+            let mut all_contents = existing_contents;
+            all_contents.push(Object::Reference(hf_id));
+
+            if let Some(page_obj) = doc.objects.get_mut(&page_id) {
+                if let Ok(dict) = page_obj.as_dict_mut() {
+                    dict.set("Contents", Object::Array(all_contents));
+                    dict.set(
+                        "Resources",
+                        Object::Dictionary(lopdf::Dictionary::from_iter(vec![(
+                            "Font",
+                            Object::Dictionary(lopdf::Dictionary::from_iter(vec![(
+                                "F1",
+                                Object::Reference(font_ref_id),
+                            )])),
+                        )])),
+                    );
+                }
+            }
+        }
+
+        doc.save(output_path)
+            .map_err(|e| PdfError::IoError(e.to_string()))?;
+
+        tracing::info!(
+            "Header/Footer applied to {} pages -> {}",
+            page_count,
+            output_path
+        );
+        Ok(output_path.to_string())
+    }
+
     // ── Feature 1: New Blank Document (DocumentBuilder) ─────────────────────
 
     /// Create a brand-new blank PDF document from scratch and write it to `output_path`.
@@ -2573,6 +2655,30 @@ impl DocumentStore {
             script.name()
         );
         Ok(crate::ocr::OcrPageResult::new(page_num, lines))
+    }
+
+    /// Perform multi-page OCR text recognition across all pages of a document.
+    pub fn ocr_document_parallel(
+        &self,
+        doc_id: DocumentId,
+        script: crate::ocr::OcrScript,
+    ) -> PdfResult<Vec<crate::ocr::OcrPageResult>> {
+        let page_count = self
+            .documents
+            .get(&doc_id)
+            .map(zpdf::PdfDocument::page_count)
+            .unwrap_or(0);
+
+        let results: Vec<crate::ocr::OcrPageResult> = (0..page_count)
+            .filter_map(|page_num| self.ocr_page(doc_id, page_num, script).ok())
+            .collect();
+
+        tracing::info!(
+            "Document OCR finished for doc_id {:?} across {} pages",
+            doc_id,
+            page_count
+        );
+        Ok(results)
     }
 }
 

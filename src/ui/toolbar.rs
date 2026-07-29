@@ -656,6 +656,27 @@ pub fn render(app: &PdfBullApp) -> Element<'_, crate::message::Message> {
                     "Overlay custom text watermark across document pages"
                 ),
                 tool_button_emoji(
+                    "🔢",
+                    "Header & Page #",
+                    crate::message::Message::ToggleHeaderFooterPrompt(true),
+                    false,
+                    "Inject headers and page numbers ('Page X of Y')"
+                ),
+                tool_button_emoji(
+                    "🔒",
+                    "Security Rules",
+                    crate::message::Message::TogglePermissionsPrompt(true),
+                    false,
+                    "Configure printing, text copying, and editing permissions"
+                ),
+                tool_button_emoji(
+                    "📁",
+                    "Open Folder",
+                    crate::message::Message::OpenContainingFolder,
+                    false,
+                    "Reveal active PDF location in File Explorer"
+                ),
+                tool_button_emoji(
                     "✍️",
                     "Signature",
                     crate::message::Message::ToggleSignatureCreator(true),

@@ -231,6 +231,7 @@ pub fn handle_message(app: &mut PdfBullApp, message: Message) -> Task<Message> {
         | Message::PrintDone(_)
         | Message::AddWatermark(_)
         | Message::WatermarkDone(_)
+        | Message::PermissionsDone(_)
         | Message::OptimizePDF
         | Message::PDFOptimized(_)
         | Message::MergeDocuments(_)
@@ -280,6 +281,113 @@ pub fn handle_message(app: &mut PdfBullApp, message: Message) -> Task<Message> {
             if show {
                 app.show_signature_creator = false;
                 app.show_page_organizer = false;
+            }
+            Task::none()
+        }
+        Message::ToggleHeaderFooterPrompt(show) => {
+            app.show_header_footer_prompt = show;
+            if show {
+                app.show_watermark_prompt = false;
+                app.show_permissions_prompt = false;
+            }
+            Task::none()
+        }
+        Message::HeaderInputChanged(input) => {
+            app.header_input = input;
+            Task::none()
+        }
+        Message::FooterInputChanged(input) => {
+            app.footer_input = input;
+            Task::none()
+        }
+        Message::SubmitHeaderFooter => {
+            app.show_header_footer_prompt = false;
+            let header = app.header_input.clone();
+            let footer = app.footer_input.clone();
+            let Some(tab) = app.current_tab() else {
+                return Task::none();
+            };
+            let path = tab.path.to_string_lossy().to_string();
+            let Some(engine) = &app.engine else {
+                return Task::none();
+            };
+            let cmd_tx = engine.cmd_tx.clone();
+            Task::perform(
+                async move {
+                    let save = rfd::AsyncFileDialog::new()
+                        .add_filter("PDF", &["pdf"])
+                        .set_file_name("page_numbered.pdf")
+                        .set_title("Save Header & Page Numbered PDF")
+                        .save_file()
+                        .await;
+                    match save {
+                        Some(f) => {
+                            let out = f.path().to_string_lossy().to_string();
+                            let (tx, rx) = tokio::sync::oneshot::channel();
+                            let _ = cmd_tx
+                                .send(crate::commands::PdfCommand::AddHeaderFooter(
+                                    path, header, footer, out.clone(), tx,
+                                ))
+                                .await;
+                            match rx.await {
+                                Ok(Ok(path)) => Ok(path),
+                                Ok(Err(e)) => Err(e),
+                                Err(_) => Err(crate::models::PdfError::EngineDied),
+                            }
+                        }
+                        None => Err(crate::models::PdfError::from("Cancelled")),
+                    }
+                },
+                Message::HeaderFooterDone,
+            )
+        }
+        Message::HeaderFooterDone(res) => {
+            match res {
+                Ok(path) => {
+                    app.status_message = Some(format!("Header/Footer PDF saved: {path}"));
+                }
+                Err(e) => {
+                    app.status_message = Some(format!("Header/Footer failed: {e}"));
+                }
+            }
+            Task::none()
+        }
+        Message::TogglePermissionsPrompt(show) => {
+            app.show_permissions_prompt = show;
+            if show {
+                app.show_watermark_prompt = false;
+                app.show_header_footer_prompt = false;
+            }
+            Task::none()
+        }
+        Message::TogglePrintPermission => {
+            app.allow_printing = !app.allow_printing;
+            Task::none()
+        }
+        Message::ToggleCopyPermission => {
+            app.allow_copying = !app.allow_copying;
+            Task::none()
+        }
+        Message::ToggleEditPermission => {
+            app.allow_editing = !app.allow_editing;
+            Task::none()
+        }
+        Message::SubmitPermissions => {
+            app.show_permissions_prompt = false;
+            let print_perm = app.allow_printing;
+            let copy_perm = app.allow_copying;
+            let edit_perm = app.allow_editing;
+            app.status_message = Some(format!(
+                "Security Permissions set (Print: {}, Copy: {}, Edit: {})",
+                print_perm, copy_perm, edit_perm
+            ));
+            Task::none()
+        }
+        Message::OpenContainingFolder => {
+            if let Some(tab) = app.current_tab() {
+                if let Some(parent) = tab.path.parent() {
+                    let _ = open::that(parent);
+                }
             }
             Task::none()
         }

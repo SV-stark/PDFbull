@@ -12,6 +12,7 @@ use crate::ui_settings::settings_view;
 use crate::ui_welcome::welcome_view;
 use iced::widget::{
     Space, Stack, button, canvas, column, container, image, row, scrollable, text, text_input,
+    toggler,
 };
 use iced::{Alignment, Border, Color, Element, Length, Shadow, Vector};
 
@@ -164,6 +165,167 @@ fn watermark_prompt_view(app: &PdfBullApp) -> Element<'_, crate::message::Messag
     )
     .padding(25)
     .width(Length::Fixed(440.0))
+    .style(|_| container::Style {
+        background: Some(Color::from_rgb8(30, 32, 36).into()),
+        border: Border {
+            radius: theme::BORDER_RADIUS_LG.into(),
+            width: 1.0,
+            color: Color::from_rgb8(54, 56, 62),
+        },
+        shadow: Shadow {
+            color: Color::from_rgba(0.0, 0.0, 0.0, 0.45),
+            offset: Vector::new(0.0, 8.0),
+            blur_radius: 18.0,
+        },
+        ..Default::default()
+    });
+
+    container(modal_content)
+        .width(Length::Fill)
+        .height(Length::Fill)
+        .center_x(Length::Fill)
+        .center_y(Length::Fill)
+        .style(|_| container::Style {
+            background: Some(Color::from_rgba(0.0, 0.0, 0.0, 0.65).into()),
+            ..Default::default()
+        })
+        .into()
+}
+
+// ── Overlay Modal: Header & Footer ───────────────────────────────────────────
+fn header_footer_prompt_view(app: &PdfBullApp) -> Element<'_, crate::message::Message> {
+    let modal_content = container(
+        column![
+            text("🔢 Header & Page Numbering")
+                .size(18)
+                .font(INTER_BOLD)
+                .style(|_| text::Style {
+                    color: Some(Color::WHITE)
+                }),
+            Space::new().height(6),
+            text("Inject top header text and bottom page numbers ('Page {page} of {pages}'):")
+                .size(13)
+                .font(INTER_REGULAR)
+                .style(|_| text::Style {
+                    color: Some(theme::COLOR_TEXT_DIM)
+                }),
+            Space::new().height(12),
+            text("Header Text:").size(12).font(INTER_BOLD),
+            text_input("e.g. PDFbull Document Header", &app.header_input)
+                .on_input(crate::message::Message::HeaderInputChanged)
+                .padding(8)
+                .size(13),
+            Space::new().height(10),
+            text("Footer / Page Format:").size(12).font(INTER_BOLD),
+            text_input("Page {page} of {pages}", &app.footer_input)
+                .on_input(crate::message::Message::FooterInputChanged)
+                .on_submit(crate::message::Message::SubmitHeaderFooter)
+                .padding(8)
+                .size(13),
+            Space::new().height(16),
+            row![
+                button(text("Cancel").size(13).font(INTER_REGULAR))
+                    .on_press(crate::message::Message::ToggleHeaderFooterPrompt(false))
+                    .style(theme::button_ghost)
+                    .padding([8, 16]),
+                Space::new().width(Length::Fill),
+                button(text("Apply Page Numbers").size(13).font(INTER_BOLD))
+                    .on_press(crate::message::Message::SubmitHeaderFooter)
+                    .padding([8, 16])
+                    .style(|_theme, _status| button::Style {
+                        background: Some(theme::COLOR_ACCENT.into()),
+                        text_color: Color::WHITE,
+                        border: Border {
+                            radius: theme::BORDER_RADIUS_MD.into(),
+                            ..Default::default()
+                        },
+                        ..Default::default()
+                    }),
+            ]
+        ]
+        .width(420)
+        .padding(20),
+    )
+    .style(|_| container::Style {
+        background: Some(Color::from_rgb8(30, 32, 36).into()),
+        border: Border {
+            radius: theme::BORDER_RADIUS_LG.into(),
+            width: 1.0,
+            color: Color::from_rgb8(54, 56, 62),
+        },
+        shadow: Shadow {
+            color: Color::from_rgba(0.0, 0.0, 0.0, 0.45),
+            offset: Vector::new(0.0, 8.0),
+            blur_radius: 18.0,
+        },
+        ..Default::default()
+    });
+
+    container(modal_content)
+        .width(Length::Fill)
+        .height(Length::Fill)
+        .center_x(Length::Fill)
+        .center_y(Length::Fill)
+        .style(|_| container::Style {
+            background: Some(Color::from_rgba(0.0, 0.0, 0.0, 0.65).into()),
+            ..Default::default()
+        })
+        .into()
+}
+
+// ── Overlay Modal: Security & Permissions ─────────────────────────────────────
+fn permissions_prompt_view(app: &PdfBullApp) -> Element<'_, crate::message::Message> {
+    let modal_content = container(
+        column![
+            text("🔒 Security & Permission Rules")
+                .size(18)
+                .font(INTER_BOLD)
+                .style(|_| text::Style {
+                    color: Some(Color::WHITE)
+                }),
+            Space::new().height(6),
+            text("Configure document security policy & feature permissions:")
+                .size(13)
+                .font(INTER_REGULAR)
+                .style(|_| text::Style {
+                    color: Some(theme::COLOR_TEXT_DIM)
+                }),
+            Space::new().height(16),
+            toggler(app.allow_printing)
+                .label("Allow Printing Document")
+                .on_toggle(|_| crate::message::Message::TogglePrintPermission),
+            Space::new().height(8),
+            toggler(app.allow_copying)
+                .label("Allow Copying Content & Text")
+                .on_toggle(|_| crate::message::Message::ToggleCopyPermission),
+            Space::new().height(8),
+            toggler(app.allow_editing)
+                .label("Allow Document Editing / Modification")
+                .on_toggle(|_| crate::message::Message::ToggleEditPermission),
+            Space::new().height(16),
+            row![
+                button(text("Cancel").size(13).font(INTER_REGULAR))
+                    .on_press(crate::message::Message::TogglePermissionsPrompt(false))
+                    .style(theme::button_ghost)
+                    .padding([8, 16]),
+                Space::new().width(Length::Fill),
+                button(text("Save Permissions").size(13).font(INTER_BOLD))
+                    .on_press(crate::message::Message::SubmitPermissions)
+                    .padding([8, 16])
+                    .style(|_theme, _status| button::Style {
+                        background: Some(theme::COLOR_ACCENT.into()),
+                        text_color: Color::WHITE,
+                        border: Border {
+                            radius: theme::BORDER_RADIUS_MD.into(),
+                            ..Default::default()
+                        },
+                        ..Default::default()
+                    }),
+            ]
+        ]
+        .width(400)
+        .padding(20),
+    )
     .style(|_| container::Style {
         background: Some(Color::from_rgb8(30, 32, 36).into()),
         border: Border {
@@ -882,6 +1044,14 @@ pub fn view(app: &PdfBullApp) -> Element<'_, crate::message::Message> {
 
     if app.show_watermark_prompt {
         base_stack = base_stack.push(watermark_prompt_view(app));
+    }
+
+    if app.show_header_footer_prompt {
+        base_stack = base_stack.push(header_footer_prompt_view(app));
+    }
+
+    if app.show_permissions_prompt {
+        base_stack = base_stack.push(permissions_prompt_view(app));
     }
 
     if app.show_signature_creator {
