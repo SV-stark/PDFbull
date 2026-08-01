@@ -395,8 +395,10 @@ impl PdfBullApp {
     pub fn update(&mut self, message: Message) -> Task<Message> {
         let old_status = self.status_message.clone();
         let task = handle_message(self, message);
-        if self.status_message.is_some() && self.status_message != old_status {
-            let msg = self.status_message.clone().unwrap();
+        if let Some(msg) = &self.status_message
+            && self.status_message != old_status
+        {
+            let msg = msg.clone();
             let msg_clone = msg.clone();
             let is_critical = msg.contains("crashed") || msg.contains("missing");
 

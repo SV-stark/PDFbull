@@ -8,16 +8,18 @@ pub fn time_ago(unix_secs: u64) -> String {
     if unix_secs == u64::MAX {
         return "unknown".into();
     }
-    let now = OffsetDateTime::now_utc().unix_timestamp() as u64;
+    let now_ts = OffsetDateTime::now_utc().unix_timestamp();
+    if now_ts < 0 {
+        return "unknown".into();
+    }
+    let now = now_ts as u64;
     if unix_secs > now {
         return "unknown".into();
     }
     let diff_secs = now - unix_secs;
     if diff_secs >= 30 * 24 * 3600 {
         if let Ok(past) = OffsetDateTime::from_unix_timestamp(unix_secs as i64) {
-            let format =
-                time::format_description::parse_borrowed::<2>("[month repr:short] [day], [year]")
-                    .unwrap();
+            let format = time::macros::format_description!("[month repr:short] [day], [year]");
             past.format(&format)
                 .unwrap_or_else(|_| "unknown".to_string())
         } else {

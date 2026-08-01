@@ -1450,6 +1450,9 @@ impl DocumentStore {
         width: u32,
         height: u32,
     ) -> Option<(u32, u32, u32, u32)> {
+        if width == 0 || height == 0 {
+            return None;
+        }
         let bbox = if data.len() < 64 * 1024 {
             let mut acc: Option<(u32, u32, u32, u32)> = None;
             for (idx, pixel) in data.chunks_exact(4).enumerate() {
