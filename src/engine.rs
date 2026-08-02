@@ -9,16 +9,18 @@ pub struct EngineState {
     pub cmd_tx: mpsc::Sender<PdfCommand>,
 }
 
-/// Re-open a document from its remembered path if it isn't currently loaded.
+pub type SharedPathMap = Arc<RwLock<HashMap<crate::models::DocumentId, (String, Option<String>)>>>;
+
+/// Re-open a document from its remembered path and password if it isn't currently loaded.
 fn reload_if_needed(
     store: &mut DocumentStore,
-    paths: &Arc<RwLock<HashMap<crate::models::DocumentId, String>>>,
+    paths: &SharedPathMap,
     doc_id: crate::models::DocumentId,
 ) {
     if !store.has_document(doc_id) {
         if let Ok(guard) = paths.read() {
-            if let Some(path) = guard.get(&doc_id).cloned() {
-                if let Err(e) = store.open_document(&path, None, doc_id) {
+            if let Some((path, pass)) = guard.get(&doc_id).cloned() {
+                if let Err(e) = store.open_document(&path, pass.as_deref(), doc_id) {
                     tracing::error!(
                         "Failed to reload document {doc_id:?} from path '{path}': {e:?}"
                     );
@@ -54,7 +56,7 @@ pub fn spawn_engine_thread(cache_size: u64, max_memory_mb: u64) -> EngineState {
 
     let render_cache: SharedRenderCache = create_render_cache(cache_size, max_memory_mb);
 
-    // Shared paths mapping between all concurrent threads
+    // Shared (path, password) mapping between all concurrent threads
     let shared_paths = Arc::new(RwLock::new(HashMap::new()));
 
     // MPMC channel for distributing tasks across the thread pool
@@ -71,12 +73,20 @@ pub fn spawn_engine_thread(cache_size: u64, max_memory_mb: u64) -> EngineState {
     // the lifetime of the iced application.
     tokio::spawn(async move {
         while let Some(cmd) = cmd_rx.recv().await {
-            if let PdfCommand::Close(doc_id) = cmd {
-                for _ in 0..num_workers {
-                    let _ = worker_tx.send(PdfCommand::Close(doc_id));
+            match cmd {
+                PdfCommand::Close(doc_id) => {
+                    for _ in 0..num_workers {
+                        let _ = worker_tx.send(PdfCommand::Close(doc_id));
+                    }
                 }
-            } else {
-                let _ = worker_tx.send(cmd);
+                PdfCommand::ToggleLayer(doc_id, obj_id, vis) => {
+                    for _ in 0..num_workers {
+                        let _ = worker_tx.send(PdfCommand::ToggleLayer(doc_id, obj_id, vis));
+                    }
+                }
+                _ => {
+                    let _ = worker_tx.send(cmd);
+                }
             }
         }
         tracing::debug!("Engine forwarder task exited (cmd_tx dropped)");
@@ -103,7 +113,7 @@ pub fn spawn_engine_thread(cache_size: u64, max_memory_mb: u64) -> EngineState {
 
                         if res.is_ok() {
                             if let Ok(mut guard) = paths.write() {
-                                guard.insert(doc_id, path);
+                                guard.insert(doc_id, (path, password));
                             }
                         } else {
                             tracing::error!("Engine worker: open failed: {:?}", res);
