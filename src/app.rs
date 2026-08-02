@@ -201,6 +201,17 @@ impl PdfBullApp {
         self.tabs.get_mut(self.active_tab)
     }
 
+    pub fn sync_page_input(&mut self) {
+        if let Some(tab) = self.current_tab() {
+            let label = tab
+                .page_labels
+                .get(tab.current_page)
+                .cloned()
+                .unwrap_or_else(|| (tab.current_page + 1).to_string());
+            self.page_input = label;
+        }
+    }
+
     pub fn save_session(&mut self) {
         if !self.settings.restore_session {
             return;

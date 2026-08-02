@@ -29,6 +29,7 @@ pub fn handle_render_message(app: &mut PdfBullApp, message: Message) -> Task<Mes
                 tab.update_visible_range();
                 tab.cleanup_distant_pages();
             }
+            app.sync_page_input();
             for tab in &mut app.tabs {
                 if tab.needs_periodic_cleanup() {
                     tab.cleanup_distant_pages();

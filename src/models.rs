@@ -630,6 +630,7 @@ impl DocumentTab {
     pub fn update_visible_range(&mut self) {
         if self.page_heights.is_empty() {
             self.view_state.visible_range = (0, 0);
+            self.current_page = 0;
             return;
         }
 
@@ -647,6 +648,9 @@ impl DocumentTab {
         let viewport_top = (self.view_state.viewport_y - margin).max(0.0);
         let viewport_bottom = self.view_state.viewport_y + v_height + margin;
 
+        let focus_y = self.view_state.viewport_y + (v_height * 0.3);
+        let mut primary_page = 0;
+
         let mut start = 0;
         let mut end = 0;
         let mut found_start = false;
@@ -654,6 +658,10 @@ impl DocumentTab {
         for (idx, height) in self.page_heights.iter().enumerate() {
             let scaled_height = height * self.zoom;
             let page_bottom = y + scaled_height;
+
+            if focus_y >= y && focus_y <= page_bottom {
+                primary_page = idx;
+            }
 
             if !found_start && page_bottom >= viewport_top {
                 start = idx;
@@ -671,6 +679,9 @@ impl DocumentTab {
 
         if found_start {
             self.view_state.visible_range = (start, end + 1);
+            if self.total_pages > 0 {
+                self.current_page = primary_page.min(self.total_pages - 1);
+            }
         } else {
             self.view_state.visible_range = (0, 0);
         }

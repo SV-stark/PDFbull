@@ -301,6 +301,7 @@ pub fn handle_tab_message(app: &mut PdfBullApp, message: Message) -> Task<Messag
                 let safe_idx = idx.min(app.tabs.len() - 1);
                 if safe_idx != app.active_tab {
                     app.active_tab = safe_idx;
+                    app.sync_page_input();
                     app.save_session();
                 }
             }
