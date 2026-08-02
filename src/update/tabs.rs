@@ -113,6 +113,7 @@ pub fn handle_tab_message(app: &mut PdfBullApp, message: Message) -> Task<Messag
                     } else {
                         tab.zoom = default_zoom;
                         tab.render_filter = default_filter;
+                        scroll_task = crate::update::scroll_to_y(0.0);
                     }
                 }
 
@@ -163,6 +164,7 @@ pub fn handle_tab_message(app: &mut PdfBullApp, message: Message) -> Task<Messag
 
                 tasks.push(app.render_visible_pages());
 
+                app.sync_page_input();
                 app.save_session();
                 Task::batch(vec![Task::batch(tasks), scroll_task])
             }
@@ -226,6 +228,7 @@ pub fn handle_tab_message(app: &mut PdfBullApp, message: Message) -> Task<Messag
             let doc_id = tab.id;
             app.tabs.push(tab);
             app.active_tab = app.tabs.len() - 1;
+            app.sync_page_input();
             app.add_recent_file(&path);
 
             if let Some(engine) = &app.engine {
@@ -293,7 +296,11 @@ pub fn handle_tab_message(app: &mut PdfBullApp, message: Message) -> Task<Messag
             } else if app.active_tab >= app.tabs.len() {
                 app.active_tab = app.tabs.len() - 1;
             }
+            app.sync_page_input();
             app.save_session();
+            if let Some(tab) = app.current_tab() {
+                return crate::update::scroll_to_y(tab.view_state.viewport_y);
+            }
             Task::none()
         }
         Message::SwitchTab(idx) => {
@@ -303,6 +310,9 @@ pub fn handle_tab_message(app: &mut PdfBullApp, message: Message) -> Task<Messag
                     app.active_tab = safe_idx;
                     app.sync_page_input();
                     app.save_session();
+                    if let Some(tab) = app.current_tab() {
+                        return crate::update::scroll_to_y(tab.view_state.viewport_y);
+                    }
                 }
             }
             Task::none()
