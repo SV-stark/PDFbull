@@ -1634,6 +1634,22 @@ impl DocumentStore {
         Ok(output_path.to_string())
     }
 
+    pub fn tag_pdf(&self, input_path: &str, output_path: &str) -> PdfResult<String> {
+        let data = std::fs::read(input_path).map_err(|e| PdfError::OpenFailed(e.to_string()))?;
+        let mut writer =
+            IncrementalWriter::new(data).map_err(|e| PdfError::OpenFailed(e.to_string()))?;
+        writer.tag_pdf().map_err(|e| PdfError::IoError(e.to_string()))?;
+        let out_bytes = {
+            let mut buf = std::io::Cursor::new(Vec::new());
+            writer
+                .write(&mut buf)
+                .map_err(|e| PdfError::IoError(e.to_string()))?;
+            buf.into_inner()
+        };
+        std::fs::write(output_path, &out_bytes).map_err(|e| PdfError::IoError(e.to_string()))?;
+        Ok(output_path.to_string())
+    }
+
     pub fn validate_pdfa(
         &self,
         path: &str,

@@ -22,8 +22,8 @@ exclude = [
 [dependencies]
 iced = { version = "0.14", features = ["image", "svg", "canvas", "tokio", "advanced"] }
 iced_draggable_tabs = "0.1"
-zpdf = { version = "0.11", features = ["cpu-render"] }
-zpdf-writer = "0.11"
+zpdf = { version = "0.12", features = ["cpu-render"] }
+zpdf-writer = "0.12"
 tokio = { version = "1.0", features = ["full"] }
 rfd = "0.17"
 zune-image = "0.5"
@@ -54,7 +54,7 @@ notify-debouncer-full = "0.7"
 interprocess = { version = "2", features = ["tokio"] }
 crossbeam-channel = "0.5.15"
 ocrs = "0.12.2"
-rten = "0.24.0"
+rten = { version = "0.24.0", features = ["mmap", "rten_format"] }
 
 [target.'cfg(windows)'.dependencies]
 winprint = { version = "0.2.1", default-features = false }
