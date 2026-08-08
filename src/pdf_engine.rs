@@ -1590,13 +1590,14 @@ impl DocumentStore {
     // apply_filter_parallel removed as it was just a misleading wrapper.
 
     pub fn optimize_pdf(&self, input_path: &str, output_path: &str) -> PdfResult<String> {
-        // Use zpdf's RewriteOptions for a proper structural optimisation pass.
-        // This runs compression, stream deduplication, and downsamples
-        // images to max 2400px (useful for shrinking PDF file sizes).
+        // Run full PDF optimization pass:
+        // 1. Enable Flate/Deflate stream compression for uncompressed content & object streams.
+        // 2. Downsample high-DPI image streams (max 1600px dimension) for significant file size reduction.
         let data = std::fs::read(input_path).map_err(|e| PdfError::OpenFailed(e.to_string()))?;
         let pdf = zpdf::PdfFile::parse(data).map_err(|e| PdfError::OpenFailed(e.to_string()))?;
         let mut opts = RewriteOptions::default();
-        opts.max_image_dimension = Some(2400);
+        opts.compress_uncompressed = true;
+        opts.max_image_dimension = Some(1600);
         let out_bytes = rewrite_pdf(&pdf, &opts).map_err(|e| PdfError::IoError(e.to_string()))?;
         std::fs::write(output_path, &out_bytes).map_err(|e| PdfError::IoError(e.to_string()))?;
         Ok(output_path.to_string())

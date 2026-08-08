@@ -105,17 +105,20 @@ pub fn load_settings() -> AppSettings {
 }
 
 pub fn save_settings(settings: &AppSettings) {
-    let dir = get_config_dir();
-    if let Err(e) = fs::create_dir_all(&dir) {
-        eprintln!("Failed to create config directory: {e}");
-        return;
-    }
-    let path = dir.join("settings.json");
-    if let Ok(data) = serde_json::to_string_pretty(settings)
-        && let Err(e) = atomic_write(&path, &data)
-    {
-        tracing::error!("Failed to save settings: {}", e);
-    }
+    let settings = settings.clone();
+    std::thread::spawn(move || {
+        let dir = get_config_dir();
+        if let Err(e) = fs::create_dir_all(&dir) {
+            eprintln!("Failed to create config directory: {e}");
+            return;
+        }
+        let path = dir.join("settings.json");
+        if let Ok(data) = serde_json::to_string_pretty(&settings)
+            && let Err(e) = atomic_write(&path, &data)
+        {
+            tracing::error!("Failed to save settings: {}", e);
+        }
+    });
 }
 
 pub fn load_recent_files() -> Vec<RecentFile> {
@@ -130,17 +133,20 @@ pub fn load_recent_files() -> Vec<RecentFile> {
 }
 
 pub fn save_recent_files(recent_files: &[RecentFile]) {
-    let dir = get_config_dir();
-    if let Err(e) = fs::create_dir_all(&dir) {
-        tracing::error!("Failed to create config directory: {}", e);
-        return;
-    }
-    let path = dir.join("recent_files.json");
-    if let Ok(data) = serde_json::to_string_pretty(recent_files)
-        && let Err(e) = atomic_write(&path, &data)
-    {
-        tracing::error!("Failed to save recent files: {}", e);
-    }
+    let recent_files = recent_files.to_vec();
+    std::thread::spawn(move || {
+        let dir = get_config_dir();
+        if let Err(e) = fs::create_dir_all(&dir) {
+            tracing::error!("Failed to create config directory: {}", e);
+            return;
+        }
+        let path = dir.join("recent_files.json");
+        if let Ok(data) = serde_json::to_string_pretty(&recent_files)
+            && let Err(e) = atomic_write(&path, &data)
+        {
+            tracing::error!("Failed to save recent files: {}", e);
+        }
+    });
 }
 
 pub fn add_recent_file(recent_files: &mut Vec<RecentFile>, path: &std::path::Path) {
@@ -179,18 +185,21 @@ pub fn load_session() -> Option<SessionData> {
 }
 
 pub fn save_session(session: &SessionData) {
-    let dir = get_config_dir();
-    if let Err(e) = fs::create_dir_all(&dir) {
-        tracing::error!("Failed to create config directory: {}", e);
-        return;
-    }
-    let path = dir.join("session.json");
+    let session = session.clone();
+    std::thread::spawn(move || {
+        let dir = get_config_dir();
+        if let Err(e) = fs::create_dir_all(&dir) {
+            tracing::error!("Failed to create config directory: {}", e);
+            return;
+        }
+        let path = dir.join("session.json");
 
-    if let Ok(data) = serde_json::to_string_pretty(session)
-        && let Err(e) = atomic_write(&path, &data)
-    {
-        tracing::error!("Failed to save session: {}", e);
-    }
+        if let Ok(data) = serde_json::to_string_pretty(&session)
+            && let Err(e) = atomic_write(&path, &data)
+        {
+            tracing::error!("Failed to save session: {}", e);
+        }
+    });
 }
 
 #[cfg(test)]

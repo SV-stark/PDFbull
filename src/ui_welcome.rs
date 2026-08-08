@@ -232,11 +232,14 @@ pub fn welcome_view(app: &crate::app::PdfBullApp) -> Element<'_, crate::message:
                         .style(|_| text::Style {
                             color: Some(theme::COLOR_TEXT_PRIMARY)
                         }),
-                    container(text("v0.9.0").size(11).font(INTER_BOLD).style(|_| {
-                        text::Style {
-                            color: Some(Color::WHITE),
-                        }
-                    }))
+                    container(
+                        text(concat!("v", env!("CARGO_PKG_VERSION")))
+                            .size(11)
+                            .font(INTER_BOLD)
+                            .style(|_| text::Style {
+                                color: Some(Color::WHITE),
+                            }),
+                    )
                     .padding([2, 8])
                     .style(|_| container::Style {
                         background: Some(theme::COLOR_ACCENT.into()),
@@ -266,7 +269,7 @@ pub fn welcome_view(app: &crate::app::PdfBullApp) -> Element<'_, crate::message:
     let quick_cards_row1 = row![
         feature_card(
             "📂",
-            "Open Document",
+            "Open Document (Ctrl + O)",
             "Browse and open local PDF files instantly",
             crate::message::Message::OpenDocument
         ),

@@ -28,10 +28,10 @@ pub const COLOR_ACCENT: Color = Color::from_rgb(0.23, 0.51, 0.96); // #3B82F6 Vi
 pub const COLOR_ACCENT_HOVER: Color = Color::from_rgb(0.15, 0.39, 0.92); // #2563EB Darker Accent
 pub const COLOR_ACCENT_DIM: Color = Color::from_rgb(0.23, 0.51, 0.96);
 
-// Colors - Text
+// Colors - Text (WCAG 2.1 AA Compliant Contrast)
 pub const COLOR_TEXT_PRIMARY: Color = Color::from_rgb(0.95, 0.96, 0.98); // #F3F4F6 Crisp White-Gray
-pub const COLOR_TEXT_DIM: Color = Color::from_rgb(0.61, 0.64, 0.69); // #9CA3AF Readable Slate Gray
-pub const COLOR_TEXT_SECONDARY: Color = Color::from_rgb(0.42, 0.45, 0.50); // #6B7280 Muted Gray
+pub const COLOR_TEXT_DIM: Color = Color::from_rgb(0.75, 0.78, 0.83); // #BFCEE0 High-contrast Slate Gray
+pub const COLOR_TEXT_SECONDARY: Color = Color::from_rgb(0.60, 0.63, 0.68); // #99A1AD Muted Gray
 
 // Colors - Status Badges
 pub const COLOR_SUCCESS: Color = Color::from_rgb(0.06, 0.73, 0.49); // #10B981 Emerald Green
@@ -69,6 +69,11 @@ pub fn button_ribbon_tab(
             iced::widget::button::Status::Hovered if !active => iced::widget::button::Style {
                 background: Some(COLOR_BG_WIDGET_HOVER.into()),
                 text_color: COLOR_TEXT_PRIMARY,
+                border: iced::Border {
+                    radius: BORDER_RADIUS_MD.into(),
+                    width: 1.0,
+                    color: COLOR_ACCENT,
+                },
                 ..base
             },
             iced::widget::button::Status::Pressed => iced::widget::button::Style {
@@ -98,6 +103,11 @@ pub fn button_ghost(
         iced::widget::button::Status::Hovered => iced::widget::button::Style {
             background: Some(COLOR_BG_WIDGET.into()),
             text_color: COLOR_TEXT_PRIMARY,
+            border: iced::Border {
+                radius: BORDER_RADIUS_MD.into(),
+                width: 1.0,
+                color: COLOR_ACCENT,
+            },
             ..base
         },
         iced::widget::button::Status::Pressed => iced::widget::button::Style {
@@ -138,6 +148,11 @@ pub fn button_tool(
             iced::widget::button::Status::Hovered if !active => iced::widget::button::Style {
                 background: Some(COLOR_BG_WIDGET_HOVER.into()),
                 text_color: COLOR_TEXT_PRIMARY,
+                border: iced::Border {
+                    radius: BORDER_RADIUS_MD.into(),
+                    width: 1.0,
+                    color: COLOR_ACCENT,
+                },
                 ..base
             },
             iced::widget::button::Status::Pressed => iced::widget::button::Style {
