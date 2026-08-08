@@ -8,6 +8,17 @@ resolver = "3"
 license = "MIT"
 homepage = "https://github.com/SV-stark/PDFbull"
 repository = "https://github.com/SV-stark/PDFbull"
+exclude = [
+    "models/*",
+    "installer_assets/*",
+    "docs/*",
+    "PDFbull.png",
+    "scorecard.png",
+    "plan-dist-manifest.json",
+    "dist-*.log",
+    "target_err.log",
+    "installer.nsi",
+]
 
 [dependencies]
 iced = { version = "0.14", features = ["image", "svg", "canvas", "tokio", "advanced"] }
