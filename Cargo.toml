@@ -12,7 +12,6 @@ exclude = [
     "models/*",
     "installer_assets/*",
     "docs/*",
-    "PDFbull.png",
     "scorecard.png",
     "plan-dist-manifest.json",
     "dist-*.log",
