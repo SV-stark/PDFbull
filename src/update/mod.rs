@@ -525,6 +525,12 @@ pub fn handle_message(app: &mut PdfBullApp, message: Message) -> Task<Message> {
         | Message::ClearStatus
         | Message::IcedEvent(_)
         | Message::LinkClicked(_)
-        | Message::ForceQuit => misc::handle_misc_message(app, message),
+        | Message::ForceQuit
+        | Message::ToggleCommandPalette
+        | Message::CommandPaletteQueryChanged(_)
+        | Message::ExecutePaletteAction(_)
+        | Message::PaletteSelectNext
+        | Message::PaletteSelectPrev
+        | Message::PaletteSubmit => misc::handle_misc_message(app, message),
     }
 }

@@ -1,6 +1,6 @@
 [package]
 name = "pdfbull"
-version = "0.12.2"
+version = "0.13.0"
 description = "A lightweight PDF reader"
 authors = ["SV-stark"]
 edition = "2024"
@@ -22,9 +22,9 @@ exclude = [
 [dependencies]
 iced = { version = "0.14", features = ["image", "svg", "canvas", "tokio", "advanced"] }
 iced_draggable_tabs = "0.1"
-zpdf = { version = "0.12", features = ["cpu-render"] }
-zpdf-writer = "0.12"
-tokio = { version = "1.0", features = ["full"] }
+zpdf = { version = "0.12.1", features = ["cpu-render"] }
+zpdf-writer = "0.12.1"
+tokio = { version = "1.0", features = ["rt-multi-thread", "sync", "time", "process", "fs", "io-util", "macros"] }
 rfd = "0.17"
 zune-image = "0.5"
 zune-core = "0.5"
@@ -43,8 +43,8 @@ lopdf = "0.44"
 pdf-writer = "0.15"
 csscolorparser = "0.8"
 timeago = "0.6"
-atomicwrites = "0.4"
-oxipng = { version = "10.1.0", default-features = false, features = ["parallel"] }
+tempfile = "3"
+oxipng = { version = "10.2", default-features = false, features = ["parallel"] }
 time = { version = "0.3", features = ["serde", "formatting", "macros"] }
 quick_cache = "0.7"
 mimalloc = "0.1"
@@ -55,10 +55,17 @@ interprocess = { version = "2", features = ["tokio"] }
 crossbeam-channel = "0.5.15"
 ocrs = "0.12.2"
 rten = { version = "0.24.0", features = ["mmap", "rten_format"] }
+nucleo-matcher = "0.3"
 
 [target.'cfg(windows)'.dependencies]
 winprint = { version = "0.2.1", default-features = false }
 windows = { version = "0.62.2", features = ["Win32_UI_Shell", "Win32_System_Com", "Win32_Foundation"] }
+
+[features]
+default = ["cpu-render"]
+cpu-render = ["zpdf/cpu-render"]
+
+
 
 [dev-dependencies]
 iced_test = "0.14"

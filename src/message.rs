@@ -217,4 +217,18 @@ pub enum Message {
     ExportDocumentTxt,
     /// Document conversion/export finished with output path or error
     DocumentExported(crate::models::PdfResult<String>),
+
+    // ── Command Palette ──────────────────────────────────────────────────────
+    /// Open/close the quick command palette modal
+    ToggleCommandPalette,
+    /// Query text changed in the command palette
+    CommandPaletteQueryChanged(String),
+    /// Execute a command action selected from the palette
+    ExecutePaletteAction(crate::models::CommandAction),
+    /// Select next item in palette
+    PaletteSelectNext,
+    /// Select previous item in palette
+    PaletteSelectPrev,
+    /// Submit currently selected palette item
+    PaletteSubmit,
 }

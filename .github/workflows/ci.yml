@@ -67,3 +67,16 @@ jobs:
 
       - name: Run Tests
         run: cargo nextest run
+
+  security:
+    name: Security & License Checks
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Check dependency advisories and licenses
+        uses: EmbarkStudios/cargo-deny-action@v2
+        with:
+          command: check
+

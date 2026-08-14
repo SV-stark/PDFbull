@@ -116,6 +116,8 @@ pub struct PdfBullApp {
     pub selected_ocr_script: crate::ocr::OcrScript,
     pub ocr_results:
         std::collections::HashMap<(crate::models::DocumentId, usize), crate::ocr::OcrPageResult>,
+    /// Command Palette state
+    pub command_palette: crate::models::CommandPalette,
 }
 
 impl Default for PdfBullApp {
@@ -187,11 +189,207 @@ impl Default for PdfBullApp {
             show_ocr_overlay: false,
             selected_ocr_script: crate::ocr::OcrScript::default(),
             ocr_results: std::collections::HashMap::new(),
+            command_palette: crate::models::CommandPalette::default(),
         }
     }
 }
 
 impl PdfBullApp {
+    pub fn build_palette_items(&self) -> Vec<crate::models::PaletteItem> {
+        use crate::models::{CommandAction, PaletteItem};
+        let mut items = vec![
+            PaletteItem {
+                title: "Open PDF Document".into(),
+                subtitle: Some("Browse filesystem for a PDF file".into()),
+                category: "File".into(),
+                action: CommandAction::OpenFile,
+                shortcut: Some("Ctrl+O".into()),
+            },
+            PaletteItem {
+                title: "New Blank Document".into(),
+                subtitle: Some("Create an empty editable PDF page".into()),
+                category: "File".into(),
+                action: CommandAction::NewDocument,
+                shortcut: None,
+            },
+            PaletteItem {
+                title: "Print Document".into(),
+                subtitle: Some("Send current PDF to printer".into()),
+                category: "File".into(),
+                action: CommandAction::Print,
+                shortcut: Some("Ctrl+P".into()),
+            },
+            PaletteItem {
+                title: "Export Page as Image".into(),
+                subtitle: Some("Save rendered page as PNG/JPEG".into()),
+                category: "Export".into(),
+                action: CommandAction::ExportImage,
+                shortcut: Some("Ctrl+E".into()),
+            },
+            PaletteItem {
+                title: "Export to Markdown (.md)".into(),
+                subtitle: Some("Convert PDF contents to formatted Markdown".into()),
+                category: "Export".into(),
+                action: CommandAction::ExportMarkdown,
+                shortcut: None,
+            },
+            PaletteItem {
+                title: "Export to HTML5 (.html)".into(),
+                subtitle: Some("Convert PDF contents to clean HTML5".into()),
+                category: "Export".into(),
+                action: CommandAction::ExportHtml,
+                shortcut: None,
+            },
+            PaletteItem {
+                title: "Export to Plain Text (.txt)".into(),
+                subtitle: Some("Extract all textual contents as plain text".into()),
+                category: "Export".into(),
+                action: CommandAction::ExportTxt,
+                shortcut: None,
+            },
+            PaletteItem {
+                title: "OCR Current Page (Latin)".into(),
+                subtitle: Some("Extract text from scanned page using local AI OCR".into()),
+                category: "Tools".into(),
+                action: CommandAction::TriggerOcrLatin,
+                shortcut: None,
+            },
+            PaletteItem {
+                title: "OCR Current Page (Devanagari)".into(),
+                subtitle: Some("Extract Hindi/Devanagari text using local AI OCR".into()),
+                category: "Tools".into(),
+                action: CommandAction::TriggerOcrDevanagari,
+                shortcut: None,
+            },
+            PaletteItem {
+                title: "Extract Text to Clipboard".into(),
+                subtitle: Some("Copy text from current page to clipboard".into()),
+                category: "Edit".into(),
+                action: CommandAction::ExtractText,
+                shortcut: None,
+            },
+            PaletteItem {
+                title: "Toggle Dark / Light Theme".into(),
+                subtitle: Some("Switch application appearance".into()),
+                category: "View".into(),
+                action: CommandAction::ToggleTheme,
+                shortcut: None,
+            },
+            PaletteItem {
+                title: "Toggle Fullscreen Reader".into(),
+                subtitle: Some("Distraction-free reading canvas".into()),
+                category: "View".into(),
+                action: CommandAction::ToggleFullscreen,
+                shortcut: Some("F11".into()),
+            },
+            PaletteItem {
+                title: "Toggle Navigation Sidebar".into(),
+                subtitle: Some("Show/hide thumbnails and outline bookmarks".into()),
+                category: "View".into(),
+                action: CommandAction::ToggleSidebar,
+                shortcut: Some("Ctrl+B".into()),
+            },
+            PaletteItem {
+                title: "Toggle Document Metadata".into(),
+                subtitle: Some("Inspect PDF title, author, dates, and XMP info".into()),
+                category: "View".into(),
+                action: CommandAction::ToggleMetadata,
+                shortcut: None,
+            },
+            PaletteItem {
+                title: "Toggle Keyboard Shortcuts Help".into(),
+                subtitle: Some("Show cheat sheet of all shortcut keys".into()),
+                category: "Help".into(),
+                action: CommandAction::ToggleKeyboardHelp,
+                shortcut: Some("F1 / ?".into()),
+            },
+            PaletteItem {
+                title: "Rotate Clockwise (90°)".into(),
+                subtitle: Some("Rotate current view clockwise".into()),
+                category: "View".into(),
+                action: CommandAction::RotateClockwise,
+                shortcut: None,
+            },
+            PaletteItem {
+                title: "Rotate Counter-Clockwise (90°)".into(),
+                subtitle: Some("Rotate current view counter-clockwise".into()),
+                category: "View".into(),
+                action: CommandAction::RotateCounterClockwise,
+                shortcut: None,
+            },
+            PaletteItem {
+                title: "Zoom In".into(),
+                subtitle: Some("Increase magnification".into()),
+                category: "View".into(),
+                action: CommandAction::ZoomIn,
+                shortcut: Some("Ctrl++".into()),
+            },
+            PaletteItem {
+                title: "Zoom Out".into(),
+                subtitle: Some("Decrease magnification".into()),
+                category: "View".into(),
+                action: CommandAction::ZoomOut,
+                shortcut: Some("Ctrl+-".into()),
+            },
+            PaletteItem {
+                title: "Reset Zoom (100%)".into(),
+                subtitle: Some("Reset to standard scale".into()),
+                category: "View".into(),
+                action: CommandAction::ResetZoom,
+                shortcut: Some("Ctrl+0".into()),
+            },
+            PaletteItem {
+                title: "Optimize PDF File".into(),
+                subtitle: Some("Compress streams and rebuild cross-references".into()),
+                category: "Tools".into(),
+                action: CommandAction::OptimizePDF,
+                shortcut: None,
+            },
+            PaletteItem {
+                title: "Open Settings".into(),
+                subtitle: Some("Configure reader defaults, rendering quality, and cache".into()),
+                category: "Settings".into(),
+                action: CommandAction::OpenSettings,
+                shortcut: None,
+            },
+        ];
+
+        if let Some(tab) = self.current_tab() {
+            if tab.current_page + 1 < tab.total_pages {
+                items.push(PaletteItem {
+                    title: format!("Next Page ({})", tab.current_page + 2),
+                    subtitle: Some("Advance to the next page".into()),
+                    category: "Navigation".into(),
+                    action: CommandAction::NextPage,
+                    shortcut: Some("PageDown".into()),
+                });
+            }
+            if tab.current_page > 0 {
+                items.push(PaletteItem {
+                    title: format!("Previous Page ({})", tab.current_page),
+                    subtitle: Some("Return to previous page".into()),
+                    category: "Navigation".into(),
+                    action: CommandAction::PrevPage,
+                    shortcut: Some("PageUp".into()),
+                });
+            }
+            for bookmark in &tab.bookmarks {
+                let label = if bookmark.label.is_empty() {
+                    "Bookmark"
+                } else {
+                    &bookmark.label
+                };
+                items.push(PaletteItem {
+                    title: format!("Bookmark: {label}"),
+                    subtitle: Some(format!("Jump to page {}", bookmark.page + 1)),
+                    category: "Outline".into(),
+                    action: CommandAction::JumpToPage(bookmark.page),
+                    shortcut: None,
+                });
+            }
+        }
+        items
+    }
     #[must_use]
     pub fn current_tab(&self) -> Option<&DocumentTab> {
         self.tabs.get(self.active_tab)

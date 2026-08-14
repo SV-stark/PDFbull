@@ -65,13 +65,11 @@ pub fn get_config_dir() -> PathBuf {
 }
 
 fn atomic_write(path: &Path, data: &str) -> io::Result<()> {
-    use atomicwrites::{AllowOverwrite, AtomicFile};
-    let af = AtomicFile::new(path, AllowOverwrite);
-    af.write(|f| f.write_all(data.as_bytes()))
-        .map_err(|e| match e {
-            atomicwrites::Error::User(io_err) => io_err,
-            atomicwrites::Error::Internal(io_err) => io_err,
-        })
+    let parent = path.parent().unwrap_or_else(|| Path::new("."));
+    let mut temp = tempfile::NamedTempFile::new_in(parent)?;
+    temp.write_all(data.as_bytes())?;
+    temp.persist(path).map_err(|e| e.error)?;
+    Ok(())
 }
 
 pub fn load_settings() -> AppSettings {

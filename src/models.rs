@@ -778,6 +778,78 @@ pub fn unrotate_coords(
     }
 }
 
+// ── Command Palette Data Models ──────────────────────────────────────────────
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum CommandAction {
+    NextPage,
+    PrevPage,
+    ZoomIn,
+    ZoomOut,
+    ResetZoom,
+    ToggleTheme,
+    ToggleSidebar,
+    ToggleFullscreen,
+    ToggleMetadata,
+    ToggleKeyboardHelp,
+    RotateClockwise,
+    RotateCounterClockwise,
+    ExtractText,
+    TriggerOcrLatin,
+    TriggerOcrDevanagari,
+    ExportMarkdown,
+    ExportHtml,
+    ExportTxt,
+    ExportImage,
+    Print,
+    OptimizePDF,
+    OpenSettings,
+    NewDocument,
+    OpenFile,
+    JumpToPage(usize),
+}
+
+#[derive(Debug, Clone)]
+pub struct PaletteItem {
+    pub title: String,
+    pub subtitle: Option<String>,
+    pub category: String,
+    pub action: CommandAction,
+    pub shortcut: Option<String>,
+}
+
+#[derive(Debug, Clone, Default)]
+pub struct CommandPalette {
+    pub is_open: bool,
+    pub query: String,
+    pub selected_index: usize,
+}
+
+pub fn filter_palette_items(query: &str, items: &[PaletteItem]) -> Vec<PaletteItem> {
+    if query.trim().is_empty() {
+        return items.to_vec();
+    }
+    let mut matcher = nucleo_matcher::Matcher::default();
+    let mut pattern_buf = Vec::new();
+    let pattern = nucleo_matcher::Utf32Str::new(query.trim(), &mut pattern_buf);
+
+    let mut scored: Vec<(u16, &PaletteItem)> = items
+        .iter()
+        .filter_map(|item| {
+            let mut target_buf = Vec::new();
+            let sub = item.subtitle.as_deref().unwrap_or("");
+            let full_text = format!("{} {} {}", item.title, item.category, sub);
+            let target = nucleo_matcher::Utf32Str::new(&full_text, &mut target_buf);
+            matcher
+                .fuzzy_match(target, pattern)
+                .map(|score| (score, item))
+        })
+        .collect();
+
+    scored.sort_by_key(|b| std::cmp::Reverse(b.0));
+    scored.into_iter().map(|(_, item)| item.clone()).collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1324,5 +1396,64 @@ mod tests {
         assert_eq!(deserialized.bbox, (10.0, 20.0, 300.0, 150.0));
         assert_eq!(deserialized.csv, "a,b\n1,2");
         assert_eq!(deserialized.cells.len(), 2);
+    }
+
+    #[test]
+    fn test_filter_palette_items_empty_query() {
+        let items = vec![
+            PaletteItem {
+                title: "Open PDF Document".into(),
+                subtitle: Some("Browse filesystem".into()),
+                category: "File".into(),
+                action: CommandAction::OpenFile,
+                shortcut: Some("Ctrl+O".into()),
+            },
+            PaletteItem {
+                title: "Print Document".into(),
+                subtitle: None,
+                category: "File".into(),
+                action: CommandAction::Print,
+                shortcut: Some("Ctrl+P".into()),
+            },
+        ];
+        let res = filter_palette_items("", &items);
+        assert_eq!(res.len(), 2);
+    }
+
+    #[test]
+    fn test_filter_palette_items_fuzzy_matching() {
+        let items = vec![
+            PaletteItem {
+                title: "Open PDF Document".into(),
+                subtitle: Some("Browse filesystem".into()),
+                category: "File".into(),
+                action: CommandAction::OpenFile,
+                shortcut: Some("Ctrl+O".into()),
+            },
+            PaletteItem {
+                title: "Export Page as Image".into(),
+                subtitle: None,
+                category: "Export".into(),
+                action: CommandAction::ExportImage,
+                shortcut: Some("Ctrl+E".into()),
+            },
+            PaletteItem {
+                title: "Toggle Dark / Light Theme".into(),
+                subtitle: None,
+                category: "View".into(),
+                action: CommandAction::ToggleTheme,
+                shortcut: None,
+            },
+        ];
+        let res = filter_palette_items("dark", &items);
+        assert_eq!(res.len(), 1);
+        assert_eq!(res[0].action, CommandAction::ToggleTheme);
+
+        let res2 = filter_palette_items("export", &items);
+        assert_eq!(res2.len(), 1);
+        assert_eq!(res2[0].action, CommandAction::ExportImage);
+
+        let res3 = filter_palette_items("nonexistentxyz", &items);
+        assert!(res3.is_empty());
     }
 }

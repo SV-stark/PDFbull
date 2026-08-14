@@ -1022,6 +1022,241 @@ fn signatures_detail_view(app: &PdfBullApp) -> Element<'_, crate::message::Messa
         .into()
 }
 
+// ── Overlay Modal: Command Palette (Ctrl+K / Ctrl+P) ─────────────────────────
+fn command_palette_view(app: &PdfBullApp) -> Element<'_, crate::message::Message> {
+    let all_items = app.build_palette_items();
+    let filtered_items =
+        crate::models::filter_palette_items(&app.command_palette.query, &all_items);
+
+    let search_bar = text_input(
+        "Type a command, tool name, or bookmark...",
+        &app.command_palette.query,
+    )
+    .id("command_palette_input")
+    .on_input(crate::message::Message::CommandPaletteQueryChanged)
+    .on_submit(crate::message::Message::PaletteSubmit)
+    .padding([12, 16])
+    .size(15)
+    .font(INTER_REGULAR)
+    .style(|_theme, _status| text_input::Style {
+        background: Color::from_rgb8(24, 25, 28).into(),
+        border: Border {
+            radius: theme::BORDER_RADIUS_MD.into(),
+            width: 1.0,
+            color: Color::from_rgb8(60, 64, 72),
+        },
+        icon: Color::from_rgb8(150, 155, 165),
+        placeholder: Color::from_rgb8(110, 115, 125),
+        value: Color::WHITE,
+        selection: theme::COLOR_ACCENT,
+    });
+
+    let mut results_col = column![].spacing(4).width(Length::Fill);
+
+    if filtered_items.is_empty() {
+        results_col = results_col.push(
+            container(
+                text("No matching commands found")
+                    .size(13)
+                    .font(INTER_REGULAR)
+                    .style(|_| text::Style {
+                        color: Some(theme::COLOR_TEXT_DIM),
+                    }),
+            )
+            .padding(20)
+            .center_x(Length::Fill),
+        );
+    } else {
+        for (idx, item) in filtered_items.iter().enumerate().take(12) {
+            let is_selected = idx == app.command_palette.selected_index;
+            let action = item.action.clone();
+            let title = item.title.clone();
+            let category = item.category.clone();
+            let subtitle = item.subtitle.clone();
+            let shortcut = item.shortcut.clone();
+
+            let mut item_row = row![
+                column![
+                    row![
+                        text(title)
+                            .size(14)
+                            .font(if is_selected {
+                                INTER_BOLD
+                            } else {
+                                INTER_REGULAR
+                            })
+                            .style(move |_| text::Style {
+                                color: Some(if is_selected {
+                                    Color::WHITE
+                                } else {
+                                    Color::from_rgb8(220, 224, 230)
+                                }),
+                            }),
+                        Space::new().width(8),
+                        container(
+                            text(category)
+                                .size(10)
+                                .font(INTER_REGULAR)
+                                .style(|_| text::Style {
+                                    color: Some(Color::from_rgb8(160, 165, 175)),
+                                }),
+                        )
+                        .padding([2, 6])
+                        .style(|_| container::Style {
+                            background: Some(Color::from_rgba(1.0, 1.0, 1.0, 0.08).into()),
+                            border: Border {
+                                radius: 4.0.into(),
+                                ..Default::default()
+                            },
+                            ..Default::default()
+                        }),
+                    ]
+                    .align_y(Alignment::Center),
+                    if let Some(sub) = subtitle {
+                        text(sub)
+                            .size(11)
+                            .font(INTER_REGULAR)
+                            .style(move |_| text::Style {
+                                color: Some(if is_selected {
+                                    Color::from_rgb8(200, 210, 225)
+                                } else {
+                                    theme::COLOR_TEXT_DIM
+                                }),
+                            })
+                    } else {
+                        text("").size(0)
+                    }
+                ]
+                .spacing(2)
+                .width(Length::Fill),
+            ]
+            .align_y(Alignment::Center)
+            .width(Length::Fill);
+
+            if let Some(sc) = shortcut {
+                item_row = item_row.push(
+                    container(
+                        text(sc)
+                            .size(11)
+                            .font(INTER_REGULAR)
+                            .style(|_| text::Style {
+                                color: Some(Color::from_rgb8(180, 185, 195)),
+                            }),
+                    )
+                    .padding([2, 6])
+                    .style(|_| container::Style {
+                        background: Some(Color::from_rgba(0.0, 0.0, 0.0, 0.3).into()),
+                        border: Border {
+                            radius: 4.0.into(),
+                            width: 1.0,
+                            color: Color::from_rgba(1.0, 1.0, 1.0, 0.1),
+                        },
+                        ..Default::default()
+                    }),
+                );
+            }
+
+            let btn = button(item_row)
+                .on_press(crate::message::Message::ExecutePaletteAction(action))
+                .padding([8, 12])
+                .width(Length::Fill)
+                .style(move |_theme, status| {
+                    let bg = if is_selected {
+                        Some(Color::from_rgb8(45, 90, 170).into())
+                    } else {
+                        match status {
+                            iced::widget::button::Status::Hovered => {
+                                Some(Color::from_rgba(1.0, 1.0, 1.0, 0.06).into())
+                            }
+                            _ => None,
+                        }
+                    };
+                    iced::widget::button::Style {
+                        background: bg,
+                        border: Border {
+                            radius: theme::BORDER_RADIUS_MD.into(),
+                            ..Default::default()
+                        },
+                        ..Default::default()
+                    }
+                });
+
+            results_col = results_col.push(btn);
+        }
+    }
+
+    let footer = row![
+        text("↑↓ Navigate")
+            .size(11)
+            .font(INTER_REGULAR)
+            .style(|_| text::Style {
+                color: Some(theme::COLOR_TEXT_DIM)
+            }),
+        Space::new().width(12),
+        text("↵ Select")
+            .size(11)
+            .font(INTER_REGULAR)
+            .style(|_| text::Style {
+                color: Some(theme::COLOR_TEXT_DIM)
+            }),
+        Space::new().width(12),
+        text("ESC Close")
+            .size(11)
+            .font(INTER_REGULAR)
+            .style(|_| text::Style {
+                color: Some(theme::COLOR_TEXT_DIM)
+            }),
+        Space::new().width(Length::Fill),
+        text(format!("{} available", filtered_items.len()))
+            .size(11)
+            .font(INTER_REGULAR)
+            .style(|_| text::Style {
+                color: Some(theme::COLOR_TEXT_DIM)
+            }),
+    ]
+    .align_y(Alignment::Center)
+    .padding([8, 12]);
+
+    let palette_content = container(
+        column![
+            search_bar,
+            Space::new().height(8),
+            scrollable(results_col).height(Length::Fixed(320.0)),
+            Space::new().height(6),
+            footer,
+        ]
+        .spacing(4),
+    )
+    .padding(14)
+    .width(Length::Fixed(560.0))
+    .style(|_| container::Style {
+        background: Some(Color::from_rgb8(30, 32, 36).into()),
+        border: Border {
+            radius: theme::BORDER_RADIUS_LG.into(),
+            width: 1.0,
+            color: Color::from_rgb8(54, 56, 62),
+        },
+        shadow: Shadow {
+            color: Color::from_rgba(0.0, 0.0, 0.0, 0.55),
+            offset: Vector::new(0.0, 10.0),
+            blur_radius: 24.0,
+        },
+        ..Default::default()
+    });
+
+    container(palette_content)
+        .width(Length::Fill)
+        .height(Length::Fill)
+        .center_x(Length::Fill)
+        .align_y(iced::alignment::Vertical::Top)
+        .padding(iced::padding::top(80.0))
+        .style(|_| container::Style {
+            background: Some(Color::from_rgba(0.0, 0.0, 0.0, 0.55).into()),
+            ..Default::default()
+        })
+        .into()
+}
+
 // ── Central UI View Coordinator ──────────────────────────────────────────────
 pub fn view(app: &PdfBullApp) -> Element<'_, crate::message::Message> {
     if app.show_keyboard_help {
@@ -1076,6 +1311,10 @@ pub fn view(app: &PdfBullApp) -> Element<'_, crate::message::Message> {
 
     if app.show_cmyk_inspector {
         base_stack = base_stack.push(crate::ui_cmyk::cmyk_inspector_view(app));
+    }
+
+    if app.command_palette.is_open {
+        base_stack = base_stack.push(command_palette_view(app));
     }
 
     base_stack.into()

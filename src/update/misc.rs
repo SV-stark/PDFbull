@@ -80,7 +80,26 @@ pub fn handle_misc_message(app: &mut PdfBullApp, message: Message) -> Task<Messa
                         Key::Named(iced::keyboard::key::Named::F1) => {
                             return app.update(Message::ToggleKeyboardHelp);
                         }
+                        Key::Named(iced::keyboard::key::Named::Escape) if app.command_palette.is_open => {
+                            app.command_palette.is_open = false;
+                            return Task::none();
+                        }
+                        Key::Named(iced::keyboard::key::Named::ArrowDown) if app.command_palette.is_open => {
+                            return app.update(Message::PaletteSelectNext);
+                        }
+                        Key::Named(iced::keyboard::key::Named::ArrowUp) if app.command_palette.is_open => {
+                            return app.update(Message::PaletteSelectPrev);
+                        }
+                        Key::Named(iced::keyboard::key::Named::Enter) if app.command_palette.is_open => {
+                            return app.update(Message::PaletteSubmit);
+                        }
                         Key::Character(c) => match c.as_str() {
+                            "k" if modifiers.command() => {
+                                return app.update(Message::ToggleCommandPalette);
+                            }
+                            "p" if modifiers.command() && modifiers.shift() => {
+                                return app.update(Message::ToggleCommandPalette);
+                            }
                             "o" if modifiers.command() => return app.update(Message::OpenDocument),
                             "e" if modifiers.command() => return app.update(Message::ExportImage),
                             "p" if modifiers.command() && !app.tabs.is_empty() => {
@@ -126,6 +145,91 @@ pub fn handle_misc_message(app: &mut PdfBullApp, message: Message) -> Task<Messa
                 _ => {}
             }
             Task::none()
+        }
+        Message::ToggleCommandPalette => {
+            app.command_palette.is_open = !app.command_palette.is_open;
+            if app.command_palette.is_open {
+                app.command_palette.query.clear();
+                app.command_palette.selected_index = 0;
+            }
+            Task::none()
+        }
+        Message::CommandPaletteQueryChanged(query) => {
+            app.command_palette.query = query;
+            app.command_palette.selected_index = 0;
+            Task::none()
+        }
+        Message::PaletteSelectNext => {
+            let all = app.build_palette_items();
+            let filtered = crate::models::filter_palette_items(&app.command_palette.query, &all);
+            if !filtered.is_empty() {
+                app.command_palette.selected_index =
+                    (app.command_palette.selected_index + 1) % filtered.len();
+            }
+            Task::none()
+        }
+        Message::PaletteSelectPrev => {
+            let all = app.build_palette_items();
+            let filtered = crate::models::filter_palette_items(&app.command_palette.query, &all);
+            if !filtered.is_empty() {
+                if app.command_palette.selected_index == 0 {
+                    app.command_palette.selected_index = filtered.len().saturating_sub(1);
+                } else {
+                    app.command_palette.selected_index -= 1;
+                }
+            }
+            Task::none()
+        }
+        Message::PaletteSubmit => {
+            let all = app.build_palette_items();
+            let filtered = crate::models::filter_palette_items(&app.command_palette.query, &all);
+            if let Some(item) = filtered.get(app.command_palette.selected_index) {
+                let action = item.action.clone();
+                app.command_palette.is_open = false;
+                return app.update(Message::ExecutePaletteAction(action));
+            }
+            Task::none()
+        }
+        Message::ExecutePaletteAction(action) => {
+            use crate::models::CommandAction;
+            match action {
+                CommandAction::NextPage => app.update(Message::NextPage),
+                CommandAction::PrevPage => app.update(Message::PrevPage),
+                CommandAction::ZoomIn => app.update(Message::ZoomIn),
+                CommandAction::ZoomOut => app.update(Message::ZoomOut),
+                CommandAction::ResetZoom => app.update(Message::ResetZoom),
+                CommandAction::ToggleTheme => {
+                    let next_theme = match app.settings.theme {
+                        crate::models::AppTheme::Dark => crate::models::AppTheme::Light,
+                        _ => crate::models::AppTheme::Dark,
+                    };
+                    app.settings.theme = next_theme;
+                    Task::none()
+                }
+                CommandAction::ToggleSidebar => app.update(Message::ToggleSidebar),
+                CommandAction::ToggleFullscreen => app.update(Message::ToggleFullscreen),
+                CommandAction::ToggleMetadata => app.update(Message::ToggleMetadata),
+                CommandAction::ToggleKeyboardHelp => app.update(Message::ToggleKeyboardHelp),
+                CommandAction::RotateClockwise => app.update(Message::RotateClockwise),
+                CommandAction::RotateCounterClockwise => app.update(Message::RotateCounterClockwise),
+                CommandAction::ExtractText => app.update(Message::ExtractTextToClipboard),
+                CommandAction::TriggerOcrLatin => {
+                    app.update(Message::TriggerOcrCurrentPage(crate::ocr::OcrScript::Latin))
+                }
+                CommandAction::TriggerOcrDevanagari => app.update(Message::TriggerOcrCurrentPage(
+                    crate::ocr::OcrScript::Devanagari,
+                )),
+                CommandAction::ExportMarkdown => app.update(Message::ExportDocumentMarkdown),
+                CommandAction::ExportHtml => app.update(Message::ExportDocumentHtml),
+                CommandAction::ExportTxt => app.update(Message::ExportDocumentTxt),
+                CommandAction::ExportImage => app.update(Message::ExportImage),
+                CommandAction::Print => app.update(Message::Print),
+                CommandAction::OptimizePDF => app.update(Message::OptimizePDF),
+                CommandAction::OpenSettings => app.update(Message::OpenSettings),
+                CommandAction::NewDocument => app.update(Message::CreateBlankDocument),
+                CommandAction::OpenFile => app.update(Message::OpenDocument),
+                CommandAction::JumpToPage(page) => app.update(Message::JumpToPage(page)),
+            }
         }
         Message::LinkClicked(link) => {
             if let Some(url) = link.url {

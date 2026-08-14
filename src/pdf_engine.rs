@@ -121,6 +121,8 @@ pub struct DocumentStore {
     /// Per-document user visibility overrides applied on top of `oc_configs`.
     /// true = force ON, false = force OFF.
     oc_visibility: HashMap<DocumentId, HashMap<zpdf::ObjectId, bool>>,
+    /// Persistent per-document image cache to avoid re-decoding streams on every render.
+    image_caches: HashMap<DocumentId, ImageCache>,
 }
 
 // DocumentState wrapper removed as it was a single-field struct.
@@ -134,6 +136,7 @@ impl DocumentStore {
             cache_keys: HashMap::new(),
             oc_configs: HashMap::new(),
             oc_visibility: HashMap::new(),
+            image_caches: HashMap::new(),
         }
     }
 
@@ -242,6 +245,7 @@ impl DocumentStore {
 
         self.documents.insert(doc_id, doc);
         self.paths.insert(doc_id, path.to_string());
+        self.image_caches.insert(doc_id, ImageCache::new());
 
         Ok(crate::models::OpenResult {
             id: doc_id,
@@ -378,6 +382,7 @@ impl DocumentStore {
         self.paths.remove(&doc_id);
         self.oc_configs.remove(&doc_id);
         self.oc_visibility.remove(&doc_id);
+        self.image_caches.remove(&doc_id);
         if let Some(doc_keys) = self.cache_keys.remove(&doc_id) {
             for key in doc_keys {
                 self.render_cache.remove(&key);
@@ -764,7 +769,7 @@ impl DocumentStore {
             .map_err(|_| PdfError::PageNotFound(page_num))?;
 
         let mut fonts = doc.load_page_fonts(&page);
-        let mut images = ImageCache::new();
+        let images = self.image_caches.entry(doc_id).or_default();
         let content = doc
             .page_content_bytes(&page)
             .map_err(|e| PdfError::RenderFailed(e.to_string()))?;
@@ -774,7 +779,7 @@ impl DocumentStore {
             .with_page_rotation(page.rotate + options.rotation)
             .with_fonts(&mut fonts)
             .with_document(doc.file(), &page.resources)
-            .with_images(&mut images);
+            .with_images(images);
 
         // Build optional-content config with user visibility overrides applied.
         // Since OcConfig has no public mutation API, we store the base config
@@ -811,7 +816,7 @@ impl DocumentStore {
 
         let display_list = interp.interpret(&content);
 
-        let mut renderer = CpuRenderer::new().with_fonts(&fonts).with_images(&images);
+        let mut renderer = CpuRenderer::new().with_fonts(&fonts).with_images(images);
         let page_img = renderer
             .render_display_list(&display_list, options.scale)
             .map_err(|e| PdfError::RenderFailed(e.to_string()))?;
@@ -1638,7 +1643,9 @@ impl DocumentStore {
         let data = std::fs::read(input_path).map_err(|e| PdfError::OpenFailed(e.to_string()))?;
         let mut writer =
             IncrementalWriter::new(data).map_err(|e| PdfError::OpenFailed(e.to_string()))?;
-        writer.tag_pdf().map_err(|e| PdfError::IoError(e.to_string()))?;
+        writer
+            .tag_pdf()
+            .map_err(|e| PdfError::IoError(e.to_string()))?;
         let out_bytes = {
             let mut buf = std::io::Cursor::new(Vec::new());
             writer
