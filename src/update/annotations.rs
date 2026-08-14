@@ -323,11 +323,30 @@ pub fn handle_annotation_message(app: &mut PdfBullApp, message: Message) -> Task
                                 a.y.partial_cmp(&b.y).unwrap_or(std::cmp::Ordering::Equal)
                             }
                         });
-                        let text: String = selected_words
-                            .iter()
-                            .map(|w| w.text.as_str())
+
+                        // Line-aware formatted joining with newlines
+                        let mut line_groups: Vec<Vec<&crate::models::TextItem>> = Vec::new();
+                        for word in &selected_words {
+                            if let Some(cur_line) = line_groups.last_mut() {
+                                let first_y = cur_line[0].y;
+                                if (word.y - first_y).abs() < 5.0 {
+                                    cur_line.push(word);
+                                    continue;
+                                }
+                            }
+                            line_groups.push(vec![word]);
+                        }
+                        let text: String = line_groups
+                            .into_iter()
+                            .map(|line| {
+                                line.into_iter()
+                                    .map(|w| w.text.as_str())
+                                    .collect::<Vec<_>>()
+                                    .join(" ")
+                            })
                             .collect::<Vec<_>>()
-                            .join(" ");
+                            .join("\n");
+
                         tab.selected_boxes = selected_words
                             .iter()
                             .map(|w| (w.x, w.y, w.width, w.height))
@@ -340,6 +359,39 @@ pub fn handle_annotation_message(app: &mut PdfBullApp, message: Message) -> Task
                         }
                         app.status_message = Some("Text copied to clipboard!".to_string());
                     }
+                }
+            }
+            Task::none()
+        }
+        Message::HighlightSelection => {
+            let color = app.annotation_color.clone();
+            if let Some(tab) = app.current_tab_mut() {
+                if !tab.selected_boxes.is_empty() {
+                    let page = tab.current_page;
+                    for (x, y, w, h) in &tab.selected_boxes {
+                        let id = crate::models::next_annotation_id();
+                        let ann = crate::models::Annotation {
+                            id,
+                            page,
+                            style: crate::models::AnnotationStyle::Highlight {
+                                color: color.clone(),
+                            },
+                            x: *x,
+                            y: *y,
+                            width: *w,
+                            height: *h,
+                        };
+                        tab.undo_stack
+                            .push(crate::models::UndoableAction::AddAnnotation(ann.clone()));
+                        tab.annotations.push(ann);
+                    }
+                    tab.redo_stack.clear();
+                    tab.annotations_dirty = true;
+                    tab.selected_text = None;
+                    tab.selected_boxes.clear();
+                    app.status_message = Some(
+                        "Highlighted selected text! Press Ctrl+S to save to PDF.".to_string(),
+                    );
                 }
             }
             Task::none()
@@ -367,14 +419,17 @@ pub fn handle_annotation_message(app: &mut PdfBullApp, message: Message) -> Task
                         tab.annotations.retain(|a| a.id != ann.id);
                     }
                     crate::models::UndoableAction::DeleteAnnotation(idx, ann) => {
-                        tab.redo_stack
-                            .push(crate::models::UndoableAction::DeleteAnnotation(
-                                idx,
-                                ann.clone(),
-                            ));
-                        tab.annotations.insert(idx.min(tab.annotations.len()), ann);
+                        tab.redo_stack.push(
+                            crate::models::UndoableAction::DeleteAnnotation(idx, ann.clone()),
+                        );
+                        if idx <= tab.annotations.len() {
+                            tab.annotations.insert(idx, ann);
+                        } else {
+                            tab.annotations.push(ann);
+                        }
                     }
                 }
+                tab.annotations_dirty = true;
             }
             Task::none()
         }
@@ -389,63 +444,46 @@ pub fn handle_annotation_message(app: &mut PdfBullApp, message: Message) -> Task
                         tab.annotations.push(ann);
                     }
                     crate::models::UndoableAction::DeleteAnnotation(idx, ann) => {
-                        tab.undo_stack
-                            .push(crate::models::UndoableAction::DeleteAnnotation(
-                                idx,
-                                ann.clone(),
-                            ));
+                        tab.undo_stack.push(
+                            crate::models::UndoableAction::DeleteAnnotation(idx, ann.clone()),
+                        );
                         tab.annotations.retain(|a| a.id != ann.id);
                     }
                 }
+                tab.annotations_dirty = true;
             }
             Task::none()
         }
         Message::SaveAnnotations => {
-            let (doc_id, annotations, pdf_path) = match app.current_tab() {
-                Some(t) if !t.annotations.is_empty() => {
-                    // Remap visual page indices to actual PDF page numbers via page_mapping.
-                    let annotations = t
-                        .annotations
-                        .iter()
-                        .map(|ann| {
-                            let mut ann = ann.clone();
-                            ann.page = t.page_mapping.get(ann.page).copied().unwrap_or(ann.page);
-                            ann
-                        })
-                        .collect::<Vec<_>>();
-                    (t.id, annotations, t.path.to_string_lossy().to_string())
-                }
-                _ => {
-                    tracing::warn!("No annotations to save");
+            if let Some(tab) = app.current_tab() {
+                let doc_id = tab.id;
+                let annotations = tab.annotations.clone();
+                let Some(engine) = &app.engine else {
                     return Task::none();
-                }
-            };
-
-            let Some(engine) = &app.engine else {
-                return Task::none();
-            };
-
-            let cmd_tx = engine.cmd_tx.clone();
-            Task::perform(
-                async move {
-                    let (resp_tx, resp_rx) = tokio::sync::oneshot::channel();
-                    let _ = cmd_tx.send(crate::commands::PdfCommand::ExportPdf(
-                        doc_id,
-                        pdf_path,
-                        annotations,
-                        resp_tx,
-                    ));
-                    match resp_rx.await {
-                        Ok(Ok(path)) => Ok(path),
-                        Ok(Err(e)) => Err(e),
-                        Err(_) => Err(crate::models::PdfError::EngineDied),
-                    }
-                },
-                Message::AnnotationsSaved,
-            )
+                };
+                let cmd_tx = engine.cmd_tx.clone();
+                Task::perform(
+                    async move {
+                        let (resp_tx, resp_rx) = tokio::sync::oneshot::channel();
+                        let _ = cmd_tx
+                            .send(crate::commands::PdfCommand::SaveAnnotations(
+                                doc_id,
+                                annotations,
+                                resp_tx,
+                            ))
+                            .await;
+                        resp_rx.await.unwrap_or_else(|_| {
+                            Err(crate::models::PdfError::IoError("Channel closed".to_string()))
+                        })
+                    },
+                    Message::AnnotationsSaved,
+                )
+            } else {
+                Task::none()
+            }
         }
-        Message::AnnotationsSaved(result) => {
-            match result {
+        Message::AnnotationsSaved(res) => {
+            match res {
                 Ok(path) => {
                     if let Some(tab) = app.current_tab_mut() {
                         tab.annotations_dirty = false;

@@ -231,4 +231,6 @@ pub enum Message {
     PaletteSelectPrev,
     /// Submit currently selected palette item
     PaletteSubmit,
+    /// Convert currently selected text into persistent highlight annotations
+    HighlightSelection,
 }

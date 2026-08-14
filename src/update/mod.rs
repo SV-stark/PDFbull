@@ -166,6 +166,7 @@ pub fn handle_message(app: &mut PdfBullApp, message: Message) -> Task<Message> {
         | Message::AnnotationDragStart { .. }
         | Message::AnnotationDragUpdate { .. }
         | Message::AnnotationDragEnd
+        | Message::HighlightSelection
         | Message::DeleteAnnotation(_)
         | Message::Undo
         | Message::Redo

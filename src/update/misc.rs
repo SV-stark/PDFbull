@@ -94,6 +94,32 @@ pub fn handle_misc_message(app: &mut PdfBullApp, message: Message) -> Task<Messa
                             return app.update(Message::PaletteSubmit);
                         }
                         Key::Character(c) => match c.as_str() {
+                            "c" if modifiers.command() => {
+                                if let Some(tab) = app.current_tab()
+                                    && let Some(text) = &tab.selected_text
+                                {
+                                    let mut clipboard = arboard::Clipboard::new().ok();
+                                    if let Some(cb) = &mut clipboard {
+                                        let _ = cb.set_text(text.clone());
+                                    }
+                                    app.status_message =
+                                        Some("Copied selected text to clipboard!".to_string());
+                                }
+                            }
+                            "h" if modifiers.command() => {
+                                if let Some(tab) = app.current_tab()
+                                    && !tab.selected_boxes.is_empty()
+                                {
+                                    return app.update(Message::HighlightSelection);
+                                }
+                            }
+                            "h" if !modifiers.command() => {
+                                if let Some(tab) = app.current_tab()
+                                    && !tab.selected_boxes.is_empty()
+                                {
+                                    return app.update(Message::HighlightSelection);
+                                }
+                            }
                             "k" if modifiers.command() => {
                                 return app.update(Message::ToggleCommandPalette);
                             }
@@ -213,6 +239,7 @@ pub fn handle_misc_message(app: &mut PdfBullApp, message: Message) -> Task<Messa
                 CommandAction::RotateClockwise => app.update(Message::RotateClockwise),
                 CommandAction::RotateCounterClockwise => app.update(Message::RotateCounterClockwise),
                 CommandAction::ExtractText => app.update(Message::ExtractTextToClipboard),
+                CommandAction::HighlightSelection => app.update(Message::HighlightSelection),
                 CommandAction::TriggerOcrLatin => {
                     app.update(Message::TriggerOcrCurrentPage(crate::ocr::OcrScript::Latin))
                 }

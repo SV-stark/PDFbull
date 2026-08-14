@@ -598,10 +598,40 @@ pub fn render(app: &PdfBullApp) -> Element<'_, crate::message::Message> {
                 .spacing(3)
                 .into()
             };
+            let highlight_selection_btn: Element<'_, crate::message::Message> =
+                if tab.selected_boxes.is_empty() {
+                    Space::new().into()
+                } else {
+                    row![
+                        v_sep(),
+                        button(
+                            row![
+                                text("✨").size(12),
+                                text("Highlight Selection").size(11).font(INTER_BOLD)
+                            ]
+                            .spacing(6)
+                            .align_y(Alignment::Center),
+                        )
+                        .on_press(crate::message::Message::HighlightSelection)
+                        .padding([6, 12])
+                        .style(|_, _| iced::widget::button::Style {
+                            background: Some(Color::from_rgb8(230, 160, 20).into()),
+                            text_color: Color::WHITE,
+                            border: Border {
+                                radius: theme::BORDER_RADIUS_MD.into(),
+                                ..Default::default()
+                            },
+                            ..Default::default()
+                        })
+                    ]
+                    .align_y(Alignment::Center)
+                    .into()
+                };
 
             container(
                 row![
                     markup_tools,
+                    highlight_selection_btn,
                     style_section,
                     v_sep(),
                     stamps_section,

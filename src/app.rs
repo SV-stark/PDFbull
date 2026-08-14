@@ -269,6 +269,13 @@ impl PdfBullApp {
                 shortcut: None,
             },
             PaletteItem {
+                title: "Highlight Selected Text".into(),
+                subtitle: Some("Create persistent highlight markup from active selection".into()),
+                category: "Annotate".into(),
+                action: CommandAction::HighlightSelection,
+                shortcut: Some("H / Ctrl+H".into()),
+            },
+            PaletteItem {
                 title: "Toggle Dark / Light Theme".into(),
                 subtitle: Some("Switch application appearance".into()),
                 category: "View".into(),

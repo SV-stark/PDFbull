@@ -807,6 +807,7 @@ pub enum CommandAction {
     NewDocument,
     OpenFile,
     JumpToPage(usize),
+    HighlightSelection,
 }
 
 #[derive(Debug, Clone)]
