@@ -2,8 +2,8 @@
 
 Name "PDFbull"
 OutFile "PDFbull-Setup.exe"
-InstallDir "$PROGRAMFILES64\PDFbull"
-RequestExecutionLevel admin
+InstallDir "$LOCALAPPDATA\Programs\PDFbull"
+RequestExecutionLevel user
 
 ; Branding and Graphics
 BrandingText "PDFbull - Pure-Rust PDF & Neural OCR"
@@ -34,6 +34,7 @@ BrandingText "PDFbull - Pure-Rust PDF & Neural OCR"
 !insertmacro MUI_UNPAGE_INSTFILES
 
 Section "Install"
+    SetShellVarContext current
     SetOutPath "$INSTDIR"
     
     File "release_dist\pdfbull.exe"
@@ -50,15 +51,16 @@ Section "Install"
     CreateShortcut "$SMPROGRAMS\PDFbull\Uninstall.lnk" "$INSTDIR\Uninstall.exe"
     CreateShortcut "$DESKTOP\PDFbull.lnk" "$INSTDIR\pdfbull.exe" "" "$INSTDIR\PDFbull.ico"
     
-    WriteRegStr HKLM "Software\Microsoft\Windows\CurrentVersion\Uninstall\PDFbull" "DisplayName" "PDFbull"
-    WriteRegStr HKLM "Software\Microsoft\Windows\CurrentVersion\Uninstall\PDFbull" "UninstallString" "$\"$INSTDIR\Uninstall.exe$\""
-    WriteRegStr HKLM "Software\Microsoft\Windows\CurrentVersion\Uninstall\PDFbull" "DisplayIcon" "$INSTDIR\pdfbull.exe"
-    WriteRegStr HKLM "Software\Microsoft\Windows\CurrentVersion\Uninstall\PDFbull" "Publisher" "SV-stark"
-    WriteRegDWORD HKLM "Software\Microsoft\Windows\CurrentVersion\Uninstall\PDFbull" "NoModify" 1
-    WriteRegDWORD HKLM "Software\Microsoft\Windows\CurrentVersion\Uninstall\PDFbull" "NoRepair" 1
+    WriteRegStr HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\PDFbull" "DisplayName" "PDFbull"
+    WriteRegStr HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\PDFbull" "UninstallString" "$\"$INSTDIR\Uninstall.exe$\""
+    WriteRegStr HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\PDFbull" "DisplayIcon" "$INSTDIR\pdfbull.exe"
+    WriteRegStr HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\PDFbull" "Publisher" "SV-stark"
+    WriteRegDWORD HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\PDFbull" "NoModify" 1
+    WriteRegDWORD HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\PDFbull" "NoRepair" 1
 SectionEnd
 
 Section "Uninstall"
+    SetShellVarContext current
     Delete "$INSTDIR\pdfbull.exe"
     Delete "$INSTDIR\PDFbull.ico"
     Delete "$INSTDIR\Uninstall.exe"
@@ -71,8 +73,5 @@ Section "Uninstall"
     
     Delete "$DESKTOP\PDFbull.lnk"
     
-    DeleteRegKey HKLM "Software\Microsoft\Windows\CurrentVersion\Uninstall\PDFbull"
-    
-    RMDir /r "$APPDATA\pdfbull"
-    RMDir /r "$LOCALAPPDATA\pdfbull"
+    DeleteRegKey HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\PDFbull"
 SectionEnd

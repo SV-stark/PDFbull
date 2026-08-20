@@ -5,6 +5,17 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use thiserror::Error;
 
+/// Overwrites string bytes in memory with zeros before clearing.
+pub fn zeroize_string(s: &mut String) {
+    if !s.is_empty() {
+        unsafe {
+            let bytes = s.as_bytes_mut();
+            std::ptr::write_bytes(bytes.as_mut_ptr(), 0, bytes.len());
+        }
+        s.clear();
+    }
+}
+
 #[derive(Error, Debug, Clone, PartialEq, Eq)]
 pub enum PdfError {
     #[error("Failed to open document: {0}")]

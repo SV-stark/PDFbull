@@ -80,17 +80,25 @@ pub fn handle_misc_message(app: &mut PdfBullApp, message: Message) -> Task<Messa
                         Key::Named(iced::keyboard::key::Named::F1) => {
                             return app.update(Message::ToggleKeyboardHelp);
                         }
-                        Key::Named(iced::keyboard::key::Named::Escape) if app.command_palette.is_open => {
+                        Key::Named(iced::keyboard::key::Named::Escape)
+                            if app.command_palette.is_open =>
+                        {
                             app.command_palette.is_open = false;
                             return Task::none();
                         }
-                        Key::Named(iced::keyboard::key::Named::ArrowDown) if app.command_palette.is_open => {
+                        Key::Named(iced::keyboard::key::Named::ArrowDown)
+                            if app.command_palette.is_open =>
+                        {
                             return app.update(Message::PaletteSelectNext);
                         }
-                        Key::Named(iced::keyboard::key::Named::ArrowUp) if app.command_palette.is_open => {
+                        Key::Named(iced::keyboard::key::Named::ArrowUp)
+                            if app.command_palette.is_open =>
+                        {
                             return app.update(Message::PaletteSelectPrev);
                         }
-                        Key::Named(iced::keyboard::key::Named::Enter) if app.command_palette.is_open => {
+                        Key::Named(iced::keyboard::key::Named::Enter)
+                            if app.command_palette.is_open =>
+                        {
                             return app.update(Message::PaletteSubmit);
                         }
                         Key::Character(c) => match c.as_str() {
@@ -237,7 +245,9 @@ pub fn handle_misc_message(app: &mut PdfBullApp, message: Message) -> Task<Messa
                 CommandAction::ToggleMetadata => app.update(Message::ToggleMetadata),
                 CommandAction::ToggleKeyboardHelp => app.update(Message::ToggleKeyboardHelp),
                 CommandAction::RotateClockwise => app.update(Message::RotateClockwise),
-                CommandAction::RotateCounterClockwise => app.update(Message::RotateCounterClockwise),
+                CommandAction::RotateCounterClockwise => {
+                    app.update(Message::RotateCounterClockwise)
+                }
                 CommandAction::ExtractText => app.update(Message::ExtractTextToClipboard),
                 CommandAction::HighlightSelection => app.update(Message::HighlightSelection),
                 CommandAction::TriggerOcrLatin => {

@@ -6,6 +6,7 @@ unsafe extern "system" {
     fn FindWindowW(lpClassName: *const u16, lpWindowName: *const u16) -> isize;
     fn ShowWindow(hWnd: isize, nCmdShow: i32) -> i32;
     fn SetForegroundWindow(hWnd: isize) -> i32;
+    fn GetWindowThreadProcessId(hWnd: isize, lpdwProcessId: *mut u32) -> u32;
 }
 
 const SW_RESTORE: i32 = 9;
@@ -30,8 +31,13 @@ pub fn ensure_single_instance(args: &[String]) -> Result<bool, Box<dyn std::erro
                 let window_title: Vec<u16> = "PDFbull\0".encode_utf16().collect();
                 let hwnd = FindWindowW(std::ptr::null(), window_title.as_ptr());
                 if hwnd != 0 {
-                    let _ = ShowWindow(hwnd, SW_RESTORE);
-                    let _ = SetForegroundWindow(hwnd);
+                    let mut pid: u32 = 0;
+                    GetWindowThreadProcessId(hwnd, std::ptr::addr_of_mut!(pid));
+                    let current_pid = std::process::id();
+                    if pid != 0 && pid != current_pid {
+                        let _ = ShowWindow(hwnd, SW_RESTORE);
+                        let _ = SetForegroundWindow(hwnd);
+                    }
                 }
             }
 

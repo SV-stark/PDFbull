@@ -176,7 +176,7 @@ pub fn handle_tab_message(app: &mut PdfBullApp, message: Message) -> Task<Messag
                         .find(|t| t.id == doc_id)
                         .map(|t| t.path.clone());
                     app.show_password_prompt = true;
-                    app.password_input.clear();
+                    crate::models::zeroize_string(&mut app.password_input);
                     app.password_prompt_path = path;
                     app.password_prompt_doc_id = Some(doc_id);
                     Task::none()
@@ -432,7 +432,7 @@ pub fn handle_tab_message(app: &mut PdfBullApp, message: Message) -> Task<Messag
             let path = app.password_prompt_path.take();
             let doc_id = app.password_prompt_doc_id.take();
             let password = app.password_input.clone();
-            app.password_input.clear();
+            crate::models::zeroize_string(&mut app.password_input);
 
             if let (Some(path), Some(doc_id), Some(engine)) = (path, doc_id, &app.engine) {
                 let cmd_tx = engine.cmd_tx.clone();
@@ -472,7 +472,7 @@ pub fn handle_tab_message(app: &mut PdfBullApp, message: Message) -> Task<Messag
             app.show_password_prompt = false;
             let doc_id = app.password_prompt_doc_id.take();
             app.password_prompt_path = None;
-            app.password_input.clear();
+            crate::models::zeroize_string(&mut app.password_input);
 
             if let Some(doc_id) = doc_id {
                 if let Some(pos) = app.tabs.iter().position(|t| t.id == doc_id) {

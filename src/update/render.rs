@@ -234,7 +234,7 @@ pub fn handle_render_message(app: &mut PdfBullApp, message: Message) -> Task<Mes
 
             if let Some(tab) = app.tabs.iter_mut().find(|t| t.id == doc_id) {
                 let expected_thumb_zoom = (120.0 / tab.page_width.max(1.0)).min(5.0);
-                if (expected_thumb_zoom - scale).abs() > 0.001 {
+                if (expected_thumb_zoom - scale).abs() > 0.05 {
                     return Task::none();
                 }
 

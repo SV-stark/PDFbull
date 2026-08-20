@@ -10,7 +10,6 @@ pub mod tabs;
 
 use crate::app::PdfBullApp;
 use crate::message::Message;
-use crate::models::AppTheme;
 use crate::storage;
 use iced::Task;
 
@@ -92,9 +91,6 @@ pub fn handle_message(app: &mut PdfBullApp, message: Message) -> Task<Message> {
         app.settings = storage::load_settings();
         app.recent_files = storage::load_recent_files();
         let session = storage::load_session();
-        if app.settings.theme == AppTheme::System {
-            app.settings.theme = AppTheme::Light;
-        }
         let args: Vec<String> = std::env::args().collect();
         let mut cli_path = None;
         if args.len() > 1 {
@@ -113,9 +109,10 @@ pub fn handle_message(app: &mut PdfBullApp, message: Message) -> Task<Message> {
             let target_tab = session_data.active_tab;
             for entry in session_data.open_tabs.drain(..) {
                 let path: std::path::PathBuf = entry.clone().into();
+                let path_clone = path.clone();
                 tasks.push(app.update(Message::OpenFile(path)));
                 if let crate::models::SessionTabEntry::Detailed(detailed) = entry {
-                    if let Some(tab) = app.tabs.last_mut() {
+                    if let Some(tab) = app.tabs.iter_mut().find(|t| t.path == path_clone) {
                         tab.pending_session = Some(detailed);
                     }
                 }

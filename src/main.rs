@@ -3,22 +3,26 @@ use pdfbull::app;
 use pdfbull::platform;
 
 struct DualWriter {
-    file: std::sync::Arc<std::sync::Mutex<std::fs::File>>,
+    file: Option<std::sync::Arc<std::sync::Mutex<std::fs::File>>>,
 }
 
 impl std::io::Write for DualWriter {
     fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
         let _ = std::io::stdout().write_all(buf);
-        if let Ok(mut file) = self.file.lock() {
-            let _ = file.write_all(buf);
+        if let Some(ref file_arc) = self.file {
+            if let Ok(mut file) = file_arc.lock() {
+                let _ = file.write_all(buf);
+            }
         }
         Ok(buf.len())
     }
 
     fn flush(&mut self) -> std::io::Result<()> {
         let _ = std::io::stdout().flush();
-        if let Ok(mut file) = self.file.lock() {
-            let _ = file.flush();
+        if let Some(ref file_arc) = self.file {
+            if let Ok(mut file) = file_arc.lock() {
+                let _ = file.flush();
+            }
         }
         Ok(())
     }
@@ -32,6 +36,9 @@ fn main() -> iced::Result {
 
     let log_path_clone = log_path.clone();
     let panic_path_clone = panic_path.clone();
+
+    human_panic::setup_panic!();
+    let default_panic_hook = std::panic::take_hook();
 
     std::panic::set_hook(Box::new(move |info| {
         let msg = if let Some(s) = info.payload().downcast_ref::<&str>() {
@@ -59,15 +66,16 @@ fn main() -> iced::Result {
             use std::io::Write;
             let _ = f.write_all(panic_msg.as_bytes());
         }
+        default_panic_hook(info);
     }));
 
-    let log_file = std::fs::OpenOptions::new()
+    let shared_file = std::fs::OpenOptions::new()
         .create(true)
         .write(true)
         .truncate(true)
         .open(&log_path)
-        .expect("Failed to open pdfbull.log");
-    let shared_file = std::sync::Arc::new(std::sync::Mutex::new(log_file));
+        .ok()
+        .map(|f| std::sync::Arc::new(std::sync::Mutex::new(f)));
 
     let file_clone = shared_file.clone();
     let make_writer = move || DualWriter {
@@ -81,8 +89,6 @@ fn main() -> iced::Result {
         )
         .with_writer(make_writer)
         .init();
-
-    human_panic::setup_panic!();
 
     let args: Vec<String> = std::env::args().collect();
 
@@ -108,7 +114,11 @@ fn main() -> iced::Result {
     .font(include_bytes!("../src/assets/fonts/lucide.ttf"))
     .theme(|app: &app::PdfBullApp| match app.settings.theme {
         pdfbull::models::AppTheme::Dark => iced::Theme::Dark,
-        pdfbull::models::AppTheme::Light | pdfbull::models::AppTheme::System => iced::Theme::Light,
+        pdfbull::models::AppTheme::Light => iced::Theme::Light,
+        pdfbull::models::AppTheme::System => match dark_light::detect() {
+            Ok(dark_light::Mode::Dark) => iced::Theme::Dark,
+            _ => iced::Theme::Light,
+        },
     })
     .subscription(app::PdfBullApp::subscription)
     .window(iced::window::Settings {

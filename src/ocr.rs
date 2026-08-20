@@ -62,7 +62,12 @@ impl OcrScript {
             return exe_dir;
         }
 
-        if let Some(proj_dirs) = directories::ProjectDirs::from("com", "PDFbull", "PDFbull") {
+        let config_models = crate::storage::get_config_dir().join("models");
+        if config_models.exists() {
+            return config_models;
+        }
+
+        if let Some(proj_dirs) = directories::ProjectDirs::from("", "SV-stark", "PDFbull") {
             let data_dir = proj_dirs.data_dir().join("models");
             if data_dir.exists() {
                 return data_dir;

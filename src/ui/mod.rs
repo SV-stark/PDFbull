@@ -1093,14 +1093,11 @@ fn command_palette_view(app: &PdfBullApp) -> Element<'_, crate::message::Message
                                 }),
                             }),
                         Space::new().width(8),
-                        container(
-                            text(category)
-                                .size(10)
-                                .font(INTER_REGULAR)
-                                .style(|_| text::Style {
-                                    color: Some(Color::from_rgb8(160, 165, 175)),
-                                }),
-                        )
+                        container(text(category).size(10).font(INTER_REGULAR).style(|_| {
+                            text::Style {
+                                color: Some(Color::from_rgb8(160, 165, 175)),
+                            }
+                        }),)
                         .padding([2, 6])
                         .style(|_| container::Style {
                             background: Some(Color::from_rgba(1.0, 1.0, 1.0, 0.08).into()),

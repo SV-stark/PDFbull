@@ -389,9 +389,8 @@ pub fn handle_annotation_message(app: &mut PdfBullApp, message: Message) -> Task
                     tab.annotations_dirty = true;
                     tab.selected_text = None;
                     tab.selected_boxes.clear();
-                    app.status_message = Some(
-                        "Highlighted selected text! Press Ctrl+S to save to PDF.".to_string(),
-                    );
+                    app.status_message =
+                        Some("Highlighted selected text! Press Ctrl+S to save to PDF.".to_string());
                 }
             }
             Task::none()
@@ -419,9 +418,11 @@ pub fn handle_annotation_message(app: &mut PdfBullApp, message: Message) -> Task
                         tab.annotations.retain(|a| a.id != ann.id);
                     }
                     crate::models::UndoableAction::DeleteAnnotation(idx, ann) => {
-                        tab.redo_stack.push(
-                            crate::models::UndoableAction::DeleteAnnotation(idx, ann.clone()),
-                        );
+                        tab.redo_stack
+                            .push(crate::models::UndoableAction::DeleteAnnotation(
+                                idx,
+                                ann.clone(),
+                            ));
                         if idx <= tab.annotations.len() {
                             tab.annotations.insert(idx, ann);
                         } else {
@@ -444,9 +445,11 @@ pub fn handle_annotation_message(app: &mut PdfBullApp, message: Message) -> Task
                         tab.annotations.push(ann);
                     }
                     crate::models::UndoableAction::DeleteAnnotation(idx, ann) => {
-                        tab.undo_stack.push(
-                            crate::models::UndoableAction::DeleteAnnotation(idx, ann.clone()),
-                        );
+                        tab.undo_stack
+                            .push(crate::models::UndoableAction::DeleteAnnotation(
+                                idx,
+                                ann.clone(),
+                            ));
                         tab.annotations.retain(|a| a.id != ann.id);
                     }
                 }
@@ -473,7 +476,9 @@ pub fn handle_annotation_message(app: &mut PdfBullApp, message: Message) -> Task
                             ))
                             .await;
                         resp_rx.await.unwrap_or_else(|_| {
-                            Err(crate::models::PdfError::IoError("Channel closed".to_string()))
+                            Err(crate::models::PdfError::IoError(
+                                "Channel closed".to_string(),
+                            ))
                         })
                     },
                     Message::AnnotationsSaved,

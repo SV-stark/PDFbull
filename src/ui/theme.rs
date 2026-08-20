@@ -26,7 +26,7 @@ pub const COLOR_BG_RIBBON_ACTIVE: Color = Color::from_rgb(0.15, 0.18, 0.23); // 
 // Colors - Brand / Accent (PDFgear Electric Blue)
 pub const COLOR_ACCENT: Color = Color::from_rgb(0.23, 0.51, 0.96); // #3B82F6 Vibrant Accent
 pub const COLOR_ACCENT_HOVER: Color = Color::from_rgb(0.15, 0.39, 0.92); // #2563EB Darker Accent
-pub const COLOR_ACCENT_DIM: Color = Color::from_rgb(0.23, 0.51, 0.96);
+pub const COLOR_ACCENT_DIM: Color = Color::from_rgb(0.18, 0.40, 0.75); // #2E66BF Dimmed Accent
 
 // Colors - Text (WCAG 2.1 AA Compliant Contrast)
 pub const COLOR_TEXT_PRIMARY: Color = Color::from_rgb(0.95, 0.96, 0.98); // #F3F4F6 Crisp White-Gray

@@ -541,47 +541,10 @@ pub fn handle_export_message(app: &mut PdfBullApp, message: Message) -> Task<Mes
                     app.status_message = Some("No printers found on this system.".into());
                     Task::none()
                 }
-                Ok(printers) => Task::perform(
-                    async move {
-                        let printer_args = printers
-                            .iter()
-                            .map(|p| format!("'{}'", p.replace('\'', "''")))
-                            .collect::<Vec<_>>()
-                            .join(",");
-
-                        let cmd = format!(
-                            "$printers = @({printer_args}); $choice = $printers | Out-GridView -Title 'Select Printer' -OutputMode Single; if ($choice) {{ Write-Output $choice }}"
-                        );
-
-                        let output = tokio::process::Command::new("powershell")
-                            .arg("-NoProfile")
-                            .arg("-Command")
-                            .arg(&cmd)
-                            .output()
-                            .await;
-
-                        let selected_printer = match output {
-                            Ok(out) if out.status.success() => {
-                                let stdout =
-                                    String::from_utf8_lossy(&out.stdout).trim().to_string();
-                                if stdout.is_empty() {
-                                    None
-                                } else {
-                                    Some(stdout)
-                                }
-                            }
-                            _ => None,
-                        };
-
-                        selected_printer.map(|printer| (path, printer))
-                    },
-                    |opt| match opt {
-                        Some((path, printer)) => {
-                            Message::PrintWithPrinter(format!("{path}|{printer}"))
-                        }
-                        None => Message::ClearStatus,
-                    },
-                ),
+                Ok(printers) => {
+                    let selected = printers[0].clone();
+                    app.update(Message::PrintWithPrinter(format!("{path}|{selected}")))
+                }
             }
         }
         // Step 3: send the actual print command with the chosen printer

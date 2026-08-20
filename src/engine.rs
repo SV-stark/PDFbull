@@ -76,16 +76,25 @@ pub fn spawn_engine_thread(cache_size: u64, max_memory_mb: u64) -> EngineState {
             match cmd {
                 PdfCommand::Close(doc_id) => {
                     for _ in 0..num_workers {
-                        let _ = worker_tx.send(PdfCommand::Close(doc_id));
+                        if let Err(e) = worker_tx.send(PdfCommand::Close(doc_id)) {
+                            tracing::error!("Failed to broadcast Close to engine worker: {e}");
+                        }
                     }
                 }
                 PdfCommand::ToggleLayer(doc_id, obj_id, vis) => {
                     for _ in 0..num_workers {
-                        let _ = worker_tx.send(PdfCommand::ToggleLayer(doc_id, obj_id, vis));
+                        if let Err(e) = worker_tx.send(PdfCommand::ToggleLayer(doc_id, obj_id, vis))
+                        {
+                            tracing::error!(
+                                "Failed to broadcast ToggleLayer to engine worker: {e}"
+                            );
+                        }
                     }
                 }
                 _ => {
-                    let _ = worker_tx.send(cmd);
+                    if let Err(e) = worker_tx.send(cmd) {
+                        tracing::error!("Failed to dispatch command to engine worker: {e}");
+                    }
                 }
             }
         }
@@ -159,7 +168,9 @@ pub fn spawn_engine_thread(cache_size: u64, max_memory_mb: u64) -> EngineState {
                             store_ref.close_document(doc_id);
                         });
                         if let Ok(mut guard) = paths.write() {
-                            guard.remove(&doc_id);
+                            if let Some((_, Some(ref mut pass))) = guard.remove(&doc_id) {
+                                crate::models::zeroize_string(pass);
+                            }
                         }
                     }
                     PdfCommand::ExtractText(doc_id, page_num, tx) => {
