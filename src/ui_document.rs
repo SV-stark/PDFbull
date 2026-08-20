@@ -36,29 +36,21 @@ impl<'a> canvas::Program<crate::message::Message> for AnnotationCanvas<'a> {
 
         match event {
             iced::Event::Mouse(iced::mouse::Event::ButtonPressed(iced::mouse::Button::Left)) => {
-                if let Some(position) = cursor.position_in(bounds) {
-                    Some(canvas::Action::publish(
-                        crate::message::Message::AnnotationDragStart {
-                            page: self.page_idx,
-                            x: position.x,
-                            y: position.y,
-                        },
-                    ))
-                } else {
-                    None
-                }
+                cursor.position_in(bounds).map(|position| {
+                    canvas::Action::publish(crate::message::Message::AnnotationDragStart {
+                        page: self.page_idx,
+                        x: position.x,
+                        y: position.y,
+                    })
+                })
             }
             iced::Event::Mouse(iced::mouse::Event::CursorMoved { .. }) => {
-                if let Some(position) = cursor.position_in(bounds) {
-                    Some(canvas::Action::publish(
-                        crate::message::Message::AnnotationDragUpdate {
-                            x: position.x,
-                            y: position.y,
-                        },
-                    ))
-                } else {
-                    None
-                }
+                cursor.position_in(bounds).map(|position| {
+                    canvas::Action::publish(crate::message::Message::AnnotationDragUpdate {
+                        x: position.x,
+                        y: position.y,
+                    })
+                })
             }
             iced::Event::Mouse(iced::mouse::Event::ButtonReleased(iced::mouse::Button::Left)) => {
                 Some(canvas::Action::publish(
@@ -583,34 +575,34 @@ fn render_selection_overlay<'a>(
     let mut overlays = Vec::new();
 
     // 1. Draw the active selection drag blue box
-    if let Some((drag_page, start, current)) = tab.selection_drag {
-        if drag_page == page_idx {
-            let x = start.0.min(current.0);
-            let y = start.1.min(current.1);
-            let w = (current.0 - start.0).abs();
-            let h = (current.1 - start.1).abs();
+    if let Some((drag_page, start, current)) = tab.selection_drag
+        && drag_page == page_idx
+    {
+        let x = start.0.min(current.0);
+        let y = start.1.min(current.1);
+        let w = (current.0 - start.0).abs();
+        let h = (current.1 - start.1).abs();
 
-            overlays.push(
-                container(Space::new())
-                    .width(Length::Fixed(w * zoom))
-                    .height(Length::Fixed(h * zoom))
-                    .style(move |_| iced::widget::container::Style {
-                        background: Some(Color::from_rgba(0.0, 0.4, 1.0, 0.15).into()),
-                        border: iced::Border {
-                            color: Color::from_rgba(0.0, 0.4, 1.0, 0.5),
-                            width: 1.0,
-                            radius: 0.0.into(),
-                        },
-                        ..Default::default()
-                    })
-                    .padding(Padding {
-                        top: y * zoom,
-                        left: x * zoom,
-                        ..Default::default()
-                    })
-                    .into(),
-            );
-        }
+        overlays.push(
+            container(Space::new())
+                .width(Length::Fixed(w * zoom))
+                .height(Length::Fixed(h * zoom))
+                .style(move |_| iced::widget::container::Style {
+                    background: Some(Color::from_rgba(0.0, 0.4, 1.0, 0.15).into()),
+                    border: iced::Border {
+                        color: Color::from_rgba(0.0, 0.4, 1.0, 0.5),
+                        width: 1.0,
+                        radius: 0.0.into(),
+                    },
+                    ..Default::default()
+                })
+                .padding(Padding {
+                    top: y * zoom,
+                    left: x * zoom,
+                    ..Default::default()
+                })
+                .into(),
+        );
     }
 
     // 2. Draw permanent selection highlight boxes for selected words

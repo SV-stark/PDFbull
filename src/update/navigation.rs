@@ -208,8 +208,10 @@ mod tests {
     use crate::models::DocumentTab;
 
     fn setup_test_app() -> PdfBullApp {
-        let mut app = PdfBullApp::default();
-        app.loaded = true;
+        let mut app = PdfBullApp {
+            loaded: true,
+            ..Default::default()
+        };
         let mut tab = DocumentTab::new(std::path::PathBuf::from("test.pdf"));
         tab.total_pages = 10;
         tab.page_heights = vec![800.0; 10];

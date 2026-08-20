@@ -200,20 +200,20 @@ pub fn handle_tab_message(app: &mut PdfBullApp, message: Message) -> Task<Messag
             }
         },
         Message::DocumentMetaLoaded(doc_id, result) => {
-            if let Ok(meta) = result {
-                if let Some(tab) = app.tabs.iter_mut().find(|t| t.id == doc_id) {
-                    tab.outline = meta.outline;
-                    tab.links = meta.links;
-                    tab.metadata = meta.metadata;
-                    tab.page_labels = meta.page_labels;
-                    tab.is_encrypted = meta.is_encrypted;
-                    tab.signatures = meta.signatures;
-                    tab.attachments = meta.attachments;
-                    tab.layers = meta.layers;
-                    tab.oc_config = meta.oc_config;
-                    tab.geo_annotations = meta.geo_annotations;
-                    tab.color_profile = meta.color_profile;
-                }
+            if let Ok(meta) = result
+                && let Some(tab) = app.tabs.iter_mut().find(|t| t.id == doc_id)
+            {
+                tab.outline = meta.outline;
+                tab.links = meta.links;
+                tab.metadata = meta.metadata;
+                tab.page_labels = meta.page_labels;
+                tab.is_encrypted = meta.is_encrypted;
+                tab.signatures = meta.signatures;
+                tab.attachments = meta.attachments;
+                tab.layers = meta.layers;
+                tab.oc_config = meta.oc_config;
+                tab.geo_annotations = meta.geo_annotations;
+                tab.color_profile = meta.color_profile;
             }
             Task::none()
         }
@@ -474,12 +474,12 @@ pub fn handle_tab_message(app: &mut PdfBullApp, message: Message) -> Task<Messag
             app.password_prompt_path = None;
             crate::models::zeroize_string(&mut app.password_input);
 
-            if let Some(doc_id) = doc_id {
-                if let Some(pos) = app.tabs.iter().position(|t| t.id == doc_id) {
-                    app.tabs.remove(pos);
-                    if app.active_tab >= app.tabs.len() && !app.tabs.is_empty() {
-                        app.active_tab = app.tabs.len() - 1;
-                    }
+            if let Some(doc_id) = doc_id
+                && let Some(pos) = app.tabs.iter().position(|t| t.id == doc_id)
+            {
+                app.tabs.remove(pos);
+                if app.active_tab >= app.tabs.len() && !app.tabs.is_empty() {
+                    app.active_tab = app.tabs.len() - 1;
                 }
             }
             Task::none()
@@ -516,11 +516,12 @@ pub fn handle_tab_message(app: &mut PdfBullApp, message: Message) -> Task<Messag
                                 ),
                             )
                         })?;
-                        if let Err(_) = cmd_tx
+                        if cmd_tx
                             .send(crate::commands::PdfCommand::GetAttachmentBytes(
                                 doc_id, obj_id, resp_tx,
                             ))
                             .await
+                            .is_err()
                         {
                             return Err(crate::models::PdfError::EngineDied);
                         }

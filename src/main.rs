@@ -1,32 +1,6 @@
-#![allow(clippy::all, clippy::pedantic, clippy::nursery)]
 use pdfbull::app;
 use pdfbull::platform;
-
-struct DualWriter {
-    file: Option<std::sync::Arc<std::sync::Mutex<std::fs::File>>>,
-}
-
-impl std::io::Write for DualWriter {
-    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
-        let _ = std::io::stdout().write_all(buf);
-        if let Some(ref file_arc) = self.file {
-            if let Ok(mut file) = file_arc.lock() {
-                let _ = file.write_all(buf);
-            }
-        }
-        Ok(buf.len())
-    }
-
-    fn flush(&mut self) -> std::io::Result<()> {
-        let _ = std::io::stdout().flush();
-        if let Some(ref file_arc) = self.file {
-            if let Ok(mut file) = file_arc.lock() {
-                let _ = file.flush();
-            }
-        }
-        Ok(())
-    }
-}
+use tracing_subscriber::fmt::writer::MakeWriterExt;
 
 fn main() -> iced::Result {
     let config_dir = pdfbull::storage::get_config_dir();
@@ -69,25 +43,15 @@ fn main() -> iced::Result {
         default_panic_hook(info);
     }));
 
-    let shared_file = std::fs::OpenOptions::new()
-        .create(true)
-        .write(true)
-        .truncate(true)
-        .open(&log_path)
-        .ok()
-        .map(|f| std::sync::Arc::new(std::sync::Mutex::new(f)));
-
-    let file_clone = shared_file.clone();
-    let make_writer = move || DualWriter {
-        file: file_clone.clone(),
-    };
+    let file_appender = tracing_appender::rolling::never(&config_dir, "pdfbull.log");
+    let (non_blocking_file, _guard) = tracing_appender::non_blocking(file_appender);
 
     tracing_subscriber::fmt()
         .with_env_filter(
             tracing_subscriber::EnvFilter::try_from_default_env()
                 .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("warn")),
         )
-        .with_writer(make_writer)
+        .with_writer(std::io::stdout.and(non_blocking_file))
         .init();
 
     let args: Vec<String> = std::env::args().collect();

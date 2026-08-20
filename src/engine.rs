@@ -17,16 +17,12 @@ fn reload_if_needed(
     paths: &SharedPathMap,
     doc_id: crate::models::DocumentId,
 ) {
-    if !store.has_document(doc_id) {
-        if let Ok(guard) = paths.read() {
-            if let Some((path, pass)) = guard.get(&doc_id).cloned() {
-                if let Err(e) = store.open_document(&path, pass.as_deref(), doc_id) {
-                    tracing::error!(
-                        "Failed to reload document {doc_id:?} from path '{path}': {e:?}"
-                    );
-                }
-            }
-        }
+    if !store.has_document(doc_id)
+        && let Ok(guard) = paths.read()
+        && let Some((path, pass)) = guard.get(&doc_id).cloned()
+        && let Err(e) = store.open_document(&path, pass.as_deref(), doc_id)
+    {
+        tracing::error!("Failed to reload document {doc_id:?} from path '{path}': {e:?}");
     }
 }
 
@@ -167,10 +163,10 @@ pub fn spawn_engine_thread(cache_size: u64, max_memory_mb: u64) -> EngineState {
                         let _ = std::panic::catch_unwind(move || {
                             store_ref.close_document(doc_id);
                         });
-                        if let Ok(mut guard) = paths.write() {
-                            if let Some((_, Some(ref mut pass))) = guard.remove(&doc_id) {
-                                crate::models::zeroize_string(pass);
-                            }
+                        if let Ok(mut guard) = paths.write()
+                            && let Some((_, Some(ref mut pass))) = guard.remove(&doc_id)
+                        {
+                            crate::models::zeroize_string(pass);
                         }
                     }
                     PdfCommand::ExtractText(doc_id, page_num, tx) => {

@@ -38,22 +38,20 @@ impl<'a> canvas::Program<crate::message::Message> for SignatureCanvasProgram<'a>
 
         match event {
             iced::Event::Mouse(iced::mouse::Event::ButtonPressed(iced::mouse::Button::Left)) => {
-                if let Some(pos) = cursor.position_in(bounds) {
-                    Some(canvas::Action::publish(
-                        crate::message::Message::SignatureDragStart { x: pos.x, y: pos.y },
-                    ))
-                } else {
-                    None
-                }
+                cursor.position_in(bounds).map(|pos| {
+                    canvas::Action::publish(crate::message::Message::SignatureDragStart {
+                        x: pos.x,
+                        y: pos.y,
+                    })
+                })
             }
             iced::Event::Mouse(iced::mouse::Event::CursorMoved { .. }) => {
-                if let Some(pos) = cursor.position_in(bounds) {
-                    Some(canvas::Action::publish(
-                        crate::message::Message::SignatureDragUpdate { x: pos.x, y: pos.y },
-                    ))
-                } else {
-                    None
-                }
+                cursor.position_in(bounds).map(|pos| {
+                    canvas::Action::publish(crate::message::Message::SignatureDragUpdate {
+                        x: pos.x,
+                        y: pos.y,
+                    })
+                })
             }
             iced::Event::Mouse(iced::mouse::Event::ButtonReleased(iced::mouse::Button::Left)) => {
                 Some(canvas::Action::publish(

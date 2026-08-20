@@ -121,41 +121,41 @@ pub fn handle_app_message(app: &mut PdfBullApp, message: Message) -> Task<Messag
         }
         Message::ToggleTableMode => {
             app.table_mode_active = !app.table_mode_active;
-            if app.table_mode_active {
-                if let Some(tab) = app.current_tab() {
-                    let doc_id = tab.id;
-                    let (start_idx, end_idx) = tab.view_state.visible_range;
-                    let mut tasks = Vec::new();
-                    if let Some(engine) = &app.engine {
-                        let cmd_tx = engine.cmd_tx.clone();
-                        for page_idx in start_idx..end_idx {
-                            if !tab.view_state.detected_tables.contains_key(&page_idx) {
-                                let tx = cmd_tx.clone();
-                                tasks.push(Task::perform(
-                                    async move {
-                                        let (resp_tx, resp_rx) = tokio::sync::oneshot::channel();
-                                        let _ = tx
-                                            .send(crate::commands::PdfCommand::DetectTables(
-                                                doc_id, page_idx, resp_tx,
-                                            ))
-                                            .await;
-                                        match resp_rx.await {
-                                            Ok(res) => (doc_id, page_idx, res),
-                                            Err(_) => (
-                                                doc_id,
-                                                page_idx,
-                                                Err(crate::models::PdfError::ChannelClosed),
-                                            ),
-                                        }
-                                    },
-                                    |(d, p, r)| Message::TablesDetected(d, p, r),
-                                ));
-                            }
+            if app.table_mode_active
+                && let Some(tab) = app.current_tab()
+            {
+                let doc_id = tab.id;
+                let (start_idx, end_idx) = tab.view_state.visible_range;
+                let mut tasks = Vec::new();
+                if let Some(engine) = &app.engine {
+                    let cmd_tx = engine.cmd_tx.clone();
+                    for page_idx in start_idx..end_idx {
+                        if !tab.view_state.detected_tables.contains_key(&page_idx) {
+                            let tx = cmd_tx.clone();
+                            tasks.push(Task::perform(
+                                async move {
+                                    let (resp_tx, resp_rx) = tokio::sync::oneshot::channel();
+                                    let _ = tx
+                                        .send(crate::commands::PdfCommand::DetectTables(
+                                            doc_id, page_idx, resp_tx,
+                                        ))
+                                        .await;
+                                    match resp_rx.await {
+                                        Ok(res) => (doc_id, page_idx, res),
+                                        Err(_) => (
+                                            doc_id,
+                                            page_idx,
+                                            Err(crate::models::PdfError::ChannelClosed),
+                                        ),
+                                    }
+                                },
+                                |(d, p, r)| Message::TablesDetected(d, p, r),
+                            ));
                         }
                     }
-                    if !tasks.is_empty() {
-                        return Task::batch(tasks);
-                    }
+                }
+                if !tasks.is_empty() {
+                    return Task::batch(tasks);
                 }
             }
             Task::none()

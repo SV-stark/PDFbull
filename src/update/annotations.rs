@@ -31,11 +31,11 @@ pub fn handle_annotation_message(app: &mut PdfBullApp, message: Message) -> Task
         Message::AnnotationDragUpdate { x, y } => {
             if let Some(drag) = &mut app.annotation_drag {
                 drag.current = (x, y);
-            } else if let Some(tab) = app.current_tab_mut() {
-                if let Some((_, _, current)) = &mut tab.selection_drag {
-                    let zoom = tab.zoom;
-                    *current = (x / zoom, y / zoom);
-                }
+            } else if let Some(tab) = app.current_tab_mut()
+                && let Some((_, _, current)) = &mut tab.selection_drag
+            {
+                let zoom = tab.zoom;
+                *current = (x / zoom, y / zoom);
             }
             Task::none()
         }
@@ -264,134 +264,134 @@ pub fn handle_annotation_message(app: &mut PdfBullApp, message: Message) -> Task
                     tab.annotations.push(ann);
                     tab.annotations_dirty = true;
                 }
-            } else if let Some(tab) = app.current_tab_mut() {
-                if let Some((page_idx, start, current)) = tab.selection_drag.take() {
-                    let actual_page = tab.page_mapping.get(page_idx).copied().unwrap_or(page_idx);
-                    let page_rotation = tab
-                        .page_rotations
-                        .get(&actual_page)
-                        .copied()
-                        .unwrap_or(tab.rotation);
-                    let original_height = tab.page_heights.get(page_idx).copied().unwrap_or(800.0);
+            } else if let Some(tab) = app.current_tab_mut()
+                && let Some((page_idx, start, current)) = tab.selection_drag.take()
+            {
+                let actual_page = tab.page_mapping.get(page_idx).copied().unwrap_or(page_idx);
+                let page_rotation = tab
+                    .page_rotations
+                    .get(&actual_page)
+                    .copied()
+                    .unwrap_or(tab.rotation);
+                let original_height = tab.page_heights.get(page_idx).copied().unwrap_or(800.0);
 
-                    let (sx, sy, _, _) = crate::models::unrotate_coords(
-                        start.0,
-                        start.1,
-                        0.0,
-                        0.0,
-                        tab.page_width,
-                        original_height,
-                        page_rotation,
-                    );
-                    let (cx, cy, _, _) = crate::models::unrotate_coords(
-                        current.0,
-                        current.1,
-                        0.0,
-                        0.0,
-                        tab.page_width,
-                        original_height,
-                        page_rotation,
-                    );
+                let (sx, sy, _, _) = crate::models::unrotate_coords(
+                    start.0,
+                    start.1,
+                    0.0,
+                    0.0,
+                    tab.page_width,
+                    original_height,
+                    page_rotation,
+                );
+                let (cx, cy, _, _) = crate::models::unrotate_coords(
+                    current.0,
+                    current.1,
+                    0.0,
+                    0.0,
+                    tab.page_width,
+                    original_height,
+                    page_rotation,
+                );
 
-                    let mut selected_words = Vec::new();
-                    if let Some(words) = tab.view_state.text_layers.get(&page_idx) {
-                        let x1 = sx.min(cx);
-                        let x2 = sx.max(cx);
-                        let y1 = sy.min(cy);
-                        let y2 = sy.max(cy);
+                let mut selected_words = Vec::new();
+                if let Some(words) = tab.view_state.text_layers.get(&page_idx) {
+                    let x1 = sx.min(cx);
+                    let x2 = sx.max(cx);
+                    let y1 = sy.min(cy);
+                    let y2 = sy.max(cy);
 
-                        for word in words {
-                            let wx1 = word.x;
-                            let wx2 = word.x + word.width;
-                            let wy1 = word.y;
-                            let wy2 = word.y + word.height;
+                    for word in words {
+                        let wx1 = word.x;
+                        let wx2 = word.x + word.width;
+                        let wy1 = word.y;
+                        let wy2 = word.y + word.height;
 
-                            let overlap_x = x1 < wx2 && x2 > wx1;
-                            let overlap_y = y1 < wy2 && y2 > wy1;
+                        let overlap_x = x1 < wx2 && x2 > wx1;
+                        let overlap_y = y1 < wy2 && y2 > wy1;
 
-                            if overlap_x && overlap_y {
-                                selected_words.push(word.clone());
-                            }
+                        if overlap_x && overlap_y {
+                            selected_words.push(word.clone());
                         }
                     }
-                    if !selected_words.is_empty() {
-                        selected_words.sort_by(|a, b| {
-                            let y_diff = (a.y - b.y).abs();
-                            if y_diff < 5.0 {
-                                a.x.partial_cmp(&b.x).unwrap_or(std::cmp::Ordering::Equal)
-                            } else {
-                                a.y.partial_cmp(&b.y).unwrap_or(std::cmp::Ordering::Equal)
-                            }
-                        });
-
-                        // Line-aware formatted joining with newlines
-                        let mut line_groups: Vec<Vec<&crate::models::TextItem>> = Vec::new();
-                        for word in &selected_words {
-                            if let Some(cur_line) = line_groups.last_mut() {
-                                let first_y = cur_line[0].y;
-                                if (word.y - first_y).abs() < 5.0 {
-                                    cur_line.push(word);
-                                    continue;
-                                }
-                            }
-                            line_groups.push(vec![word]);
+                }
+                if !selected_words.is_empty() {
+                    selected_words.sort_by(|a, b| {
+                        let y_diff = (a.y - b.y).abs();
+                        if y_diff < 5.0 {
+                            a.x.partial_cmp(&b.x).unwrap_or(std::cmp::Ordering::Equal)
+                        } else {
+                            a.y.partial_cmp(&b.y).unwrap_or(std::cmp::Ordering::Equal)
                         }
-                        let text: String = line_groups
-                            .into_iter()
-                            .map(|line| {
-                                line.into_iter()
-                                    .map(|w| w.text.as_str())
-                                    .collect::<Vec<_>>()
-                                    .join(" ")
-                            })
-                            .collect::<Vec<_>>()
-                            .join("\n");
+                    });
 
-                        tab.selected_boxes = selected_words
-                            .iter()
-                            .map(|w| (w.x, w.y, w.width, w.height))
-                            .collect();
-                        tab.selected_text = Some(text.clone());
-
-                        let mut clipboard = arboard::Clipboard::new().ok();
-                        if let Some(cb) = &mut clipboard {
-                            let _ = cb.set_text(text);
+                    // Line-aware formatted joining with newlines
+                    let mut line_groups: Vec<Vec<&crate::models::TextItem>> = Vec::new();
+                    for word in &selected_words {
+                        if let Some(cur_line) = line_groups.last_mut() {
+                            let first_y = cur_line[0].y;
+                            if (word.y - first_y).abs() < 5.0 {
+                                cur_line.push(word);
+                                continue;
+                            }
                         }
-                        app.status_message = Some("Text copied to clipboard!".to_string());
+                        line_groups.push(vec![word]);
                     }
+                    let text: String = line_groups
+                        .into_iter()
+                        .map(|line| {
+                            line.into_iter()
+                                .map(|w| w.text.as_str())
+                                .collect::<Vec<_>>()
+                                .join(" ")
+                        })
+                        .collect::<Vec<_>>()
+                        .join("\n");
+
+                    tab.selected_boxes = selected_words
+                        .iter()
+                        .map(|w| (w.x, w.y, w.width, w.height))
+                        .collect();
+                    tab.selected_text = Some(text.clone());
+
+                    let mut clipboard = arboard::Clipboard::new().ok();
+                    if let Some(cb) = &mut clipboard {
+                        let _ = cb.set_text(text);
+                    }
+                    app.status_message = Some("Text copied to clipboard!".to_string());
                 }
             }
             Task::none()
         }
         Message::HighlightSelection => {
             let color = app.annotation_color.clone();
-            if let Some(tab) = app.current_tab_mut() {
-                if !tab.selected_boxes.is_empty() {
-                    let page = tab.current_page;
-                    for (x, y, w, h) in &tab.selected_boxes {
-                        let id = crate::models::next_annotation_id();
-                        let ann = crate::models::Annotation {
-                            id,
-                            page,
-                            style: crate::models::AnnotationStyle::Highlight {
-                                color: color.clone(),
-                            },
-                            x: *x,
-                            y: *y,
-                            width: *w,
-                            height: *h,
-                        };
-                        tab.undo_stack
-                            .push(crate::models::UndoableAction::AddAnnotation(ann.clone()));
-                        tab.annotations.push(ann);
-                    }
-                    tab.redo_stack.clear();
-                    tab.annotations_dirty = true;
-                    tab.selected_text = None;
-                    tab.selected_boxes.clear();
-                    app.status_message =
-                        Some("Highlighted selected text! Press Ctrl+S to save to PDF.".to_string());
+            if let Some(tab) = app.current_tab_mut()
+                && !tab.selected_boxes.is_empty()
+            {
+                let page = tab.current_page;
+                for (x, y, w, h) in &tab.selected_boxes {
+                    let id = crate::models::next_annotation_id();
+                    let ann = crate::models::Annotation {
+                        id,
+                        page,
+                        style: crate::models::AnnotationStyle::Highlight {
+                            color: color.clone(),
+                        },
+                        x: *x,
+                        y: *y,
+                        width: *w,
+                        height: *h,
+                    };
+                    tab.undo_stack
+                        .push(crate::models::UndoableAction::AddAnnotation(ann.clone()));
+                    tab.annotations.push(ann);
                 }
+                tab.redo_stack.clear();
+                tab.annotations_dirty = true;
+                tab.selected_text = None;
+                tab.selected_boxes.clear();
+                app.status_message =
+                    Some("Highlighted selected text! Press Ctrl+S to save to PDF.".to_string());
             }
             Task::none()
         }
@@ -509,19 +509,19 @@ pub fn handle_annotation_message(app: &mut PdfBullApp, message: Message) -> Task
             app.render_visible_pages()
         }
         Message::EditAnnotationText(idx, new_text) => {
-            if let Some(tab) = app.current_tab_mut() {
-                if let Some(ann) = tab.annotations.get_mut(idx) {
-                    match &mut ann.style {
-                        crate::models::AnnotationStyle::Text { text, .. } => {
-                            *text = new_text;
-                            tab.annotations_dirty = true;
-                        }
-                        crate::models::AnnotationStyle::StickyNote { comment, .. } => {
-                            *comment = new_text;
-                            tab.annotations_dirty = true;
-                        }
-                        _ => {}
+            if let Some(tab) = app.current_tab_mut()
+                && let Some(ann) = tab.annotations.get_mut(idx)
+            {
+                match &mut ann.style {
+                    crate::models::AnnotationStyle::Text { text, .. } => {
+                        *text = new_text;
+                        tab.annotations_dirty = true;
                     }
+                    crate::models::AnnotationStyle::StickyNote { comment, .. } => {
+                        *comment = new_text;
+                        tab.annotations_dirty = true;
+                    }
+                    _ => {}
                 }
             }
             Task::none()

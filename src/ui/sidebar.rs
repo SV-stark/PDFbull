@@ -289,9 +289,7 @@ pub fn render(app: &PdfBullApp) -> Element<'_, crate::message::Message> {
                             .spacing(6)
                             .align_y(Alignment::Center),
                         )
-                        .on_press(crate::message::Message::JumpToPage(
-                            bookmark.page_index as usize,
-                        ))
+                        .on_press(crate::message::Message::JumpToPage(bookmark.page_index))
                         .style(theme::button_ghost)
                         .padding([6, 8])
                         .width(Length::Fill),

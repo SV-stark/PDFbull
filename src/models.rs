@@ -5,15 +5,11 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use thiserror::Error;
 
-/// Overwrites string bytes in memory with zeros before clearing.
+use zeroize::Zeroize;
+
+/// Securely overwrites string bytes in memory with zeros using compiler memory fences.
 pub fn zeroize_string(s: &mut String) {
-    if !s.is_empty() {
-        unsafe {
-            let bytes = s.as_bytes_mut();
-            std::ptr::write_bytes(bytes.as_mut_ptr(), 0, bytes.len());
-        }
-        s.clear();
-    }
+    s.zeroize();
 }
 
 #[derive(Error, Debug, Clone, PartialEq, Eq)]
@@ -895,7 +891,7 @@ mod tests {
     #[test]
     fn test_document_id_clone() {
         let id1 = DocumentId(42);
-        let id2 = id1.clone();
+        let id2 = id1;
         assert_eq!(id1, id2);
     }
 
@@ -1064,7 +1060,7 @@ mod tests {
         tab.cleanup_distant_pages();
 
         for i in 0..20 {
-            if i >= 3 && i <= 9 {
+            if (3..=9).contains(&i) {
                 assert!(
                     tab.view_state.rendered_pages.contains_key(&i),
                     "Page {} should be kept",

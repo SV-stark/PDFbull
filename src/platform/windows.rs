@@ -1,15 +1,9 @@
 use windows::Win32::System::Com::{COINIT_MULTITHREADED, CoInitializeEx};
 use windows::Win32::UI::Shell::{ApplicationDocumentLists, IApplicationDocumentLists};
-
-#[link(name = "user32")]
-unsafe extern "system" {
-    fn FindWindowW(lpClassName: *const u16, lpWindowName: *const u16) -> isize;
-    fn ShowWindow(hWnd: isize, nCmdShow: i32) -> i32;
-    fn SetForegroundWindow(hWnd: isize) -> i32;
-    fn GetWindowThreadProcessId(hWnd: isize, lpdwProcessId: *mut u32) -> u32;
-}
-
-const SW_RESTORE: i32 = 9;
+use windows::Win32::UI::WindowsAndMessaging::{
+    FindWindowW, GetWindowThreadProcessId, SW_RESTORE, SetForegroundWindow, ShowWindow,
+};
+use windows::core::PCWSTR;
 
 pub fn ensure_single_instance(args: &[String]) -> Result<bool, Box<dyn std::error::Error>> {
     use interprocess::local_socket::{GenericNamespaced, Stream, prelude::*};
@@ -27,12 +21,13 @@ pub fn ensure_single_instance(args: &[String]) -> Result<bool, Box<dyn std::erro
             stream.flush()?;
 
             // Attempt to bring the primary window to foreground
+            let window_title: Vec<u16> = "PDFbull\0".encode_utf16().collect();
             unsafe {
-                let window_title: Vec<u16> = "PDFbull\0".encode_utf16().collect();
-                let hwnd = FindWindowW(std::ptr::null(), window_title.as_ptr());
-                if hwnd != 0 {
+                if let Ok(hwnd) = FindWindowW(None, PCWSTR(window_title.as_ptr()))
+                    && !hwnd.0.is_null()
+                {
                     let mut pid: u32 = 0;
-                    GetWindowThreadProcessId(hwnd, std::ptr::addr_of_mut!(pid));
+                    let _ = GetWindowThreadProcessId(hwnd, Some(&mut pid));
                     let current_pid = std::process::id();
                     if pid != 0 && pid != current_pid {
                         let _ = ShowWindow(hwnd, SW_RESTORE);

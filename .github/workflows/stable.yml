@@ -39,13 +39,12 @@ jobs:
           Invoke-WebRequest -Uri "https://ocrs-models.s3-accelerate.amazonaws.com/text-detection.rten" -OutFile "models/text-detection.rten"
           Invoke-WebRequest -Uri "https://ocrs-models.s3-accelerate.amazonaws.com/text-recognition.rten" -OutFile "models/text-recognition.rten"
           
-          # Attempt downloading genuine Devanagari PP-OCRv4 model from repo release assets
+          # Download genuine Devanagari PP-OCRv4 model from repo release assets
           $devUrl = "https://github.com/SV-stark/PDFbull/releases/download/models/devanagari_PP-OCRv4_rec.rten"
           try {
               Invoke-WebRequest -Uri $devUrl -OutFile "models/devanagari_PP-OCRv4_rec.rten" -ErrorAction Stop
           } catch {
-              Write-Warning "Genuine Devanagari model not found at $devUrl; using text-recognition fallback."
-              Copy-Item "models/text-recognition.rten" "models/devanagari_PP-OCRv4_rec.rten"
+              Write-Warning "Devanagari PP-OCRv4 model not found at $devUrl - skipping inclusion (will not copy mismatched Latin model)."
           }
 
       - name: Prepare Release Artifacts

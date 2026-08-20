@@ -111,10 +111,10 @@ pub fn handle_message(app: &mut PdfBullApp, message: Message) -> Task<Message> {
                 let path: std::path::PathBuf = entry.clone().into();
                 let path_clone = path.clone();
                 tasks.push(app.update(Message::OpenFile(path)));
-                if let crate::models::SessionTabEntry::Detailed(detailed) = entry {
-                    if let Some(tab) = app.tabs.iter_mut().find(|t| t.path == path_clone) {
-                        tab.pending_session = Some(detailed);
-                    }
+                if let crate::models::SessionTabEntry::Detailed(detailed) = entry
+                    && let Some(tab) = app.tabs.iter_mut().find(|t| t.path == path_clone)
+                {
+                    tab.pending_session = Some(detailed);
                 }
             }
             if !tasks.is_empty() {
@@ -382,11 +382,10 @@ pub fn handle_message(app: &mut PdfBullApp, message: Message) -> Task<Message> {
             Task::none()
         }
         Message::OpenContainingFolder => {
-            if let Some(tab) = app.current_tab() {
-                if let Some(parent) = tab.path.parent() {
+            if let Some(tab) = app.current_tab()
+                && let Some(parent) = tab.path.parent() {
                     let _ = open::that(parent);
                 }
-            }
             Task::none()
         }
         Message::ToggleSignaturesDetail(show) => {
@@ -456,8 +455,8 @@ pub fn handle_message(app: &mut PdfBullApp, message: Message) -> Task<Message> {
             Task::none()
         }
         Message::OrganizerDeletePage(page_idx) => {
-            if let Some(tab) = app.current_tab_mut() {
-                if page_idx < tab.page_mapping.len() {
+            if let Some(tab) = app.current_tab_mut()
+                && page_idx < tab.page_mapping.len() {
                     let actual_page = tab.page_mapping[page_idx];
                     tab.page_rotations.remove(&actual_page);
                     tab.page_mapping.remove(page_idx);
@@ -476,12 +475,11 @@ pub fn handle_message(app: &mut PdfBullApp, message: Message) -> Task<Message> {
                     tab.view_state.rendered_pages.clear();
                     tab.view_state.thumbnails.clear();
                 }
-            }
             app.render_visible_pages()
         }
         Message::OrganizerRotatePage(page_idx, rotation_diff) => {
-            if let Some(tab) = app.current_tab_mut() {
-                if page_idx < tab.page_mapping.len() {
+            if let Some(tab) = app.current_tab_mut()
+                && page_idx < tab.page_mapping.len() {
                     let actual_page = tab.page_mapping[page_idx];
                     let current_rot = tab.page_rotations.entry(actual_page).or_insert(0);
                     *current_rot = (*current_rot + rotation_diff) % 360;
@@ -491,13 +489,12 @@ pub fn handle_message(app: &mut PdfBullApp, message: Message) -> Task<Message> {
                     tab.view_state.rendered_pages.clear();
                     tab.view_state.thumbnails.clear();
                 }
-            }
             app.render_visible_pages()
         }
         Message::OrganizerMovePage(page_idx, direction) => {
-            if let Some(tab) = app.current_tab_mut() {
-                if let Ok(target_idx) = usize::try_from(page_idx as isize + direction) {
-                    if page_idx < tab.page_mapping.len() && target_idx < tab.page_mapping.len() {
+            if let Some(tab) = app.current_tab_mut()
+                && let Ok(target_idx) = usize::try_from(page_idx as isize + direction)
+                    && page_idx < tab.page_mapping.len() && target_idx < tab.page_mapping.len() {
                         tab.page_mapping.swap(page_idx, target_idx);
                         if page_idx < tab.page_heights.len() && target_idx < tab.page_heights.len()
                         {
@@ -514,8 +511,6 @@ pub fn handle_message(app: &mut PdfBullApp, message: Message) -> Task<Message> {
                         tab.view_state.rendered_pages.clear();
                         tab.view_state.thumbnails.clear();
                     }
-                }
-            }
             app.render_visible_pages()
         }
         Message::EngineInitialized(_)

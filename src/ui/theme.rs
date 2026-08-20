@@ -176,19 +176,28 @@ pub fn input_field(_theme: &iced::Theme) -> iced::widget::container::Style {
     }
 }
 
-pub fn hex_to_rgb(hex: &str) -> (f32, f32, f32) {
+pub fn try_hex_to_rgb(hex: &str) -> Option<(f32, f32, f32)> {
     let hex = hex.trim();
-    let hex_digits = hex.strip_prefix('#').unwrap_or(hex);
-    if hex_digits.len() != 6 {
-        return (0.0, 0.0, 0.0);
+    if hex.is_empty() {
+        return None;
     }
-    let input = format!("#{hex_digits}");
-    csscolorparser::parse(&input)
-        .map(|c| {
-            let arr = c.to_array();
-            (arr[0] as f32, arr[1] as f32, arr[2] as f32)
-        })
-        .unwrap_or((0.0, 0.0, 0.0))
+    let input = if hex.starts_with('#') {
+        hex.to_string()
+    } else {
+        format!("#{hex}")
+    };
+    csscolorparser::parse(&input).ok().map(|c| {
+        let arr = c.to_array();
+        (arr[0], arr[1], arr[2])
+    })
+}
+
+pub fn hex_to_rgb_or(hex: &str, default: (f32, f32, f32)) -> (f32, f32, f32) {
+    try_hex_to_rgb(hex).unwrap_or(default)
+}
+
+pub fn hex_to_rgb(hex: &str) -> (f32, f32, f32) {
+    hex_to_rgb_or(hex, (0.0, 0.0, 0.0))
 }
 
 #[cfg(test)]
@@ -253,27 +262,25 @@ mod tests {
     }
 
     #[test]
-    fn test_hex_to_rgb_invalid_short() {
-        let (r, g, b) = hex_to_rgb("#FFF");
-        assert_eq!(r, 0.0);
-        assert_eq!(g, 0.0);
-        assert_eq!(b, 0.0);
-    }
-
-    #[test]
     fn test_hex_to_rgb_invalid_empty() {
-        let (r, g, b) = hex_to_rgb("");
-        assert_eq!(r, 0.0);
-        assert_eq!(g, 0.0);
-        assert_eq!(b, 0.0);
+        assert_eq!(try_hex_to_rgb(""), None);
+        assert_eq!(hex_to_rgb(""), (0.0, 0.0, 0.0));
     }
 
     #[test]
     fn test_hex_to_rgb_invalid_chars() {
-        let (r, g, b) = hex_to_rgb("#GGHHII");
-        assert_eq!(r, 0.0);
-        assert_eq!(g, 0.0);
-        assert_eq!(b, 0.0);
+        assert_eq!(try_hex_to_rgb("#GGHHII"), None);
+        assert_eq!(hex_to_rgb_or("#GGHHII", (1.0, 0.5, 0.2)), (1.0, 0.5, 0.2));
+    }
+
+    #[test]
+    fn test_hex_to_rgb_short_hex() {
+        let res = try_hex_to_rgb("#FFF");
+        assert!(res.is_some());
+        let (r, g, b) = res.unwrap();
+        assert_eq!(r, 1.0);
+        assert_eq!(g, 1.0);
+        assert_eq!(b, 1.0);
     }
 
     #[test]

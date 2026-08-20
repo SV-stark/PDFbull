@@ -25,6 +25,35 @@ use zune_image::image::Image;
 
 use crate::ui::theme::hex_to_rgb;
 
+#[repr(C)]
+struct OcConfigInternal {
+    off: std::collections::HashSet<zpdf::ObjectId>,
+    on: std::collections::HashSet<zpdf::ObjectId>,
+    base_state_off: bool,
+}
+
+impl OcConfigInternal {
+    fn apply_overrides(
+        oc: &mut zpdf::OcConfig,
+        overrides: &std::collections::HashMap<zpdf::ObjectId, bool>,
+    ) {
+        if std::mem::size_of::<zpdf::OcConfig>() == std::mem::size_of::<Self>()
+            && std::mem::align_of::<zpdf::OcConfig>() == std::mem::align_of::<Self>()
+        {
+            let internal = unsafe { &mut *(oc as *mut zpdf::OcConfig as *mut Self) };
+            for (&id, &visible) in overrides {
+                if visible {
+                    internal.on.insert(id);
+                    internal.off.remove(&id);
+                } else {
+                    internal.off.insert(id);
+                    internal.on.remove(&id);
+                }
+            }
+        }
+    }
+}
+
 // PDF field-flags bit for "radio button" (ISO 32000-1 Table 221).
 const FF_RADIO: i64 = 1 << 15;
 const WHITE_THRESHOLD: u8 = 245;
@@ -431,33 +460,32 @@ impl DocumentStore {
 
         let mut layers = Vec::new();
         for item in ocgs_arr {
-            if let zpdf::PdfObject::Ref(r) = item {
-                if let Ok(ocg_obj) = doc.file().resolve(*r) {
-                    if let Ok(ocg_dict) = ocg_obj.as_dict() {
-                        let name_opt = ocg_dict.get("Name").and_then(|n| {
-                            let resolved = match n {
-                                zpdf::PdfObject::Ref(ref_id) => doc.file().resolve(*ref_id).ok()?,
-                                other => other.clone(),
-                            };
+            if let zpdf::PdfObject::Ref(r) = item
+                && let Ok(ocg_obj) = doc.file().resolve(*r)
+                && let Ok(ocg_dict) = ocg_obj.as_dict()
+            {
+                let name_opt = ocg_dict.get("Name").and_then(|n| {
+                    let resolved = match n {
+                        zpdf::PdfObject::Ref(ref_id) => doc.file().resolve(*ref_id).ok()?,
+                        other => other.clone(),
+                    };
+                    resolved
+                        .as_name()
+                        .map(ToString::to_string)
+                        .or_else(|_| {
                             resolved
-                                .as_name()
-                                .map(ToString::to_string)
-                                .or_else(|_| {
-                                    resolved
-                                        .as_str()
-                                        .map(|s| String::from_utf8_lossy(&s.0).to_string())
-                                })
-                                .ok()
-                        });
-                        if let Some(name) = name_opt {
-                            let visible = oc.group_visible(*r);
-                            layers.push(crate::models::LayerInfo {
-                                name,
-                                object_id: (r.0, r.1),
-                                visible,
-                            });
-                        }
-                    }
+                                .as_str()
+                                .map(|s| String::from_utf8_lossy(&s.0).to_string())
+                        })
+                        .ok()
+                });
+                if let Some(name) = name_opt {
+                    let visible = oc.group_visible(*r);
+                    layers.push(crate::models::LayerInfo {
+                        name,
+                        object_id: (r.0, r.1),
+                        visible,
+                    });
                 }
             }
         }
@@ -466,7 +494,6 @@ impl DocumentStore {
 
     pub fn toggle_layer(&mut self, doc_id: DocumentId, object_id: (u32, u16), visible: bool) {
         if self.oc_configs.contains_key(&doc_id) {
-            // Record the override in our safe visibility map — no unsafe transmute needed.
             let id = zpdf::ObjectId(object_id.0, object_id.1);
             self.oc_visibility
                 .entry(doc_id)
@@ -527,7 +554,7 @@ impl DocumentStore {
                 .and_then(|o| o.as_array().ok())
                 .and_then(|a| a.get(3))
                 .and_then(|o| match o {
-                    Object::Real(v) => Some(*v as f32),
+                    Object::Real(v) => Some(*v),
                     Object::Integer(v) => Some(*v as f32),
                     _ => None,
                 })
@@ -578,7 +605,7 @@ impl DocumentStore {
                 let (pdf_x0, pdf_y0, pdf_x1, pdf_y1) = match rect.as_deref() {
                     Some([a, b, c, d]) => {
                         let to_f32 = |o: &Object| match o {
-                            Object::Real(v) => *v as f32,
+                            Object::Real(v) => *v,
                             Object::Integer(v) => *v as f32,
                             _ => 0.0_f32,
                         };
@@ -601,7 +628,7 @@ impl DocumentStore {
                     .cloned()
                     .and_then(|arr| {
                         let to_f32 = |o: &Object| match o {
-                            Object::Real(v) => *v as f32,
+                            Object::Real(v) => *v,
                             Object::Integer(v) => *v as f32,
                             _ => 0.0_f32,
                         };
@@ -624,7 +651,7 @@ impl DocumentStore {
                     .and_then(|o| o.as_dict().ok())
                     .and_then(|d| d.get(b"W").ok())
                     .and_then(|o| match o {
-                        Object::Real(v) => Some(*v as f32),
+                        Object::Real(v) => Some(*v),
                         Object::Integer(v) => Some(*v as f32),
                         _ => None,
                     })
@@ -782,30 +809,15 @@ impl DocumentStore {
             .with_images(images);
 
         // Build optional-content config with user visibility overrides applied.
-        // Since OcConfig has no public mutation API, we store the base config
-        // and our overrides separately. We pass the base OcConfig to the interpreter,
-        // which honours its group_visible() for unknown groups. Our oc_visibility map
-        // records per-user-session overrides; we apply them via the interpreter's
-        // layer-filter closure if the API supports it, or fall back to cloning the
-        // config and patching visibility through the only available approach.
-        //
-        // For now, if we have overrides, rebuild by starting from base and using
-        // OcConfig::with_overrides (the v0.11 API for applying a visibility map).
         let oc_for_render: Option<zpdf::OcConfig>;
         if let Some(base_oc) = self.oc_configs.get(&doc_id) {
-            if let Some(overrides) = self.oc_visibility.get(&doc_id) {
-                if overrides.is_empty() {
-                    oc_for_render = Some(base_oc.clone());
-                } else {
-                    // TODO: OcConfig has no public setter API for per-group overrides;
-                    // apply_overrides is tracked as a future enhancement.
-                    // For now, use the base config; visibility state is stored in
-                    // oc_visibility for future use when the zpdf API exposes setters.
-                    oc_for_render = Some(base_oc.clone());
-                }
-            } else {
-                oc_for_render = Some(base_oc.clone());
+            let mut oc = base_oc.clone();
+            if let Some(overrides) = self.oc_visibility.get(&doc_id)
+                && !overrides.is_empty()
+            {
+                OcConfigInternal::apply_overrides(&mut oc, overrides);
             }
+            oc_for_render = Some(oc);
         } else {
             oc_for_render = None;
         }
@@ -1600,9 +1612,11 @@ impl DocumentStore {
         // 2. Downsample high-DPI image streams (max 1600px dimension) for significant file size reduction.
         let data = std::fs::read(input_path).map_err(|e| PdfError::OpenFailed(e.to_string()))?;
         let pdf = zpdf::PdfFile::parse(data).map_err(|e| PdfError::OpenFailed(e.to_string()))?;
-        let mut opts = RewriteOptions::default();
-        opts.compress_uncompressed = true;
-        opts.max_image_dimension = Some(1600);
+        let opts = RewriteOptions {
+            compress_uncompressed: true,
+            max_image_dimension: Some(1600),
+            ..Default::default()
+        };
         let out_bytes = rewrite_pdf(&pdf, &opts).map_err(|e| PdfError::IoError(e.to_string()))?;
         std::fs::write(output_path, &out_bytes).map_err(|e| PdfError::IoError(e.to_string()))?;
         Ok(output_path.to_string())
@@ -1623,8 +1637,10 @@ impl DocumentStore {
         } else {
             zpdf_writer::EncryptionConfig::aes256(user_pass, owner_pass)
         };
-        let mut opts = RewriteOptions::default();
-        opts.encrypt = Some(enc_config);
+        let opts = RewriteOptions {
+            encrypt: Some(enc_config),
+            ..Default::default()
+        };
         let out_bytes = rewrite_pdf(&pdf, &opts).map_err(|e| PdfError::IoError(e.to_string()))?;
         std::fs::write(output_path, &out_bytes).map_err(|e| PdfError::IoError(e.to_string()))?;
         Ok(output_path.to_string())
@@ -2028,10 +2044,10 @@ impl DocumentStore {
             .find(|(_, p)| *p == path)
             .map(|(id, _)| *id);
 
-        if let Some(id) = doc_id {
-            if let Some(doc) = self.documents.get(&id) {
-                return Ok(self.extract_form_fields_from_doc(doc));
-            }
+        if let Some(id) = doc_id
+            && let Some(doc) = self.documents.get(&id)
+        {
+            return Ok(self.extract_form_fields_from_doc(doc));
         }
 
         let data = std::fs::read(path).map_err(|e| PdfError::OpenFailed(e.to_string()))?;
@@ -2089,11 +2105,11 @@ impl DocumentStore {
                 let mut page_idx = 0;
                 if let Some(&widget_id) = f.widgets.first() {
                     for i in 0..doc.page_count() {
-                        if let Ok(page) = doc.page(i) {
-                            if page.annots.contains(&widget_id) {
-                                page_idx = i;
-                                break;
-                            }
+                        if let Ok(page) = doc.page(i)
+                            && page.annots.contains(&widget_id)
+                        {
+                            page_idx = i;
+                            break;
                         }
                     }
                 }
@@ -2380,20 +2396,20 @@ impl DocumentStore {
             let mut all_contents = existing_contents;
             all_contents.push(Object::Reference(hf_id));
 
-            if let Some(page_obj) = doc.objects.get_mut(&page_id) {
-                if let Ok(dict) = page_obj.as_dict_mut() {
-                    dict.set("Contents", Object::Array(all_contents));
-                    dict.set(
-                        "Resources",
+            if let Some(page_obj) = doc.objects.get_mut(&page_id)
+                && let Ok(dict) = page_obj.as_dict_mut()
+            {
+                dict.set("Contents", Object::Array(all_contents));
+                dict.set(
+                    "Resources",
+                    Object::Dictionary(lopdf::Dictionary::from_iter(vec![(
+                        "Font",
                         Object::Dictionary(lopdf::Dictionary::from_iter(vec![(
-                            "Font",
-                            Object::Dictionary(lopdf::Dictionary::from_iter(vec![(
-                                "F1",
-                                Object::Reference(font_ref_id),
-                            )])),
+                            "F1",
+                            Object::Reference(font_ref_id),
                         )])),
-                    );
-                }
+                    )])),
+                );
             }
         }
 
@@ -3163,5 +3179,21 @@ mod tests {
             );
         });
         handle.join().unwrap();
+    }
+
+    #[test]
+    fn test_oc_config_overrides() {
+        let mut oc = zpdf::OcConfig::default();
+        let target_id = zpdf::ObjectId(42, 0);
+        assert!(oc.group_visible(target_id));
+
+        let mut overrides = std::collections::HashMap::new();
+        overrides.insert(target_id, false);
+        OcConfigInternal::apply_overrides(&mut oc, &overrides);
+        assert!(!oc.group_visible(target_id));
+
+        overrides.insert(target_id, true);
+        OcConfigInternal::apply_overrides(&mut oc, &overrides);
+        assert!(oc.group_visible(target_id));
     }
 }

@@ -545,7 +545,7 @@ impl PdfBullApp {
                         .await;
                     let res = resp_rx
                         .await
-                        .unwrap_or_else(|_| Err(crate::models::PdfError::EngineDied));
+                        .unwrap_or(Err(crate::models::PdfError::EngineDied));
                     (page_idx, current_scale, res)
                 },
                 move |(page_idx, scale, res)| Message::PageRendered(doc_id, page_idx, scale, res),
@@ -563,7 +563,7 @@ impl PdfBullApp {
                 if is_thumb_rendered || self.rendering_set.contains(&target) {
                     continue;
                 }
-                let thumb_zoom = (120.0 / page_width.max(1.0)).min(5.0);
+                let thumb_zoom = (160.0 / page_width.max(1.0)).min(5.0);
 
                 let (thumb_actual, thumb_rotation) = if let Some(tab) = self.current_tab() {
                     let actual_page = tab.page_mapping.get(page_idx).copied().unwrap_or(page_idx);
@@ -699,15 +699,14 @@ impl PdfBullApp {
                         if let Ok(stream) = listener.accept().await {
                             let mut reader = BufReader::new(stream);
                             let mut buffer = String::new();
-                            if let Ok(_) = reader.read_line(&mut buffer).await {
-                                if let Ok(args) = serde_json::from_str::<Vec<String>>(&buffer) {
-                                    if args.len() > 1 {
-                                        let path_str = &args[1];
-                                        let path_buf = std::path::PathBuf::from(path_str);
-                                        if path_buf.exists() && path_buf.is_file() {
-                                            let _ = output.send(Message::OpenFile(path_buf)).await;
-                                        }
-                                    }
+                            if reader.read_line(&mut buffer).await.is_ok()
+                                && let Ok(args) = serde_json::from_str::<Vec<String>>(&buffer)
+                                && args.len() > 1
+                            {
+                                let path_str = &args[1];
+                                let path_buf = std::path::PathBuf::from(path_str);
+                                if path_buf.exists() && path_buf.is_file() {
+                                    let _ = output.send(Message::OpenFile(path_buf)).await;
                                 }
                             }
                         }
