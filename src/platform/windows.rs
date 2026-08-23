@@ -54,3 +54,24 @@ pub fn setup_jump_list(paths: &[String]) {
         }
     }
 }
+
+pub fn is_system_dark_mode() -> bool {
+    use windows::Win32::System::Registry::{HKEY_CURRENT_USER, RRF_RT_REG_DWORD, RegGetValueW};
+    use windows::core::w;
+
+    let mut data: u32 = 0;
+    let mut data_len = std::mem::size_of::<u32>() as u32;
+    let status = unsafe {
+        RegGetValueW(
+            HKEY_CURRENT_USER,
+            w!(r"Software\Microsoft\Windows\CurrentVersion\Themes\Personalize"),
+            w!("AppsUseLightTheme"),
+            RRF_RT_REG_DWORD,
+            None,
+            Some(&mut data as *mut u32 as *mut _),
+            Some(&mut data_len),
+        )
+    };
+    // 0 = Dark Mode, 1 = Light Mode. If key cannot be read, default to Light (false).
+    status.is_ok() && data == 0
+}

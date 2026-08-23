@@ -7,6 +7,9 @@ pub mod dummy {
     pub fn ensure_single_instance(_args: &[String]) -> Result<bool, Box<dyn std::error::Error>> {
         Ok(false)
     }
+    pub fn is_system_dark_mode() -> bool {
+        false
+    }
 }
 
 #[cfg(windows)]

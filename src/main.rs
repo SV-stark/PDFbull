@@ -82,10 +82,13 @@ fn main() -> iced::Result {
     .theme(|app: &app::PdfBullApp| match app.settings.theme {
         pdfbull::models::AppTheme::Dark => iced::Theme::Dark,
         pdfbull::models::AppTheme::Light => iced::Theme::Light,
-        pdfbull::models::AppTheme::System => match dark_light::detect() {
-            Ok(dark_light::Mode::Dark) => iced::Theme::Dark,
-            _ => iced::Theme::Light,
-        },
+        pdfbull::models::AppTheme::System => {
+            if pdfbull::platform::is_system_dark_mode() {
+                iced::Theme::Dark
+            } else {
+                iced::Theme::Light
+            }
+        }
     })
     .subscription(app::PdfBullApp::subscription)
     .window(iced::window::Settings {
