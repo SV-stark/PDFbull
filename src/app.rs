@@ -701,12 +701,12 @@ impl PdfBullApp {
                             let mut buffer = String::new();
                             if reader.read_line(&mut buffer).await.is_ok()
                                 && let Ok(args) = serde_json::from_str::<Vec<String>>(&buffer)
-                                && args.len() > 1
                             {
-                                let path_str = &args[1];
-                                let path_buf = std::path::PathBuf::from(path_str);
-                                if path_buf.exists() && path_buf.is_file() {
-                                    let _ = output.send(Message::OpenFile(path_buf)).await;
+                                for path_str in args.iter().skip(1) {
+                                    let path_buf = std::path::PathBuf::from(path_str);
+                                    if path_buf.exists() && path_buf.is_file() {
+                                        let _ = output.send(Message::OpenFile(path_buf)).await;
+                                    }
                                 }
                             }
                         }
@@ -730,7 +730,7 @@ impl PdfBullApp {
                         use notify_debouncer_full::{new_debouncer, notify::RecursiveMode};
                         use std::time::Duration;
 
-                        let (tx, mut rx) = tokio::sync::mpsc::channel(10);
+                        let (tx, mut rx) = tokio::sync::mpsc::channel(32);
 
                         let mut debouncer = match new_debouncer(
                             Duration::from_secs(1),
@@ -739,7 +739,7 @@ impl PdfBullApp {
                                 if let Ok(events) = res {
                                     for event in events {
                                         for path in &event.paths {
-                                            let _ = tx.blocking_send(path.clone());
+                                            let _ = tx.try_send(path.clone());
                                         }
                                     }
                                 }

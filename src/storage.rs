@@ -66,10 +66,14 @@ pub fn get_config_dir() -> PathBuf {
 
 fn atomic_write(path: &Path, data: &str) -> io::Result<()> {
     let parent = path.parent().unwrap_or_else(|| Path::new("."));
-    let mut temp = tempfile::NamedTempFile::new_in(parent)?;
-    temp.write_all(data.as_bytes())?;
-    temp.persist(path).map_err(|e| e.error)?;
-    Ok(())
+    if let Ok(mut temp) = tempfile::NamedTempFile::new_in(parent)
+        && temp.write_all(data.as_bytes()).is_ok()
+        && temp.persist(path).is_ok()
+    {
+        return Ok(());
+    }
+    // Fallback in case of cross-device links, junctions, or persist failures
+    fs::write(path, data)
 }
 
 pub fn load_settings() -> AppSettings {

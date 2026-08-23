@@ -865,11 +865,9 @@ mod tests {
 
     #[test]
     fn test_document_id_new_increments() {
-        NEXT_DOC_ID.store(1, std::sync::atomic::Ordering::SeqCst);
         let id1 = next_doc_id();
         let id2 = next_doc_id();
-        assert_eq!(id1.0, 1);
-        assert_eq!(id2.0, 2);
+        assert_eq!(id2.0, id1.0 + 1);
     }
 
     #[test]
@@ -907,11 +905,9 @@ mod tests {
 
     #[test]
     fn test_annotation_id_new_increments() {
-        NEXT_ANN_ID.store(1, std::sync::atomic::Ordering::SeqCst);
         let id1 = next_annotation_id();
         let id2 = next_annotation_id();
-        assert_eq!(id1, 1);
-        assert_eq!(id2, 2);
+        assert_eq!(id2, id1 + 1);
     }
 
     #[test]

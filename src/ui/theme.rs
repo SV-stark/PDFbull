@@ -181,12 +181,12 @@ pub fn try_hex_to_rgb(hex: &str) -> Option<(f32, f32, f32)> {
     if hex.is_empty() {
         return None;
     }
-    let input = if hex.starts_with('#') {
-        hex.to_string()
+    let parsed = if hex.starts_with('#') {
+        csscolorparser::parse(hex)
     } else {
-        format!("#{hex}")
+        csscolorparser::parse(&format!("#{hex}"))
     };
-    csscolorparser::parse(&input).ok().map(|c| {
+    parsed.ok().map(|c| {
         let arr = c.to_array();
         (arr[0], arr[1], arr[2])
     })

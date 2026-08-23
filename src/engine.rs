@@ -41,7 +41,11 @@ where
                 "unknown panic"
             };
             tracing::error!("Engine worker panicked during {cmd_name}: {panic_msg}");
-            Err(crate::models::PdfError::EngineDied)
+            Err(crate::models::PdfError::EngineError(
+                crate::models::EngineErrorKind::Generic(format!(
+                    "Worker panicked during {cmd_name}: {panic_msg}"
+                )),
+            ))
         }
     }
 }
@@ -61,41 +65,54 @@ pub fn spawn_engine_thread(cache_size: u64, max_memory_mb: u64) -> EngineState {
     let num_workers = std::thread::available_parallelism()
         .map(std::num::NonZero::get)
         .unwrap_or(4)
-        .clamp(2, 4);
+        .max(2);
 
-    // Forward Tokio mpsc commands into the crossbeam MPMC channel.
-    // iced uses the `tokio` feature so a full multi-thread runtime is always
-    // available here; tokio::spawn is safe and keeps the forwarder alive for
-    // the lifetime of the iced application.
-    tokio::spawn(async move {
-        while let Some(cmd) = cmd_rx.recv().await {
-            match cmd {
-                PdfCommand::Close(doc_id) => {
-                    for _ in 0..num_workers {
-                        if let Err(e) = worker_tx.send(PdfCommand::Close(doc_id)) {
-                            tracing::error!("Failed to broadcast Close to engine worker: {e}");
+    let forwarder = {
+        let worker_tx = worker_tx.clone();
+        async move {
+            while let Some(cmd) = cmd_rx.recv().await {
+                match cmd {
+                    PdfCommand::Close(doc_id) => {
+                        for _ in 0..num_workers {
+                            if let Err(e) = worker_tx.send(PdfCommand::Close(doc_id)) {
+                                tracing::error!("Failed to broadcast Close to engine worker: {e}");
+                            }
                         }
                     }
-                }
-                PdfCommand::ToggleLayer(doc_id, obj_id, vis) => {
-                    for _ in 0..num_workers {
-                        if let Err(e) = worker_tx.send(PdfCommand::ToggleLayer(doc_id, obj_id, vis))
-                        {
-                            tracing::error!(
-                                "Failed to broadcast ToggleLayer to engine worker: {e}"
-                            );
+                    PdfCommand::ToggleLayer(doc_id, obj_id, vis) => {
+                        for _ in 0..num_workers {
+                            if let Err(e) =
+                                worker_tx.send(PdfCommand::ToggleLayer(doc_id, obj_id, vis))
+                            {
+                                tracing::error!(
+                                    "Failed to broadcast ToggleLayer to engine worker: {e}"
+                                );
+                            }
                         }
                     }
-                }
-                _ => {
-                    if let Err(e) = worker_tx.send(cmd) {
-                        tracing::error!("Failed to dispatch command to engine worker: {e}");
+                    _ => {
+                        if let Err(e) = worker_tx.send(cmd) {
+                            tracing::error!("Failed to dispatch command to engine worker: {e}");
+                        }
                     }
                 }
             }
+            tracing::debug!("Engine forwarder task exited (cmd_tx dropped)");
         }
-        tracing::debug!("Engine forwarder task exited (cmd_tx dropped)");
-    });
+    };
+
+    if tokio::runtime::Handle::try_current().is_ok() {
+        tokio::spawn(forwarder);
+    } else {
+        std::thread::spawn(move || {
+            if let Ok(rt) = tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+            {
+                rt.block_on(forwarder);
+            }
+        });
+    }
 
     for _ in 0..num_workers {
         let rx = worker_rx.clone();
@@ -107,7 +124,7 @@ pub fn spawn_engine_thread(cache_size: u64, max_memory_mb: u64) -> EngineState {
 
             while let Ok(cmd) = rx.recv() {
                 match cmd {
-                    PdfCommand::Open(path, password, doc_id, tx) => {
+                    PdfCommand::Open(path, mut password, doc_id, tx) => {
                         tracing::info!("Engine worker: opening {:?}", path);
                         let mut store_ref = std::panic::AssertUnwindSafe(&mut store);
                         let path_clone = path.clone();
@@ -122,6 +139,9 @@ pub fn spawn_engine_thread(cache_size: u64, max_memory_mb: u64) -> EngineState {
                             }
                         } else {
                             tracing::error!("Engine worker: open failed: {:?}", res);
+                            if let Some(ref mut p) = password {
+                                crate::models::zeroize_string(p);
+                            }
                         }
                         let _ = tx.send(res);
                     }
@@ -234,11 +254,10 @@ pub fn spawn_engine_thread(cache_size: u64, max_memory_mb: u64) -> EngineState {
                                 if let Ok(buf) =
                                     store_ref.export_page_as_image(doc_id, page_num, scale)
                                 {
-                                    let optimized = oxipng::optimize_from_memory(
-                                        &buf,
-                                        &oxipng::Options::default(),
-                                    )
-                                    .unwrap_or(buf);
+                                    let mut opts = oxipng::Options::from_preset(2);
+                                    opts.strip = oxipng::StripChunks::Safe;
+                                    let optimized =
+                                        oxipng::optimize_from_memory(&buf, &opts).unwrap_or(buf);
                                     if std::fs::write(&out_file, optimized).is_ok()
                                         && let Some(path_str) = out_file.to_str()
                                     {
@@ -421,7 +440,7 @@ pub fn spawn_engine_thread(cache_size: u64, max_memory_mb: u64) -> EngineState {
                     }
                     PdfCommand::OcrPage(doc_id, page_num, script, tx) => {
                         reload_if_needed(&mut store, &paths, doc_id);
-                        let store_ref = std::panic::AssertUnwindSafe(&store);
+                        let mut store_ref = std::panic::AssertUnwindSafe(&mut store);
                         let res = catch_worker_panic("ocr_page", move || {
                             store_ref.ocr_page(doc_id, page_num, script)
                         });

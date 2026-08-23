@@ -1,5 +1,3 @@
-use windows::Win32::System::Com::{COINIT_MULTITHREADED, CoInitializeEx};
-use windows::Win32::UI::Shell::{ApplicationDocumentLists, IApplicationDocumentLists};
 use windows::Win32::UI::WindowsAndMessaging::{
     FindWindowW, GetWindowThreadProcessId, SW_RESTORE, SetForegroundWindow, ShowWindow,
 };
@@ -46,22 +44,13 @@ pub fn ensure_single_instance(args: &[String]) -> Result<bool, Box<dyn std::erro
 }
 
 pub fn setup_jump_list(paths: &[String]) {
-    if paths.is_empty() {
-        return;
-    }
-
-    let _ = unsafe { CoInitializeEx(None, COINIT_MULTITHREADED) };
-
-    unsafe {
-        let app_doc_lists: Result<IApplicationDocumentLists, _> =
-            windows::Win32::System::Com::CoCreateInstance(
-                &ApplicationDocumentLists,
-                None,
-                windows::Win32::System::Com::CLSCTX_INPROC_SERVER,
+    for path in paths {
+        let path_u16: Vec<u16> = path.encode_utf16().chain(std::iter::once(0)).collect();
+        unsafe {
+            windows::Win32::UI::Shell::SHAddToRecentDocs(
+                windows::Win32::UI::Shell::SHARD_PATHW.0 as u32,
+                Some(path_u16.as_ptr() as *const _),
             );
-
-        if app_doc_lists.is_ok() {
-            tracing::info!("Windows Jump List COM object created.");
         }
     }
 }

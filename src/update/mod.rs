@@ -109,19 +109,15 @@ pub fn handle_message(app: &mut PdfBullApp, message: Message) -> Task<Message> {
             let target_tab = session_data.active_tab;
             for entry in session_data.open_tabs.drain(..) {
                 let path: std::path::PathBuf = entry.clone().into();
-                let path_clone = path.clone();
                 tasks.push(app.update(Message::OpenFile(path)));
                 if let crate::models::SessionTabEntry::Detailed(detailed) = entry
-                    && let Some(tab) = app.tabs.iter_mut().find(|t| t.path == path_clone)
+                    && let Some(tab) = app.tabs.last_mut()
                 {
                     tab.pending_session = Some(detailed);
                 }
             }
-            if !tasks.is_empty() {
-                tasks.push(Task::perform(
-                    async move { Message::SwitchTab(target_tab) },
-                    |m| m,
-                ));
+            if !app.tabs.is_empty() {
+                app.active_tab = target_tab.min(app.tabs.len() - 1);
             }
         }
 

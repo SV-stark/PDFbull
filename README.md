@@ -163,8 +163,8 @@ Cold-start launch and page rendering timings measured on Windows 11 across vario
 - **Language**: [Rust](https://www.rust-lang.org/)
 - **Concurrency**: [Tokio](https://tokio.rs/) (Async Runtime) & [Rayon](https://github.com/rayon-rs/rayon) (Data Parallelism)
 - **PDF Engine**: [zpdf](https://crates.io/crates/zpdf) (pure-Rust PDF backend)
-- **GPU Rasterizer**: [zpdf-render-wgpu](https://crates.io/crates/zpdf-render-wgpu) (active)
-- **CPU Rasterizer (Fallback)**: [zpdf-render-cpu](https://crates.io/crates/zpdf-render-cpu)
+- **CPU Rasterizer**: [zpdf-render-cpu](https://crates.io/crates/zpdf-render-cpu) (active)
+- **GPU Rasterizer (Experimental)**: [zpdf-render-wgpu](https://crates.io/crates/zpdf-render-wgpu)
 - **Caching**: [quick_cache](https://github.com/arthurprs/quick-cache)
 - **File Dialogs**: [rfd](https://github.com/Empson/rfd) (Native file dialogs)
 

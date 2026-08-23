@@ -543,6 +543,7 @@ pub fn handle_export_message(app: &mut PdfBullApp, message: Message) -> Task<Mes
                 }
                 Ok(printers) => {
                     let selected = printers[0].clone();
+                    app.status_message = Some(format!("Sending document to printer: {selected}"));
                     app.update(Message::PrintWithPrinter(format!("{path}|{selected}")))
                 }
             }

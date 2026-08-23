@@ -3,6 +3,7 @@ use crate::models::{
     Hyperlink, PdfError, PdfResult, SearchResultItem,
 };
 use lopdf::{Document, Object, ObjectId};
+use ocrs::TextItem;
 use quick_cache::{Weighter, sync::Cache};
 use rayon::prelude::*;
 use std::collections::HashMap;
@@ -31,6 +32,11 @@ struct OcConfigInternal {
     on: std::collections::HashSet<zpdf::ObjectId>,
     base_state_off: bool,
 }
+
+const _: () = {
+    assert!(std::mem::size_of::<zpdf::OcConfig>() == std::mem::size_of::<OcConfigInternal>());
+    assert!(std::mem::align_of::<zpdf::OcConfig>() == std::mem::align_of::<OcConfigInternal>());
+};
 
 impl OcConfigInternal {
     fn apply_overrides(
@@ -65,6 +71,7 @@ pub struct RenderKey {
     pub doc_id: DocumentId,
     pub page_num: usize,
     pub scale: u32,
+    pub rotation: i32,
     pub auto_crop: bool,
     pub quality: RenderQuality,
 }
@@ -80,6 +87,7 @@ impl Weighter<RenderKey, crate::models::RenderResult> for RenderWeighter {
 
 pub struct RenderCache {
     cache: Cache<RenderKey, crate::models::RenderResult, RenderWeighter>,
+    doc_keys: std::sync::Mutex<HashMap<DocumentId, std::collections::HashSet<RenderKey>>>,
 }
 
 impl RenderCache {
@@ -94,6 +102,7 @@ impl RenderCache {
                 },
                 RenderWeighter,
             ),
+            doc_keys: std::sync::Mutex::new(HashMap::new()),
         }
     }
 
@@ -102,11 +111,39 @@ impl RenderCache {
     }
 
     pub fn put(&self, key: RenderKey, result: crate::models::RenderResult) {
+        if let Ok(mut guard) = self.doc_keys.lock() {
+            guard.entry(key.doc_id).or_default().insert(key.clone());
+        }
         self.cache.insert(key, result);
     }
 
     pub fn remove(&self, key: &RenderKey) {
+        if let Ok(mut guard) = self.doc_keys.lock()
+            && let Some(set) = guard.get_mut(&key.doc_id)
+        {
+            set.remove(key);
+        }
         self.cache.remove(key);
+    }
+
+    pub fn invalidate_document(&self, doc_id: DocumentId) {
+        if let Ok(guard) = self.doc_keys.lock()
+            && let Some(keys) = guard.get(&doc_id)
+        {
+            for key in keys {
+                self.cache.remove(key);
+            }
+        }
+    }
+
+    pub fn remove_document(&self, doc_id: DocumentId) {
+        if let Ok(mut guard) = self.doc_keys.lock()
+            && let Some(keys) = guard.remove(&doc_id)
+        {
+            for key in keys {
+                self.cache.remove(&key);
+            }
+        }
     }
 }
 
@@ -179,6 +216,12 @@ impl DocumentStore {
         password: Option<&str>,
         doc_id: DocumentId,
     ) -> PdfResult<crate::models::OpenResult> {
+        let metadata = std::fs::metadata(path).map_err(|e| PdfError::OpenFailed(e.to_string()))?;
+        if metadata.len() > 512 * 1024 * 1024 {
+            return Err(PdfError::OpenFailed(
+                "PDF file exceeds 512 MB size limit".into(),
+            ));
+        }
         let data = std::fs::read(path).map_err(|e| PdfError::OpenFailed(e.to_string()))?;
         // Harden against malformed/malicious PDFs by capping stream and object counts.
         let limits = ParseLimits {
@@ -412,11 +455,8 @@ impl DocumentStore {
         self.oc_configs.remove(&doc_id);
         self.oc_visibility.remove(&doc_id);
         self.image_caches.remove(&doc_id);
-        if let Some(doc_keys) = self.cache_keys.remove(&doc_id) {
-            for key in doc_keys {
-                self.render_cache.remove(&key);
-            }
-        }
+        self.cache_keys.remove(&doc_id);
+        self.render_cache.remove_document(doc_id);
     }
 
     /// Extract layer information from a document's `OCProperties` dictionary.
@@ -500,12 +540,8 @@ impl DocumentStore {
                 .or_default()
                 .insert(id, visible);
 
-            // Invalidate the render cache for this document.
-            if let Some(keys) = self.cache_keys.get(&doc_id) {
-                for key in keys {
-                    self.render_cache.remove(key);
-                }
-            }
+            // Invalidate the render cache for this document across all workers.
+            self.render_cache.invalidate_document(doc_id);
         }
     }
 
@@ -762,6 +798,7 @@ impl DocumentStore {
             doc_id,
             page_num,
             scale: rounded_scale,
+            rotation: options.rotation,
             auto_crop: if is_thumbnail {
                 false
             } else {
@@ -1213,6 +1250,7 @@ impl DocumentStore {
             doc_id,
             page_num,
             scale: (scale * 100.0).round() as u32,
+            rotation: 0,
             auto_crop: false,
             quality: RenderQuality::Medium,
         };
@@ -1472,7 +1510,7 @@ impl DocumentStore {
         }
         let bbox = if data.len() < 64 * 1024 {
             let mut acc: Option<(u32, u32, u32, u32)> = None;
-            for (idx, pixel) in data.chunks_exact(4).enumerate() {
+            for (idx, pixel) in data.as_chunks::<4>().0.iter().enumerate() {
                 if pixel[0] <= WHITE_THRESHOLD
                     || pixel[1] <= WHITE_THRESHOLD
                     || pixel[2] <= WHITE_THRESHOLD
@@ -1733,16 +1771,7 @@ impl DocumentStore {
         Ok(results)
     }
 
-    pub fn convert_pdf_doc_by_id(
-        &self,
-        doc_id: DocumentId,
-        mode: &str,
-        format: &str,
-    ) -> PdfResult<String> {
-        let doc = self
-            .documents
-            .get(&doc_id)
-            .ok_or(PdfError::EngineError(EngineErrorKind::DocumentNotFound))?;
+    fn convert_inner(doc: &PdfDocument, mode: &str, format: &str) -> PdfResult<String> {
         let page_indices: Vec<usize> = (0..doc.page_count()).collect();
         let conv_mode = if mode.eq_ignore_ascii_case("rich") {
             zpdf::ConversionMode::Rich
@@ -1797,61 +1826,29 @@ impl DocumentStore {
         }
     }
 
+    pub fn convert_pdf_doc_by_id(
+        &self,
+        doc_id: DocumentId,
+        mode: &str,
+        format: &str,
+    ) -> PdfResult<String> {
+        let doc = self
+            .documents
+            .get(&doc_id)
+            .ok_or(PdfError::EngineError(EngineErrorKind::DocumentNotFound))?;
+        Self::convert_inner(doc, mode, format)
+    }
+
     pub fn convert_pdf_doc(&self, path: &str, mode: &str, format: &str) -> PdfResult<String> {
+        let metadata = std::fs::metadata(path).map_err(|e| PdfError::OpenFailed(e.to_string()))?;
+        if metadata.len() > 512 * 1024 * 1024 {
+            return Err(PdfError::OpenFailed(
+                "PDF file exceeds 512 MB size limit".into(),
+            ));
+        }
         let data = std::fs::read(path).map_err(|e| PdfError::OpenFailed(e.to_string()))?;
         let doc = zpdf::PdfDocument::open(data).map_err(|e| PdfError::OpenFailed(e.to_string()))?;
-        let page_indices: Vec<usize> = (0..doc.page_count()).collect();
-        let conv_mode = if mode.eq_ignore_ascii_case("rich") {
-            zpdf::ConversionMode::Rich
-        } else {
-            zpdf::ConversionMode::TextOnly
-        };
-        let opts = zpdf::ConversionOptions {
-            mode: conv_mode,
-            use_structure: true,
-        };
-        let converted = zpdf::convert_pdf(&doc, &page_indices, opts).map_err(|e| {
-            PdfError::EngineError(EngineErrorKind::Generic(format!(
-                "Conversion failed: {e:?}"
-            )))
-        })?;
-
-        match format.to_lowercase().as_str() {
-            "md" | "markdown" => {
-                let mut out = String::new();
-                for page in &converted.pages {
-                    let _ = writeln!(out, "## Page {}\n\n{}\n", page.index + 1, page.text);
-                }
-                Ok(out)
-            }
-            "html" => {
-                let mut out = String::from(
-                    "<!DOCTYPE html>\n<html>\n<head>\n<meta charset=\"utf-8\">\n<title>Converted PDF</title>\n</head>\n<body>\n",
-                );
-                for page in &converted.pages {
-                    let escaped = page
-                        .text
-                        .replace('&', "&amp;")
-                        .replace('<', "&lt;")
-                        .replace('>', "&gt;");
-                    let _ = writeln!(
-                        out,
-                        "<section><h2>Page {}</h2><pre>{}</pre></section>",
-                        page.index + 1,
-                        escaped
-                    );
-                }
-                out.push_str("</body>\n</html>");
-                Ok(out)
-            }
-            _ => {
-                let mut out = String::new();
-                for page in &converted.pages {
-                    let _ = writeln!(out, "--- Page {} ---\n\n{}\n", page.index + 1, page.text);
-                }
-                Ok(out)
-            }
-        }
+        Self::convert_inner(&doc, mode, format)
     }
 
     pub fn merge_documents(&self, paths: Vec<String>, output_path: String) -> PdfResult<String> {
@@ -2630,7 +2627,7 @@ impl DocumentStore {
     /// Feature 6: Perform OCR text recognition and bounding box extraction for page `page_num`.
     /// Reconstructs line structures and word bounding boxes in PDF user space coordinates.
     pub fn ocr_page(
-        &self,
+        &mut self,
         doc_id: DocumentId,
         page_num: usize,
         script: crate::ocr::OcrScript,
@@ -2652,43 +2649,129 @@ impl DocumentStore {
             )));
         };
 
+        if !script.is_model_available() {
+            return Err(PdfError::EngineError(EngineErrorKind::Generic(format!(
+                "OCR models for {} not found in {:?}",
+                script.name(),
+                crate::ocr::OcrScript::resolve_model_dir()
+            ))));
+        }
+
+        let det_path = script.resolve_det_model_path();
+        let rec_path = script.resolve_rec_model_path();
+        let detection_model = rten::Model::load_file(&det_path).map_err(|e| {
+            PdfError::EngineError(EngineErrorKind::Generic(format!(
+                "Failed to load OCR detection model: {e}"
+            )))
+        })?;
+        let recognition_model = rten::Model::load_file(&rec_path).map_err(|e| {
+            PdfError::EngineError(EngineErrorKind::Generic(format!(
+                "Failed to load OCR recognition model: {e}"
+            )))
+        })?;
+
+        let engine = ocrs::OcrEngine::new(ocrs::OcrEngineParams {
+            detection_model: Some(detection_model),
+            recognition_model: Some(recognition_model),
+            ..Default::default()
+        })
+        .map_err(|e| {
+            PdfError::EngineError(EngineErrorKind::Generic(format!(
+                "Failed to initialize OCR engine: {e}"
+            )))
+        })?;
+
+        let render_opts = RenderOptions {
+            scale: 2.0,
+            rotation: 0,
+            filter: RenderFilter::None,
+            auto_crop: false,
+            quality: RenderQuality::High,
+        };
+        let rendered = self.render_page_internal(doc_id, page_num, render_opts, false)?;
+
         let page_rect = page.media_box;
-        let mut spans = Vec::new();
+        let page_width = (page_rect.x1 - page_rect.x0).abs() as f32;
+        let page_height = (page_rect.y1 - page_rect.y0).abs() as f32;
+        let scale_x = page_width / rendered.width as f32;
+        let scale_y = page_height / rendered.height as f32;
+
+        let img_source =
+            ocrs::ImageSource::from_bytes(&rendered.data, (rendered.width, rendered.height))
+                .map_err(|e| {
+                    PdfError::EngineError(EngineErrorKind::Generic(format!(
+                        "Invalid image for OCR: {e:?}"
+                    )))
+                })?;
+        let ocr_input = engine.prepare_input(img_source).map_err(|e| {
+            PdfError::EngineError(EngineErrorKind::Generic(format!(
+                "OCR prepare input failed: {e}"
+            )))
+        })?;
+        let word_rects = engine.detect_words(&ocr_input).map_err(|e| {
+            PdfError::EngineError(EngineErrorKind::Generic(format!(
+                "OCR word detection failed: {e}"
+            )))
+        })?;
+        let line_rects = engine.find_text_lines(&ocr_input, &word_rects);
+        let line_texts = engine
+            .recognize_text(&ocr_input, &line_rects)
+            .map_err(|e| {
+                PdfError::EngineError(EngineErrorKind::Generic(format!(
+                    "OCR recognition failed: {e}"
+                )))
+            })?;
+
         let mut lines: Vec<crate::ocr::OcrLine> = Vec::new();
-
-        if let Ok(contents) = doc.page_content_bytes(&page) {
-            let interp = ContentInterpreter::new(page_rect).with_text_sink(&mut spans);
-            let _dl = interp.interpret(&contents);
-
-            if !spans.is_empty() {
-                let full_text = zpdf::spans_to_text(spans, 2.0);
-                for (line_idx, line_str) in full_text.lines().enumerate() {
-                    let trimmed = line_str.trim();
-                    if trimmed.is_empty() {
-                        continue;
-                    }
-                    let y_base = (page_rect.y1 as f32 - 40.0) - (line_idx as f32 * 18.0);
-                    let words: Vec<crate::ocr::OcrWord> = trimmed
-                        .split_whitespace()
-                        .enumerate()
-                        .map(|(w_idx, word)| {
-                            let x0 = 50.0 + (w_idx as f32 * 45.0);
-                            let x1 = x0 + (word.len() as f32 * 8.0);
-                            crate::ocr::OcrWord {
-                                text: word.to_string(),
-                                bbox: [x0, y_base, x1, y_base + 12.0],
-                            }
-                        })
-                        .collect();
-
-                    let line_x1 = words.last().map(|w| w.bbox[2]).unwrap_or(500.0);
-                    lines.push(crate::ocr::OcrLine {
-                        text: trimmed.to_string(),
-                        words,
-                        bbox: [50.0, y_base, line_x1, y_base + 12.0],
-                    });
-                }
+        for maybe_line in &line_texts {
+            let Some(line) = maybe_line else { continue };
+            let line_text = line.to_string();
+            let trimmed = line_text.trim();
+            if trimmed.is_empty() {
+                continue;
             }
+
+            let mut words = Vec::new();
+            for word in line.words() {
+                let w_text = word.to_string();
+                let rect = word.bounding_rect();
+                let x0 = page_rect.x0 as f32 + (rect.left() as f32 * scale_x);
+                let x1 = page_rect.x0 as f32 + (rect.right() as f32 * scale_x);
+                let y0 = page_rect.y1 as f32 - (rect.bottom() as f32 * scale_y);
+                let y1 = page_rect.y1 as f32 - (rect.top() as f32 * scale_y);
+                words.push(crate::ocr::OcrWord {
+                    text: w_text,
+                    bbox: [x0, y0, x1, y1],
+                });
+            }
+
+            let (lx0, ly0, lx1, ly1) = if words.is_empty() {
+                (50.0, 50.0, 500.0, 62.0)
+            } else {
+                let min_x = words
+                    .iter()
+                    .map(|w| w.bbox[0])
+                    .fold(f32::INFINITY, f32::min);
+                let min_y = words
+                    .iter()
+                    .map(|w| w.bbox[1])
+                    .fold(f32::INFINITY, f32::min);
+                let max_x = words
+                    .iter()
+                    .map(|w| w.bbox[2])
+                    .fold(f32::NEG_INFINITY, f32::max);
+                let max_y = words
+                    .iter()
+                    .map(|w| w.bbox[3])
+                    .fold(f32::NEG_INFINITY, f32::max);
+                (min_x, min_y, max_x, max_y)
+            };
+
+            lines.push(crate::ocr::OcrLine {
+                text: trimmed.to_string(),
+                words,
+                bbox: [lx0, ly0, lx1, ly1],
+            });
         }
 
         tracing::info!(
@@ -2702,7 +2785,7 @@ impl DocumentStore {
 
     /// Perform multi-page OCR text recognition across all pages of a document.
     pub fn ocr_document_parallel(
-        &self,
+        &mut self,
         doc_id: DocumentId,
         script: crate::ocr::OcrScript,
     ) -> PdfResult<Vec<crate::ocr::OcrPageResult>> {
@@ -2712,9 +2795,12 @@ impl DocumentStore {
             .map(zpdf::PdfDocument::page_count)
             .unwrap_or(0);
 
-        let results: Vec<crate::ocr::OcrPageResult> = (0..page_count)
-            .filter_map(|page_num| self.ocr_page(doc_id, page_num, script).ok())
-            .collect();
+        let mut results = Vec::with_capacity(page_count);
+        for page_num in 0..page_count {
+            if let Ok(res) = self.ocr_page(doc_id, page_num, script) {
+                results.push(res);
+            }
+        }
 
         tracing::info!(
             "Document OCR finished for doc_id {:?} across {} pages",
@@ -2750,6 +2836,7 @@ mod tests {
             doc_id,
             page_num: 0,
             scale: 100,
+            rotation: 0,
             auto_crop: false,
             quality: RenderQuality::Medium,
         };
@@ -2757,6 +2844,7 @@ mod tests {
             doc_id,
             page_num: 0,
             scale: 100,
+            rotation: 0,
             auto_crop: false,
             quality: RenderQuality::Medium,
         };
@@ -2770,6 +2858,7 @@ mod tests {
             doc_id,
             page_num: 0,
             scale: 100,
+            rotation: 0,
             auto_crop: false,
             quality: RenderQuality::Medium,
         };
@@ -2777,6 +2866,7 @@ mod tests {
             doc_id,
             page_num: 1,
             scale: 100,
+            rotation: 0,
             auto_crop: false,
             quality: RenderQuality::Medium,
         };
@@ -2790,6 +2880,7 @@ mod tests {
             doc_id,
             page_num: 0,
             scale: 100,
+            rotation: 0,
             auto_crop: false,
             quality: RenderQuality::Medium,
         };
@@ -2797,6 +2888,7 @@ mod tests {
             doc_id,
             page_num: 0,
             scale: 200,
+            rotation: 0,
             auto_crop: false,
             quality: RenderQuality::Medium,
         };
@@ -2809,6 +2901,7 @@ mod tests {
             doc_id: DocumentId(1),
             page_num: 0,
             scale: 100,
+            rotation: 0,
             auto_crop: false,
             quality: RenderQuality::Medium,
         };
@@ -2816,6 +2909,7 @@ mod tests {
             doc_id: DocumentId(2),
             page_num: 0,
             scale: 100,
+            rotation: 0,
             auto_crop: false,
             quality: RenderQuality::Medium,
         };
@@ -2829,6 +2923,7 @@ mod tests {
             doc_id,
             page_num: 0,
             scale: 100,
+            rotation: 0,
             auto_crop: false,
             quality: RenderQuality::Medium,
         };
@@ -2836,6 +2931,7 @@ mod tests {
             doc_id,
             page_num: 0,
             scale: 200,
+            rotation: 0,
             auto_crop: false,
             quality: RenderQuality::Medium,
         };
@@ -2850,6 +2946,7 @@ mod tests {
                 doc_id: DocumentId(1),
                 page_num: 0,
                 scale: 100,
+                rotation: 0,
                 auto_crop: false,
                 quality: RenderQuality::Medium,
             }),
@@ -2864,6 +2961,7 @@ mod tests {
             doc_id: DocumentId(1),
             page_num: 0,
             scale: 100,
+            rotation: 0,
             auto_crop: false,
             quality: RenderQuality::Medium,
         };
@@ -2885,6 +2983,7 @@ mod tests {
             doc_id: DocumentId(1),
             page_num: 0,
             scale: 100,
+            rotation: 0,
             auto_crop: false,
             quality: RenderQuality::Medium,
         };
@@ -2911,6 +3010,7 @@ mod tests {
             doc_id: DocumentId(1),
             page_num: 0,
             scale: 100,
+            rotation: 0,
             auto_crop: false,
             quality: RenderQuality::Medium,
         };
@@ -2918,6 +3018,7 @@ mod tests {
             doc_id: DocumentId(1),
             page_num: 1,
             scale: 100,
+            rotation: 0,
             auto_crop: false,
             quality: RenderQuality::Medium,
         };
@@ -3094,6 +3195,7 @@ mod tests {
                     doc_id: DocumentId(1),
                     page_num: 0,
                     scale: 100,
+                    rotation: 0,
                     auto_crop: false,
                     quality: RenderQuality::Medium,
                 })

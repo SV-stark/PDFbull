@@ -11,8 +11,9 @@ fn main() -> iced::Result {
     let log_path_clone = log_path.clone();
     let panic_path_clone = panic_path.clone();
 
+    let prev_panic_hook = std::panic::take_hook();
     human_panic::setup_panic!();
-    let default_panic_hook = std::panic::take_hook();
+    let human_panic_hook = std::panic::take_hook();
 
     std::panic::set_hook(Box::new(move |info| {
         let msg = if let Some(s) = info.payload().downcast_ref::<&str>() {
@@ -40,11 +41,13 @@ fn main() -> iced::Result {
             use std::io::Write;
             let _ = f.write_all(panic_msg.as_bytes());
         }
-        default_panic_hook(info);
+        human_panic_hook(info);
+        prev_panic_hook(info);
     }));
 
     let file_appender = tracing_appender::rolling::never(&config_dir, "pdfbull.log");
-    let (non_blocking_file, _guard) = tracing_appender::non_blocking(file_appender);
+    let (non_blocking_file, guard) = tracing_appender::non_blocking(file_appender);
+    let _guard = Box::leak(Box::new(guard));
 
     tracing_subscriber::fmt()
         .with_env_filter(

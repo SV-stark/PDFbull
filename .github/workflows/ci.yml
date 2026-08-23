@@ -68,6 +68,9 @@ jobs:
       - name: Run Tests
         run: cargo nextest run
 
+      - name: Check Benchmarks
+        run: cargo check --benches
+
   security:
     name: Security & License Checks
     runs-on: ubuntu-latest
