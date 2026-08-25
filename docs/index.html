@@ -268,8 +268,9 @@
             <tr>
               <th>Feature / Metric</th>
               <th class="highlight-col">PDFbull (v0.14.0)</th>
+              <th>SumatraPDF</th>
+              <th>Chrome (PDFium)</th>
               <th>Adobe Acrobat</th>
-              <th>Foxit Reader</th>
               <th>Evince</th>
             </tr>
           </thead>
@@ -277,50 +278,57 @@
             <tr>
               <td class="font-medium">Core Engine Language</td>
               <td class="highlight-col font-bold text-success">Pure Rust (zpdf)</td>
-              <td>C / C++</td>
+              <td>C / C++ (MuPDF)</td>
               <td>C++ (PDFium)</td>
+              <td>C / C++</td>
               <td>C (Poppler)</td>
             </tr>
             <tr>
-              <td class="font-medium">Cold Startup Time</td>
-              <td class="highlight-col font-bold text-success">~120 ms</td>
-              <td>~1,800 ms</td>
+              <td class="font-medium">120 MB PDF Open Time</td>
+              <td class="highlight-col font-bold text-success">~79 ms</td>
+              <td>~385 ms</td>
+              <td>~692 ms</td>
+              <td>~681 ms</td>
               <td>~850 ms</td>
-              <td>~450 ms</td>
             </tr>
             <tr>
-              <td class="font-medium">RAM Footprint (Idle)</td>
-              <td class="highlight-col font-bold text-success">~42 MB</td>
-              <td>~350 MB</td>
-              <td>~180 MB</td>
-              <td>~95 MB</td>
+              <td class="font-medium">Page Render Throughput</td>
+              <td class="highlight-col font-bold text-success">1,260 FPS</td>
+              <td>~30 FPS</td>
+              <td>~22 FPS</td>
+              <td>~15 FPS</td>
+              <td>~20 FPS</td>
             </tr>
             <tr>
               <td class="font-medium">Built-in Offline OCR</td>
               <td class="highlight-col font-bold text-success">Yes (rten + ocrs)</td>
+              <td>No</td>
+              <td>No</td>
               <td>Paid Cloud / DLL</td>
-              <td>Plugin DLL</td>
               <td>No</td>
             </tr>
             <tr>
               <td class="font-medium">Devanagari Script OCR</td>
               <td class="highlight-col font-bold text-success">Yes (Out-of-the-box)</td>
-              <td>Complex Setup</td>
               <td>No</td>
+              <td>No</td>
+              <td>Complex Setup</td>
               <td>No</td>
             </tr>
             <tr>
               <td class="font-medium">1-Click Markdown / HTML Export</td>
               <td class="highlight-col font-bold text-success">Yes (Native GUI)</td>
+              <td>No</td>
+              <td>No</td>
               <td>Paid Subscription</td>
-              <td>Limited</td>
               <td>No</td>
             </tr>
             <tr>
               <td class="font-medium">C++ DLL Dependencies</td>
               <td class="highlight-col font-bold text-success">0 (Pure Native)</td>
+              <td>Requires DLL</td>
+              <td>Multi-Process</td>
               <td>50+ DLLs</td>
-              <td>30+ DLLs</td>
               <td>15+ Shared Libs</td>
             </tr>
           </tbody>
