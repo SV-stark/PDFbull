@@ -742,6 +742,13 @@ pub fn render(app: &PdfBullApp) -> Element<'_, crate::message::Message> {
                     "Validate PDF/A, PDF/X, and PDF/UA standard compliance"
                 ),
                 tool_button_emoji(
+                    "\u{1f5a5}",
+                    "Logs",
+                    crate::message::Message::ToggleLogConsole(None),
+                    app.show_log_console,
+                    "Open in-app developer log console (Ctrl+L)"
+                ),
+                tool_button_emoji(
                     "\u{1f4c4}",
                     "New Doc",
                     crate::message::Message::CreateBlankDocument,

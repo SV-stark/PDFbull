@@ -160,6 +160,51 @@ pub fn handle_app_message(app: &mut PdfBullApp, message: Message) -> Task<Messag
             }
             Task::none()
         }
+        Message::ToggleLogConsole(opt) => {
+            let new_state = opt.unwrap_or(!app.show_log_console);
+            app.show_log_console = new_state;
+            if app.show_log_console {
+                app.log_entries = crate::logging::recent_logs();
+                if app.log_autoscroll {
+                    return iced::widget::operation::scroll_to(
+                        "log_console_scroll",
+                        iced::widget::scrollable::AbsoluteOffset {
+                            x: 0.0,
+                            y: f32::MAX,
+                        },
+                    );
+                }
+            }
+            Task::none()
+        }
+        Message::ClearLogs => {
+            crate::logging::clear_logs();
+            app.log_entries.clear();
+            Task::none()
+        }
+        Message::SetLogLevelFilter(filter) => {
+            app.log_level_filter = filter;
+            Task::none()
+        }
+        Message::ToggleLogAutoscroll => {
+            app.log_autoscroll = !app.log_autoscroll;
+            Task::none()
+        }
+        Message::RefreshLogs => {
+            if app.show_log_console {
+                app.log_entries = crate::logging::recent_logs();
+                if app.log_autoscroll {
+                    return iced::widget::operation::scroll_to(
+                        "log_console_scroll",
+                        iced::widget::scrollable::AbsoluteOffset {
+                            x: 0.0,
+                            y: f32::MAX,
+                        },
+                    );
+                }
+            }
+            Task::none()
+        }
         _ => Task::none(),
     }
 }

@@ -100,6 +100,12 @@ pub fn load_settings() -> AppSettings {
                 if let Some(v) = obj.get("default_zoom").and_then(serde_json::Value::as_f64) {
                     settings.default_zoom = v as f32;
                 }
+                if let Some(v) = obj
+                    .get("show_logs_on_start")
+                    .and_then(serde_json::Value::as_bool)
+                {
+                    settings.show_logs_on_start = v;
+                }
             }
         }
     }

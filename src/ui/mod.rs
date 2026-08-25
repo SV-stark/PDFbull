@@ -1312,6 +1312,10 @@ pub fn view(app: &PdfBullApp) -> Element<'_, crate::message::Message> {
         base_stack = base_stack.push(crate::ui_conformance::conformance_validator_view(app));
     }
 
+    if app.show_log_console {
+        base_stack = base_stack.push(crate::ui_log_console::log_console_view(app));
+    }
+
     if app.command_palette.is_open {
         base_stack = base_stack.push(command_palette_view(app));
     }

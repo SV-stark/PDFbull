@@ -123,6 +123,11 @@ pub struct PdfBullApp {
     pub conformance_pending: bool,
     /// Command Palette state
     pub command_palette: crate::models::CommandPalette,
+    /// In-app Developer Log Console state
+    pub show_log_console: bool,
+    pub log_entries: Vec<crate::logging::LogEntry>,
+    pub log_level_filter: crate::logging::LogLevelFilter,
+    pub log_autoscroll: bool,
 }
 
 impl Default for PdfBullApp {
@@ -199,6 +204,10 @@ impl Default for PdfBullApp {
             conformance_report: None,
             conformance_pending: false,
             command_palette: crate::models::CommandPalette::default(),
+            show_log_console: false,
+            log_entries: Vec::new(),
+            log_level_filter: crate::logging::LogLevelFilter::All,
+            log_autoscroll: true,
         }
     }
 }
@@ -367,6 +376,13 @@ impl PdfBullApp {
                 category: "Tools".into(),
                 action: CommandAction::ValidateConformance,
                 shortcut: None,
+            },
+            PaletteItem {
+                title: "Toggle Log Console".into(),
+                subtitle: Some("Show or hide live in-app developer log viewer".into()),
+                category: "View".into(),
+                action: CommandAction::ToggleLogConsole,
+                shortcut: Some("Ctrl+L".into()),
             },
             PaletteItem {
                 title: "Open Settings".into(),

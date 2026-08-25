@@ -18,6 +18,9 @@ pub fn handle_misc_message(app: &mut PdfBullApp, message: Message) -> Task<Messa
             Task::none()
         }
         Message::IcedEvent(event) => {
+            if app.show_log_console {
+                app.log_entries = crate::logging::recent_logs();
+            }
             match event {
                 iced::Event::Window(iced::window::Event::CloseRequested) => {
                     let has_dirty = app.tabs.iter().any(|t| t.annotations_dirty);
@@ -160,6 +163,9 @@ pub fn handle_misc_message(app: &mut PdfBullApp, message: Message) -> Task<Messa
                             "?" if modifiers.shift() => {
                                 return app.update(Message::ToggleKeyboardHelp);
                             }
+                            "l" if modifiers.command() => {
+                                return app.update(Message::ToggleLogConsole(None));
+                            }
                             "t" if !modifiers.command() => {
                                 return app.update(Message::SetAnnotationMode(Some(
                                     crate::models::PendingAnnotationKind::Text,
@@ -269,6 +275,7 @@ pub fn handle_misc_message(app: &mut PdfBullApp, message: Message) -> Task<Messa
                 CommandAction::NewDocument => app.update(Message::CreateBlankDocument),
                 CommandAction::OpenFile => app.update(Message::OpenDocument),
                 CommandAction::JumpToPage(page) => app.update(Message::JumpToPage(page)),
+                CommandAction::ToggleLogConsole => app.update(Message::ToggleLogConsole(None)),
             }
         }
         Message::LinkClicked(link) => {

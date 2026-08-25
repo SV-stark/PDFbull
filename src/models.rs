@@ -336,6 +336,10 @@ pub struct AppSettings {
     pub remember_last_file: bool,
     pub default_zoom: f32,
     pub auto_save: bool,
+    #[serde(default)]
+    pub show_logs_on_start: bool,
+    #[serde(default)]
+    pub log_level_filter: crate::logging::LogLevelFilter,
 }
 
 impl Default for AppSettings {
@@ -351,6 +355,8 @@ impl Default for AppSettings {
             remember_last_file: true,
             default_zoom: 1.0,
             auto_save: true,
+            show_logs_on_start: false,
+            log_level_filter: crate::logging::LogLevelFilter::All,
         }
     }
 }
@@ -824,6 +830,7 @@ pub enum CommandAction {
     OpenFile,
     JumpToPage(usize),
     HighlightSelection,
+    ToggleLogConsole,
 }
 
 #[derive(Debug, Clone)]

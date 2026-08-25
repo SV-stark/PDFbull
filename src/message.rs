@@ -237,4 +237,16 @@ pub enum Message {
     PaletteSubmit,
     /// Convert currently selected text into persistent highlight annotations
     HighlightSelection,
+
+    // ── Log Console ──────────────────────────────────────────────────────────
+    /// Toggle or set visibility of in-app log console drawer
+    ToggleLogConsole(Option<bool>),
+    /// Clear all captured logs from buffer
+    ClearLogs,
+    /// Set the level filter for visible log entries
+    SetLogLevelFilter(crate::logging::LogLevelFilter),
+    /// Toggle autoscroll behavior in log console
+    ToggleLogAutoscroll,
+    /// Refresh logs snapshot
+    RefreshLogs,
 }

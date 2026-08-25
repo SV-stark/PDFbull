@@ -325,6 +325,28 @@ pub fn settings_view(app: &crate::app::PdfBullApp) -> Element<'_, crate::message
         behavior_buttons,
     );
 
+    let developer_card = custom_card(
+        text("Developer & Logging")
+            .size(18)
+            .font(INTER_BOLD)
+            .style(|_theme| iced::widget::text::Style {
+                color: Some(Color::WHITE),
+            }),
+        row![
+            setting_btn("Open Logs on Start", app.settings.show_logs_on_start, {
+                let mut s = app.settings.clone();
+                s.show_logs_on_start = !s.show_logs_on_start;
+                crate::message::Message::SaveSettings(s)
+            }),
+            setting_btn(
+                "Open Log Console Now",
+                app.show_log_console,
+                crate::message::Message::ToggleLogConsole(Some(true)),
+            ),
+        ]
+        .spacing(10),
+    );
+
     container(scrollable(
         column![
             row![
@@ -366,6 +388,8 @@ pub fn settings_view(app: &crate::app::PdfBullApp) -> Element<'_, crate::message
             defaults_card,
             Space::new().height(20),
             behavior_card,
+            Space::new().height(20),
+            developer_card,
             Space::new().height(40),
         ]
         .padding(30)

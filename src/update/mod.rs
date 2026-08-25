@@ -100,6 +100,12 @@ pub fn handle_message(app: &mut PdfBullApp, message: Message) -> Task<Message> {
             }
         }
 
+        if app.settings.show_logs_on_start {
+            app.show_log_console = true;
+            app.log_entries = crate::logging::recent_logs();
+        }
+        app.log_level_filter = app.settings.log_level_filter;
+
         let mut tasks = Vec::new();
         if let Some(path) = cli_path {
             tasks.push(app.update(Message::OpenFile(path)));
@@ -147,6 +153,11 @@ pub fn handle_message(app: &mut PdfBullApp, message: Message) -> Task<Message> {
         | Message::SetRibbonTab(_)
         | Message::ToggleMarkupBar
         | Message::ToggleTableMode
+        | Message::ToggleLogConsole(_)
+        | Message::ClearLogs
+        | Message::SetLogLevelFilter(_)
+        | Message::ToggleLogAutoscroll
+        | Message::RefreshLogs
         | Message::ClearRecentFiles => app::handle_app_message(app, message),
         Message::AddBookmark | Message::RemoveBookmark(_) | Message::JumpToBookmark(_) => {
             bookmarks::handle_bookmark_message(app, message)

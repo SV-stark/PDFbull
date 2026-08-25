@@ -1,6 +1,9 @@
+#![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
+
 use pdfbull::app;
 use pdfbull::platform;
-use tracing_subscriber::fmt::writer::MakeWriterExt;
+use tracing_subscriber::layer::SubscriberExt;
+use tracing_subscriber::util::SubscriberInitExt;
 
 fn main() -> iced::Result {
     let config_dir = pdfbull::storage::get_config_dir();
@@ -32,6 +35,7 @@ fn main() -> iced::Result {
             "PANIC: {} at {}\nBacktrace:\n{:?}",
             msg, location, backtrace
         );
+        tracing::error!(target: "panic", "PANIC at {}: {}\nBacktrace:\n{:?}", location, msg, backtrace);
         let _ = std::fs::write(&panic_path_clone, &panic_msg);
         if let Ok(mut f) = std::fs::OpenOptions::new()
             .create(true)
@@ -49,13 +53,32 @@ fn main() -> iced::Result {
     let (non_blocking_file, guard) = tracing_appender::non_blocking(file_appender);
     let _guard = Box::leak(Box::new(guard));
 
-    tracing_subscriber::fmt()
-        .with_env_filter(
-            tracing_subscriber::EnvFilter::try_from_default_env()
-                .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("warn")),
-        )
-        .with_writer(std::io::stdout.and(non_blocking_file))
-        .init();
+    let env_filter = tracing_subscriber::EnvFilter::try_from_default_env()
+        .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("info,pdfbull=debug"));
+    let file_layer = tracing_subscriber::fmt::layer()
+        .with_writer(non_blocking_file)
+        .with_ansi(false);
+    let ring_layer = pdfbull::logging::RingBufferLayer;
+
+    #[cfg(debug_assertions)]
+    {
+        let stdout_layer = tracing_subscriber::fmt::layer().with_writer(std::io::stdout);
+        tracing_subscriber::registry()
+            .with(env_filter)
+            .with(ring_layer)
+            .with(file_layer)
+            .with(stdout_layer)
+            .init();
+    }
+
+    #[cfg(not(debug_assertions))]
+    {
+        tracing_subscriber::registry()
+            .with(env_filter)
+            .with(ring_layer)
+            .with(file_layer)
+            .init();
+    }
 
     let args: Vec<String> = std::env::args().collect();
 
