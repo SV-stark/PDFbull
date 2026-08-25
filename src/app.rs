@@ -116,6 +116,11 @@ pub struct PdfBullApp {
     pub selected_ocr_script: crate::ocr::OcrScript,
     pub ocr_results:
         std::collections::HashMap<(crate::models::DocumentId, usize), crate::ocr::OcrPageResult>,
+    /// PDF Conformance Validator (PDF/A, PDF/X, PDF/UA)
+    pub show_conformance_validator: bool,
+    pub conformance_profile_idx: usize,
+    pub conformance_report: Option<crate::models::ConformanceReport>,
+    pub conformance_pending: bool,
     /// Command Palette state
     pub command_palette: crate::models::CommandPalette,
 }
@@ -189,6 +194,10 @@ impl Default for PdfBullApp {
             show_ocr_overlay: false,
             selected_ocr_script: crate::ocr::OcrScript::default(),
             ocr_results: std::collections::HashMap::new(),
+            show_conformance_validator: false,
+            conformance_profile_idx: 0,
+            conformance_report: None,
+            conformance_pending: false,
             command_palette: crate::models::CommandPalette::default(),
         }
     }
@@ -350,6 +359,13 @@ impl PdfBullApp {
                 subtitle: Some("Compress streams and rebuild cross-references".into()),
                 category: "Tools".into(),
                 action: CommandAction::OptimizePDF,
+                shortcut: None,
+            },
+            PaletteItem {
+                title: "Validate PDF Conformance".into(),
+                subtitle: Some("Verify PDF/A, PDF/X, and PDF/UA standard compliance".into()),
+                category: "Tools".into(),
+                action: CommandAction::ValidateConformance,
                 shortcut: None,
             },
             PaletteItem {

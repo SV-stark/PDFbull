@@ -1308,6 +1308,10 @@ pub fn view(app: &PdfBullApp) -> Element<'_, crate::message::Message> {
         base_stack = base_stack.push(crate::ui_cmyk::cmyk_inspector_view(app));
     }
 
+    if app.show_conformance_validator {
+        base_stack = base_stack.push(crate::ui_conformance::conformance_validator_view(app));
+    }
+
     if app.command_palette.is_open {
         base_stack = base_stack.push(command_palette_view(app));
     }

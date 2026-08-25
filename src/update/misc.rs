@@ -262,6 +262,9 @@ pub fn handle_misc_message(app: &mut PdfBullApp, message: Message) -> Task<Messa
                 CommandAction::ExportImage => app.update(Message::ExportImage),
                 CommandAction::Print => app.update(Message::Print),
                 CommandAction::OptimizePDF => app.update(Message::OptimizePDF),
+                CommandAction::ValidateConformance => {
+                    app.update(Message::ToggleConformanceValidator(true))
+                }
                 CommandAction::OpenSettings => app.update(Message::OpenSettings),
                 CommandAction::NewDocument => app.update(Message::CreateBlankDocument),
                 CommandAction::OpenFile => app.update(Message::OpenDocument),

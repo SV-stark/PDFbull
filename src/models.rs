@@ -151,11 +151,19 @@ pub struct PdfaViolation {
     pub message: String,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum ConformanceFamily {
+    PdfA,
+    PdfX,
+    PdfUa,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-pub struct PdfaValidationReport {
+pub struct ConformanceReport {
+    pub family: ConformanceFamily,
     pub profile: String,
     pub conforms: bool,
-    pub claimed: Option<(String, String)>,
+    pub claimed: Vec<(String, String)>,
     pub violations: Vec<PdfaViolation>,
 }
 
@@ -810,6 +818,7 @@ pub enum CommandAction {
     ExportImage,
     Print,
     OptimizePDF,
+    ValidateConformance,
     OpenSettings,
     NewDocument,
     OpenFile,

@@ -103,9 +103,12 @@ Cold-start launch and page rendering timings measured on Windows 11 across vario
 - **AES-256 & RC4-128 Security**: Encrypt saved PDFs with V5/R6 (AES-256) or V2/R3 (RC4-128) standard security handlers.
 - **Dual Passwords**: Set custom User (read access) and Owner (permissions access) passwords.
 
-### 📋 PDF/A Conformance Validation (Powered by `zpdf::pdfa`)
-- **PDF/A-1b & PDF/A-2b Standard Checking**: Validates documents against archival standards (encryption, ID presence, font embedding, transparency).
-- **Detailed Violation Reports**: Returns exact rule IDs and human-readable violation descriptions.
+### 🛡️ PDF Conformance Validation (Powered by `zpdf::pdfa`, `zpdf::pdfx`, `zpdf::pdfua`)
+- **Multi-Standard Conformance Suite**: Validates documents against 9 international standards:
+  - **PDF/A**: `PDF/A-1b`, `PDF/A-2b`, and `PDF/A-3b` (Archival preservation, font embedding, color spaces, and file attachments).
+  - **PDF/X**: `PDF/X-1a`, `PDF/X-3`, `PDF/X-4`, and `PDF/X-6` (Prepress & graphic arts printing, transparency, and layers).
+  - **PDF/UA**: `PDF/UA-1` and `PDF/UA-2` (Universal Accessibility, structure trees, and alternative text).
+- **Rich Interactive Validator Dialog**: Provides instant conformance verification with status badges (✓/✗), claimed standard metadata extraction, and categorized rule-by-rule violation diagnostics.
 
 ### 🛡️ Signature Trust Chain Verification (Powered by `zpdf::trust`)
 - **Certificate Chain Validation**: Validates signature X.509 certificate chains against custom PEM/DER trust anchors.
@@ -181,7 +184,7 @@ Cold-start launch and page rendering timings measured on Windows 11 across vario
 - [x] **Advanced Shapes (Circles/Lines/Arrows) & Sticky Notes** (interactive creation & vector rendering)
 - [x] **PDF Optimization & Image Downsampling** (built-in stream compression, deduplication & downsampling)
 - [x] **PDF Encryption on Save** (AES-256 & RC4-128 password protection)
-- [x] **PDF/A Conformance Validation** (PDF/A-1b & PDF/A-2b compliance suite)
+- [x] **PDF Conformance Validation** (PDF/A-1b/2b/3b, PDF/X-1a/3/4/6, and PDF/UA-1/2 compliance suite)
 - [x] **Digital Signature Trust Chain Verification** (X.509 certificate chain validation against root anchors)
 - [x] **Linearization / Fast Web View** (ISO 32000-1 Annex F web streaming stream optimization)
 - [x] **Multi-Format Document Conversion** (Markdown, HTML5, and TXT export)
@@ -199,7 +202,7 @@ Cold-start launch and page rendering timings measured on Windows 11 across vario
 ## 📦 Installation & Development
 
 ### Release Builds
-Download the latest binaries from the [Releases Page](https://github.com/SV-stark/PDFbull/releases). The current release tag is **`v0.13.0`**.
+Download the latest binaries from the [Releases Page](https://github.com/SV-stark/PDFbull/releases). The current release tag is **`v0.14.0`**.
 
 ### Building from Source
 

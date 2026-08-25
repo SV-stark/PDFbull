@@ -107,10 +107,10 @@ pub enum PdfCommand {
         oneshot::Sender<PdfResult<String>>,
     ),
     LinearizePdf(String, String, oneshot::Sender<PdfResult<String>>),
-    ValidatePdfA(
+    ValidateConformance(
         String,
         String,
-        oneshot::Sender<PdfResult<crate::models::PdfaValidationReport>>,
+        oneshot::Sender<PdfResult<crate::models::ConformanceReport>>,
     ),
     VerifySignatureTrust(
         DocumentId,

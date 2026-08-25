@@ -735,6 +735,13 @@ pub fn render(app: &PdfBullApp) -> Element<'_, crate::message::Message> {
                     "Compress streams & sanitize document metadata"
                 ),
                 tool_button_emoji(
+                    "\u{1f6e1}",
+                    "Validate",
+                    crate::message::Message::ToggleConformanceValidator(!app.show_conformance_validator),
+                    app.show_conformance_validator,
+                    "Validate PDF/A, PDF/X, and PDF/UA standard compliance"
+                ),
+                tool_button_emoji(
                     "\u{1f4c4}",
                     "New Doc",
                     crate::message::Message::CreateBlankDocument,

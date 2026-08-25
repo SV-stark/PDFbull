@@ -682,6 +682,75 @@ pub fn handle_export_message(app: &mut PdfBullApp, message: Message) -> Task<Mes
             }
             Task::none()
         }
+        Message::ToggleConformanceValidator(open) => {
+            app.show_conformance_validator = open;
+            if !open {
+                app.conformance_report = None;
+                app.conformance_pending = false;
+            }
+            Task::none()
+        }
+        Message::SetConformanceProfile(idx) => {
+            app.conformance_profile_idx = idx;
+            app.conformance_report = None;
+            Task::none()
+        }
+        Message::RunConformanceValidation => {
+            let Some(tab) = app.current_tab() else {
+                app.status_message = Some("No document open to validate".to_string());
+                return Task::none();
+            };
+            let path = tab.path.to_string_lossy().to_string();
+            let Some(engine) = &app.engine else {
+                return Task::none();
+            };
+            let cmd_tx = engine.cmd_tx.clone();
+            const PROFILES: [&str; 9] = [
+                "pdfa-1b", "pdfa-2b", "pdfa-3b", "pdfx-1a", "pdfx-3", "pdfx-4", "pdfx-6",
+                "pdfua-1", "pdfua-2",
+            ];
+            let profile_str = PROFILES
+                .get(app.conformance_profile_idx)
+                .unwrap_or(&"pdfa-1b")
+                .to_string();
+            app.conformance_pending = true;
+            Task::perform(
+                async move {
+                    let (tx, rx) = tokio::sync::oneshot::channel();
+                    let _ = cmd_tx
+                        .send(PdfCommand::ValidateConformance(path, profile_str, tx))
+                        .await;
+                    match rx.await {
+                        Ok(res) => res,
+                        Err(_) => Err(crate::models::PdfError::EngineDied),
+                    }
+                },
+                Message::ConformanceValidated,
+            )
+        }
+        Message::ConformanceValidated(res) => {
+            app.conformance_pending = false;
+            match res {
+                Ok(report) => {
+                    let status_txt = if report.conforms {
+                        format!("{} validation passed: Document conforms!", report.profile)
+                    } else {
+                        format!(
+                            "{} validation: {} violation(s) found",
+                            report.profile,
+                            report.violations.len()
+                        )
+                    };
+                    app.status_message = Some(status_txt);
+                    app.conformance_report = Some(report);
+                }
+                Err(e) => {
+                    app.status_message = Some(format!("Validation failed: {e}"));
+                    app.conformance_report = None;
+                }
+            }
+            Task::none()
+        }
         Message::SaveOrganizedPDF => {
             let Some(tab) = app.current_tab() else {
                 return Task::none();

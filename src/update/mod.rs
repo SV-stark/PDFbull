@@ -228,6 +228,10 @@ pub fn handle_message(app: &mut PdfBullApp, message: Message) -> Task<Message> {
         | Message::PermissionsDone(_)
         | Message::OptimizePDF
         | Message::PDFOptimized(_)
+        | Message::ToggleConformanceValidator(_)
+        | Message::SetConformanceProfile(_)
+        | Message::RunConformanceValidation
+        | Message::ConformanceValidated(_)
         | Message::MergeDocuments(_)
         | Message::DocumentsMerged(_)
         | Message::SplitPDF(_)

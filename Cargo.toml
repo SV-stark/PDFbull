@@ -1,6 +1,6 @@
 [package]
 name = "pdfbull"
-version = "0.13.7"
+version = "0.14.0"
 description = "A lightweight PDF reader"
 authors = ["SV-stark"]
 edition = "2024"
@@ -21,8 +21,8 @@ exclude = [
 
 [dependencies]
 iced = { version = "0.14", features = ["image", "svg", "canvas", "tokio", "advanced"] }
-zpdf = { version = "=0.12.1", features = ["cpu-render"] }
-zpdf-writer = "=0.12.1"
+zpdf = { version = "=0.13.0", features = ["cpu-render"] }
+zpdf-writer = "=0.13.0"
 tokio = { version = "1.0", features = ["rt-multi-thread", "sync", "time", "process", "fs", "io-util", "macros"] }
 rfd = "0.17"
 zune-image = "0.5"

@@ -1711,31 +1711,225 @@ impl DocumentStore {
         Ok(output_path.to_string())
     }
 
-    pub fn validate_pdfa(
+    pub fn validate_conformance(
         &self,
         path: &str,
         profile_str: &str,
-    ) -> PdfResult<crate::models::PdfaValidationReport> {
+    ) -> PdfResult<crate::models::ConformanceReport> {
         let data = std::fs::read(path).map_err(|e| PdfError::OpenFailed(e.to_string()))?;
         let pdf = zpdf::PdfFile::parse(data).map_err(|e| PdfError::OpenFailed(e.to_string()))?;
-        let profile = match profile_str.to_lowercase().as_str() {
-            "pdfa-2b" | "2b" | "a-2b" => zpdf::pdfa::Profile::A2b,
-            _ => zpdf::pdfa::Profile::A1b,
-        };
-        let report = zpdf::pdfa::validate(&pdf, profile);
-        Ok(crate::models::PdfaValidationReport {
-            profile: profile.as_str().to_string(),
-            conforms: report.conforms(),
-            claimed: report.claimed,
-            violations: report
-                .violations
-                .into_iter()
-                .map(|v| crate::models::PdfaViolation {
-                    rule: v.rule.to_string(),
-                    message: v.message,
+        let normalized = profile_str.to_lowercase().replace(['-', '/', '_', ' '], "");
+        match normalized.as_str() {
+            "pdfa1b" | "1b" | "a1b" => {
+                let profile = zpdf::pdfa::Profile::A1b;
+                let report = zpdf::pdfa::validate(&pdf, profile);
+                let conforms = report.conforms();
+                let claimed = report
+                    .claimed
+                    .as_ref()
+                    .map(|(part, conf)| vec![("pdfaid".to_string(), format!("{part}/{conf}"))])
+                    .unwrap_or_default();
+                Ok(crate::models::ConformanceReport {
+                    family: crate::models::ConformanceFamily::PdfA,
+                    profile: "PDF/A-1b".to_string(),
+                    conforms,
+                    claimed,
+                    violations: report
+                        .violations
+                        .into_iter()
+                        .map(|v| crate::models::PdfaViolation {
+                            rule: v.rule.to_string(),
+                            message: v.message,
+                        })
+                        .collect(),
                 })
-                .collect(),
-        })
+            }
+            "pdfa2b" | "2b" | "a2b" => {
+                let profile = zpdf::pdfa::Profile::A2b;
+                let report = zpdf::pdfa::validate(&pdf, profile);
+                let conforms = report.conforms();
+                let claimed = report
+                    .claimed
+                    .as_ref()
+                    .map(|(part, conf)| vec![("pdfaid".to_string(), format!("{part}/{conf}"))])
+                    .unwrap_or_default();
+                Ok(crate::models::ConformanceReport {
+                    family: crate::models::ConformanceFamily::PdfA,
+                    profile: "PDF/A-2b".to_string(),
+                    conforms,
+                    claimed,
+                    violations: report
+                        .violations
+                        .into_iter()
+                        .map(|v| crate::models::PdfaViolation {
+                            rule: v.rule.to_string(),
+                            message: v.message,
+                        })
+                        .collect(),
+                })
+            }
+            "pdfa3b" | "3b" | "a3b" => {
+                let profile = zpdf::pdfa::Profile::A3b;
+                let report = zpdf::pdfa::validate(&pdf, profile);
+                let conforms = report.conforms();
+                let claimed = report
+                    .claimed
+                    .as_ref()
+                    .map(|(part, conf)| vec![("pdfaid".to_string(), format!("{part}/{conf}"))])
+                    .unwrap_or_default();
+                Ok(crate::models::ConformanceReport {
+                    family: crate::models::ConformanceFamily::PdfA,
+                    profile: "PDF/A-3b".to_string(),
+                    conforms,
+                    claimed,
+                    violations: report
+                        .violations
+                        .into_iter()
+                        .map(|v| crate::models::PdfaViolation {
+                            rule: v.rule.to_string(),
+                            message: v.message,
+                        })
+                        .collect(),
+                })
+            }
+            "pdfx1a" | "1a" | "x1a" => {
+                let profile = zpdf::pdfx::Profile::X1a;
+                let report = zpdf::pdfx::validate(&pdf, profile);
+                let conforms = report.conforms();
+                let claimed = report
+                    .claimed
+                    .as_ref()
+                    .map(|val| vec![("GTS_PDFXVersion".to_string(), val.clone())])
+                    .unwrap_or_default();
+                Ok(crate::models::ConformanceReport {
+                    family: crate::models::ConformanceFamily::PdfX,
+                    profile: "PDF/X-1a".to_string(),
+                    conforms,
+                    claimed,
+                    violations: report
+                        .violations
+                        .into_iter()
+                        .map(|v| crate::models::PdfaViolation {
+                            rule: v.rule.to_string(),
+                            message: v.message,
+                        })
+                        .collect(),
+                })
+            }
+            "pdfx3" | "x3" => {
+                let profile = zpdf::pdfx::Profile::X3;
+                let report = zpdf::pdfx::validate(&pdf, profile);
+                let conforms = report.conforms();
+                let claimed = report
+                    .claimed
+                    .as_ref()
+                    .map(|val| vec![("GTS_PDFXVersion".to_string(), val.clone())])
+                    .unwrap_or_default();
+                Ok(crate::models::ConformanceReport {
+                    family: crate::models::ConformanceFamily::PdfX,
+                    profile: "PDF/X-3".to_string(),
+                    conforms,
+                    claimed,
+                    violations: report
+                        .violations
+                        .into_iter()
+                        .map(|v| crate::models::PdfaViolation {
+                            rule: v.rule.to_string(),
+                            message: v.message,
+                        })
+                        .collect(),
+                })
+            }
+            "pdfx4" | "x4" => {
+                let profile = zpdf::pdfx::Profile::X4;
+                let report = zpdf::pdfx::validate(&pdf, profile);
+                let conforms = report.conforms();
+                let claimed = report
+                    .claimed
+                    .as_ref()
+                    .map(|val| vec![("GTS_PDFXVersion".to_string(), val.clone())])
+                    .unwrap_or_default();
+                Ok(crate::models::ConformanceReport {
+                    family: crate::models::ConformanceFamily::PdfX,
+                    profile: "PDF/X-4".to_string(),
+                    conforms,
+                    claimed,
+                    violations: report
+                        .violations
+                        .into_iter()
+                        .map(|v| crate::models::PdfaViolation {
+                            rule: v.rule.to_string(),
+                            message: v.message,
+                        })
+                        .collect(),
+                })
+            }
+            "pdfx6" | "x6" => {
+                let profile = zpdf::pdfx::Profile::X6;
+                let report = zpdf::pdfx::validate(&pdf, profile);
+                let conforms = report.conforms();
+                let claimed = report
+                    .claimed
+                    .as_ref()
+                    .map(|val| vec![("GTS_PDFXVersion".to_string(), val.clone())])
+                    .unwrap_or_default();
+                Ok(crate::models::ConformanceReport {
+                    family: crate::models::ConformanceFamily::PdfX,
+                    profile: "PDF/X-6".to_string(),
+                    conforms,
+                    claimed,
+                    violations: report
+                        .violations
+                        .into_iter()
+                        .map(|v| crate::models::PdfaViolation {
+                            rule: v.rule.to_string(),
+                            message: v.message,
+                        })
+                        .collect(),
+                })
+            }
+            "pdfua1" | "ua1" => {
+                let profile = zpdf::pdfua::Profile::Ua1;
+                let report = zpdf::pdfua::validate(&pdf, profile);
+                let conforms = report.conforms();
+                Ok(crate::models::ConformanceReport {
+                    family: crate::models::ConformanceFamily::PdfUa,
+                    profile: "PDF/UA-1".to_string(),
+                    conforms,
+                    claimed: Vec::new(),
+                    violations: report
+                        .violations
+                        .into_iter()
+                        .map(|v| crate::models::PdfaViolation {
+                            rule: v.rule.to_string(),
+                            message: v.message,
+                        })
+                        .collect(),
+                })
+            }
+            "pdfua2" | "ua2" => {
+                let profile = zpdf::pdfua::Profile::Ua2;
+                let report = zpdf::pdfua::validate(&pdf, profile);
+                let conforms = report.conforms();
+                Ok(crate::models::ConformanceReport {
+                    family: crate::models::ConformanceFamily::PdfUa,
+                    profile: "PDF/UA-2".to_string(),
+                    conforms,
+                    claimed: Vec::new(),
+                    violations: report
+                        .violations
+                        .into_iter()
+                        .map(|v| crate::models::PdfaViolation {
+                            rule: v.rule.to_string(),
+                            message: v.message,
+                        })
+                        .collect(),
+                })
+            }
+            _ => Err(PdfError::OpenFailed(format!(
+                "Unsupported conformance profile: '{profile_str}'"
+            ))),
+        }
     }
 
     pub fn verify_signature_trust(
@@ -3297,5 +3491,68 @@ mod tests {
         overrides.insert(target_id, true);
         OcConfigInternal::apply_overrides(&mut oc, &overrides);
         assert!(oc.group_visible(target_id));
+    }
+
+    #[test]
+    fn test_validate_conformance_all_profiles() {
+        let store = DocumentStore::new(create_render_cache(10, 0));
+        let mut path = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+        path.push("tests");
+        path.push("test_document.pdf");
+        let path_str = path.to_str().unwrap();
+
+        let profiles = [
+            (
+                "pdfa-1b",
+                crate::models::ConformanceFamily::PdfA,
+                "PDF/A-1b",
+            ),
+            (
+                "pdfa-2b",
+                crate::models::ConformanceFamily::PdfA,
+                "PDF/A-2b",
+            ),
+            (
+                "pdfa-3b",
+                crate::models::ConformanceFamily::PdfA,
+                "PDF/A-3b",
+            ),
+            (
+                "pdfx-1a",
+                crate::models::ConformanceFamily::PdfX,
+                "PDF/X-1a",
+            ),
+            ("pdfx-3", crate::models::ConformanceFamily::PdfX, "PDF/X-3"),
+            ("pdfx-4", crate::models::ConformanceFamily::PdfX, "PDF/X-4"),
+            ("pdfx-6", crate::models::ConformanceFamily::PdfX, "PDF/X-6"),
+            (
+                "pdfua-1",
+                crate::models::ConformanceFamily::PdfUa,
+                "PDF/UA-1",
+            ),
+            (
+                "pdfua-2",
+                crate::models::ConformanceFamily::PdfUa,
+                "PDF/UA-2",
+            ),
+        ];
+
+        for (prof_str, expected_family, expected_name) in profiles {
+            let res = store.validate_conformance(path_str, prof_str);
+            assert!(
+                res.is_ok(),
+                "Validation failed for profile {prof_str}: {res:?}"
+            );
+            let report = res.unwrap();
+            assert_eq!(report.family, expected_family);
+            assert_eq!(report.profile, expected_name);
+        }
+
+        // Verify invalid profile returns an explicit Err rather than silently falling back
+        let err_res = store.validate_conformance(path_str, "unknown-standard-99");
+        assert!(
+            err_res.is_err(),
+            "Expected error for invalid profile string"
+        );
     }
 }

@@ -393,10 +393,10 @@ pub fn spawn_engine_thread(cache_size: u64, max_memory_mb: u64) -> EngineState {
                         });
                         let _ = tx.send(res);
                     }
-                    PdfCommand::ValidatePdfA(path, profile, tx) => {
+                    PdfCommand::ValidateConformance(path, profile, tx) => {
                         let store_ref = std::panic::AssertUnwindSafe(&store);
-                        let res = catch_worker_panic("validate_pdfa", move || {
-                            store_ref.validate_pdfa(&path, &profile)
+                        let res = catch_worker_panic("validate_conformance", move || {
+                            store_ref.validate_conformance(&path, &profile)
                         });
                         let _ = tx.send(res);
                     }
