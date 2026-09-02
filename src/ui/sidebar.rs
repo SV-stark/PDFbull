@@ -680,18 +680,33 @@ pub fn render_forms(app: &PdfBullApp) -> Element<'_, crate::message::Message> {
                     })
                     .padding(6)
                     .into(),
-                FormFieldVariant::Checkbox { is_checked } => checkbox(*is_checked)
-                    .on_toggle({
-                        let name = field.name.clone();
-                        move |val| {
-                            crate::message::Message::FormFieldChanged(
-                                name.clone(),
-                                FormFieldVariant::Checkbox { is_checked: val },
-                            )
-                        }
-                    })
-                    .into(),
-                FormFieldVariant::RadioButton { is_selected, .. } => {
+                FormFieldVariant::Checkbox {
+                    is_checked,
+                    on_value,
+                } => {
+                    let on_val = on_value.clone();
+                    checkbox(*is_checked)
+                        .on_toggle({
+                            let name = field.name.clone();
+                            move |val| {
+                                crate::message::Message::FormFieldChanged(
+                                    name.clone(),
+                                    FormFieldVariant::Checkbox {
+                                        is_checked: val,
+                                        on_value: on_val.clone(),
+                                    },
+                                )
+                            }
+                        })
+                        .into()
+                }
+                FormFieldVariant::RadioButton {
+                    is_selected,
+                    group_name,
+                    on_value,
+                } => {
+                    let on_val = on_value.clone();
+                    let grp = group_name.clone();
                     radio("", true, if *is_selected { Some(true) } else { None }, {
                         let name = field.name.clone();
                         move |_| {
@@ -699,7 +714,8 @@ pub fn render_forms(app: &PdfBullApp) -> Element<'_, crate::message::Message> {
                                 name,
                                 FormFieldVariant::RadioButton {
                                     is_selected: true,
-                                    group_name: None,
+                                    group_name: grp.clone(),
+                                    on_value: on_val.clone(),
                                 },
                             )
                         }

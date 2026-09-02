@@ -524,7 +524,8 @@ pub fn handle_message(app: &mut PdfBullApp, message: Message) -> Task<Message> {
                     }
             app.render_visible_pages()
         }
-        Message::EngineInitialized(_)
+        Message::Noop
+        | Message::EngineInitialized(_)
         | Message::Error(_)
         | Message::ClearStatus
         | Message::IcedEvent(_)

@@ -10,7 +10,7 @@ pub fn render<'a>(app: &'a PdfBullApp) -> Element<'a, crate::message::Message> {
     for (idx, tab) in app.tabs.iter().enumerate() {
         let is_active = idx == app.active_tab;
 
-        let tab_button = button(
+        let select_tab_button = button(
             row![
                 text("📄").size(12),
                 text(&tab.name)
@@ -23,17 +23,26 @@ pub fn render<'a>(app: &'a PdfBullApp) -> Element<'a, crate::message::Message> {
                             theme::COLOR_TEXT_DIM
                         })
                     }),
-                button(text(icons::CLOSE).size(10).font(LUCIDE))
-                    .on_press(crate::message::Message::CloseTab(idx))
-                    .style(theme::button_ghost)
-                    .padding(2)
             ]
-            .spacing(8)
+            .spacing(6)
             .align_y(Alignment::Center),
         )
         .on_press(crate::message::Message::SwitchTab(idx))
-        .padding([4, 12])
-        .style(move |_theme, status| {
+        .padding([4, 6])
+        .style(theme::button_ghost);
+
+        let close_tab_button = button(text(icons::CLOSE).size(10).font(LUCIDE))
+            .on_press(crate::message::Message::CloseTab(idx))
+            .style(theme::button_ghost)
+            .padding(2);
+
+        let tab_item = container(
+            row![select_tab_button, close_tab_button]
+                .spacing(4)
+                .align_y(Alignment::Center),
+        )
+        .padding([2, 6])
+        .style(move |_theme| {
             let base_bg = if is_active {
                 Some(theme::COLOR_BG_WIDGET.into())
             } else {
@@ -45,7 +54,7 @@ pub fn render<'a>(app: &'a PdfBullApp) -> Element<'a, crate::message::Message> {
                 Color::TRANSPARENT
             };
 
-            let base = iced::widget::button::Style {
+            iced::widget::container::Style {
                 background: base_bg,
                 border: Border {
                     radius: theme::BORDER_RADIUS_MD.into(),
@@ -53,20 +62,10 @@ pub fn render<'a>(app: &'a PdfBullApp) -> Element<'a, crate::message::Message> {
                     color: border_color,
                 },
                 ..Default::default()
-            };
-
-            match status {
-                iced::widget::button::Status::Hovered if !is_active => {
-                    iced::widget::button::Style {
-                        background: Some(theme::COLOR_BG_WIDGET_HOVER.into()),
-                        ..base
-                    }
-                }
-                _ => base,
             }
         });
 
-        tab_row = tab_row.push(tab_button);
+        tab_row = tab_row.push(tab_item);
     }
 
     let add_button = tooltip(

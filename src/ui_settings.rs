@@ -4,6 +4,11 @@ use crate::pdf_engine::{RenderFilter, RenderQuality};
 use iced::widget::{Space, button, column, container, image, row, scrollable, text};
 use iced::{Alignment, Border, Color, Element, Length, Shadow, Vector};
 
+static LOGO_HANDLE: std::sync::LazyLock<iced::widget::image::Handle> =
+    std::sync::LazyLock::new(|| {
+        iced::widget::image::Handle::from_bytes(include_bytes!("../PDFbull.png").as_slice())
+    });
+
 fn custom_card<'a>(
     header: impl Into<Element<'a, crate::message::Message>>,
     body: impl Into<Element<'a, crate::message::Message>>,
@@ -350,10 +355,7 @@ pub fn settings_view(app: &crate::app::PdfBullApp) -> Element<'_, crate::message
     container(scrollable(
         column![
             row![
-                image(iced::widget::image::Handle::from_bytes(
-                    include_bytes!("../PDFbull.png").to_vec(),
-                ))
-                .width(Length::Fixed(48.0)),
+                image(LOGO_HANDLE.clone()).width(Length::Fixed(48.0)),
                 column![
                     text("Settings").size(28).font(INTER_BOLD).style(|_theme| {
                         iced::widget::text::Style {

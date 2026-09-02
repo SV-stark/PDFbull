@@ -526,12 +526,13 @@ pub fn handle_export_message(app: &mut PdfBullApp, message: Message) -> Task<Mes
                 Message::PrintersListed,
             )
         }
-        // Step 2: have the list → show an rfd selection dialog
+        // Step 2: have the list → show confirmation dialog
         Message::PrintersListed(res) => {
             let Some(tab) = app.current_tab() else {
                 return Task::none();
             };
             let path = tab.path.to_string_lossy().to_string();
+            let filename = tab.name.clone();
             match res {
                 Err(e) => {
                     app.status_message = Some(format!("Failed to list printers: {e}"));
@@ -543,16 +544,44 @@ pub fn handle_export_message(app: &mut PdfBullApp, message: Message) -> Task<Mes
                 }
                 Ok(printers) => {
                     let selected = printers[0].clone();
-                    app.status_message = Some(format!("Sending document to printer: {selected}"));
-                    app.update(Message::PrintWithPrinter(format!("{path}|{selected}")))
+                    Task::perform(
+                        async move {
+                            let confirmed = rfd::AsyncMessageDialog::new()
+                                .set_title("Print Document")
+                                .set_description(format!(
+                                    "Send document '{filename}' to printer '{selected}'?"
+                                ))
+                                .set_buttons(rfd::MessageButtons::OkCancel)
+                                .show()
+                                .await;
+                            if confirmed == rfd::MessageDialogResult::Ok {
+                                Some((path, selected))
+                            } else {
+                                None
+                            }
+                        },
+                        |choice| match choice {
+                            Some((path, printer)) => {
+                                let payload =
+                                    serde_json::to_string(&(path, printer)).unwrap_or_default();
+                                Message::PrintWithPrinter(payload)
+                            }
+                            None => Message::Noop,
+                        },
+                    )
                 }
             }
         }
         // Step 3: send the actual print command with the chosen printer
         Message::PrintWithPrinter(payload) => {
-            let mut parts = payload.splitn(2, '|');
-            let path = parts.next().unwrap_or("").to_string();
-            let printer = parts.next().unwrap_or("").to_string();
+            let (path, printer): (String, String) =
+                serde_json::from_str(&payload).unwrap_or_else(|_| {
+                    let mut parts = payload.splitn(2, '|');
+                    (
+                        parts.next().unwrap_or("").to_string(),
+                        parts.next().unwrap_or("").to_string(),
+                    )
+                });
 
             let Some(engine) = &app.engine else {
                 return Task::none();
@@ -905,13 +934,16 @@ pub fn handle_export_message(app: &mut PdfBullApp, message: Message) -> Task<Mes
                         .file_stem()
                         .map(|s| s.to_string_lossy().to_string())
                         .unwrap_or_else(|| "document".to_string());
-                    let output = format!(
-                        "{}_signed.pdf",
-                        std::path::Path::new(&tab_path)
-                            .parent()
-                            .map(|p| p.join(&stem).to_string_lossy().to_string())
-                            .unwrap_or(stem)
-                    );
+                    let default_name = format!("{stem}_signed.pdf");
+                    let file_handle = rfd::AsyncFileDialog::new()
+                        .set_file_name(&default_name)
+                        .add_filter("PDF Document", &["pdf"])
+                        .save_file()
+                        .await;
+                    let Some(output_handle) = file_handle else {
+                        return Err(crate::models::PdfError::IoError("Signing cancelled".into()));
+                    };
+                    let output = output_handle.path().to_string_lossy().to_string();
                     let cert_str = cert_path.to_string_lossy().to_string();
                     let (resp_tx, resp_rx) = tokio::sync::oneshot::channel();
                     if let Err(e) = cmd_tx
@@ -967,13 +999,16 @@ pub fn handle_export_message(app: &mut PdfBullApp, message: Message) -> Task<Mes
                         .file_stem()
                         .map(|s| s.to_string_lossy().to_string())
                         .unwrap_or_else(|| "document".to_string());
-                    let output = format!(
-                        "{}_stamped.pdf",
-                        std::path::Path::new(&tab_path)
-                            .parent()
-                            .map(|p| p.join(&stem).to_string_lossy().to_string())
-                            .unwrap_or(stem)
-                    );
+                    let default_name = format!("{stem}_stamped.pdf");
+                    let file_handle = rfd::AsyncFileDialog::new()
+                        .set_file_name(&default_name)
+                        .add_filter("PDF Document", &["pdf"])
+                        .save_file()
+                        .await;
+                    let Some(output_handle) = file_handle else {
+                        return Err(crate::models::PdfError::IoError("Stamp cancelled".into()));
+                    };
+                    let output = output_handle.path().to_string_lossy().to_string();
                     let (resp_tx, resp_rx) = tokio::sync::oneshot::channel();
                     if let Err(e) = cmd_tx
                         .send(crate::commands::PdfCommand::ApplyStamp(

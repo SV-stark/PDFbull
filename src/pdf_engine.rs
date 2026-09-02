@@ -26,37 +26,82 @@ use zune_image::image::Image;
 
 use crate::ui::theme::hex_to_rgb;
 
-#[repr(C)]
-struct OcConfigInternal {
-    off: std::collections::HashSet<zpdf::ObjectId>,
-    on: std::collections::HashSet<zpdf::ObjectId>,
-    base_state_off: bool,
-}
+/// Safely construct a `zpdf::OcConfig` with user visibility overrides applied.
+/// Synthesizes a valid PDF Catalog containing the desired `/OCProperties /D` dictionary
+/// via `lopdf::Document` and parses it through `zpdf::PdfDocument::open`, eliminating unsafe memory transmutation.
+pub fn apply_oc_overrides(
+    base_oc: &zpdf::OcConfig,
+    overrides: &std::collections::HashMap<zpdf::ObjectId, bool>,
+) -> zpdf::OcConfig {
+    let mut doc = lopdf::Document::with_version("1.4");
+    let pages_id = doc.new_object_id();
+    let catalog_id = doc.new_object_id();
 
-const _: () = {
-    assert!(std::mem::size_of::<zpdf::OcConfig>() == std::mem::size_of::<OcConfigInternal>());
-    assert!(std::mem::align_of::<zpdf::OcConfig>() == std::mem::align_of::<OcConfigInternal>());
-};
+    let mut d_dict = lopdf::Dictionary::new();
+    d_dict.set("BaseState", lopdf::Object::Name(b"ON".to_vec()));
 
-impl OcConfigInternal {
-    fn apply_overrides(
-        oc: &mut zpdf::OcConfig,
-        overrides: &std::collections::HashMap<zpdf::ObjectId, bool>,
-    ) {
-        if std::mem::size_of::<zpdf::OcConfig>() == std::mem::size_of::<Self>()
-            && std::mem::align_of::<zpdf::OcConfig>() == std::mem::align_of::<Self>()
-        {
-            let internal = unsafe { &mut *(oc as *mut zpdf::OcConfig as *mut Self) };
-            for (&id, &visible) in overrides {
-                if visible {
-                    internal.on.insert(id);
-                    internal.off.remove(&id);
-                } else {
-                    internal.off.insert(id);
-                    internal.on.remove(&id);
-                }
-            }
+    let mut on_objs = Vec::new();
+    let mut off_objs = Vec::new();
+    for (&id, &visible) in overrides {
+        let r = lopdf::Object::Reference((id.0, id.1));
+        if visible {
+            on_objs.push(r);
+        } else {
+            off_objs.push(r);
         }
+    }
+    d_dict.set("ON", lopdf::Object::Array(on_objs));
+    d_dict.set("OFF", lopdf::Object::Array(off_objs));
+
+    let mut ocp_dict = lopdf::Dictionary::new();
+    ocp_dict.set("D", lopdf::Object::Dictionary(d_dict));
+
+    let mut catalog = lopdf::Dictionary::new();
+    catalog.set("Type", lopdf::Object::Name(b"Catalog".to_vec()));
+    catalog.set("Pages", lopdf::Object::Reference(pages_id));
+    catalog.set("OCProperties", lopdf::Object::Dictionary(ocp_dict));
+
+    doc.objects
+        .insert(catalog_id, lopdf::Object::Dictionary(catalog));
+    doc.trailer
+        .set("Root", lopdf::Object::Reference(catalog_id));
+
+    let page_id = doc.new_object_id();
+    let mut page = lopdf::Dictionary::new();
+    page.set("Type", lopdf::Object::Name(b"Page".to_vec()));
+    page.set("Parent", lopdf::Object::Reference(pages_id));
+    page.set(
+        "MediaBox",
+        lopdf::Object::Array(vec![
+            lopdf::Object::Integer(0),
+            lopdf::Object::Integer(0),
+            lopdf::Object::Integer(100),
+            lopdf::Object::Integer(100),
+        ]),
+    );
+    doc.objects.insert(page_id, lopdf::Object::Dictionary(page));
+
+    let mut pages = lopdf::Dictionary::new();
+    pages.set("Type", lopdf::Object::Name(b"Pages".to_vec()));
+    pages.set(
+        "Kids",
+        lopdf::Object::Array(vec![lopdf::Object::Reference(page_id)]),
+    );
+    pages.set("Count", lopdf::Object::Integer(1));
+    doc.objects
+        .insert(pages_id, lopdf::Object::Dictionary(pages));
+
+    let mut bytes = Vec::new();
+    if doc.save_to(&mut bytes).is_err() {
+        return base_oc.clone();
+    }
+
+    if let Ok(pdf_doc) = zpdf::PdfDocument::open(bytes)
+        && let Some(oc) = pdf_doc.oc_config()
+    {
+        oc
+    } else {
+        base_oc.clone()
     }
 }
 
@@ -192,6 +237,57 @@ pub struct DocumentStore {
 }
 
 // DocumentState wrapper removed as it was a single-field struct.
+
+static OCR_ENGINE_CACHE: std::sync::LazyLock<
+    std::sync::Mutex<HashMap<crate::ocr::OcrScript, Arc<ocrs::OcrEngine>>>,
+> = std::sync::LazyLock::new(|| std::sync::Mutex::new(HashMap::new()));
+
+fn get_or_load_ocr_engine(script: crate::ocr::OcrScript) -> PdfResult<Arc<ocrs::OcrEngine>> {
+    if let Ok(guard) = OCR_ENGINE_CACHE.lock()
+        && let Some(engine) = guard.get(&script)
+    {
+        return Ok(engine.clone());
+    }
+
+    if !script.is_model_available() {
+        return Err(PdfError::EngineError(EngineErrorKind::Generic(format!(
+            "OCR models for {} not found in {:?}",
+            script.name(),
+            crate::ocr::OcrScript::resolve_model_dir()
+        ))));
+    }
+
+    let det_path = script.resolve_det_model_path();
+    let rec_path = script.resolve_rec_model_path();
+    let detection_model = rten::Model::load_file(&det_path).map_err(|e| {
+        PdfError::EngineError(EngineErrorKind::Generic(format!(
+            "Failed to load OCR detection model: {e}"
+        )))
+    })?;
+    let recognition_model = rten::Model::load_file(&rec_path).map_err(|e| {
+        PdfError::EngineError(EngineErrorKind::Generic(format!(
+            "Failed to load OCR recognition model: {e}"
+        )))
+    })?;
+
+    let engine = ocrs::OcrEngine::new(ocrs::OcrEngineParams {
+        detection_model: Some(detection_model),
+        recognition_model: Some(recognition_model),
+        ..Default::default()
+    })
+    .map_err(|e| {
+        PdfError::EngineError(EngineErrorKind::Generic(format!(
+            "Failed to initialize OCR engine: {e}"
+        )))
+    })?;
+
+    let arc_engine = Arc::new(engine);
+    if let Ok(mut guard) = OCR_ENGINE_CACHE.lock() {
+        guard.insert(script, arc_engine.clone());
+    }
+
+    Ok(arc_engine)
+}
 
 impl DocumentStore {
     pub fn new(cache: SharedRenderCache) -> Self {
@@ -846,18 +942,15 @@ impl DocumentStore {
             .with_images(images);
 
         // Build optional-content config with user visibility overrides applied.
-        let oc_for_render: Option<zpdf::OcConfig>;
-        if let Some(base_oc) = self.oc_configs.get(&doc_id) {
-            let mut oc = base_oc.clone();
+        let oc_for_render: Option<zpdf::OcConfig> = self.oc_configs.get(&doc_id).map(|base_oc| {
             if let Some(overrides) = self.oc_visibility.get(&doc_id)
                 && !overrides.is_empty()
             {
-                OcConfigInternal::apply_overrides(&mut oc, overrides);
+                apply_oc_overrides(base_oc, overrides)
+            } else {
+                base_oc.clone()
             }
-            oc_for_render = Some(oc);
-        } else {
-            oc_for_render = None;
-        }
+        });
 
         if let Some(ref oc) = oc_for_render {
             interp = interp.with_optional_content(oc);
@@ -1184,26 +1277,31 @@ impl DocumentStore {
                 }
                 AnnotationStyle::Line { color, thickness } => {
                     let (r, g, b) = hex_to_rgb(color);
-                    // Reconstruct line endpoints from the bounding rect.
+                    // Preserve true start and end endpoints in PDF space regardless of draw direction
+                    let x1 = ann.x as f64;
+                    let y1 = page_height - ann.y as f64;
+                    let x2 = (ann.x + ann.width) as f64;
+                    let y2 = page_height - (ann.y + ann.height) as f64;
                     AnnotationSpec::Line {
-                        x1: pdf_x,
-                        y1: pdf_y + pdf_h,
-                        x2: pdf_x + pdf_w,
-                        y2: pdf_y,
+                        x1,
+                        y1,
+                        x2,
+                        y2,
                         color: (r as f64, g as f64, b as f64),
                         width: *thickness as f64,
                     }
                 }
                 AnnotationStyle::Arrow { color, thickness } => {
                     let (r, g, b) = hex_to_rgb(color);
-                    // Arrow is also a Line annotation; LE entries mark the arrowhead.
-                    // zpdf's Line spec doesn't expose arrowheads directly \u2014 we use a
-                    // Line spec here (the arrowhead rendering is decorative in the viewer).
+                    let x1 = ann.x as f64;
+                    let y1 = page_height - ann.y as f64;
+                    let x2 = (ann.x + ann.width) as f64;
+                    let y2 = page_height - (ann.y + ann.height) as f64;
                     AnnotationSpec::Line {
-                        x1: pdf_x,
-                        y1: pdf_y + pdf_h,
-                        x2: pdf_x + pdf_w,
-                        y2: pdf_y,
+                        x1,
+                        y1,
+                        x2,
+                        y2,
                         color: (r as f64, g as f64, b as f64),
                         width: *thickness as f64,
                     }
@@ -2111,6 +2209,8 @@ impl DocumentStore {
         output_dir: String,
     ) -> PdfResult<Vec<String>> {
         let base_data = std::fs::read(path).map_err(|e| PdfError::OpenFailed(e.to_string()))?;
+        let pdf_file =
+            zpdf::PdfFile::parse(base_data).map_err(|e| PdfError::OpenFailed(e.to_string()))?;
 
         let total_pages = Document::load(path)
             .map(|d| d.get_pages().len())
@@ -2127,26 +2227,14 @@ impl DocumentStore {
             if page_idx >= total_pages {
                 continue;
             }
-            // Build a delete list of all pages except the one we want.
-            let delete_indices: Vec<usize> = (0..total_pages).filter(|&i| i != page_idx).collect();
 
-            // Create a fresh writer per output page.
-            let mut writer = IncrementalWriter::new(base_data.clone())
-                .map_err(|e| PdfError::OpenFailed(e.to_string()))?;
-
-            writer
-                .delete_pages(&delete_indices)
+            let out_bytes = zpdf::extract_pages(&pdf_file, &[page_idx])
                 .map_err(|e| PdfError::IoError(e.to_string()))?;
 
-            let out_bytes = {
-                let mut buf = std::io::Cursor::new(Vec::new());
-                writer
-                    .write(&mut buf)
-                    .map_err(|e| PdfError::IoError(e.to_string()))?;
-                buf.into_inner()
-            };
-
-            let out_path = format!("{}/{}_page_{}.pdf", output_dir, filename, page_idx + 1);
+            let out_path = std::path::Path::new(&output_dir)
+                .join(format!("{filename}_page_{}.pdf", page_idx + 1))
+                .to_string_lossy()
+                .into_owned();
             std::fs::write(&out_path, &out_bytes).map_err(|e| PdfError::IoError(e.to_string()))?;
             created_paths.push(out_path);
         }
@@ -2260,17 +2348,21 @@ impl DocumentStore {
                         FormFieldVariant::Text { value: val }
                     }
                     FieldKind::Button => {
-                        let is_checked = match &f.value {
-                            Some(FieldValue::Name(n)) => n != "Off",
-                            _ => false,
+                        let (is_checked, on_value) = match &f.value {
+                            Some(FieldValue::Name(n)) => (n != "Off", Some(n.clone())),
+                            _ => (false, None),
                         };
                         if f.flags & FF_RADIO != 0 {
                             FormFieldVariant::RadioButton {
                                 is_selected: is_checked,
                                 group_name: Some(name.clone()),
+                                on_value,
                             }
                         } else {
-                            FormFieldVariant::Checkbox { is_checked }
+                            FormFieldVariant::Checkbox {
+                                is_checked,
+                                on_value,
+                            }
                         }
                     }
                     FieldKind::Choice => {
@@ -2331,16 +2423,23 @@ impl DocumentStore {
             for update in updates {
                 let val_str = match &update.variant {
                     FormFieldVariant::Text { value } => value.clone(),
-                    FormFieldVariant::Checkbox { is_checked } => {
+                    FormFieldVariant::Checkbox {
+                        is_checked,
+                        on_value,
+                    } => {
                         if *is_checked {
-                            "Yes".to_string()
+                            on_value.clone().unwrap_or_else(|| "Yes".to_string())
                         } else {
                             "Off".to_string()
                         }
                     }
-                    FormFieldVariant::RadioButton { is_selected, .. } => {
+                    FormFieldVariant::RadioButton {
+                        is_selected,
+                        on_value,
+                        ..
+                    } => {
                         if *is_selected {
-                            "Yes".to_string()
+                            on_value.clone().unwrap_or_else(|| "Yes".to_string())
                         } else {
                             "Off".to_string()
                         }
@@ -2843,37 +2942,7 @@ impl DocumentStore {
             )));
         };
 
-        if !script.is_model_available() {
-            return Err(PdfError::EngineError(EngineErrorKind::Generic(format!(
-                "OCR models for {} not found in {:?}",
-                script.name(),
-                crate::ocr::OcrScript::resolve_model_dir()
-            ))));
-        }
-
-        let det_path = script.resolve_det_model_path();
-        let rec_path = script.resolve_rec_model_path();
-        let detection_model = rten::Model::load_file(&det_path).map_err(|e| {
-            PdfError::EngineError(EngineErrorKind::Generic(format!(
-                "Failed to load OCR detection model: {e}"
-            )))
-        })?;
-        let recognition_model = rten::Model::load_file(&rec_path).map_err(|e| {
-            PdfError::EngineError(EngineErrorKind::Generic(format!(
-                "Failed to load OCR recognition model: {e}"
-            )))
-        })?;
-
-        let engine = ocrs::OcrEngine::new(ocrs::OcrEngineParams {
-            detection_model: Some(detection_model),
-            recognition_model: Some(recognition_model),
-            ..Default::default()
-        })
-        .map_err(|e| {
-            PdfError::EngineError(EngineErrorKind::Generic(format!(
-                "Failed to initialize OCR engine: {e}"
-            )))
-        })?;
+        let engine = get_or_load_ocr_engine(script)?;
 
         let render_opts = RenderOptions {
             scale: 2.0,
@@ -3479,17 +3548,18 @@ mod tests {
 
     #[test]
     fn test_oc_config_overrides() {
-        let mut oc = zpdf::OcConfig::default();
+        let oc = zpdf::OcConfig::default();
         let target_id = zpdf::ObjectId(42, 0);
         assert!(oc.group_visible(target_id));
 
         let mut overrides = std::collections::HashMap::new();
         overrides.insert(target_id, false);
-        OcConfigInternal::apply_overrides(&mut oc, &overrides);
+        let oc = apply_oc_overrides(&oc, &overrides);
         assert!(!oc.group_visible(target_id));
 
-        overrides.insert(target_id, true);
-        OcConfigInternal::apply_overrides(&mut oc, &overrides);
+        let mut overrides2 = std::collections::HashMap::new();
+        overrides2.insert(target_id, true);
+        let oc = apply_oc_overrides(&oc, &overrides2);
         assert!(oc.group_visible(target_id));
     }
 

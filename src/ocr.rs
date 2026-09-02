@@ -25,7 +25,7 @@ pub struct OcrPageResult {
 }
 
 /// Target script/language family for OCR recognition.
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Hash, Default)]
 pub enum OcrScript {
     #[default]
     Latin,

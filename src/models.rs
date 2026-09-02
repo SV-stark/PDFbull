@@ -490,10 +490,14 @@ pub enum FormFieldVariant {
     },
     Checkbox {
         is_checked: bool,
+        #[serde(default)]
+        on_value: Option<String>,
     },
     RadioButton {
         is_selected: bool,
         group_name: Option<String>,
+        #[serde(default)]
+        on_value: Option<String>,
     },
     ComboBox {
         options: Vec<String>,
@@ -1319,13 +1323,16 @@ mod tests {
     fn test_form_field_checkbox_serialization() {
         let field = FormField {
             name: "Agree".to_string(),
-            variant: FormFieldVariant::Checkbox { is_checked: true },
+            variant: FormFieldVariant::Checkbox {
+                is_checked: true,
+                on_value: None,
+            },
             page: 1,
         };
         let json = serde_json::to_string(&field).unwrap();
         let deserialized: FormField = serde_json::from_str(&json).unwrap();
         match deserialized.variant {
-            FormFieldVariant::Checkbox { is_checked } => assert!(is_checked),
+            FormFieldVariant::Checkbox { is_checked, .. } => assert!(is_checked),
             _ => panic!("Expected Checkbox variant"),
         }
     }
@@ -1475,5 +1482,27 @@ mod tests {
 
         let res3 = filter_palette_items("nonexistentxyz", &items);
         assert!(res3.is_empty());
+    }
+
+    #[test]
+    fn test_rotate_unrotate_coords_roundtrip() {
+        let (pw, ph) = (612.0, 792.0);
+        let rects = [
+            (10.0, 20.0, 100.0, 50.0),
+            (0.0, 0.0, 612.0, 792.0),
+            (50.0, 150.0, 30.0, 40.0),
+        ];
+
+        for rotation in [0, 90, 180, 270] {
+            for &(x, y, w, h) in &rects {
+                let (rx, ry, rw, rh) = rotate_coords(x, y, w, h, pw, ph, rotation);
+                let (ux, uy, uw, uh) = unrotate_coords(rx, ry, rw, rh, pw, ph, rotation);
+
+                assert!((ux - x).abs() < 1e-3, "Rot {rotation}: ux {ux} != x {x}");
+                assert!((uy - y).abs() < 1e-3, "Rot {rotation}: uy {uy} != y {y}");
+                assert!((uw - w).abs() < 1e-3, "Rot {rotation}: uw {uw} != w {w}");
+                assert!((uh - h).abs() < 1e-3, "Rot {rotation}: uh {uh} != h {h}");
+            }
+        }
     }
 }

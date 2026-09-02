@@ -9,7 +9,8 @@ pub struct EngineState {
     pub cmd_tx: mpsc::Sender<PdfCommand>,
 }
 
-pub type SharedPathMap = Arc<RwLock<HashMap<crate::models::DocumentId, (String, Option<String>)>>>;
+pub type SharedPathMap =
+    Arc<RwLock<HashMap<crate::models::DocumentId, (String, Option<zeroize::Zeroizing<String>>)>>>;
 
 /// Re-open a document from its remembered path and password if it isn't currently loaded.
 fn reload_if_needed(
@@ -19,10 +20,13 @@ fn reload_if_needed(
 ) {
     if !store.has_document(doc_id)
         && let Ok(guard) = paths.read()
-        && let Some((path, pass)) = guard.get(&doc_id).cloned()
-        && let Err(e) = store.open_document(&path, pass.as_deref(), doc_id)
+        && let Some((path, pass)) = guard.get(&doc_id)
     {
-        tracing::error!("Failed to reload document {doc_id:?} from path '{path}': {e:?}");
+        let path = path.clone();
+        let pass_ref = pass.as_ref().map(|s| s.as_str());
+        if let Err(e) = store.open_document(&path, pass_ref, doc_id) {
+            tracing::error!("Failed to reload document {doc_id:?} from path '{path}': {e:?}");
+        }
     }
 }
 
@@ -57,9 +61,9 @@ pub fn spawn_engine_thread(cache_size: u64, max_memory_mb: u64) -> EngineState {
     let render_cache: SharedRenderCache = create_render_cache(cache_size, max_memory_mb);
 
     // Shared (path, password) mapping between all concurrent threads
-    let shared_paths = Arc::new(RwLock::new(HashMap::new()));
+    let shared_paths: SharedPathMap = Arc::new(RwLock::new(HashMap::new()));
 
-    // MPMC channel for distributing tasks across the thread pool
+    // MPMC channel for distributing general work-stealing tasks across the thread pool
     let (worker_tx, worker_rx) = crossbeam_channel::bounded::<PdfCommand>(256);
 
     let num_workers = std::thread::available_parallelism()
@@ -67,23 +71,31 @@ pub fn spawn_engine_thread(cache_size: u64, max_memory_mb: u64) -> EngineState {
         .unwrap_or(4)
         .max(2);
 
+    // Dedicated unicast-broadcast channels per worker so every worker receives Close/ToggleLayer
+    let mut broadcast_txs = Vec::with_capacity(num_workers);
+    let mut broadcast_rxs = Vec::with_capacity(num_workers);
+
+    for _ in 0..num_workers {
+        let (btx, brx) = crossbeam_channel::unbounded::<PdfCommand>();
+        broadcast_txs.push(btx);
+        broadcast_rxs.push(brx);
+    }
+
     let forwarder = {
         let worker_tx = worker_tx.clone();
         async move {
             while let Some(cmd) = cmd_rx.recv().await {
                 match cmd {
                     PdfCommand::Close(doc_id) => {
-                        for _ in 0..num_workers {
-                            if let Err(e) = worker_tx.send(PdfCommand::Close(doc_id)) {
+                        for tx in &broadcast_txs {
+                            if let Err(e) = tx.send(PdfCommand::Close(doc_id)) {
                                 tracing::error!("Failed to broadcast Close to engine worker: {e}");
                             }
                         }
                     }
                     PdfCommand::ToggleLayer(doc_id, obj_id, vis) => {
-                        for _ in 0..num_workers {
-                            if let Err(e) =
-                                worker_tx.send(PdfCommand::ToggleLayer(doc_id, obj_id, vis))
-                            {
+                        for tx in &broadcast_txs {
+                            if let Err(e) = tx.send(PdfCommand::ToggleLayer(doc_id, obj_id, vis)) {
                                 tracing::error!(
                                     "Failed to broadcast ToggleLayer to engine worker: {e}"
                                 );
@@ -114,341 +126,376 @@ pub fn spawn_engine_thread(cache_size: u64, max_memory_mb: u64) -> EngineState {
         });
     }
 
-    for _ in 0..num_workers {
+    for (i, b_rx) in broadcast_rxs.into_iter().enumerate() {
         let rx = worker_rx.clone();
         let cache = render_cache.clone();
         let paths = shared_paths.clone();
 
-        std::thread::spawn(move || {
-            let mut store = DocumentStore::new(cache);
+        let _ = std::thread::Builder::new()
+            .name(format!("pdf-worker-{i}"))
+            .spawn(move || {
+                let mut store = DocumentStore::new(cache);
 
-            while let Ok(cmd) = rx.recv() {
-                match cmd {
-                    PdfCommand::Open(path, mut password, doc_id, tx) => {
-                        tracing::info!("Engine worker: opening {:?}", path);
-                        let mut store_ref = std::panic::AssertUnwindSafe(&mut store);
-                        let path_clone = path.clone();
-                        let pass_clone = password.clone();
-                        let res = catch_worker_panic("open", move || {
-                            store_ref.open_document(&path_clone, pass_clone.as_deref(), doc_id)
-                        });
-
-                        if res.is_ok() {
-                            if let Ok(mut guard) = paths.write() {
-                                guard.insert(doc_id, (path, password));
-                            }
-                        } else {
-                            tracing::error!("Engine worker: open failed: {:?}", res);
-                            if let Some(ref mut p) = password {
-                                crate::models::zeroize_string(p);
-                            }
-                        }
-                        let _ = tx.send(res);
-                    }
-                    PdfCommand::Render(doc_id, page_num, options, tx) => {
-                        tracing::debug!("Engine worker: render page {} for {:?}", page_num, doc_id);
-                        reload_if_needed(&mut store, &paths, doc_id);
-
-                        let mut store_ref = std::panic::AssertUnwindSafe(&mut store);
-                        let res = catch_worker_panic("render", move || {
-                            store_ref.render_page(doc_id, page_num, options)
-                        });
-
-                        if res.is_err() {
-                            tracing::error!(
-                                "Engine worker: render page {} failed: {:?}",
-                                page_num,
-                                res
-                            );
-                        }
-                        let _ = tx.send(res);
-                    }
-                    PdfCommand::RenderThumbnail(doc_id, page_num, scale, rotation, tx) => {
-                        reload_if_needed(&mut store, &paths, doc_id);
-                        let options = crate::pdf_engine::RenderOptions {
-                            scale,
-                            rotation,
-                            filter: crate::pdf_engine::RenderFilter::None,
-                            auto_crop: false,
-                            quality: crate::pdf_engine::RenderQuality::Low,
-                        };
-                        let mut store_ref = std::panic::AssertUnwindSafe(&mut store);
-                        let res = catch_worker_panic("render_thumbnail", move || {
-                            store_ref.render_thumbnail(doc_id, page_num, options)
-                        });
-                        let _ = tx.send(res);
-                    }
-                    PdfCommand::Close(doc_id) => {
-                        let mut store_ref = std::panic::AssertUnwindSafe(&mut store);
-                        let _ = std::panic::catch_unwind(move || {
-                            store_ref.close_document(doc_id);
-                        });
-                        if let Ok(mut guard) = paths.write()
-                            && let Some((_, Some(ref mut pass))) = guard.remove(&doc_id)
-                        {
-                            crate::models::zeroize_string(pass);
-                        }
-                    }
-                    PdfCommand::ExtractText(doc_id, page_num, tx) => {
-                        reload_if_needed(&mut store, &paths, doc_id);
-                        let store_ref = std::panic::AssertUnwindSafe(&store);
-                        let res = catch_worker_panic("extract_text", move || {
-                            store_ref.extract_text(doc_id, page_num)
-                        });
-                        let _ = tx.send(res);
-                    }
-                    PdfCommand::Search(doc_id, query, tx) => {
-                        reload_if_needed(&mut store, &paths, doc_id);
-                        let store_ref = std::panic::AssertUnwindSafe(&store);
-                        let res =
-                            catch_worker_panic("search", move || store_ref.search(doc_id, &query));
-                        let _ = tx.send(res);
-                    }
-                    PdfCommand::GetTextItems(doc_id, page_num, tx) => {
-                        reload_if_needed(&mut store, &paths, doc_id);
-                        let store_ref = std::panic::AssertUnwindSafe(&store);
-                        let res = catch_worker_panic("get_text_items", move || {
-                            store_ref.extract_text_items(doc_id, page_num)
-                        });
-                        let _ = tx.send(res);
-                    }
-                    PdfCommand::LoadDocumentMeta(doc_id, tx) => {
-                        reload_if_needed(&mut store, &paths, doc_id);
-                        let mut store_ref = std::panic::AssertUnwindSafe(&mut store);
-                        let res = catch_worker_panic("load_document_meta", move || {
-                            store_ref.load_document_meta(doc_id)
-                        });
-                        let _ = tx.send(res);
-                    }
-                    PdfCommand::SaveAnnotations(doc_id, annotations, tx) => {
-                        reload_if_needed(&mut store, &paths, doc_id);
-                        let mut store_ref = std::panic::AssertUnwindSafe(&mut store);
-                        let res = catch_worker_panic("save_annotations", move || {
-                            store_ref.save_annotations(doc_id, &annotations, None)
-                        });
-                        let _ = tx.send(res);
-                    }
-                    PdfCommand::ExportImage(doc_id, page_num, scale, tx) => {
-                        reload_if_needed(&mut store, &paths, doc_id);
-                        let store_ref = std::panic::AssertUnwindSafe(&store);
-                        let res = catch_worker_panic("export_image", move || {
-                            store_ref.export_page_as_image(doc_id, page_num, scale)
-                        });
-                        let _ = tx.send(res);
-                    }
-                    PdfCommand::ExportImages(doc_id, pages, scale, out_dir, tx) => {
-                        reload_if_needed(&mut store, &paths, doc_id);
-                        let out_path = std::path::Path::new(&out_dir);
-                        if !out_path.is_dir() {
-                            let _ = tx.send(Err(crate::models::PdfError::IoError(
-                                "Output directory does not exist".into(),
-                            )));
-                            continue;
-                        }
-                        let store_ref = std::panic::AssertUnwindSafe(&store);
-                        let res = catch_worker_panic("export_images", move || {
-                            let mut output_paths = Vec::new();
-                            for page_num in pages {
-                                let safe_name = format!("page_{page_num}.png");
-                                let out_file = out_path.join(&safe_name);
-                                if let Ok(buf) =
-                                    store_ref.export_page_as_image(doc_id, page_num, scale)
-                                {
-                                    let mut opts = oxipng::Options::from_preset(2);
-                                    opts.strip = oxipng::StripChunks::Safe;
-                                    let optimized =
-                                        oxipng::optimize_from_memory(&buf, &opts).unwrap_or(buf);
-                                    if std::fs::write(&out_file, optimized).is_ok()
-                                        && let Some(path_str) = out_file.to_str()
-                                    {
-                                        output_paths.push(path_str.to_string());
-                                    }
+                loop {
+                    let cmd = crossbeam_channel::select! {
+                        recv(b_rx) -> msg => match msg {
+                            Ok(cmd) => cmd,
+                            Err(_) => break,
+                        },
+                        recv(rx) -> msg => match msg {
+                            Ok(cmd) => cmd,
+                            Err(_) => {
+                                if let Ok(cmd) = b_rx.try_recv() {
+                                    cmd
+                                } else {
+                                    break;
                                 }
                             }
-                            Ok(output_paths)
-                        });
-                        let _ = tx.send(res);
-                    }
-                    PdfCommand::ExportPdf(doc_id, path, annotations, tx) => {
-                        reload_if_needed(&mut store, &paths, doc_id);
-                        let mut store_ref = std::panic::AssertUnwindSafe(&mut store);
-                        let res = catch_worker_panic("export_pdf", move || {
-                            store_ref.save_annotations(doc_id, &annotations, Some(path))
-                        });
-                        let _ = tx.send(res);
-                    }
-                    PdfCommand::Merge(paths_list, out, tx) => {
-                        let store_ref = std::panic::AssertUnwindSafe(&store);
-                        let res = catch_worker_panic("merge", move || {
-                            store_ref.merge_documents(paths_list, out)
-                        });
-                        let _ = tx.send(res);
-                    }
-                    PdfCommand::Split(path, pages, out, tx) => {
-                        let store_ref = std::panic::AssertUnwindSafe(&store);
-                        let res = catch_worker_panic("split", move || {
-                            store_ref.split_pdf(&path, pages, out)
-                        });
-                        let _ = tx.send(res);
-                    }
-                    PdfCommand::GetFormFields(path, tx) => {
-                        let mut store_ref = std::panic::AssertUnwindSafe(&mut store);
-                        let res = catch_worker_panic("get_form_fields", move || {
-                            store_ref.get_form_fields(&path)
-                        });
-                        let _ = tx.send(res);
-                    }
-                    PdfCommand::FillForm(path, fields, out, tx) => {
-                        let mut store_ref = std::panic::AssertUnwindSafe(&mut store);
-                        let res = catch_worker_panic("fill_form", move || {
-                            store_ref.fill_form(&path, fields, out)
-                        });
-                        let _ = tx.send(res);
-                    }
-                    PdfCommand::PrintPdf(path, printer_name, tx) => {
-                        let res = catch_worker_panic("print_pdf", move || {
-                            crate::pdf_engine::DocumentStore::print_document(
-                                &path,
-                                printer_name.as_deref(),
-                            )
-                        });
-                        let _ = tx.send(res);
-                    }
-                    PdfCommand::ListPrinters(tx) => {
-                        let res = catch_worker_panic("list_printers", move || {
-                            crate::pdf_engine::DocumentStore::list_printers()
-                        });
-                        let _ = tx.send(res);
-                    }
-                    PdfCommand::AddWatermark(input, text, output, tx) => {
-                        let res = catch_worker_panic("add_watermark", move || {
-                            crate::pdf_engine::DocumentStore::add_watermark(&input, &text, &output)
-                        });
-                        let _ = tx.send(res);
-                    }
-                    PdfCommand::AddHeaderFooter(input, header, footer, output, tx) => {
-                        let res = catch_worker_panic("add_header_footer", move || {
-                            crate::pdf_engine::DocumentStore::add_header_footer(
-                                &input, &header, &footer, &output,
-                            )
-                        });
-                        let _ = tx.send(res);
-                    }
-                    PdfCommand::Optimize(input, output, tx) => {
-                        let store_ref = std::panic::AssertUnwindSafe(&store);
-                        let res = catch_worker_panic("optimize", move || {
-                            store_ref.optimize_pdf(&input, &output)
-                        });
-                        let _ = tx.send(res);
-                    }
-                    PdfCommand::ReorderPages(input, page_order, output, tx) => {
-                        let store_ref = std::panic::AssertUnwindSafe(&store);
-                        let res = catch_worker_panic("reorder_pages", move || {
-                            store_ref.reorder_pages(&input, &page_order, &output)
-                        });
-                        let _ = tx.send(res);
-                    }
-                    PdfCommand::LoadAnnotations(doc_id, path, tx) => {
-                        let _ = doc_id;
-                        let store_ref = std::panic::AssertUnwindSafe(&store);
-                        let res = catch_worker_panic("load_annotations", move || {
-                            store_ref.load_annotations(&path)
-                        });
-                        let _ = tx.send(res);
-                    }
-                    PdfCommand::ToggleLayer(doc_id, object_id, visible) => {
-                        reload_if_needed(&mut store, &paths, doc_id);
-                        let mut store_ref = std::panic::AssertUnwindSafe(&mut store);
-                        let _ = std::panic::catch_unwind(move || {
-                            store_ref.toggle_layer(doc_id, object_id, visible);
-                        });
-                    }
-                    PdfCommand::GetAttachmentBytes(doc_id, object_id, tx) => {
-                        reload_if_needed(&mut store, &paths, doc_id);
-                        let store_ref = std::panic::AssertUnwindSafe(&store);
-                        let res = catch_worker_panic("get_attachment_bytes", move || {
-                            store_ref.get_attachment_bytes(doc_id, object_id)
-                        });
-                        let _ = tx.send(res);
-                    }
-                    PdfCommand::DetectTables(doc_id, page_num, tx) => {
-                        reload_if_needed(&mut store, &paths, doc_id);
-                        let store_ref = std::panic::AssertUnwindSafe(&store);
-                        let res = catch_worker_panic("detect_tables", move || {
-                            store_ref.detect_tables_on_page(doc_id, page_num)
-                        });
-                        let _ = tx.send(res);
-                    }
-                    PdfCommand::EncryptPdf(input, output, user, owner, algo, tx) => {
-                        let store_ref = std::panic::AssertUnwindSafe(&store);
-                        let res = catch_worker_panic("encrypt_pdf", move || {
-                            store_ref.encrypt_pdf(&input, &output, &user, &owner, &algo)
-                        });
-                        let _ = tx.send(res);
-                    }
-                    PdfCommand::LinearizePdf(input, output, tx) => {
-                        let store_ref = std::panic::AssertUnwindSafe(&store);
-                        let res = catch_worker_panic("linearize_pdf", move || {
-                            store_ref.linearize_pdf(&input, &output)
-                        });
-                        let _ = tx.send(res);
-                    }
-                    PdfCommand::ValidateConformance(path, profile, tx) => {
-                        let store_ref = std::panic::AssertUnwindSafe(&store);
-                        let res = catch_worker_panic("validate_conformance", move || {
-                            store_ref.validate_conformance(&path, &profile)
-                        });
-                        let _ = tx.send(res);
-                    }
-                    PdfCommand::VerifySignatureTrust(doc_id, anchors, tx) => {
-                        reload_if_needed(&mut store, &paths, doc_id);
-                        let store_ref = std::panic::AssertUnwindSafe(&store);
-                        let res = catch_worker_panic("verify_signature_trust", move || {
-                            store_ref.verify_signature_trust(doc_id, &anchors)
-                        });
-                        let _ = tx.send(res);
-                    }
-                    PdfCommand::ConvertPdf(doc_id, mode, format, tx) => {
-                        reload_if_needed(&mut store, &paths, doc_id);
-                        let store_ref = std::panic::AssertUnwindSafe(&store);
-                        let res = catch_worker_panic("convert_pdf", move || {
-                            store_ref.convert_pdf_doc_by_id(doc_id, &mode, &format)
-                        });
-                        let _ = tx.send(res);
-                    }
-                    PdfCommand::CreateBlankDocument(output_path, tx) => {
-                        let res = catch_worker_panic("create_blank_document", move || {
-                            crate::pdf_engine::DocumentStore::create_blank_document(&output_path)
-                        });
-                        let _ = tx.send(res);
-                    }
-                    PdfCommand::SignDocumentWithCert(doc_id, cert_path, output_path, tx) => {
-                        reload_if_needed(&mut store, &paths, doc_id);
-                        let store_ref = std::panic::AssertUnwindSafe(&store);
-                        let res = catch_worker_panic("sign_with_certificate", move || {
-                            store_ref.sign_with_certificate(doc_id, &cert_path, &output_path)
-                        });
-                        let _ = tx.send(res);
-                    }
-                    PdfCommand::ApplyStamp(doc_id, page_num, label, output_path, tx) => {
-                        reload_if_needed(&mut store, &paths, doc_id);
-                        let store_ref = std::panic::AssertUnwindSafe(&store);
-                        let res = catch_worker_panic("apply_stamp", move || {
-                            store_ref.apply_stamp(doc_id, page_num, &label, &output_path)
-                        });
-                        let _ = tx.send(res);
-                    }
-                    PdfCommand::OcrPage(doc_id, page_num, script, tx) => {
-                        reload_if_needed(&mut store, &paths, doc_id);
-                        let mut store_ref = std::panic::AssertUnwindSafe(&mut store);
-                        let res = catch_worker_panic("ocr_page", move || {
-                            store_ref.ocr_page(doc_id, page_num, script)
-                        });
-                        let _ = tx.send(res);
+                        },
+                    };
+
+                    match cmd {
+                        PdfCommand::Open(path, mut password, doc_id, tx) => {
+                            tracing::info!("Engine worker: opening {:?}", path);
+                            let mut store_ref = std::panic::AssertUnwindSafe(&mut store);
+                            let path_clone = path.clone();
+                            let pass_clone = password.clone();
+                            let res = catch_worker_panic("open", move || {
+                                store_ref.open_document(&path_clone, pass_clone.as_deref(), doc_id)
+                            });
+
+                            if res.is_ok() {
+                                if let Ok(mut guard) = paths.write() {
+                                    guard.insert(
+                                        doc_id,
+                                        (path, password.map(zeroize::Zeroizing::new)),
+                                    );
+                                }
+                            } else {
+                                tracing::error!("Engine worker: open failed: {:?}", res);
+                                if let Some(ref mut p) = password {
+                                    crate::models::zeroize_string(p);
+                                }
+                            }
+                            let _ = tx.send(res);
+                        }
+                        PdfCommand::Render(doc_id, page_num, options, tx) => {
+                            if tx.is_closed() {
+                                tracing::debug!(
+                                    "Engine worker: render cancelled (receiver dropped)"
+                                );
+                                continue;
+                            }
+                            tracing::debug!(
+                                "Engine worker: render page {} for {:?}",
+                                page_num,
+                                doc_id
+                            );
+                            reload_if_needed(&mut store, &paths, doc_id);
+
+                            let mut store_ref = std::panic::AssertUnwindSafe(&mut store);
+                            let res = catch_worker_panic("render", move || {
+                                store_ref.render_page(doc_id, page_num, options)
+                            });
+
+                            if res.is_err() {
+                                tracing::error!(
+                                    "Engine worker: render page {} failed: {:?}",
+                                    page_num,
+                                    res
+                                );
+                            }
+                            let _ = tx.send(res);
+                        }
+                        PdfCommand::RenderThumbnail(doc_id, page_num, scale, rotation, tx) => {
+                            reload_if_needed(&mut store, &paths, doc_id);
+                            let options = crate::pdf_engine::RenderOptions {
+                                scale,
+                                rotation,
+                                filter: crate::pdf_engine::RenderFilter::None,
+                                auto_crop: false,
+                                quality: crate::pdf_engine::RenderQuality::Low,
+                            };
+                            let mut store_ref = std::panic::AssertUnwindSafe(&mut store);
+                            let res = catch_worker_panic("render_thumbnail", move || {
+                                store_ref.render_thumbnail(doc_id, page_num, options)
+                            });
+                            let _ = tx.send(res);
+                        }
+                        PdfCommand::Close(doc_id) => {
+                            let mut store_ref = std::panic::AssertUnwindSafe(&mut store);
+                            let _ = std::panic::catch_unwind(move || {
+                                store_ref.close_document(doc_id);
+                            });
+                            if let Ok(mut guard) = paths.write() {
+                                guard.remove(&doc_id);
+                            }
+                        }
+                        PdfCommand::ExtractText(doc_id, page_num, tx) => {
+                            reload_if_needed(&mut store, &paths, doc_id);
+                            let store_ref = std::panic::AssertUnwindSafe(&store);
+                            let res = catch_worker_panic("extract_text", move || {
+                                store_ref.extract_text(doc_id, page_num)
+                            });
+                            let _ = tx.send(res);
+                        }
+                        PdfCommand::Search(doc_id, query, tx) => {
+                            reload_if_needed(&mut store, &paths, doc_id);
+                            let store_ref = std::panic::AssertUnwindSafe(&store);
+                            let res = catch_worker_panic("search", move || {
+                                store_ref.search(doc_id, &query)
+                            });
+                            let _ = tx.send(res);
+                        }
+                        PdfCommand::GetTextItems(doc_id, page_num, tx) => {
+                            reload_if_needed(&mut store, &paths, doc_id);
+                            let store_ref = std::panic::AssertUnwindSafe(&store);
+                            let res = catch_worker_panic("get_text_items", move || {
+                                store_ref.extract_text_items(doc_id, page_num)
+                            });
+                            let _ = tx.send(res);
+                        }
+                        PdfCommand::LoadDocumentMeta(doc_id, tx) => {
+                            reload_if_needed(&mut store, &paths, doc_id);
+                            let mut store_ref = std::panic::AssertUnwindSafe(&mut store);
+                            let res = catch_worker_panic("load_document_meta", move || {
+                                store_ref.load_document_meta(doc_id)
+                            });
+                            let _ = tx.send(res);
+                        }
+                        PdfCommand::SaveAnnotations(doc_id, annotations, tx) => {
+                            reload_if_needed(&mut store, &paths, doc_id);
+                            let mut store_ref = std::panic::AssertUnwindSafe(&mut store);
+                            let res = catch_worker_panic("save_annotations", move || {
+                                store_ref.save_annotations(doc_id, &annotations, None)
+                            });
+                            let _ = tx.send(res);
+                        }
+                        PdfCommand::ExportImage(doc_id, page_num, scale, tx) => {
+                            reload_if_needed(&mut store, &paths, doc_id);
+                            let store_ref = std::panic::AssertUnwindSafe(&store);
+                            let res = catch_worker_panic("export_image", move || {
+                                store_ref.export_page_as_image(doc_id, page_num, scale)
+                            });
+                            let _ = tx.send(res);
+                        }
+                        PdfCommand::ExportImages(doc_id, pages, scale, out_dir, tx) => {
+                            reload_if_needed(&mut store, &paths, doc_id);
+                            let out_path = std::path::Path::new(&out_dir);
+                            if !out_path.is_dir() {
+                                let _ = tx.send(Err(crate::models::PdfError::IoError(
+                                    "Output directory does not exist".into(),
+                                )));
+                                continue;
+                            }
+                            let store_ref = std::panic::AssertUnwindSafe(&store);
+                            let res = catch_worker_panic("export_images", move || {
+                                let mut output_paths = Vec::new();
+                                for page_num in pages {
+                                    let safe_name = format!("page_{page_num}.png");
+                                    let out_file = out_path.join(&safe_name);
+                                    if let Ok(buf) =
+                                        store_ref.export_page_as_image(doc_id, page_num, scale)
+                                    {
+                                        let mut opts = oxipng::Options::from_preset(2);
+                                        opts.strip = oxipng::StripChunks::Safe;
+                                        let optimized = oxipng::optimize_from_memory(&buf, &opts)
+                                            .unwrap_or(buf);
+                                        if std::fs::write(&out_file, optimized).is_ok()
+                                            && let Some(path_str) = out_file.to_str()
+                                        {
+                                            output_paths.push(path_str.to_string());
+                                        }
+                                    }
+                                }
+                                Ok(output_paths)
+                            });
+                            let _ = tx.send(res);
+                        }
+                        PdfCommand::ExportPdf(doc_id, path, annotations, tx) => {
+                            reload_if_needed(&mut store, &paths, doc_id);
+                            let mut store_ref = std::panic::AssertUnwindSafe(&mut store);
+                            let res = catch_worker_panic("export_pdf", move || {
+                                store_ref.save_annotations(doc_id, &annotations, Some(path))
+                            });
+                            let _ = tx.send(res);
+                        }
+                        PdfCommand::Merge(paths_list, out, tx) => {
+                            let store_ref = std::panic::AssertUnwindSafe(&store);
+                            let res = catch_worker_panic("merge", move || {
+                                store_ref.merge_documents(paths_list, out)
+                            });
+                            let _ = tx.send(res);
+                        }
+                        PdfCommand::Split(path, pages, out, tx) => {
+                            let store_ref = std::panic::AssertUnwindSafe(&store);
+                            let res = catch_worker_panic("split", move || {
+                                store_ref.split_pdf(&path, pages, out)
+                            });
+                            let _ = tx.send(res);
+                        }
+                        PdfCommand::GetFormFields(path, tx) => {
+                            let mut store_ref = std::panic::AssertUnwindSafe(&mut store);
+                            let res = catch_worker_panic("get_form_fields", move || {
+                                store_ref.get_form_fields(&path)
+                            });
+                            let _ = tx.send(res);
+                        }
+                        PdfCommand::FillForm(path, fields, out, tx) => {
+                            let mut store_ref = std::panic::AssertUnwindSafe(&mut store);
+                            let res = catch_worker_panic("fill_form", move || {
+                                store_ref.fill_form(&path, fields, out)
+                            });
+                            let _ = tx.send(res);
+                        }
+                        PdfCommand::PrintPdf(path, printer_name, tx) => {
+                            let res = catch_worker_panic("print_pdf", move || {
+                                crate::pdf_engine::DocumentStore::print_document(
+                                    &path,
+                                    printer_name.as_deref(),
+                                )
+                            });
+                            let _ = tx.send(res);
+                        }
+                        PdfCommand::ListPrinters(tx) => {
+                            let res = catch_worker_panic("list_printers", move || {
+                                crate::pdf_engine::DocumentStore::list_printers()
+                            });
+                            let _ = tx.send(res);
+                        }
+                        PdfCommand::AddWatermark(input, text, output, tx) => {
+                            let res = catch_worker_panic("add_watermark", move || {
+                                crate::pdf_engine::DocumentStore::add_watermark(
+                                    &input, &text, &output,
+                                )
+                            });
+                            let _ = tx.send(res);
+                        }
+                        PdfCommand::AddHeaderFooter(input, header, footer, output, tx) => {
+                            let res = catch_worker_panic("add_header_footer", move || {
+                                crate::pdf_engine::DocumentStore::add_header_footer(
+                                    &input, &header, &footer, &output,
+                                )
+                            });
+                            let _ = tx.send(res);
+                        }
+                        PdfCommand::Optimize(input, output, tx) => {
+                            let store_ref = std::panic::AssertUnwindSafe(&store);
+                            let res = catch_worker_panic("optimize", move || {
+                                store_ref.optimize_pdf(&input, &output)
+                            });
+                            let _ = tx.send(res);
+                        }
+                        PdfCommand::ReorderPages(input, page_order, output, tx) => {
+                            let store_ref = std::panic::AssertUnwindSafe(&store);
+                            let res = catch_worker_panic("reorder_pages", move || {
+                                store_ref.reorder_pages(&input, &page_order, &output)
+                            });
+                            let _ = tx.send(res);
+                        }
+                        PdfCommand::LoadAnnotations(doc_id, path, tx) => {
+                            let _ = doc_id;
+                            let store_ref = std::panic::AssertUnwindSafe(&store);
+                            let res = catch_worker_panic("load_annotations", move || {
+                                store_ref.load_annotations(&path)
+                            });
+                            let _ = tx.send(res);
+                        }
+                        PdfCommand::ToggleLayer(doc_id, object_id, visible) => {
+                            reload_if_needed(&mut store, &paths, doc_id);
+                            let mut store_ref = std::panic::AssertUnwindSafe(&mut store);
+                            let _ = std::panic::catch_unwind(move || {
+                                store_ref.toggle_layer(doc_id, object_id, visible);
+                            });
+                        }
+                        PdfCommand::GetAttachmentBytes(doc_id, object_id, tx) => {
+                            reload_if_needed(&mut store, &paths, doc_id);
+                            let store_ref = std::panic::AssertUnwindSafe(&store);
+                            let res = catch_worker_panic("get_attachment_bytes", move || {
+                                store_ref.get_attachment_bytes(doc_id, object_id)
+                            });
+                            let _ = tx.send(res);
+                        }
+                        PdfCommand::DetectTables(doc_id, page_num, tx) => {
+                            reload_if_needed(&mut store, &paths, doc_id);
+                            let store_ref = std::panic::AssertUnwindSafe(&store);
+                            let res = catch_worker_panic("detect_tables", move || {
+                                store_ref.detect_tables_on_page(doc_id, page_num)
+                            });
+                            let _ = tx.send(res);
+                        }
+                        PdfCommand::EncryptPdf(input, output, user, owner, algo, tx) => {
+                            let store_ref = std::panic::AssertUnwindSafe(&store);
+                            let res = catch_worker_panic("encrypt_pdf", move || {
+                                store_ref.encrypt_pdf(&input, &output, &user, &owner, &algo)
+                            });
+                            let _ = tx.send(res);
+                        }
+                        PdfCommand::LinearizePdf(input, output, tx) => {
+                            let store_ref = std::panic::AssertUnwindSafe(&store);
+                            let res = catch_worker_panic("linearize_pdf", move || {
+                                store_ref.linearize_pdf(&input, &output)
+                            });
+                            let _ = tx.send(res);
+                        }
+                        PdfCommand::ValidateConformance(path, profile, tx) => {
+                            let store_ref = std::panic::AssertUnwindSafe(&store);
+                            let res = catch_worker_panic("validate_conformance", move || {
+                                store_ref.validate_conformance(&path, &profile)
+                            });
+                            let _ = tx.send(res);
+                        }
+                        PdfCommand::VerifySignatureTrust(doc_id, anchors, tx) => {
+                            reload_if_needed(&mut store, &paths, doc_id);
+                            let store_ref = std::panic::AssertUnwindSafe(&store);
+                            let res = catch_worker_panic("verify_signature_trust", move || {
+                                store_ref.verify_signature_trust(doc_id, &anchors)
+                            });
+                            let _ = tx.send(res);
+                        }
+                        PdfCommand::ConvertPdf(doc_id, mode, format, tx) => {
+                            reload_if_needed(&mut store, &paths, doc_id);
+                            let store_ref = std::panic::AssertUnwindSafe(&store);
+                            let res = catch_worker_panic("convert_pdf", move || {
+                                store_ref.convert_pdf_doc_by_id(doc_id, &mode, &format)
+                            });
+                            let _ = tx.send(res);
+                        }
+                        PdfCommand::CreateBlankDocument(output_path, tx) => {
+                            let res = catch_worker_panic("create_blank_document", move || {
+                                crate::pdf_engine::DocumentStore::create_blank_document(
+                                    &output_path,
+                                )
+                            });
+                            let _ = tx.send(res);
+                        }
+                        PdfCommand::SignDocumentWithCert(doc_id, cert_path, output_path, tx) => {
+                            reload_if_needed(&mut store, &paths, doc_id);
+                            let store_ref = std::panic::AssertUnwindSafe(&store);
+                            let res = catch_worker_panic("sign_with_certificate", move || {
+                                store_ref.sign_with_certificate(doc_id, &cert_path, &output_path)
+                            });
+                            let _ = tx.send(res);
+                        }
+                        PdfCommand::ApplyStamp(doc_id, page_num, label, output_path, tx) => {
+                            reload_if_needed(&mut store, &paths, doc_id);
+                            let store_ref = std::panic::AssertUnwindSafe(&store);
+                            let res = catch_worker_panic("apply_stamp", move || {
+                                store_ref.apply_stamp(doc_id, page_num, &label, &output_path)
+                            });
+                            let _ = tx.send(res);
+                        }
+                        PdfCommand::OcrPage(doc_id, page_num, script, tx) => {
+                            reload_if_needed(&mut store, &paths, doc_id);
+                            let mut store_ref = std::panic::AssertUnwindSafe(&mut store);
+                            let res = catch_worker_panic("ocr_page", move || {
+                                store_ref.ocr_page(doc_id, page_num, script)
+                            });
+                            let _ = tx.send(res);
+                        }
                     }
                 }
-            }
-        });
+            });
     }
 
     EngineState { cmd_tx }

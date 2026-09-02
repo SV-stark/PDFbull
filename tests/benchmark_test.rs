@@ -7,28 +7,29 @@ use std::time::Instant;
 
 #[test]
 fn benchmark_pdfbull_open_and_render() {
-    let test_files = vec![
-        (
-            "Small PDF (26 KB)",
-            PathBuf::from(r"E:\PDFbull\tests\test_document.pdf"),
-        ),
+    let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let fixture_pdf = manifest_dir.join("tests").join("test_document.pdf");
+
+    let mut test_files = vec![("Fixture PDF (26 KB)", fixture_pdf)];
+
+    let doc_dir = std::env::var_os("USERPROFILE")
+        .map(PathBuf::from)
+        .map(|p| p.join("Documents"))
+        .unwrap_or_default();
+    let opt_files = [
         (
             "Medium PDF (0.9 MB)",
-            PathBuf::from(r"C:\Users\suyas\Documents\Declaration cum affidaavit.pdf"),
+            doc_dir.join("Declaration cum affidaavit.pdf"),
         ),
-        (
-            "Large PDF (5.9 MB)",
-            PathBuf::from(r"C:\Users\suyas\Documents\f-2.pdf"),
-        ),
-        (
-            "Heavy PDF (11.0 MB)",
-            PathBuf::from(r"C:\Users\suyas\Documents\FOREST3.pdf"),
-        ),
-        (
-            "Giant PDF (54.6 MB)",
-            PathBuf::from(r"C:\Users\suyas\Documents\forest 100.pdf"),
-        ),
+        ("Large PDF (5.9 MB)", doc_dir.join("f-2.pdf")),
+        ("Heavy PDF (11.0 MB)", doc_dir.join("FOREST3.pdf")),
+        ("Giant PDF (54.6 MB)", doc_dir.join("forest 100.pdf")),
     ];
+    for (label, p) in opt_files {
+        if p.exists() {
+            test_files.push((label, p));
+        }
+    }
 
     println!("\n========================================================");
     println!("          PDFbull Engine Benchmark Results              ");

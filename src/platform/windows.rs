@@ -1,24 +1,49 @@
+use windows::Win32::Foundation::{ERROR_ALREADY_EXISTS, GetLastError, HANDLE};
+use windows::Win32::System::Threading::CreateMutexW;
 use windows::Win32::UI::WindowsAndMessaging::{
     FindWindowW, GetWindowThreadProcessId, SW_RESTORE, SetForegroundWindow, ShowWindow,
 };
 use windows::core::PCWSTR;
 
+static mut PRIMARY_MUTEX: Option<HANDLE> = None;
+
 pub fn ensure_single_instance(args: &[String]) -> Result<bool, Box<dyn std::error::Error>> {
     use interprocess::local_socket::{GenericNamespaced, Stream, prelude::*};
     use std::io::Write;
 
+    let mutex_name: Vec<u16> = "Local\\PDFbull_SingleInstance_Mutex\0"
+        .encode_utf16()
+        .collect();
+    let is_secondary = unsafe {
+        let handle = CreateMutexW(None, true, PCWSTR(mutex_name.as_ptr()))?;
+        if GetLastError() == ERROR_ALREADY_EXISTS {
+            true
+        } else {
+            PRIMARY_MUTEX = Some(handle);
+            false
+        }
+    };
+
     let name = "pdfbull-single-instance.sock".to_ns_name::<GenericNamespaced>()?;
 
-    // Try to connect to a running instance
-    match Stream::connect(name) {
-        Ok(mut stream) => {
-            // Write arguments to the pipe
+    if is_secondary {
+        // Retry connection for up to 1000ms in case the primary instance is currently binding its listener
+        let mut stream = None;
+        for _ in 0..20 {
+            if let Ok(s) = Stream::connect(name.clone()) {
+                stream = Some(s);
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(50));
+        }
+
+        if let Some(mut stream) = stream {
             let json = serde_json::to_string(args)?;
             stream.write_all(json.as_bytes())?;
             stream.write_all(b"\n")?;
             stream.flush()?;
 
-            // Attempt to bring the primary window to foreground
+            // Bring the primary window to foreground
             let window_title: Vec<u16> = "PDFbull\0".encode_utf16().collect();
             unsafe {
                 if let Ok(hwnd) = FindWindowW(None, PCWSTR(window_title.as_ptr()))
@@ -34,13 +59,11 @@ pub fn ensure_single_instance(args: &[String]) -> Result<bool, Box<dyn std::erro
                 }
             }
 
-            Ok(true)
-        }
-        Err(_) => {
-            // No instance running, we are the primary instance
-            Ok(false)
+            return Ok(true);
         }
     }
+
+    Ok(false)
 }
 
 pub fn setup_jump_list(paths: &[String]) {

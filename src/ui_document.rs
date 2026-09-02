@@ -721,6 +721,9 @@ fn render_accessibility_layer<'a>(
         .text_layers
         .get(&page_idx)
         .map(|items| {
+            if items.is_empty() {
+                return Vec::new();
+            }
             let actual_page = tab.page_mapping.get(page_idx).copied().unwrap_or(page_idx);
             let page_rotation = tab
                 .page_rotations
@@ -729,28 +732,62 @@ fn render_accessibility_layer<'a>(
                 .unwrap_or(tab.rotation);
             let original_height = tab.page_heights.get(page_idx).copied().unwrap_or(800.0);
 
-            items
-                .iter()
-                .map(|item| {
-                    let (rx, ry, rw, rh) = crate::models::rotate_coords(
-                        item.x,
-                        item.y,
-                        item.width,
-                        item.height,
-                        tab.page_width,
-                        original_height,
-                        page_rotation,
-                    );
-                    container(text(item.text.clone()).size(item.height * zoom).style(|_| {
+            // Group adjacent text glyphs/words on roughly the same baseline into lines to reduce widget allocations
+            struct LineGroup {
+                min_rx: f32,
+                min_ry: f32,
+                max_rx2: f32,
+                max_ry2: f32,
+                text: String,
+                font_size: f32,
+            }
+
+            let mut lines: Vec<LineGroup> = Vec::new();
+
+            for item in items {
+                let (rx, ry, rw, rh) = crate::models::rotate_coords(
+                    item.x,
+                    item.y,
+                    item.width,
+                    item.height,
+                    tab.page_width,
+                    original_height,
+                    page_rotation,
+                );
+
+                if let Some(last) = lines.last_mut()
+                    && (last.min_ry - ry).abs() < (rh * 0.5).max(3.0)
+                {
+                    last.min_rx = last.min_rx.min(rx);
+                    last.max_rx2 = last.max_rx2.max(rx + rw);
+                    last.max_ry2 = last.max_ry2.max(ry + rh);
+                    last.text.push(' ');
+                    last.text.push_str(&item.text);
+                } else {
+                    lines.push(LineGroup {
+                        min_rx: rx,
+                        min_ry: ry,
+                        max_rx2: rx + rw,
+                        max_ry2: ry + rh,
+                        text: item.text.clone(),
+                        font_size: item.height,
+                    });
+                }
+            }
+
+            lines
+                .into_iter()
+                .map(|line| {
+                    container(text(line.text).size(line.font_size * zoom).style(|_| {
                         iced::widget::text::Style {
                             color: Some(Color::TRANSPARENT),
                         }
                     }))
-                    .width(Length::Fixed((rx + rw) * zoom))
-                    .height(Length::Fixed((ry + rh) * zoom))
+                    .width(Length::Fixed(line.max_rx2 * zoom))
+                    .height(Length::Fixed(line.max_ry2 * zoom))
                     .padding(Padding {
-                        top: ry * zoom,
-                        left: rx * zoom,
+                        top: line.min_ry * zoom,
+                        left: line.min_rx * zoom,
                         ..Default::default()
                     })
                     .into()
