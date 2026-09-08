@@ -1,6 +1,6 @@
 use crate::app::PdfBullApp;
 use crate::app::{INTER_BOLD, INTER_REGULAR, LUCIDE, icons};
-use crate::models::{PendingAnnotationKind, RibbonTab};
+use crate::models::{PageLayoutMode, PendingAnnotationKind, RibbonTab};
 use crate::pdf_engine::RenderFilter;
 use crate::ui::theme;
 use iced::widget::{Space, button, column, container, pick_list, row, text, text_input, tooltip};
@@ -335,46 +335,89 @@ pub fn render(app: &PdfBullApp) -> Element<'_, crate::message::Message> {
                 "Toggle Midnight Mode (Color Inversion)",
             );
 
-            container(
-                row![
-                    zoom_control(tab.zoom),
-                    v_sep(),
-                    tool_button(
-                        icons::ROTATE,
-                        "Rotate 90°",
-                        crate::message::Message::RotateClockwise,
-                        false,
-                        "Rotate page 90° clockwise"
-                    ),
-                    v_sep(),
-                    midnight_btn,
-                    v_sep(),
-                    filter_section(tab.render_filter, tab.auto_crop),
-                    v_sep(),
-                    tool_button(
-                        icons::HELP,
-                        "Metadata",
-                        crate::message::Message::ToggleMetadata,
-                        app.show_metadata,
-                        "Inspect document structural metadata"
-                    ),
-                ]
+            let layout_controls = row![
+                tool_button_emoji(
+                    "📜",
+                    "Continuous",
+                    crate::message::Message::SetPageLayoutMode(PageLayoutMode::SingleContinuous),
+                    tab.layout_mode == PageLayoutMode::SingleContinuous,
+                    "Continuous vertical scrolling mode"
+                ),
+                tool_button_emoji(
+                    "📄",
+                    "Single",
+                    crate::message::Message::SetPageLayoutMode(PageLayoutMode::SinglePage),
+                    tab.layout_mode == PageLayoutMode::SinglePage,
+                    "Single page presentation mode (PgUp/PgDn/Arrows)"
+                ),
+                tool_button_emoji(
+                    "📖",
+                    "Spread",
+                    crate::message::Message::SetPageLayoutMode(PageLayoutMode::TwoPageSpread),
+                    tab.layout_mode == PageLayoutMode::TwoPageSpread,
+                    "Two-page spread / Book view"
+                ),
+            ]
+            .spacing(4);
+
+            let cover_toggle = if tab.layout_mode == PageLayoutMode::TwoPageSpread {
+                Some(tool_button_emoji(
+                    "📕",
+                    if tab.two_page_cover {
+                        "Cover: On"
+                    } else {
+                        "Cover: Off"
+                    },
+                    crate::message::Message::ToggleTwoPageCover,
+                    tab.two_page_cover,
+                    "Toggle first page as standalone cover",
+                ))
+            } else {
+                None
+            };
+
+            let mut view_row = row![zoom_control(tab.zoom), v_sep(), layout_controls,]
                 .spacing(12)
-                .padding([0, 16])
-                .align_y(Alignment::Center),
-            )
-            .width(Length::Fill)
-            .height(Length::Fixed(48.0))
-            .style(|_| iced::widget::container::Style {
-                background: Some(theme::COLOR_BG_SIDEBAR.into()),
-                border: Border {
-                    width: 1.0,
-                    color: Color::from_rgb(0.12, 0.14, 0.18),
+                .align_y(Alignment::Center);
+
+            if let Some(cover_btn) = cover_toggle {
+                view_row = view_row.push(cover_btn);
+            }
+
+            view_row = view_row.push(v_sep());
+            view_row = view_row.push(tool_button(
+                icons::ROTATE,
+                "Rotate 90°",
+                crate::message::Message::RotateClockwise,
+                false,
+                "Rotate page 90° clockwise",
+            ));
+            view_row = view_row.push(v_sep());
+            view_row = view_row.push(midnight_btn);
+            view_row = view_row.push(v_sep());
+            view_row = view_row.push(filter_section(tab.render_filter, tab.auto_crop));
+            view_row = view_row.push(v_sep());
+            view_row = view_row.push(tool_button(
+                icons::HELP,
+                "Metadata",
+                crate::message::Message::ToggleMetadata,
+                app.show_metadata,
+                "Inspect document structural metadata",
+            ));
+
+            container(view_row.padding([0, 16]))
+                .width(Length::Fill)
+                .height(Length::Fixed(48.0))
+                .style(|_| iced::widget::container::Style {
+                    background: Some(theme::COLOR_BG_SIDEBAR.into()),
+                    border: Border {
+                        width: 1.0,
+                        color: Color::from_rgb(0.12, 0.14, 0.18),
+                        ..Default::default()
+                    },
                     ..Default::default()
-                },
-                ..Default::default()
-            })
-            .into()
+                })
+                .into()
         }
         RibbonTab::Annotate => {
             let markup_tools = row![
@@ -946,6 +989,22 @@ fn zoom_control(zoom: f32) -> Element<'static, crate::message::Message> {
                 .on_press(crate::message::Message::ZoomIn)
                 .style(theme::button_ghost)
                 .padding(4),
+            tooltip(
+                button(text("↔").size(12).font(INTER_BOLD))
+                    .on_press(crate::message::Message::FitWidth)
+                    .style(theme::button_ghost)
+                    .padding([2, 5]),
+                text("Fit Width (Ctrl+1)").size(11),
+                tooltip::Position::Bottom,
+            ),
+            tooltip(
+                button(text("⛶").size(12).font(INTER_BOLD))
+                    .on_press(crate::message::Message::FitPage)
+                    .style(theme::button_ghost)
+                    .padding([2, 5]),
+                text("Fit Page (Ctrl+2)").size(11),
+                tooltip::Position::Bottom,
+            ),
         ]
         .spacing(2)
         .align_y(Alignment::Center),

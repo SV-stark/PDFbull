@@ -1320,5 +1320,61 @@ pub fn view(app: &PdfBullApp) -> Element<'_, crate::message::Message> {
         base_stack = base_stack.push(command_palette_view(app));
     }
 
+    if let Some(tab_idx) = app.tab_context_menu {
+        base_stack = base_stack.push(tabs::render_tab_context_menu(app, tab_idx));
+    }
+
+    if app.is_file_hovered {
+        base_stack = base_stack.push(render_file_drop_overlay());
+    }
+
     base_stack.into()
+}
+
+fn render_file_drop_overlay<'a>() -> Element<'a, crate::message::Message> {
+    let drop_box = container(
+        column![
+            text("📥").size(54),
+            text("Drop PDF to Open")
+                .size(22)
+                .font(INTER_BOLD)
+                .style(|_| text::Style {
+                    color: Some(Color::WHITE),
+                }),
+            text("Release your file to open it in a new tab")
+                .size(14)
+                .font(INTER_REGULAR)
+                .style(|_| text::Style {
+                    color: Some(theme::COLOR_TEXT_DIM),
+                }),
+        ]
+        .spacing(12)
+        .align_x(Alignment::Center),
+    )
+    .padding(40)
+    .style(|_| container::Style {
+        background: Some(Color::from_rgba(0.08, 0.10, 0.14, 0.95).into()),
+        border: Border {
+            radius: 16.0.into(),
+            width: 2.0,
+            color: theme::COLOR_ACCENT,
+        },
+        shadow: Shadow {
+            color: Color::from_rgba(0.0, 0.0, 0.0, 0.6),
+            offset: Vector::new(0.0, 8.0),
+            blur_radius: 24.0,
+        },
+        ..Default::default()
+    });
+
+    container(drop_box)
+        .width(Length::Fill)
+        .height(Length::Fill)
+        .center_x(Length::Fill)
+        .center_y(Length::Fill)
+        .style(|_| container::Style {
+            background: Some(Color::from_rgba(0.0, 0.0, 0.0, 0.65).into()),
+            ..Default::default()
+        })
+        .into()
 }

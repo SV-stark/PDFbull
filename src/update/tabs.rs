@@ -272,6 +272,7 @@ pub fn handle_tab_message(app: &mut PdfBullApp, message: Message) -> Task<Messag
             Task::none()
         }
         Message::CloseTab(idx) => {
+            app.tab_context_menu = None;
             if idx >= app.tabs.len() {
                 return Task::none();
             }
@@ -300,6 +301,88 @@ pub fn handle_tab_message(app: &mut PdfBullApp, message: Message) -> Task<Messag
             app.save_session();
             if let Some(tab) = app.current_tab() {
                 return crate::update::scroll_to_y(tab.view_state.viewport_y);
+            }
+            Task::none()
+        }
+        Message::ShowTabContextMenu(idx) => {
+            if idx < app.tabs.len() {
+                app.tab_context_menu = Some(idx);
+            }
+            Task::none()
+        }
+        Message::DismissTabContextMenu => {
+            app.tab_context_menu = None;
+            Task::none()
+        }
+        Message::CloseOtherTabs(idx) => {
+            app.tab_context_menu = None;
+            if idx >= app.tabs.len() {
+                return Task::none();
+            }
+            let kept = app.tabs.remove(idx);
+            if let Some(engine) = &app.engine {
+                for t in &app.tabs {
+                    let cmd_tx = engine.cmd_tx.clone();
+                    let doc_id = t.id;
+                    tokio::spawn(async move {
+                        let _ = cmd_tx
+                            .send(crate::commands::PdfCommand::Close(doc_id))
+                            .await;
+                    });
+                }
+            }
+            app.tabs = vec![kept];
+            app.active_tab = 0;
+            app.sync_page_input();
+            app.save_session();
+            if let Some(tab) = app.current_tab() {
+                return crate::update::scroll_to_y(tab.view_state.viewport_y);
+            }
+            Task::none()
+        }
+        Message::CloseTabsToRight(idx) => {
+            app.tab_context_menu = None;
+            if idx + 1 >= app.tabs.len() {
+                return Task::none();
+            }
+            let closed_tabs: Vec<_> = app.tabs.drain((idx + 1)..).collect();
+            if let Some(engine) = &app.engine {
+                for t in closed_tabs {
+                    let cmd_tx = engine.cmd_tx.clone();
+                    let doc_id = t.id;
+                    tokio::spawn(async move {
+                        let _ = cmd_tx
+                            .send(crate::commands::PdfCommand::Close(doc_id))
+                            .await;
+                    });
+                }
+            }
+            if app.active_tab >= app.tabs.len() {
+                app.active_tab = app.tabs.len() - 1;
+            }
+            app.sync_page_input();
+            app.save_session();
+            if let Some(tab) = app.current_tab() {
+                return crate::update::scroll_to_y(tab.view_state.viewport_y);
+            }
+            Task::none()
+        }
+        Message::CopyTabPath(idx) => {
+            app.tab_context_menu = None;
+            if let Some(tab) = app.tabs.get(idx) {
+                let path_str = tab.path.to_string_lossy().to_string();
+                if let Ok(mut cb) = arboard::Clipboard::new() {
+                    let _ = cb.set_text(path_str);
+                }
+            }
+            Task::none()
+        }
+        Message::OpenTabFolder(idx) => {
+            app.tab_context_menu = None;
+            if let Some(tab) = app.tabs.get(idx)
+                && let Some(parent) = tab.path.parent()
+            {
+                let _ = open::that(parent);
             }
             Task::none()
         }

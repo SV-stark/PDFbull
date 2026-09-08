@@ -44,7 +44,16 @@ pub fn handle_misc_message(app: &mut PdfBullApp, message: Message) -> Task<Messa
                     app.save_session_and_recent();
                     return iced::exit();
                 }
+                iced::Event::Window(iced::window::Event::FileHovered(_)) => {
+                    app.is_file_hovered = true;
+                    return Task::none();
+                }
+                iced::Event::Window(iced::window::Event::FilesHoveredLeft) => {
+                    app.is_file_hovered = false;
+                    return Task::none();
+                }
                 iced::Event::Window(iced::window::Event::FileDropped(path)) => {
+                    app.is_file_hovered = false;
                     return app.update(Message::OpenFile(path));
                 }
                 iced::Event::Mouse(iced::mouse::Event::CursorMoved { position }) => {
@@ -80,11 +89,42 @@ pub fn handle_misc_message(app: &mut PdfBullApp, message: Message) -> Task<Messa
                         Key::Named(iced::keyboard::key::Named::F1) => {
                             return app.update(Message::ToggleKeyboardHelp);
                         }
-                        Key::Named(iced::keyboard::key::Named::Escape)
-                            if app.command_palette.is_open =>
-                        {
-                            app.command_palette.is_open = false;
+                        Key::Named(iced::keyboard::key::Named::Escape) => {
+                            if app.tab_context_menu.is_some() {
+                                app.tab_context_menu = None;
+                                return Task::none();
+                            }
+                            if app.command_palette.is_open {
+                                app.command_palette.is_open = false;
+                                return Task::none();
+                            }
+                            if app.show_search_hud {
+                                app.show_search_hud = false;
+                                return Task::none();
+                            }
+                            if app.annotation_mode.is_some() || app.markup_active {
+                                app.markup_active = false;
+                                return app.update(Message::SetAnnotationMode(None));
+                            }
                             return Task::none();
+                        }
+                        Key::Named(iced::keyboard::key::Named::ArrowLeft) => {
+                            if let Some(tab) = app.current_tab()
+                                && (tab.layout_mode == crate::models::PageLayoutMode::SinglePage
+                                    || tab.layout_mode
+                                        == crate::models::PageLayoutMode::TwoPageSpread)
+                            {
+                                return app.update(Message::PrevPage);
+                            }
+                        }
+                        Key::Named(iced::keyboard::key::Named::ArrowRight) => {
+                            if let Some(tab) = app.current_tab()
+                                && (tab.layout_mode == crate::models::PageLayoutMode::SinglePage
+                                    || tab.layout_mode
+                                        == crate::models::PageLayoutMode::TwoPageSpread)
+                            {
+                                return app.update(Message::NextPage);
+                            }
                         }
                         Key::Named(iced::keyboard::key::Named::ArrowDown)
                             if app.command_palette.is_open =>
@@ -147,8 +187,12 @@ pub fn handle_misc_message(app: &mut PdfBullApp, message: Message) -> Task<Messa
                             }
                             "z" if modifiers.command() => return app.update(Message::Undo),
                             "y" if modifiers.command() => return app.update(Message::Redo),
-                            "f" if modifiers.command() => { /* Search is handled in UI */ }
+                            "f" if modifiers.command() => {
+                                return app.update(Message::ToggleSearchHud(Some(true)));
+                            }
                             "0" if modifiers.command() => return app.update(Message::ResetZoom),
+                            "1" if modifiers.command() => return app.update(Message::FitWidth),
+                            "2" if modifiers.command() => return app.update(Message::FitPage),
                             "=" | "+" if modifiers.command() => return app.update(Message::ZoomIn),
                             "-" if modifiers.command() => return app.update(Message::ZoomOut),
                             "w" if modifiers.command() && !app.tabs.is_empty() => {
@@ -170,12 +214,6 @@ pub fn handle_misc_message(app: &mut PdfBullApp, message: Message) -> Task<Messa
                             }
                             _ => {}
                         },
-                        Key::Named(iced::keyboard::key::Named::Escape)
-                            if app.annotation_mode.is_some() || app.markup_active =>
-                        {
-                            app.markup_active = false;
-                            return app.update(Message::SetAnnotationMode(None));
-                        }
                         _ => {}
                     }
                 }
@@ -188,8 +226,10 @@ pub fn handle_misc_message(app: &mut PdfBullApp, message: Message) -> Task<Messa
             if app.command_palette.is_open {
                 app.command_palette.query.clear();
                 app.command_palette.selected_index = 0;
+                iced::widget::operation::focus("command_palette_input")
+            } else {
+                Task::none()
             }
-            Task::none()
         }
         Message::CommandPaletteQueryChanged(query) => {
             app.command_palette.query = query;
@@ -228,6 +268,7 @@ pub fn handle_misc_message(app: &mut PdfBullApp, message: Message) -> Task<Messa
             Task::none()
         }
         Message::ExecutePaletteAction(action) => {
+            app.command_palette.is_open = false;
             use crate::models::CommandAction;
             match action {
                 CommandAction::NextPage => app.update(Message::NextPage),
@@ -235,6 +276,14 @@ pub fn handle_misc_message(app: &mut PdfBullApp, message: Message) -> Task<Messa
                 CommandAction::ZoomIn => app.update(Message::ZoomIn),
                 CommandAction::ZoomOut => app.update(Message::ZoomOut),
                 CommandAction::ResetZoom => app.update(Message::ResetZoom),
+                CommandAction::FitWidth => app.update(Message::FitWidth),
+                CommandAction::FitPage => app.update(Message::FitPage),
+                CommandAction::ToggleSearchHud => app.update(Message::ToggleSearchHud(Some(true))),
+                CommandAction::SaveDocument => app.update(Message::SaveAnnotations),
+                CommandAction::DetectTables => app.update(Message::ToggleTableMode),
+                CommandAction::ManageAttachments => app.update(Message::ToggleSidebar),
+                CommandAction::ToggleLayers => app.update(Message::ToggleSidebar),
+                CommandAction::CmykInspector => app.update(Message::ToggleCmykInspector(true)),
                 CommandAction::ToggleTheme => {
                     let next_theme = match app.settings.theme {
                         crate::models::AppTheme::Dark => crate::models::AppTheme::Light,
@@ -292,6 +341,10 @@ pub fn handle_misc_message(app: &mut PdfBullApp, message: Message) -> Task<Messa
         Message::ForceQuit => {
             app.save_session_and_recent();
             iced::exit()
+        }
+        Message::FileHovered(hovered) => {
+            app.is_file_hovered = hovered;
+            Task::none()
         }
         _ => Task::none(),
     }

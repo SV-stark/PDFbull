@@ -164,6 +164,15 @@ pub fn handle_search_message(app: &mut PdfBullApp, message: Message) -> Task<Mes
             app.search_query.clear();
             Task::none()
         }
+        Message::ToggleSearchHud(open) => {
+            let next_state = open.unwrap_or(!app.show_search_hud);
+            app.show_search_hud = next_state;
+            if next_state {
+                iced::widget::operation::focus("search_hud_input")
+            } else {
+                Task::none()
+            }
+        }
         _ => Task::none(),
     }
 }

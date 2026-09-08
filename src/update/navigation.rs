@@ -7,8 +7,20 @@ pub fn handle_nav_message(app: &mut PdfBullApp, message: Message) -> Task<Messag
     match message {
         Message::NextPage => {
             let next_page = if let Some(tab) = app.current_tab_mut() {
-                if tab.current_page + 1 < tab.total_pages {
-                    tab.current_page += 1;
+                let step = if tab.layout_mode == crate::models::PageLayoutMode::TwoPageSpread {
+                    if tab.two_page_cover && tab.current_page == 0 {
+                        1
+                    } else {
+                        2
+                    }
+                } else {
+                    1
+                };
+                if tab.current_page + step < tab.total_pages {
+                    tab.current_page += step;
+                    Some(tab.current_page)
+                } else if tab.current_page + 1 < tab.total_pages {
+                    tab.current_page = tab.total_pages - 1;
                     Some(tab.current_page)
                 } else {
                     None
@@ -28,6 +40,9 @@ pub fn handle_nav_message(app: &mut PdfBullApp, message: Message) -> Task<Messag
                 };
                 app.page_input = label;
                 if let Some(tab) = app.current_tab_mut() {
+                    if tab.layout_mode == crate::models::PageLayoutMode::SinglePage {
+                        return app.render_visible_pages();
+                    }
                     return scroll_to_page(tab, page);
                 }
             }
@@ -35,8 +50,20 @@ pub fn handle_nav_message(app: &mut PdfBullApp, message: Message) -> Task<Messag
         }
         Message::PrevPage => {
             let prev_page = if let Some(tab) = app.current_tab_mut() {
-                if tab.current_page > 0 {
-                    tab.current_page -= 1;
+                let step = if tab.layout_mode == crate::models::PageLayoutMode::TwoPageSpread {
+                    if tab.two_page_cover && (tab.current_page == 1 || tab.current_page == 2) {
+                        tab.current_page
+                    } else {
+                        2
+                    }
+                } else {
+                    1
+                };
+                if tab.current_page >= step {
+                    tab.current_page -= step;
+                    Some(tab.current_page)
+                } else if tab.current_page > 0 {
+                    tab.current_page = 0;
                     Some(tab.current_page)
                 } else {
                     None
@@ -56,6 +83,9 @@ pub fn handle_nav_message(app: &mut PdfBullApp, message: Message) -> Task<Messag
                 };
                 app.page_input = label;
                 if let Some(tab) = app.current_tab_mut() {
+                    if tab.layout_mode == crate::models::PageLayoutMode::SinglePage {
+                        return app.render_visible_pages();
+                    }
                     return scroll_to_page(tab, page);
                 }
             }
@@ -138,6 +168,83 @@ pub fn handle_nav_message(app: &mut PdfBullApp, message: Message) -> Task<Messag
             }
             tasks.push(app.render_visible_pages());
             Task::batch(tasks)
+        }
+        Message::FitWidth => {
+            let mut tasks = Vec::new();
+            if let Some(tab) = app.current_tab_mut() {
+                let page_idx = tab.current_page;
+                let actual_page = tab.page_mapping.get(page_idx).copied().unwrap_or(page_idx);
+                let page_rotation = tab
+                    .page_rotations
+                    .get(&actual_page)
+                    .copied()
+                    .unwrap_or(tab.rotation);
+                let original_height = tab.page_heights.get(page_idx).copied().unwrap_or(800.0);
+                let is_landscape = page_rotation % 180 != 0;
+                let original_width = if is_landscape {
+                    original_height
+                } else {
+                    tab.page_width
+                };
+
+                // Allow padding for margins and scrollbars
+                let available_width = (tab.view_state.viewport_width - 48.0).max(100.0);
+                let target_zoom = (available_width / original_width.max(1.0)).clamp(0.25, 5.0);
+
+                let old_zoom = tab.zoom;
+                if (target_zoom - old_zoom).abs() > 0.001 {
+                    tab.zoom = target_zoom;
+                    let factor = target_zoom / old_zoom;
+                    let new_scroll_y = (tab.view_state.viewport_y * factor).max(0.0);
+                    tasks.push(crate::update::scroll_to_y(new_scroll_y));
+                }
+            }
+            tasks.push(app.render_visible_pages());
+            Task::batch(tasks)
+        }
+        Message::FitPage => {
+            let mut tasks = Vec::new();
+            if let Some(tab) = app.current_tab_mut() {
+                let page_idx = tab.current_page;
+                let actual_page = tab.page_mapping.get(page_idx).copied().unwrap_or(page_idx);
+                let page_rotation = tab
+                    .page_rotations
+                    .get(&actual_page)
+                    .copied()
+                    .unwrap_or(tab.rotation);
+                let original_height = tab.page_heights.get(page_idx).copied().unwrap_or(800.0);
+                let is_landscape = page_rotation % 180 != 0;
+                let (original_width, original_height_layout) = if is_landscape {
+                    (original_height, tab.page_width)
+                } else {
+                    (tab.page_width, original_height)
+                };
+
+                let available_width = (tab.view_state.viewport_width - 48.0).max(100.0);
+                let available_height = (tab.view_state.viewport_height - 64.0).max(100.0);
+                let zoom_w = available_width / original_width.max(1.0);
+                let zoom_h = available_height / original_height_layout.max(1.0);
+                let target_zoom = zoom_w.min(zoom_h).clamp(0.25, 5.0);
+
+                tab.zoom = target_zoom;
+                tasks.push(crate::update::scroll_to_page(tab, page_idx));
+            }
+            tasks.push(app.render_visible_pages());
+            Task::batch(tasks)
+        }
+        Message::SetPageLayoutMode(mode) => {
+            if let Some(tab) = app.current_tab_mut() {
+                tab.layout_mode = mode;
+                tab.view_state.rendered_pages.clear();
+            }
+            app.render_visible_pages()
+        }
+        Message::ToggleTwoPageCover => {
+            if let Some(tab) = app.current_tab_mut() {
+                tab.two_page_cover = !tab.two_page_cover;
+                tab.view_state.rendered_pages.clear();
+            }
+            app.render_visible_pages()
         }
         Message::JumpToPage(page) => {
             let jump_page = if let Some(tab) = app.current_tab_mut() {

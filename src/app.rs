@@ -123,6 +123,12 @@ pub struct PdfBullApp {
     pub conformance_pending: bool,
     /// Command Palette state
     pub command_palette: crate::models::CommandPalette,
+    /// Floating in-document search HUD state
+    pub show_search_hud: bool,
+    /// Right-clicked tab index for context menu
+    pub tab_context_menu: Option<usize>,
+    /// Drag and drop file hover indicator
+    pub is_file_hovered: bool,
     /// In-app Developer Log Console state
     pub show_log_console: bool,
     pub log_entries: Vec<crate::logging::LogEntry>,
@@ -204,6 +210,9 @@ impl Default for PdfBullApp {
             conformance_report: None,
             conformance_pending: false,
             command_palette: crate::models::CommandPalette::default(),
+            show_search_hud: false,
+            tab_context_menu: None,
+            is_file_hovered: false,
             show_log_console: false,
             log_entries: Vec::new(),
             log_level_filter: crate::logging::LogLevelFilter::All,
@@ -362,6 +371,62 @@ impl PdfBullApp {
                 category: "View".into(),
                 action: CommandAction::ResetZoom,
                 shortcut: Some("Ctrl+0".into()),
+            },
+            PaletteItem {
+                title: "Fit to Width".into(),
+                subtitle: Some("Scale page to fit window width".into()),
+                category: "View".into(),
+                action: CommandAction::FitWidth,
+                shortcut: Some("Ctrl+1".into()),
+            },
+            PaletteItem {
+                title: "Fit to Entire Page".into(),
+                subtitle: Some("Scale page to fit full window".into()),
+                category: "View".into(),
+                action: CommandAction::FitPage,
+                shortcut: Some("Ctrl+2".into()),
+            },
+            PaletteItem {
+                title: "Find in Document".into(),
+                subtitle: Some("Open floating in-document search HUD".into()),
+                category: "View".into(),
+                action: CommandAction::ToggleSearchHud,
+                shortcut: Some("Ctrl+F".into()),
+            },
+            PaletteItem {
+                title: "Save Document Annotations".into(),
+                subtitle: Some("Write vector markup back into PDF file".into()),
+                category: "File".into(),
+                action: CommandAction::SaveDocument,
+                shortcut: Some("Ctrl+S".into()),
+            },
+            PaletteItem {
+                title: "Detect Tables & Export (CSV/TSV)".into(),
+                subtitle: Some("Detect table grids and export structured spreadsheet data".into()),
+                category: "Tools".into(),
+                action: CommandAction::DetectTables,
+                shortcut: None,
+            },
+            PaletteItem {
+                title: "Embedded Files & Attachments".into(),
+                subtitle: Some("View and extract embedded PDF file attachments".into()),
+                category: "Tools".into(),
+                action: CommandAction::ManageAttachments,
+                shortcut: None,
+            },
+            PaletteItem {
+                title: "Optional Content (Layers)".into(),
+                subtitle: Some("Manage visibility of CAD, language, or markup layers".into()),
+                category: "View".into(),
+                action: CommandAction::ToggleLayers,
+                shortcut: None,
+            },
+            PaletteItem {
+                title: "CMYK & Prepress Color Inspector".into(),
+                subtitle: Some("Inspect ICC color profiles and ink separations".into()),
+                category: "Tools".into(),
+                action: CommandAction::CmykInspector,
+                shortcut: None,
             },
             PaletteItem {
                 title: "Optimize PDF File".into(),
@@ -688,7 +753,10 @@ impl PdfBullApp {
     pub fn subscription(&self) -> iced::Subscription<Message> {
         let events = iced::event::listen_with(|event, _status, _id| match event {
             iced::Event::Window(
-                iced::window::Event::CloseRequested | iced::window::Event::FileDropped(_),
+                iced::window::Event::CloseRequested
+                | iced::window::Event::FileDropped(_)
+                | iced::window::Event::FileHovered(_)
+                | iced::window::Event::FilesHoveredLeft,
             )
             | iced::Event::Mouse(
                 iced::mouse::Event::CursorMoved { .. } | iced::mouse::Event::WheelScrolled { .. },

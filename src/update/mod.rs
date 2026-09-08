@@ -180,7 +180,7 @@ pub fn handle_message(app: &mut PdfBullApp, message: Message) -> Task<Message> {
         | Message::EditAnnotationText(_, _) => annotations::handle_annotation_message(app, message),
         Message::SetFilter(_)
         | Message::ToggleAutoCrop
-        | Message::ViewportChanged(_, _)
+        | Message::ViewportChanged(_, _, _)
         | Message::SidebarViewportChanged(_)
         | Message::RequestRender(_)
         | Message::PageRendered(_, _, _, _)
@@ -194,6 +194,12 @@ pub fn handle_message(app: &mut PdfBullApp, message: Message) -> Task<Message> {
         | Message::OpenFile(_)
         | Message::OpenRecentFile(_)
         | Message::CloseTab(_)
+        | Message::CloseOtherTabs(_)
+        | Message::CloseTabsToRight(_)
+        | Message::CopyTabPath(_)
+        | Message::OpenTabFolder(_)
+        | Message::ShowTabContextMenu(_)
+        | Message::DismissTabContextMenu
         | Message::SwitchTab(_)
         | Message::TabReordered(_)
         | Message::DocumentModifiedExternally(_)
@@ -210,6 +216,10 @@ pub fn handle_message(app: &mut PdfBullApp, message: Message) -> Task<Message> {
         | Message::ZoomIn
         | Message::ZoomOut
         | Message::SetZoom(_)
+        | Message::FitWidth
+        | Message::FitPage
+        | Message::SetPageLayoutMode(_)
+        | Message::ToggleTwoPageCover
         | Message::JumpToPage(_)
         | Message::PageInputChanged(_)
         | Message::PageInputSubmitted => navigation::handle_nav_message(app, message),
@@ -218,7 +228,8 @@ pub fn handle_message(app: &mut PdfBullApp, message: Message) -> Task<Message> {
         | Message::SearchResult(_, _)
         | Message::NextSearchResult
         | Message::PrevSearchResult
-        | Message::ClearSearch => search::handle_search_message(app, message),
+        | Message::ClearSearch
+        | Message::ToggleSearchHud(_) => search::handle_search_message(app, message),
         Message::ExtractText
         | Message::ExtractTextToClipboard
         | Message::TextExtracted(_)
@@ -529,6 +540,7 @@ pub fn handle_message(app: &mut PdfBullApp, message: Message) -> Task<Message> {
         | Message::Error(_)
         | Message::ClearStatus
         | Message::IcedEvent(_)
+        | Message::FileHovered(_)
         | Message::LinkClicked(_)
         | Message::ForceQuit
         | Message::ToggleCommandPalette

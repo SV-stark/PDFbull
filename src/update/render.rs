@@ -22,9 +22,10 @@ pub fn handle_render_message(app: &mut PdfBullApp, message: Message) -> Task<Mes
             }
             app.render_visible_pages()
         }
-        Message::ViewportChanged(y, height) => {
+        Message::ViewportChanged(y, width, height) => {
             if let Some(tab) = app.current_tab_mut() {
                 tab.view_state.viewport_y = y;
+                tab.view_state.viewport_width = width;
                 tab.view_state.viewport_height = height;
                 tab.update_visible_range();
                 tab.cleanup_distant_pages();

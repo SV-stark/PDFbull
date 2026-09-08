@@ -526,6 +526,7 @@ pub struct TabViewState {
     pub text_layers: std::collections::HashMap<usize, Vec<TextItem>>,
     pub detected_tables: std::collections::HashMap<usize, Vec<DetectedTable>>,
     pub viewport_y: f32,
+    pub viewport_width: f32,
     pub viewport_height: f32,
     pub sidebar_viewport_y: f32,
     pub last_cleanup_time: std::time::Instant,
@@ -541,6 +542,7 @@ impl Default for TabViewState {
             text_layers: std::collections::HashMap::new(),
             detected_tables: std::collections::HashMap::new(),
             viewport_y: 0.0,
+            viewport_width: 1000.0,
             viewport_height: 800.0,
             sidebar_viewport_y: 0.0,
             last_cleanup_time: std::time::Instant::now()
@@ -550,6 +552,14 @@ impl Default for TabViewState {
             is_loading: false,
         }
     }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
+pub enum PageLayoutMode {
+    #[default]
+    SingleContinuous,
+    SinglePage,
+    TwoPageSpread,
 }
 
 pub struct DocumentTab {
@@ -562,6 +572,8 @@ pub struct DocumentTab {
     pub rotation: i32,
     pub render_filter: RenderFilter,
     pub auto_crop: bool,
+    pub layout_mode: PageLayoutMode,
+    pub two_page_cover: bool,
     pub page_heights: Vec<f32>,
     pub page_width: f32,
     pub search_results: Vec<SearchResult>,
@@ -580,7 +592,7 @@ pub struct DocumentTab {
     #[allow(clippy::type_complexity)]
     pub selection_drag: Option<(usize, (f32, f32), (f32, f32))>,
     pub selected_text: Option<String>,
-    pub selected_boxes: Vec<(f32, f32, f32, f32)>,
+    pub selected_boxes: Vec<(usize, f32, f32, f32, f32)>,
     pub annotations_dirty: bool,
     pub page_labels: Vec<String>,
     pub is_encrypted: bool,
@@ -622,6 +634,8 @@ impl DocumentTab {
             rotation: 0,
             render_filter: RenderFilter::None,
             auto_crop: false,
+            layout_mode: PageLayoutMode::SingleContinuous,
+            two_page_cover: true,
             page_heights: Vec::new(),
             page_width: 0.0,
             search_results: Vec::new(),
@@ -657,6 +671,34 @@ impl DocumentTab {
             self.view_state.visible_range = (0, 0);
             self.current_page = 0;
             return;
+        }
+
+        match self.layout_mode {
+            PageLayoutMode::SinglePage => {
+                let p = self.current_page.min(self.total_pages.saturating_sub(1));
+                self.view_state.visible_range = (p, p + 1);
+                return;
+            }
+            PageLayoutMode::TwoPageSpread => {
+                let cur = self.current_page.min(self.total_pages.saturating_sub(1));
+                let (start, end) = if self.two_page_cover {
+                    if cur == 0 {
+                        (0, 1)
+                    } else {
+                        let offset = cur - 1;
+                        let pair_start = 1 + (offset / 2) * 2;
+                        let pair_end = (pair_start + 2).min(self.total_pages);
+                        (pair_start, pair_end)
+                    }
+                } else {
+                    let pair_start = (cur / 2) * 2;
+                    let pair_end = (pair_start + 2).min(self.total_pages);
+                    (pair_start, pair_end)
+                };
+                self.view_state.visible_range = (start, end);
+                return;
+            }
+            PageLayoutMode::SingleContinuous => {}
         }
 
         let scaled_spacing = crate::ui::theme::PAGE_SPACING * self.zoom;
@@ -812,11 +854,14 @@ pub enum CommandAction {
     ZoomIn,
     ZoomOut,
     ResetZoom,
+    FitWidth,
+    FitPage,
     ToggleTheme,
     ToggleSidebar,
     ToggleFullscreen,
     ToggleMetadata,
     ToggleKeyboardHelp,
+    ToggleSearchHud,
     RotateClockwise,
     RotateCounterClockwise,
     ExtractText,
@@ -835,6 +880,11 @@ pub enum CommandAction {
     JumpToPage(usize),
     HighlightSelection,
     ToggleLogConsole,
+    CmykInspector,
+    ManageAttachments,
+    DetectTables,
+    ToggleLayers,
+    SaveDocument,
 }
 
 #[derive(Debug, Clone)]
@@ -1033,6 +1083,68 @@ mod tests {
         tab.zoom = 2.0;
         tab.update_visible_range();
         assert!(tab.view_state.visible_range.1 >= 1);
+    }
+
+    #[test]
+    fn test_update_visible_range_single_page_mode() {
+        let mut tab = DocumentTab::new(PathBuf::from("/test/doc.pdf"));
+        tab.page_heights = vec![1000.0; 10];
+        tab.total_pages = 10;
+        tab.layout_mode = PageLayoutMode::SinglePage;
+        tab.current_page = 4;
+        tab.update_visible_range();
+        assert_eq!(tab.view_state.visible_range, (4, 5));
+    }
+
+    #[test]
+    fn test_update_visible_range_two_page_spread_with_cover() {
+        let mut tab = DocumentTab::new(PathBuf::from("/test/doc.pdf"));
+        tab.page_heights = vec![1000.0; 10];
+        tab.total_pages = 10;
+        tab.layout_mode = PageLayoutMode::TwoPageSpread;
+        tab.two_page_cover = true;
+
+        // Page 0 (Cover alone)
+        tab.current_page = 0;
+        tab.update_visible_range();
+        assert_eq!(tab.view_state.visible_range, (0, 1));
+
+        // Page 1 or 2 (Pair 1..3)
+        tab.current_page = 1;
+        tab.update_visible_range();
+        assert_eq!(tab.view_state.visible_range, (1, 3));
+
+        tab.current_page = 2;
+        tab.update_visible_range();
+        assert_eq!(tab.view_state.visible_range, (1, 3));
+
+        // Page 3 or 4 (Pair 3..5)
+        tab.current_page = 3;
+        tab.update_visible_range();
+        assert_eq!(tab.view_state.visible_range, (3, 5));
+    }
+
+    #[test]
+    fn test_update_visible_range_two_page_spread_without_cover() {
+        let mut tab = DocumentTab::new(PathBuf::from("/test/doc.pdf"));
+        tab.page_heights = vec![1000.0; 10];
+        tab.total_pages = 10;
+        tab.layout_mode = PageLayoutMode::TwoPageSpread;
+        tab.two_page_cover = false;
+
+        // Page 0 or 1 (Pair 0..2)
+        tab.current_page = 0;
+        tab.update_visible_range();
+        assert_eq!(tab.view_state.visible_range, (0, 2));
+
+        tab.current_page = 1;
+        tab.update_visible_range();
+        assert_eq!(tab.view_state.visible_range, (0, 2));
+
+        // Page 2 or 3 (Pair 2..4)
+        tab.current_page = 2;
+        tab.update_visible_range();
+        assert_eq!(tab.view_state.visible_range, (2, 4));
     }
 
     #[test]
@@ -1482,6 +1594,44 @@ mod tests {
 
         let res3 = filter_palette_items("nonexistentxyz", &items);
         assert!(res3.is_empty());
+    }
+
+    #[test]
+    fn test_filter_palette_items_fit_and_search() {
+        let items = vec![
+            PaletteItem {
+                title: "Fit to Width".into(),
+                subtitle: Some("Scale page to fit window width".into()),
+                category: "View".into(),
+                action: CommandAction::FitWidth,
+                shortcut: Some("Ctrl+1".into()),
+            },
+            PaletteItem {
+                title: "Fit to Entire Page".into(),
+                subtitle: Some("Scale page to fit full window".into()),
+                category: "View".into(),
+                action: CommandAction::FitPage,
+                shortcut: Some("Ctrl+2".into()),
+            },
+            PaletteItem {
+                title: "Find in Document".into(),
+                subtitle: Some("Open floating in-document search HUD".into()),
+                category: "View".into(),
+                action: CommandAction::ToggleSearchHud,
+                shortcut: Some("Ctrl+F".into()),
+            },
+        ];
+        let res_width = filter_palette_items("width", &items);
+        assert!(!res_width.is_empty());
+        assert_eq!(res_width[0].action, CommandAction::FitWidth);
+
+        let res_page = filter_palette_items("fit page", &items);
+        assert!(!res_page.is_empty());
+        assert_eq!(res_page[0].action, CommandAction::FitPage);
+
+        let res_find = filter_palette_items("find", &items);
+        assert!(!res_find.is_empty());
+        assert_eq!(res_find[0].action, CommandAction::ToggleSearchHud);
     }
 
     #[test]

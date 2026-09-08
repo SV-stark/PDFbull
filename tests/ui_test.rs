@@ -174,3 +174,119 @@ async fn test_open_document_flow() {
     assert_eq!(app.tabs[0].id, doc_id);
     assert_eq!(app.active_tab, 0);
 }
+
+#[tokio::test(flavor = "current_thread")]
+async fn test_tab_context_menu_and_closing_actions() {
+    let mut app = PdfBullApp::default();
+    app.loaded = true;
+
+    let test_path = std::path::PathBuf::from("tests/test_document.pdf");
+
+    // Create 3 tabs
+    for i in 0..3 {
+        let open_res = pdfbull::models::OpenResult {
+            id: pdfbull::models::DocumentId(i as u64),
+            page_count: 5,
+            page_heights: vec![800.0; 5],
+            max_width: 600.0,
+            outline: Vec::new(),
+            links: Vec::new(),
+            metadata: pdfbull::models::DocumentMetadata::default(),
+            page_labels: Vec::new(),
+            is_encrypted: false,
+            signatures: Vec::new(),
+            attachments: Vec::new(),
+            layers: Vec::new(),
+            oc_config: None,
+            geo_annotations: Vec::new(),
+            color_profile: None,
+        };
+        let _ = app.update(Message::DocumentOpenedWithPath((
+            test_path.clone(),
+            open_res,
+        )));
+    }
+
+    assert_eq!(app.tabs.len(), 3);
+
+    // Context menu trigger and dismiss
+    let _ = app.update(Message::ShowTabContextMenu(1));
+    assert_eq!(app.tab_context_menu, Some(1));
+    let _ = app.update(Message::DismissTabContextMenu);
+    assert_eq!(app.tab_context_menu, None);
+
+    // Close Tabs to the Right of tab 0 (should close tab 1 and tab 2)
+    let _ = app.update(Message::CloseTabsToRight(0));
+    assert_eq!(app.tabs.len(), 1);
+    assert_eq!(app.tabs[0].id, pdfbull::models::DocumentId(0));
+
+    // Middle-click / close tab
+    let _ = app.update(Message::CloseTab(0));
+    assert_eq!(app.tabs.len(), 0);
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn test_layout_mode_and_cover_toggles() {
+    let mut app = PdfBullApp::default();
+    app.loaded = true;
+
+    let test_path = std::path::PathBuf::from("tests/test_document.pdf");
+    let open_res = pdfbull::models::OpenResult {
+        id: pdfbull::models::DocumentId(1),
+        page_count: 10,
+        page_heights: vec![800.0; 10],
+        max_width: 600.0,
+        outline: Vec::new(),
+        links: Vec::new(),
+        metadata: pdfbull::models::DocumentMetadata::default(),
+        page_labels: Vec::new(),
+        is_encrypted: false,
+        signatures: Vec::new(),
+        attachments: Vec::new(),
+        layers: Vec::new(),
+        oc_config: None,
+        geo_annotations: Vec::new(),
+        color_profile: None,
+    };
+    let _ = app.update(Message::DocumentOpenedWithPath((test_path, open_res)));
+
+    assert_eq!(
+        app.current_tab().unwrap().layout_mode,
+        pdfbull::models::PageLayoutMode::SingleContinuous
+    );
+
+    // Switch to SinglePage
+    let _ = app.update(Message::SetPageLayoutMode(
+        pdfbull::models::PageLayoutMode::SinglePage,
+    ));
+    assert_eq!(
+        app.current_tab().unwrap().layout_mode,
+        pdfbull::models::PageLayoutMode::SinglePage
+    );
+
+    // Switch to TwoPageSpread
+    let _ = app.update(Message::SetPageLayoutMode(
+        pdfbull::models::PageLayoutMode::TwoPageSpread,
+    ));
+    assert_eq!(
+        app.current_tab().unwrap().layout_mode,
+        pdfbull::models::PageLayoutMode::TwoPageSpread
+    );
+    assert!(app.current_tab().unwrap().two_page_cover);
+
+    // Toggle cover
+    let _ = app.update(Message::ToggleTwoPageCover);
+    assert!(!app.current_tab().unwrap().two_page_cover);
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn test_file_drag_hover_state() {
+    let mut app = PdfBullApp::default();
+    assert!(!app.is_file_hovered);
+
+    let _ = app.update(Message::FileHovered(true));
+    assert!(app.is_file_hovered);
+
+    let _ = app.update(Message::FileHovered(false));
+    assert!(!app.is_file_hovered);
+}

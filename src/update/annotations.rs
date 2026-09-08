@@ -31,11 +31,16 @@ pub fn handle_annotation_message(app: &mut PdfBullApp, message: Message) -> Task
         Message::AnnotationDragUpdate { x, y } => {
             if let Some(drag) = &mut app.annotation_drag {
                 drag.current = (x, y);
-            } else if let Some(tab) = app.current_tab_mut()
-                && let Some((_, _, current)) = &mut tab.selection_drag
-            {
-                let zoom = tab.zoom;
-                *current = (x / zoom, y / zoom);
+            } else if let Some(tab) = app.current_tab_mut() {
+                if let Some((_, _, current)) = &mut tab.selection_drag {
+                    let zoom = tab.zoom;
+                    *current = (x / zoom, y / zoom);
+                }
+                if let Some((page_idx, start, current)) = tab.selection_drag {
+                    let (boxes, text) = extract_selection_for_drag(tab, page_idx, start, current);
+                    tab.selected_boxes = boxes;
+                    tab.selected_text = text;
+                }
             }
             Task::none()
         }
@@ -267,98 +272,17 @@ pub fn handle_annotation_message(app: &mut PdfBullApp, message: Message) -> Task
             } else if let Some(tab) = app.current_tab_mut()
                 && let Some((page_idx, start, current)) = tab.selection_drag.take()
             {
-                let actual_page = tab.page_mapping.get(page_idx).copied().unwrap_or(page_idx);
-                let page_rotation = tab
-                    .page_rotations
-                    .get(&actual_page)
-                    .copied()
-                    .unwrap_or(tab.rotation);
-                let original_height = tab.page_heights.get(page_idx).copied().unwrap_or(800.0);
-
-                let (sx, sy, _, _) = crate::models::unrotate_coords(
-                    start.0,
-                    start.1,
-                    0.0,
-                    0.0,
-                    tab.page_width,
-                    original_height,
-                    page_rotation,
-                );
-                let (cx, cy, _, _) = crate::models::unrotate_coords(
-                    current.0,
-                    current.1,
-                    0.0,
-                    0.0,
-                    tab.page_width,
-                    original_height,
-                    page_rotation,
-                );
-
-                let mut selected_words = Vec::new();
-                if let Some(words) = tab.view_state.text_layers.get(&page_idx) {
-                    let x1 = sx.min(cx);
-                    let x2 = sx.max(cx);
-                    let y1 = sy.min(cy);
-                    let y2 = sy.max(cy);
-
-                    for word in words {
-                        let wx1 = word.x;
-                        let wx2 = word.x + word.width;
-                        let wy1 = word.y;
-                        let wy2 = word.y + word.height;
-
-                        let overlap_x = x1 < wx2 && x2 > wx1;
-                        let overlap_y = y1 < wy2 && y2 > wy1;
-
-                        if overlap_x && overlap_y {
-                            selected_words.push(word.clone());
-                        }
-                    }
-                }
-                if !selected_words.is_empty() {
-                    selected_words.sort_by(|a, b| {
-                        let y_diff = (a.y - b.y).abs();
-                        if y_diff < 5.0 {
-                            a.x.partial_cmp(&b.x).unwrap_or(std::cmp::Ordering::Equal)
-                        } else {
-                            a.y.partial_cmp(&b.y).unwrap_or(std::cmp::Ordering::Equal)
-                        }
-                    });
-
-                    // Line-aware formatted joining with newlines
-                    let mut line_groups: Vec<Vec<&crate::models::TextItem>> = Vec::new();
-                    for word in &selected_words {
-                        if let Some(cur_line) = line_groups.last_mut() {
-                            let first_y = cur_line[0].y;
-                            if (word.y - first_y).abs() < 5.0 {
-                                cur_line.push(word);
-                                continue;
-                            }
-                        }
-                        line_groups.push(vec![word]);
-                    }
-                    let text: String = line_groups
-                        .into_iter()
-                        .map(|line| {
-                            line.into_iter()
-                                .map(|w| w.text.as_str())
-                                .collect::<Vec<_>>()
-                                .join(" ")
-                        })
-                        .collect::<Vec<_>>()
-                        .join("\n");
-
-                    tab.selected_boxes = selected_words
-                        .iter()
-                        .map(|w| (w.x, w.y, w.width, w.height))
-                        .collect();
-                    tab.selected_text = Some(text.clone());
-
+                let (boxes, text) = extract_selection_for_drag(tab, page_idx, start, current);
+                tab.selected_boxes = boxes;
+                tab.selected_text = text.clone();
+                if let Some(text) = text {
                     let mut clipboard = arboard::Clipboard::new().ok();
                     if let Some(cb) = &mut clipboard {
                         let _ = cb.set_text(text);
                     }
-                    app.status_message = Some("Text copied to clipboard!".to_string());
+                    app.status_message = Some(
+                        "Text copied to clipboard! (Ctrl+C to copy, H to highlight)".to_string(),
+                    );
                 }
             }
             Task::none()
@@ -368,8 +292,7 @@ pub fn handle_annotation_message(app: &mut PdfBullApp, message: Message) -> Task
             if let Some(tab) = app.current_tab_mut()
                 && !tab.selected_boxes.is_empty()
             {
-                let page = tab.current_page;
-                for (x, y, w, h) in &tab.selected_boxes {
+                for (page, x, y, w, h) in tab.selected_boxes.clone() {
                     let id = crate::models::next_annotation_id();
                     let ann = crate::models::Annotation {
                         id,
@@ -377,10 +300,10 @@ pub fn handle_annotation_message(app: &mut PdfBullApp, message: Message) -> Task
                         style: crate::models::AnnotationStyle::Highlight {
                             color: color.clone(),
                         },
-                        x: *x,
-                        y: *y,
-                        width: *w,
-                        height: *h,
+                        x,
+                        y,
+                        width: w,
+                        height: h,
                     };
                     tab.undo_stack
                         .push(crate::models::UndoableAction::AddAnnotation(ann.clone()));
@@ -527,5 +450,248 @@ pub fn handle_annotation_message(app: &mut PdfBullApp, message: Message) -> Task
             Task::none()
         }
         _ => Task::none(),
+    }
+}
+
+pub type SelectionBox = (usize, f32, f32, f32, f32);
+
+pub fn extract_selection_for_drag(
+    tab: &crate::models::DocumentTab,
+    page_idx: usize,
+    start: (f32, f32),
+    current: (f32, f32),
+) -> (Vec<SelectionBox>, Option<String>) {
+    let actual_page = tab.page_mapping.get(page_idx).copied().unwrap_or(page_idx);
+    let page_rotation = tab
+        .page_rotations
+        .get(&actual_page)
+        .copied()
+        .unwrap_or(tab.rotation);
+    let original_height = tab.page_heights.get(page_idx).copied().unwrap_or(800.0);
+
+    let vx = start.0.min(current.0);
+    let vy = start.1.min(current.1);
+    let vw = (current.0 - start.0).abs();
+    let vh = (current.1 - start.1).abs();
+
+    if vw < 3.0 && vh < 3.0 {
+        return (Vec::new(), None);
+    }
+
+    let (ux, uy, uw, uh) = crate::models::unrotate_coords(
+        vx,
+        vy,
+        vw,
+        vh,
+        tab.page_width,
+        original_height,
+        page_rotation,
+    );
+
+    let x1 = ux;
+    let x2 = ux + uw;
+    let y1 = uy;
+    let y2 = uy + uh;
+
+    let mut selected_words = Vec::new();
+    if let Some(words) = tab.view_state.text_layers.get(&page_idx) {
+        for word in words {
+            let wx1 = word.x;
+            let wx2 = word.x + word.width;
+            let wy1 = word.y;
+            let wy2 = word.y + word.height;
+
+            let overlap_x = x1 < wx2 && x2 > wx1;
+            let overlap_y = y1 < wy2 && y2 > wy1;
+
+            if overlap_x && overlap_y {
+                selected_words.push(word.clone());
+            }
+        }
+    }
+
+    if selected_words.is_empty() {
+        return (Vec::new(), None);
+    }
+
+    selected_words.sort_by(|a, b| {
+        let threshold = (a.height.min(b.height) * 0.6).max(4.0);
+        let y_diff = (a.y - b.y).abs();
+        if y_diff < threshold {
+            a.x.partial_cmp(&b.x).unwrap_or(std::cmp::Ordering::Equal)
+        } else {
+            a.y.partial_cmp(&b.y).unwrap_or(std::cmp::Ordering::Equal)
+        }
+    });
+
+    // Group words into lines
+    let mut line_groups: Vec<Vec<&crate::models::TextItem>> = Vec::new();
+    for word in &selected_words {
+        if let Some(cur_line) = line_groups.last_mut() {
+            let first_y = cur_line[0].y;
+            let threshold = (cur_line[0].height.max(word.height) * 0.6).max(4.0);
+            if (word.y - first_y).abs() < threshold {
+                cur_line.push(word);
+                continue;
+            }
+        }
+        line_groups.push(vec![word]);
+    }
+
+    // Sort horizontally within each line
+    for line in &mut line_groups {
+        line.sort_by(|a, b| a.x.partial_cmp(&b.x).unwrap_or(std::cmp::Ordering::Equal));
+    }
+
+    let text: String = line_groups
+        .iter()
+        .map(|line| {
+            line.iter()
+                .map(|w| w.text.as_str())
+                .collect::<Vec<_>>()
+                .join(" ")
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+
+    // Produce merged bounding box per line segment for clean highlight rendering
+    let mut boxes = Vec::new();
+    for line in line_groups {
+        if line.is_empty() {
+            continue;
+        }
+        let mut min_x = line[0].x;
+        let mut min_y = line[0].y;
+        let mut max_x = line[0].x + line[0].width;
+        let mut max_y = line[0].y + line[0].height;
+
+        for w in &line[1..] {
+            min_x = min_x.min(w.x);
+            min_y = min_y.min(w.y);
+            max_x = max_x.max(w.x + w.width);
+            max_y = max_y.max(w.y + w.height);
+        }
+
+        boxes.push((page_idx, min_x, min_y, max_x - min_x, max_y - min_y));
+    }
+
+    (boxes, Some(text))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::models::{DocumentTab, TextItem};
+
+    fn make_test_tab() -> DocumentTab {
+        let mut tab = DocumentTab::new(std::path::PathBuf::from("test.pdf"));
+        tab.total_pages = 2;
+        tab.page_width = 600.0;
+        tab.page_heights = vec![800.0, 800.0];
+
+        // Add mock text items to page 0:
+        // Line 1 (y = 100): "Hello" (x=50..100), "World" (x=110..170)
+        // Line 2 (y = 130): "PDFbull" (x=50..120), "Reader" (x=130..190)
+        let page_0_words = vec![
+            TextItem {
+                text: "Hello".to_string(),
+                x: 50.0,
+                y: 100.0,
+                width: 50.0,
+                height: 16.0,
+            },
+            TextItem {
+                text: "World".to_string(),
+                x: 110.0,
+                y: 100.0,
+                width: 60.0,
+                height: 16.0,
+            },
+            TextItem {
+                text: "PDFbull".to_string(),
+                x: 50.0,
+                y: 130.0,
+                width: 70.0,
+                height: 16.0,
+            },
+            TextItem {
+                text: "Reader".to_string(),
+                x: 130.0,
+                y: 130.0,
+                width: 60.0,
+                height: 16.0,
+            },
+        ];
+
+        tab.view_state.text_layers.insert(0, page_0_words);
+        tab
+    }
+
+    #[test]
+    fn test_drag_selection_single_word() {
+        let tab = make_test_tab();
+        // Drag over "Hello" (x: 40..105, y: 95..120)
+        let (boxes, text) = extract_selection_for_drag(&tab, 0, (40.0, 95.0), (105.0, 120.0));
+        assert_eq!(text, Some("Hello".to_string()));
+        assert_eq!(boxes.len(), 1);
+        assert_eq!(boxes[0], (0, 50.0, 100.0, 50.0, 16.0));
+    }
+
+    #[test]
+    fn test_drag_selection_full_line() {
+        let tab = make_test_tab();
+        // Drag over both "Hello" and "World" on line 1
+        let (boxes, text) = extract_selection_for_drag(&tab, 0, (40.0, 95.0), (180.0, 120.0));
+        assert_eq!(text, Some("Hello World".to_string()));
+        assert_eq!(boxes.len(), 1);
+        // Box should merge horizontally: min_x=50.0, max_x=170.0 -> width=120.0
+        assert_eq!(boxes[0], (0, 50.0, 100.0, 120.0, 16.0));
+    }
+
+    #[test]
+    fn test_drag_selection_multiline() {
+        let tab = make_test_tab();
+        // Drag across both Line 1 and Line 2
+        let (boxes, text) = extract_selection_for_drag(&tab, 0, (40.0, 90.0), (200.0, 150.0));
+        assert_eq!(text, Some("Hello World\nPDFbull Reader".to_string()));
+        assert_eq!(boxes.len(), 2);
+        // Line 1 box
+        assert_eq!(boxes[0], (0, 50.0, 100.0, 120.0, 16.0));
+        // Line 2 box: min_x=50.0, max_x=190.0 -> width=140.0
+        assert_eq!(boxes[1], (0, 50.0, 130.0, 140.0, 16.0));
+    }
+
+    #[test]
+    fn test_click_to_clear_subthreshold() {
+        let tab = make_test_tab();
+        // Micro-movement / single click (< 3px)
+        let (boxes, text) = extract_selection_for_drag(&tab, 0, (60.0, 105.0), (61.0, 106.0));
+        assert!(boxes.is_empty());
+        assert_eq!(text, None);
+    }
+
+    #[test]
+    fn test_drag_empty_area() {
+        let tab = make_test_tab();
+        // Drag over empty space (x: 400..500, y: 400..500)
+        let (boxes, text) = extract_selection_for_drag(&tab, 0, (400.0, 400.0), (500.0, 500.0));
+        assert!(boxes.is_empty());
+        assert_eq!(text, None);
+    }
+
+    #[test]
+    fn test_drag_selection_with_page_rotation() {
+        let mut tab = make_test_tab();
+        // Set rotation to 180 degrees
+        tab.rotation = 180;
+        // Unrotated coords for "Hello" are x: 50..100, y: 100..116.
+        // At 180 deg (pw=600, ph=800):
+        // rx = 600 - (100) = 500
+        // ry = 800 - (116) = 684
+        // Drag over this rotated area in visual space:
+        let (boxes, text) = extract_selection_for_drag(&tab, 0, (490.0, 680.0), (560.0, 710.0));
+        assert_eq!(text, Some("Hello".to_string()));
+        assert_eq!(boxes.len(), 1);
+        assert_eq!(boxes[0], (0, 50.0, 100.0, 50.0, 16.0));
     }
 }

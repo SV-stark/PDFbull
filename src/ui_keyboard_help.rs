@@ -23,20 +23,23 @@ pub fn keyboard_help_view(_app: &crate::app::PdfBullApp) -> Element<'_, crate::m
         shortcut_section(
             "View",
             vec![
-                ("Ctrl + 0", "Reset Zoom"),
+                ("Ctrl + 0", "Reset Zoom (100%)"),
+                ("Ctrl + 1", "Fit to Width"),
+                ("Ctrl + 2", "Fit to Page"),
                 ("Ctrl + +", "Zoom In"),
                 ("Ctrl + -", "Zoom Out"),
                 ("F11", "Toggle Fullscreen"),
             ]
         ),
         shortcut_section(
-            "Document",
+            "Document & Tools",
             vec![
+                ("Ctrl + K", "Command Palette"),
+                ("Ctrl + F", "Find in Document (Search HUD)"),
                 ("Ctrl + O", "Open File"),
                 ("Ctrl + P", "Print"),
                 ("Ctrl + S", "Save/Export"),
                 ("Ctrl + D", "Add Bookmark"),
-                ("Ctrl + F", "Search"),
                 ("Ctrl + B", "Toggle Sidebar"),
                 ("Ctrl + W", "Close Tab"),
             ]

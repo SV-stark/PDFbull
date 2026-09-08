@@ -1,9 +1,9 @@
 use crate::app::PdfBullApp;
 use crate::app::{INTER_BOLD, INTER_REGULAR, LUCIDE, icons};
-use crate::models::{AnnotationStyle, DocumentTab, PendingAnnotationKind};
+use crate::models::{AnnotationStyle, DocumentTab, PageLayoutMode, PendingAnnotationKind};
 use crate::ui::theme::{self, hex_to_rgb};
 use iced::widget::{
-    Space, Stack, button, canvas, column, container, mouse_area, row, scrollable, text,
+    Space, Stack, button, canvas, column, container, mouse_area, row, scrollable, text, text_input,
 };
 use iced::{Alignment, Border, Color, Element, Length, Padding, Rectangle, Shadow, Vector};
 
@@ -15,6 +15,7 @@ struct AnnotationCanvas<'a> {
     annotations: &'a [crate::models::Annotation],
     zoom: f32,
     drag: Option<crate::models::AnnotationDrag>,
+    is_annotation_mode: bool,
     rotation: i32,
     page_width: f32,
     page_height: f32,
@@ -58,6 +59,23 @@ impl<'a> canvas::Program<crate::message::Message> for AnnotationCanvas<'a> {
                 ))
             }
             _ => None,
+        }
+    }
+
+    fn mouse_interaction(
+        &self,
+        _state: &Self::State,
+        bounds: Rectangle,
+        cursor: iced::mouse::Cursor,
+    ) -> iced::mouse::Interaction {
+        if cursor.is_over(bounds) {
+            if self.is_annotation_mode || self.drag.is_some() {
+                iced::mouse::Interaction::Crosshair
+            } else {
+                iced::mouse::Interaction::Text
+            }
+        } else {
+            iced::mouse::Interaction::default()
         }
     }
 
@@ -605,8 +623,11 @@ fn render_selection_overlay<'a>(
         );
     }
 
-    // 2. Draw permanent selection highlight boxes for selected words
-    for &(bx, by, bw, bh) in &tab.selected_boxes {
+    // 2. Draw permanent selection highlight boxes for selected words on this page
+    for &(p, bx, by, bw, bh) in &tab.selected_boxes {
+        if p != page_idx {
+            continue;
+        }
         let actual_page = tab.page_mapping.get(page_idx).copied().unwrap_or(page_idx);
         let page_rotation = tab
             .page_rotations
@@ -951,6 +972,7 @@ fn render_page_canvas<'a>(
                 annotations: &tab.annotations,
                 zoom,
                 drag: app.annotation_drag.clone(),
+                is_annotation_mode: app.annotation_mode.is_some(),
                 rotation: page_rotation,
                 page_width: tab.page_width,
                 page_height: original_height,
@@ -1014,62 +1036,120 @@ fn render_pdf_content(app: &PdfBullApp) -> Element<'_, crate::message::Message> 
     let zoom = tab.zoom;
     let scaled_spacing = theme::PAGE_SPACING * zoom;
 
-    let mut pdf_column = column![]
-        .spacing(scaled_spacing)
-        .padding(theme::PAGE_PADDING * zoom)
-        .align_x(Alignment::Center);
+    match tab.layout_mode {
+        PageLayoutMode::SingleContinuous => {
+            let mut pdf_column = column![]
+                .spacing(scaled_spacing)
+                .padding(theme::PAGE_PADDING * zoom)
+                .align_x(Alignment::Center);
 
-    let (start_idx, end_idx) = tab.view_state.visible_range;
+            let (start_idx, end_idx) = tab.view_state.visible_range;
 
-    if start_idx > 0 {
-        let y_above: f32 = tab
-            .page_heights
-            .iter()
-            .take(start_idx)
-            .map(|h| (h + theme::PAGE_SPACING) * zoom)
-            .sum();
-        let y_above = (y_above - scaled_spacing).max(0.0);
-        if y_above > 0.0 {
-            pdf_column = pdf_column.push(Space::new().height(y_above));
+            if start_idx > 0 {
+                let y_above: f32 = tab
+                    .page_heights
+                    .iter()
+                    .take(start_idx)
+                    .map(|h| (h + theme::PAGE_SPACING) * zoom)
+                    .sum();
+                let y_above = (y_above - scaled_spacing).max(0.0);
+                if y_above > 0.0 {
+                    pdf_column = pdf_column.push(Space::new().height(y_above));
+                }
+            }
+
+            for page_idx in start_idx..end_idx {
+                pdf_column = pdf_column.push(render_page_canvas(page_idx, tab, app));
+            }
+
+            if end_idx < tab.total_pages {
+                let y_below: f32 = tab
+                    .page_heights
+                    .iter()
+                    .skip(end_idx)
+                    .map(|h| (h + theme::PAGE_SPACING) * zoom)
+                    .sum();
+                let y_below = (y_below - scaled_spacing).max(0.0);
+                if y_below > 0.0 {
+                    pdf_column = pdf_column.push(Space::new().height(y_below));
+                }
+            }
+
+            scrollable(
+                container(pdf_column)
+                    .width(Length::Shrink)
+                    .center_x(Length::Fill),
+            )
+            .id("pdf_scroll")
+            .auto_scroll(true)
+            .direction(iced::widget::scrollable::Direction::Both {
+                vertical: iced::widget::scrollable::Scrollbar::new(),
+                horizontal: iced::widget::scrollable::Scrollbar::new(),
+            })
+            .on_scroll(|viewport| {
+                crate::message::Message::ViewportChanged(
+                    viewport.absolute_offset().y,
+                    viewport.bounds().width,
+                    viewport.bounds().height,
+                )
+            })
+            .height(Length::Fill)
+            .into()
+        }
+        PageLayoutMode::SinglePage => {
+            let cur_page = tab.current_page.min(tab.total_pages.saturating_sub(1));
+            let page_element = if tab.total_pages > 0 {
+                render_page_canvas(cur_page, tab, app)
+            } else {
+                container(column![]).into()
+            };
+
+            let single_page_container = container(page_element)
+                .padding(theme::PAGE_PADDING * zoom)
+                .center_x(Length::Fill)
+                .center_y(Length::Fill);
+
+            scrollable(single_page_container)
+                .direction(iced::widget::scrollable::Direction::Both {
+                    vertical: iced::widget::scrollable::Scrollbar::new(),
+                    horizontal: iced::widget::scrollable::Scrollbar::new(),
+                })
+                .height(Length::Fill)
+                .width(Length::Fill)
+                .into()
+        }
+        PageLayoutMode::TwoPageSpread => {
+            let (start_idx, end_idx) = tab.view_state.visible_range;
+
+            let spread_content: Element<'_, crate::message::Message> = if tab.total_pages == 0 {
+                container(column![]).into()
+            } else if tab.two_page_cover && start_idx == 0 {
+                // Cover page alone in center
+                render_page_canvas(0, tab, app)
+            } else {
+                // Dual page side-by-side spread
+                let mut spread_row = row![].spacing(scaled_spacing).align_y(Alignment::Center);
+                for page_idx in start_idx..end_idx {
+                    spread_row = spread_row.push(render_page_canvas(page_idx, tab, app));
+                }
+                spread_row.into()
+            };
+
+            let spread_container = container(spread_content)
+                .padding(theme::PAGE_PADDING * zoom)
+                .center_x(Length::Fill)
+                .center_y(Length::Fill);
+
+            scrollable(spread_container)
+                .direction(iced::widget::scrollable::Direction::Both {
+                    vertical: iced::widget::scrollable::Scrollbar::new(),
+                    horizontal: iced::widget::scrollable::Scrollbar::new(),
+                })
+                .height(Length::Fill)
+                .width(Length::Fill)
+                .into()
         }
     }
-
-    for page_idx in start_idx..end_idx {
-        pdf_column = pdf_column.push(render_page_canvas(page_idx, tab, app));
-    }
-
-    if end_idx < tab.total_pages {
-        let y_below: f32 = tab
-            .page_heights
-            .iter()
-            .skip(end_idx)
-            .map(|h| (h + theme::PAGE_SPACING) * zoom)
-            .sum();
-        let y_below = (y_below - scaled_spacing).max(0.0);
-        if y_below > 0.0 {
-            pdf_column = pdf_column.push(Space::new().height(y_below));
-        }
-    }
-
-    scrollable(
-        container(pdf_column)
-            .width(Length::Shrink)
-            .center_x(Length::Fill),
-    )
-    .id("pdf_scroll")
-    .auto_scroll(true)
-    .direction(iced::widget::scrollable::Direction::Both {
-        vertical: iced::widget::scrollable::Scrollbar::new(),
-        horizontal: iced::widget::scrollable::Scrollbar::new(),
-    })
-    .on_scroll(|viewport| {
-        crate::message::Message::ViewportChanged(
-            viewport.absolute_offset().y,
-            viewport.bounds().height,
-        )
-    })
-    .height(Length::Fill)
-    .into()
 }
 
 pub fn document_view<'a>(app: &'a PdfBullApp) -> Element<'a, crate::message::Message> {
@@ -1214,6 +1294,14 @@ pub fn document_view<'a>(app: &'a PdfBullApp) -> Element<'a, crate::message::Mes
                     .on_press(crate::message::Message::ResetZoom)
                     .style(theme::button_ghost)
                     .padding([2, 6]),
+                button(text("Fit W").size(10).font(INTER_BOLD))
+                    .on_press(crate::message::Message::FitWidth)
+                    .style(theme::button_ghost)
+                    .padding([2, 6]),
+                button(text("Fit P").size(10).font(INTER_BOLD))
+                    .on_press(crate::message::Message::FitPage)
+                    .style(theme::button_ghost)
+                    .padding([2, 6]),
             ]
             .spacing(8)
             .padding([6, 14])
@@ -1234,7 +1322,7 @@ pub fn document_view<'a>(app: &'a PdfBullApp) -> Element<'a, crate::message::Mes
             ..Default::default()
         });
 
-        let doc_with_floating_dock = Stack::new()
+        let mut doc_with_floating_dock = Stack::new()
             .push(
                 container(content)
                     .width(Length::Fill)
@@ -1253,6 +1341,17 @@ pub fn document_view<'a>(app: &'a PdfBullApp) -> Element<'a, crate::message::Mes
                     .align_y(iced::alignment::Vertical::Bottom),
             );
 
+        if app.show_search_hud {
+            doc_with_floating_dock = doc_with_floating_dock.push(
+                container(render_search_hud(app))
+                    .width(Length::Fill)
+                    .height(Length::Fill)
+                    .padding([16, 24])
+                    .align_x(iced::alignment::Horizontal::Right)
+                    .align_y(iced::alignment::Vertical::Top),
+            );
+        }
+
         column![
             tabs::render(app),
             toolbar::render(app),
@@ -1260,4 +1359,130 @@ pub fn document_view<'a>(app: &'a PdfBullApp) -> Element<'a, crate::message::Mes
         ]
         .into()
     }
+}
+
+fn render_search_hud(app: &PdfBullApp) -> Element<'_, crate::message::Message> {
+    let (match_text, has_matches) = if let Some(tab) = app.current_tab() {
+        if app.search_query.is_empty() {
+            ("".to_string(), false)
+        } else if tab.search_results.is_empty() {
+            ("No matches".to_string(), false)
+        } else {
+            (
+                format!(
+                    "{}/{}",
+                    tab.current_search_index + 1,
+                    tab.search_results.len()
+                ),
+                true,
+            )
+        }
+    } else {
+        ("".to_string(), false)
+    };
+
+    let search_input = text_input("Find in page...", &app.search_query)
+        .id("search_hud_input")
+        .on_input(crate::message::Message::Search)
+        .on_submit(crate::message::Message::NextSearchResult)
+        .font(INTER_REGULAR)
+        .size(13)
+        .width(180)
+        .padding([6, 8])
+        .style(|_theme, _status| text_input::Style {
+            background: Color::TRANSPARENT.into(),
+            border: Border::default(),
+            icon: Color::from_rgb8(150, 155, 165),
+            placeholder: Color::from_rgb8(110, 115, 125),
+            value: Color::WHITE,
+            selection: theme::COLOR_ACCENT,
+        });
+
+    let mut hud_row = row![
+        text(icons::SEARCH)
+            .font(LUCIDE)
+            .size(14)
+            .style(|_| text::Style {
+                color: Some(theme::COLOR_TEXT_SECONDARY),
+            }),
+        search_input,
+    ]
+    .spacing(6)
+    .align_y(Alignment::Center);
+
+    if !match_text.is_empty() {
+        hud_row = hud_row.push(
+            container(
+                text(match_text)
+                    .size(11)
+                    .font(INTER_BOLD)
+                    .style(move |_| text::Style {
+                        color: Some(if has_matches {
+                            theme::COLOR_ACCENT
+                        } else {
+                            Color::from_rgb8(230, 100, 100)
+                        }),
+                    }),
+            )
+            .padding([2, 6])
+            .style(|_| container::Style {
+                background: Some(Color::from_rgba(0.0, 0.0, 0.0, 0.3).into()),
+                border: Border {
+                    radius: 4.0.into(),
+                    ..Default::default()
+                },
+                ..Default::default()
+            }),
+        );
+    }
+
+    let prev_btn = button(text("▲").size(10).style(|_| text::Style {
+        color: Some(Color::from_rgb8(200, 205, 215)),
+    }))
+    .on_press(crate::message::Message::PrevSearchResult)
+    .style(theme::button_ghost)
+    .padding([4, 6]);
+
+    let next_btn = button(text("▼").size(10).style(|_| text::Style {
+        color: Some(Color::from_rgb8(200, 205, 215)),
+    }))
+    .on_press(crate::message::Message::NextSearchResult)
+    .style(theme::button_ghost)
+    .padding([4, 6]);
+
+    let close_btn = button(text("✕").size(11).style(|_| text::Style {
+        color: Some(Color::from_rgb8(170, 175, 185)),
+    }))
+    .on_press(crate::message::Message::ToggleSearchHud(Some(false)))
+    .style(theme::button_ghost)
+    .padding([4, 6]);
+
+    hud_row = hud_row
+        .push(prev_btn)
+        .push(next_btn)
+        .push(
+            container(Space::new().width(1.0).height(14.0)).style(|_| container::Style {
+                background: Some(Color::from_rgba(1.0, 1.0, 1.0, 0.15).into()),
+                ..Default::default()
+            }),
+        )
+        .push(close_btn);
+
+    container(hud_row)
+        .padding([4, 10])
+        .style(|_| container::Style {
+            background: Some(Color::from_rgba(0.10, 0.12, 0.16, 0.95).into()),
+            border: Border {
+                radius: theme::BORDER_RADIUS_MD.into(),
+                width: 1.0,
+                color: Color::from_rgb(0.24, 0.28, 0.36),
+            },
+            shadow: Shadow {
+                color: Color::from_rgba(0.0, 0.0, 0.0, 0.5),
+                offset: Vector::new(0.0, 4.0),
+                blur_radius: 12.0,
+            },
+            ..Default::default()
+        })
+        .into()
 }

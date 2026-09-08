@@ -5,6 +5,30 @@ All notable changes to the PDFbull project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.15.0] - 2026-09-08
+
+### Added
+- **Two-Page Spread / Book View & Standalone Cover Toggle**:
+  - Dual-page side-by-side reading layout (`PageLayoutMode::TwoPageSpread`) designed for eBooks, magazines, and double-column papers.
+  - Standalone cover toggle (`two_page_cover`) to present Page 1 centered as a standalone cover with subsequent pages displayed in two-page pairs.
+  - View ribbon controls: `📖 Spread` mode toggle and `📕 Cover: On/Off` button.
+  - Page navigation stepping by 2 pages in spread mode with proper cover alignment.
+- **Continuous Scroll vs. Single-Page Presentation Mode**:
+  - `PageLayoutMode::SinglePage` presentation mode focusing on a single active page centered in viewport without vertical overflow.
+  - Ribbon selector buttons: `📜 Continuous` and `📄 Single` for instant switching.
+  - Arrow keys (`Left`/`Right`) and `PgUp`/`PgDn` page snapping for distraction-free reading.
+- **Tab Ergonomics**:
+  - **Middle-Click to Close Tab**: Middle-clicking any tab directly closes it.
+  - **Right-Click Tab Context Menu**: Context menu offering `Close Tab`, `Close Others`, `Close Tabs to the Right`, `Copy File Path`, and `Open Containing Folder`.
+  - **Drag-and-Drop PDF File Opening**: Drag any PDF file directly into the PDFbull window canvas to open it in a new tab, with visual drop overlay indicator.
+- **Interactive Drag to Select Text**:
+  - Native `Text` (I-beam) cursor hovering over pages in pointer mode.
+  - Dynamic click-and-drag marquee bounding box with live word highlighting during dragging.
+  - Rotation-independent (0°, 90°, 180°, 270°) and zoom-independent coordinate space mapping.
+  - Multi-line smart formatting: lines grouped by baseline, ordered horizontally, separated by newlines, with merged highlight bounding boxes per line segment.
+  - Automatic clipboard copy on mouse release, `Ctrl+C` manual copy, and `H` / `Ctrl+H` one-key permanent PDF highlight annotation creation.
+  - Click outside (< 3px) to dismiss selection.
+
 ## [0.14.0] - 2026-08-25
 
 ### Added
