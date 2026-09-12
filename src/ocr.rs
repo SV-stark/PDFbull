@@ -100,11 +100,15 @@ impl OcrPageResult {
 
     /// Reconstruct full plain text from extracted OCR lines.
     pub fn full_text(&self) -> String {
-        self.lines
-            .iter()
-            .map(|l| l.text.as_str())
-            .collect::<Vec<_>>()
-            .join("\n")
+        let est_cap = self.lines.iter().map(|l| l.text.len() + 1).sum();
+        let mut res = String::with_capacity(est_cap);
+        for (i, line) in self.lines.iter().enumerate() {
+            if i > 0 {
+                res.push('\n');
+            }
+            res.push_str(&line.text);
+        }
+        res
     }
 
     pub fn is_empty(&self) -> bool {

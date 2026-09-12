@@ -114,9 +114,16 @@ pub fn handle_message(app: &mut PdfBullApp, message: Message) -> Task<Message> {
         {
             let target_tab = session_data.active_tab;
             for entry in session_data.open_tabs.drain(..) {
-                let path: std::path::PathBuf = entry.clone().into();
+                let (path, detailed) = match entry {
+                    crate::models::SessionTabEntry::Simple(p) => {
+                        (std::path::PathBuf::from(p), None)
+                    }
+                    crate::models::SessionTabEntry::Detailed(d) => {
+                        (std::path::PathBuf::from(&d.path), Some(d))
+                    }
+                };
                 tasks.push(app.update(Message::OpenFile(path)));
-                if let crate::models::SessionTabEntry::Detailed(detailed) = entry
+                if let Some(detailed) = detailed
                     && let Some(tab) = app.tabs.last_mut()
                 {
                     tab.pending_session = Some(detailed);
@@ -346,7 +353,7 @@ pub fn handle_message(app: &mut PdfBullApp, message: Message) -> Task<Message> {
                             let (tx, rx) = tokio::sync::oneshot::channel();
                             let _ = cmd_tx
                                 .send(crate::commands::PdfCommand::AddHeaderFooter(
-                                    path, header, footer, out.clone(), tx,
+                                    path, header, footer, out, tx,
                                 ))
                                 .await;
                             match rx.await {

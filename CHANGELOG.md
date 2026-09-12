@@ -5,6 +5,22 @@ All notable changes to the PDFbull project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.15.1] - 2026-09-12
+
+### Fixed & Optimized
+- **Rust 2024 Concurrency & Win32 FFI Safety**:
+  - Replaced deprecated `static mut` mutex handle with thread-safe `OnceLock<MutexHolder>` implementing RAII `Drop` cleanup.
+  - Eliminated runtime heap allocation of UTF-16 strings in Win32 single-instance mutex and window detection using zero-cost `windows::core::w!` literals.
+  - Added comprehensive `// SAFETY:` rationale comments across all Windows FFI call sites.
+- **Robust Error Handling**:
+  - Eliminated production `.unwrap()` call in document merge routing by adopting `Option::get_or_insert_with`.
+- **Memory & Allocation Optimizations**:
+  - Reused internal matching buffers in Command Palette fuzzy search (`filter_palette_items`), eliminating repetitive `format!` allocations.
+  - Pre-allocated text assembly buffer in `OcrPageResult::full_text`, removing intermediate vector allocations.
+  - Removed redundant string and path clones across tab session restoration and background command channels.
+- **Idiomatic API Design**:
+  - Implemented `From<SearchResultItem> for SearchResult` for standard trait conversions.
+
 ## [0.15.0] - 2026-09-08
 
 ### Added

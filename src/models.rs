@@ -262,8 +262,8 @@ pub struct SearchResult {
     pub height: f32,
 }
 
-impl SearchResult {
-    pub fn from_search_result_item(item: SearchResultItem) -> Self {
+impl From<SearchResultItem> for SearchResult {
+    fn from(item: SearchResultItem) -> Self {
         Self {
             page: item.page_index,
             text: item.text,
@@ -272,6 +272,12 @@ impl SearchResult {
             width: item.width,
             height: item.height,
         }
+    }
+}
+
+impl SearchResult {
+    pub fn from_search_result_item(item: SearchResultItem) -> Self {
+        item.into()
     }
 }
 
@@ -911,12 +917,20 @@ pub fn filter_palette_items(query: &str, items: &[PaletteItem]) -> Vec<PaletteIt
     let mut pattern_buf = Vec::new();
     let pattern = nucleo_matcher::Utf32Str::new(query.trim(), &mut pattern_buf);
 
+    let mut target_buf = Vec::new();
+    let mut full_text = String::new();
+
     let mut scored: Vec<(u16, &PaletteItem)> = items
         .iter()
         .filter_map(|item| {
-            let mut target_buf = Vec::new();
-            let sub = item.subtitle.as_deref().unwrap_or("");
-            let full_text = format!("{} {} {}", item.title, item.category, sub);
+            full_text.clear();
+            full_text.push_str(&item.title);
+            full_text.push(' ');
+            full_text.push_str(&item.category);
+            if let Some(sub) = &item.subtitle {
+                full_text.push(' ');
+                full_text.push_str(sub);
+            }
             let target = nucleo_matcher::Utf32Str::new(&full_text, &mut target_buf);
             matcher
                 .fuzzy_match(target, pattern)

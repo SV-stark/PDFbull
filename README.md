@@ -214,7 +214,7 @@ Timings measured across diverse document scales on Windows 11:
 ## 📦 Installation & Development
 
 ### Release Builds
-Download the latest binaries from the [Releases Page](https://github.com/SV-stark/PDFbull/releases). The current release tag is **`v0.14.0`**.
+Download the latest binaries from the [Releases Page](https://github.com/SV-stark/PDFbull/releases). The current release tag is **`v0.15.1`**.
 
 ### Building from Source
 

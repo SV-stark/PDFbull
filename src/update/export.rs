@@ -309,14 +309,11 @@ pub fn handle_export_message(app: &mut PdfBullApp, message: Message) -> Task<Mes
             )
         }
         Message::MergeDocuments(paths) => {
-            let engine = if let Some(e) = &app.engine {
-                e
-            } else {
-                let cache_size = app.settings.cache_size as u64;
-                let max_mem = app.settings.max_cache_memory as u64;
-                app.engine = Some(crate::engine::spawn_engine_thread(cache_size, max_mem));
-                app.engine.as_ref().unwrap()
-            };
+            let cache_size = app.settings.cache_size as u64;
+            let max_mem = app.settings.max_cache_memory as u64;
+            let engine = app
+                .engine
+                .get_or_insert_with(|| crate::engine::spawn_engine_thread(cache_size, max_mem));
             let cmd_tx = engine.cmd_tx.clone();
             Task::perform(
                 async move {
