@@ -25,6 +25,12 @@ pub struct TabsState {
     pub active_tab_index: usize,
 }
 
+impl Default for TabsState {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl TabsState {
     pub fn new() -> Self {
         Self {

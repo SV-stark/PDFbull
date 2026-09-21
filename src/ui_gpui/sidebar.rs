@@ -26,6 +26,12 @@ pub struct SidebarState {
     pub width: f32,
 }
 
+impl Default for SidebarState {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl SidebarState {
     pub fn new() -> Self {
         Self {

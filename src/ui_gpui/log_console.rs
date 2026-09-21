@@ -16,6 +16,12 @@ pub struct LogConsoleState {
     pub filter_level: Option<&'static str>,
 }
 
+impl Default for LogConsoleState {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl LogConsoleState {
     pub fn new() -> Self {
         Self {

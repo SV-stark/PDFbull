@@ -16,6 +16,12 @@ pub struct WelcomeState {
     pub recent_files: Vec<PathBuf>,
 }
 
+impl Default for WelcomeState {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl WelcomeState {
     pub fn new() -> Self {
         Self {

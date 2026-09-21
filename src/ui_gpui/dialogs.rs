@@ -17,6 +17,12 @@ pub struct DialogsState {
     pub active: Option<ActiveDialog>,
 }
 
+impl Default for DialogsState {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl DialogsState {
     pub fn new() -> Self {
         Self { active: None }

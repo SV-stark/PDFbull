@@ -81,6 +81,12 @@ pub struct RibbonState {
     pub midnight_mode: bool,
 }
 
+impl Default for RibbonState {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl RibbonState {
     pub fn new() -> Self {
         Self {

@@ -15,6 +15,12 @@ pub struct DocumentViewport {
     pub selection_end: Option<Point<Pixels>>,
 }
 
+impl Default for DocumentViewport {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl DocumentViewport {
     pub fn new() -> Self {
         Self {
