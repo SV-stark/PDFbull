@@ -1,5 +1,4 @@
 use pdfbull::commands::PdfCommand;
-use pdfbull::message::Message;
 use pdfbull::models::DocumentId;
 use pdfbull::ocr::{OcrLine, OcrPageResult, OcrScript, OcrWord};
 
@@ -166,13 +165,5 @@ fn test_ocr_command_message_payload() {
             assert_eq!(script, OcrScript::Devanagari);
         }
         _ => panic!("Expected PdfCommand::OcrPage variant"),
-    }
-
-    let msg = Message::SelectOcrScript(OcrScript::Devanagari);
-    match msg {
-        Message::SelectOcrScript(script) => {
-            assert_eq!(script, OcrScript::Devanagari);
-        }
-        _ => panic!("Expected Message::SelectOcrScript variant"),
     }
 }

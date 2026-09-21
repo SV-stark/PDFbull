@@ -5,6 +5,22 @@ All notable changes to the PDFbull project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.16.1] - 2026-09-21
+
+### Fixed & Improved (GPUI-Kit Integration)
+- **Native File Dialog Integration**:
+  - Wired native asynchronous file dialogs via `rfd::AsyncFileDialog` into GPUI's async task runner (`cx.spawn`).
+  - Connected file browsing to the Welcome screen "Browse Files..." button, Welcome dropzone click, Ribbon Home tab "Open" action, and Tab Bar `+` button.
+- **Full Drag-and-Drop Ingestion**:
+  - Implemented `ExternalPaths` drop handling across both the dedicated Welcome dropzone and the global window surface.
+  - Users can now drag and drop one or multiple PDF documents directly into PDFbull from Windows Explorer.
+- **Windows Stack & Layout Stability**:
+  - Expanded Windows linker stack reserve to 8 MB (`/STACK:8388608`) in `.cargo/config.toml` and `build.rs` to eliminate debug MSVC stack overflow.
+  - Modularized Ribbon action strip rendering into `#[inline(never)]` helpers with heap-allocated element vectors.
+  - Prevented circular layout negotiation loops by replacing `.size_full()` with `.flex_1().w_full()`.
+- **GPUI Kit Design Guides Alignment**:
+  - Audited against normative GPUI Kit Design Guides (`gpui-kit-design-guides`), ensuring semantic theme token usage (`cx.theme()`), desktop ergonomics, and clear visual state hierarchies.
+
 ## [0.16.0] - 2026-09-21
 
 ### Major UI Overhaul (GPUI-Kit)

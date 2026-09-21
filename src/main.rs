@@ -1,11 +1,10 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
-use pdfbull::app;
 use pdfbull::platform;
 use tracing_subscriber::layer::SubscriberExt;
 use tracing_subscriber::util::SubscriberInitExt;
 
-fn main() -> iced::Result {
+fn main() {
     let config_dir = pdfbull::storage::get_config_dir();
     let _ = std::fs::create_dir_all(&config_dir);
     let log_path = config_dir.join("pdfbull.log");
@@ -87,49 +86,9 @@ fn main() -> iced::Result {
         && is_secondary
     {
         tracing::info!("Sent arguments to main instance. Exiting.");
-        return Ok(());
+        return;
     }
 
-    let use_iced = args.iter().any(|arg| arg == "--iced");
-    if !use_iced {
-        tracing::info!("Starting PDFbull with GPUI-Kit presentation engine...");
-        pdfbull::ui_gpui::run_gpui_app();
-        return Ok(());
-    }
-
-    const ICON_RGBA: &[u8] = include_bytes!("assets/icon_32x32.rgba");
-    let icon = iced::window::icon::from_rgba(ICON_RGBA.to_vec(), 32, 32).ok();
-
-    let res = iced::application(
-        app::PdfBullApp::default,
-        app::PdfBullApp::update,
-        app::PdfBullApp::view,
-    )
-    .title("PDFbull")
-    .font(include_bytes!("../src/assets/fonts/Inter-Regular.ttf"))
-    .font(include_bytes!("../src/assets/fonts/Inter-Bold.ttf"))
-    .font(include_bytes!("../src/assets/fonts/lucide.ttf"))
-    .theme(|app: &app::PdfBullApp| match app.settings.theme {
-        pdfbull::models::AppTheme::Dark => iced::Theme::Dark,
-        pdfbull::models::AppTheme::Light => iced::Theme::Light,
-        pdfbull::models::AppTheme::System => {
-            if pdfbull::platform::is_system_dark_mode() {
-                iced::Theme::Dark
-            } else {
-                iced::Theme::Light
-            }
-        }
-    })
-    .subscription(app::PdfBullApp::subscription)
-    .window(iced::window::Settings {
-        icon,
-        exit_on_close_request: false,
-        ..Default::default()
-    })
-    .run();
-
-    if let Err(ref e) = res {
-        tracing::error!("Iced application error: {:?}", e);
-    }
-    res
+    tracing::info!("Starting PDFbull with GPUI-Kit presentation engine...");
+    pdfbull::ui_gpui::run_gpui_app();
 }

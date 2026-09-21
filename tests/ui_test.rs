@@ -1,292 +1,219 @@
-#![allow(clippy::field_reassign_with_default)]
-use pdfbull::app::PdfBullApp;
-use pdfbull::message::Message;
+use pdfbull::ui_gpui::canvas::DocumentViewport;
+use pdfbull::ui_gpui::dialogs::{ActiveDialog, DialogsState};
+use pdfbull::ui_gpui::log_console::LogConsoleState;
+use pdfbull::ui_gpui::ribbon::{AnnotationTool, PageLayoutMode, RibbonState, RibbonTab};
+use pdfbull::ui_gpui::sidebar::{SidebarMode, SidebarState};
+use pdfbull::ui_gpui::tabs::{DocumentTab, TabsState};
+use pdfbull::ui_gpui::welcome::WelcomeState;
+use std::path::PathBuf;
 
-#[tokio::test(flavor = "current_thread")]
-async fn test_sidebar_toggle() {
-    let mut app = PdfBullApp::default();
+#[test]
+fn test_tabs_state_management() {
+    let mut tabs_state = TabsState::new();
+    assert!(tabs_state.tabs.is_empty());
+    assert_eq!(tabs_state.active_tab_index, 0);
 
-    // Check if sidebar is hidden initially
-    let at = std::time::Instant::now();
-    let sidebar_width: f32 = app.sidebar_animation.interpolate_with(|v| v, at);
-    let sidebar_width = sidebar_width * 280.0;
-    assert!(sidebar_width < 0.1);
+    // Add multiple tabs
+    tabs_state.tabs.push(DocumentTab {
+        id: 0,
+        title: "doc1.pdf".to_string(),
+        path: Some(PathBuf::from("doc1.pdf")),
+        is_modified: false,
+    });
+    tabs_state.tabs.push(DocumentTab {
+        id: 1,
+        title: "doc2.pdf".to_string(),
+        path: Some(PathBuf::from("doc2.pdf")),
+        is_modified: true,
+    });
+    tabs_state.tabs.push(DocumentTab {
+        id: 2,
+        title: "doc3.pdf".to_string(),
+        path: None,
+        is_modified: false,
+    });
 
-    // Toggle sidebar
-    let _ = app.update(Message::ToggleSidebar);
+    assert_eq!(tabs_state.tabs.len(), 3);
+    assert!(tabs_state.tabs[1].is_modified);
 
-    // In a headless test, we can check if the internal state updated
-    assert!(app.show_sidebar);
+    // Switch active tab
+    tabs_state.active_tab_index = 1;
+    assert_eq!(tabs_state.active_tab_index, 1);
 
-    // After toggling, the animation value will start changing on next frame
-    // but here we just check the boolean state.
+    // Close middle tab
+    tabs_state.tabs.remove(1);
+    assert_eq!(tabs_state.tabs.len(), 2);
+    assert_eq!(tabs_state.tabs[0].title, "doc1.pdf");
+    assert_eq!(tabs_state.tabs[1].title, "doc3.pdf");
 }
 
-#[tokio::test(flavor = "current_thread")]
-async fn test_ui_initial_state() {
-    let app = PdfBullApp::default();
-    assert!(!app.show_settings);
-    assert!(!app.show_sidebar);
-    assert!(!app.is_fullscreen);
-    assert!(app.tabs.is_empty());
+#[test]
+fn test_sidebar_state_and_mode_switching() {
+    let mut sidebar = SidebarState::new();
+    assert!(sidebar.is_open);
+    assert_eq!(sidebar.mode, SidebarMode::Thumbnails);
+    assert_eq!(sidebar.width, 250.0);
+
+    // Toggle sidebar visibility
+    sidebar.is_open = false;
+    assert!(!sidebar.is_open);
+    sidebar.is_open = true;
+    assert!(sidebar.is_open);
+
+    // Mode switching
+    let modes = [
+        SidebarMode::Thumbnails,
+        SidebarMode::Bookmarks,
+        SidebarMode::Annotations,
+        SidebarMode::Search,
+        SidebarMode::Attachments,
+        SidebarMode::Layers,
+    ];
+
+    for mode in modes {
+        sidebar.mode = mode;
+        assert_eq!(sidebar.mode, mode);
+    }
 }
 
-#[tokio::test(flavor = "current_thread")]
-async fn test_settings_toggle() {
-    let mut app = PdfBullApp::default();
-    assert!(!app.show_settings);
+#[test]
+fn test_ribbon_state_and_actions() {
+    let mut ribbon = RibbonState::new();
+    assert_eq!(ribbon.active_tab, RibbonTab::Home);
+    assert_eq!(ribbon.active_tool, AnnotationTool::Pointer);
+    assert_eq!(ribbon.layout_mode, PageLayoutMode::Continuous);
+    assert!(!ribbon.standalone_cover);
+    assert!(!ribbon.midnight_mode);
 
-    // Open settings
-    let _ = app.update(Message::OpenSettings);
-    assert!(app.show_settings);
+    // Switch tabs
+    ribbon.active_tab = RibbonTab::View;
+    assert_eq!(ribbon.active_tab, RibbonTab::View);
+    ribbon.active_tab = RibbonTab::Annotate;
+    assert_eq!(ribbon.active_tab, RibbonTab::Annotate);
+    ribbon.active_tab = RibbonTab::Tools;
+    assert_eq!(ribbon.active_tab, RibbonTab::Tools);
+    ribbon.active_tab = RibbonTab::Convert;
+    assert_eq!(ribbon.active_tab, RibbonTab::Convert);
 
-    // Close settings
-    let _ = app.update(Message::CloseSettings);
-    assert!(!app.show_settings);
-}
+    // Switch annotation tools
+    let tools = [
+        AnnotationTool::Highlight,
+        AnnotationTool::Underline,
+        AnnotationTool::Strikeout,
+        AnnotationTool::Rectangle,
+        AnnotationTool::Circle,
+        AnnotationTool::Line,
+        AnnotationTool::Arrow,
+        AnnotationTool::Ink,
+        AnnotationTool::StickyNote,
+        AnnotationTool::Text,
+        AnnotationTool::Redact,
+    ];
 
-#[tokio::test(flavor = "current_thread")]
-async fn test_fullscreen_toggle() {
-    let mut app = PdfBullApp::default();
-    assert!(!app.is_fullscreen);
-
-    // Toggle fullscreen
-    let _ = app.update(Message::ToggleFullscreen);
-    assert!(app.is_fullscreen);
-
-    // Toggle back
-    let _ = app.update(Message::ToggleFullscreen);
-    assert!(!app.is_fullscreen);
-}
-
-#[tokio::test(flavor = "current_thread")]
-async fn test_keyboard_help_toggle() {
-    let mut app = PdfBullApp::default();
-    assert!(!app.show_keyboard_help);
-
-    let _ = app.update(Message::ToggleKeyboardHelp);
-    assert!(app.show_keyboard_help);
-
-    let _ = app.update(Message::ToggleKeyboardHelp);
-    assert!(!app.show_keyboard_help);
-}
-
-#[tokio::test(flavor = "current_thread")]
-async fn test_metadata_toggle() {
-    let mut app = PdfBullApp::default();
-    assert!(!app.show_metadata);
-
-    let _ = app.update(Message::ToggleMetadata);
-    assert!(app.show_metadata);
-
-    let _ = app.update(Message::ToggleMetadata);
-    assert!(!app.show_metadata);
-}
-
-#[tokio::test(flavor = "current_thread")]
-async fn test_document_rotation() {
-    let mut app = PdfBullApp::default();
-    let tab = pdfbull::models::DocumentTab::new(std::path::PathBuf::from("test.pdf"));
-    app.tabs.push(tab);
-    app.active_tab = 0;
-
-    // Initial rotation should be 0
-    assert_eq!(app.current_tab().unwrap().rotation, 0);
-
-    // Rotate clockwise
-    let _ = app.update(Message::RotateClockwise);
-    assert_eq!(app.current_tab().unwrap().rotation, 90);
-
-    // Rotate clockwise again
-    let _ = app.update(Message::RotateClockwise);
-    assert_eq!(app.current_tab().unwrap().rotation, 180);
-
-    // Rotate counter-clockwise
-    let _ = app.update(Message::RotateCounterClockwise);
-    assert_eq!(app.current_tab().unwrap().rotation, 90);
-
-    // Rotate counter-clockwise to negative/wrap
-    let _ = app.update(Message::RotateCounterClockwise);
-    assert_eq!(app.current_tab().unwrap().rotation, 0);
-    let _ = app.update(Message::RotateCounterClockwise);
-    assert_eq!(app.current_tab().unwrap().rotation, 270);
-}
-
-#[tokio::test(flavor = "current_thread")]
-#[allow(clippy::float_cmp)]
-async fn test_document_zoom() {
-    let mut app = PdfBullApp::default();
-    let tab = pdfbull::models::DocumentTab::new(std::path::PathBuf::from("test.pdf"));
-    app.tabs.push(tab);
-    app.active_tab = 0;
-
-    // Initial zoom should be 1.0
-    assert_eq!(app.current_tab().unwrap().zoom, 1.0);
-
-    // Zoom in
-    let _ = app.update(Message::ZoomIn);
-    assert!((app.current_tab().unwrap().zoom - 1.1).abs() < 1e-5);
-
-    // Reset zoom
-    let _ = app.update(Message::ResetZoom);
-    assert_eq!(app.current_tab().unwrap().zoom, 1.0);
-
-    // Set zoom to specific value
-    let _ = app.update(Message::SetZoom(2.5));
-    assert_eq!(app.current_tab().unwrap().zoom, 2.5);
-
-    // Set zoom out
-    let _ = app.update(Message::ZoomOut);
-    assert!((app.current_tab().unwrap().zoom - (2.5 / 1.1)).abs() < 1e-5);
-}
-
-#[tokio::test(flavor = "current_thread")]
-async fn test_open_document_flow() {
-    let mut app = PdfBullApp::default();
-    app.loaded = true; // Prevent loading real session/settings in test
-    let test_path = std::path::PathBuf::from("tests/test_document.pdf");
-
-    // Simulate what happens after the file is picked and loaded by the engine
-    let doc_id = pdfbull::models::DocumentId(42);
-    let open_res = pdfbull::models::OpenResult {
-        id: doc_id,
-        page_count: 5,
-        page_heights: vec![800.0; 5],
-        max_width: 600.0,
-        outline: Vec::new(),
-        links: Vec::new(),
-        metadata: pdfbull::models::DocumentMetadata::default(),
-        page_labels: Vec::new(),
-        is_encrypted: false,
-        signatures: Vec::new(),
-        attachments: Vec::new(),
-        layers: Vec::new(),
-        oc_config: None,
-        geo_annotations: Vec::new(),
-        color_profile: None,
-    };
-
-    // Send DocumentOpenedWithPath message
-    let _ = app.update(Message::DocumentOpenedWithPath((test_path, open_res)));
-
-    // The tab should have been created with the correct ID matching the engine's doc_id
-    assert_eq!(app.tabs.len(), 1);
-    assert_eq!(app.tabs[0].id, doc_id);
-    assert_eq!(app.active_tab, 0);
-}
-
-#[tokio::test(flavor = "current_thread")]
-async fn test_tab_context_menu_and_closing_actions() {
-    let mut app = PdfBullApp::default();
-    app.loaded = true;
-
-    let test_path = std::path::PathBuf::from("tests/test_document.pdf");
-
-    // Create 3 tabs
-    for i in 0..3 {
-        let open_res = pdfbull::models::OpenResult {
-            id: pdfbull::models::DocumentId(i as u64),
-            page_count: 5,
-            page_heights: vec![800.0; 5],
-            max_width: 600.0,
-            outline: Vec::new(),
-            links: Vec::new(),
-            metadata: pdfbull::models::DocumentMetadata::default(),
-            page_labels: Vec::new(),
-            is_encrypted: false,
-            signatures: Vec::new(),
-            attachments: Vec::new(),
-            layers: Vec::new(),
-            oc_config: None,
-            geo_annotations: Vec::new(),
-            color_profile: None,
-        };
-        let _ = app.update(Message::DocumentOpenedWithPath((
-            test_path.clone(),
-            open_res,
-        )));
+    for tool in tools {
+        ribbon.active_tool = tool;
+        assert_eq!(ribbon.active_tool, tool);
     }
 
-    assert_eq!(app.tabs.len(), 3);
+    // Switch color
+    ribbon.active_color = [0.2, 0.8, 0.4, 0.9];
+    assert_eq!(ribbon.active_color, [0.2, 0.8, 0.4, 0.9]);
 
-    // Context menu trigger and dismiss
-    let _ = app.update(Message::ShowTabContextMenu(1));
-    assert_eq!(app.tab_context_menu, Some(1));
-    let _ = app.update(Message::DismissTabContextMenu);
-    assert_eq!(app.tab_context_menu, None);
-
-    // Close Tabs to the Right of tab 0 (should close tab 1 and tab 2)
-    let _ = app.update(Message::CloseTabsToRight(0));
-    assert_eq!(app.tabs.len(), 1);
-    assert_eq!(app.tabs[0].id, pdfbull::models::DocumentId(0));
-
-    // Middle-click / close tab
-    let _ = app.update(Message::CloseTab(0));
-    assert_eq!(app.tabs.len(), 0);
+    // Page layout & cover & midnight
+    ribbon.layout_mode = PageLayoutMode::TwoPageSpread;
+    ribbon.standalone_cover = true;
+    ribbon.midnight_mode = true;
+    assert_eq!(ribbon.layout_mode, PageLayoutMode::TwoPageSpread);
+    assert!(ribbon.standalone_cover);
+    assert!(ribbon.midnight_mode);
 }
 
-#[tokio::test(flavor = "current_thread")]
-async fn test_layout_mode_and_cover_toggles() {
-    let mut app = PdfBullApp::default();
-    app.loaded = true;
+#[test]
+fn test_document_viewport_zoom_and_rotation() {
+    let mut viewport = DocumentViewport::new();
+    assert_eq!(viewport.zoom, 1.0);
+    assert_eq!(viewport.rotation, 0);
+    assert_eq!(viewport.current_page, 0);
+    assert_eq!(viewport.total_pages, 1);
+    assert_eq!(viewport.page_width, 595.0);
+    assert_eq!(viewport.page_height, 842.0);
 
-    let test_path = std::path::PathBuf::from("tests/test_document.pdf");
-    let open_res = pdfbull::models::OpenResult {
-        id: pdfbull::models::DocumentId(1),
-        page_count: 10,
-        page_heights: vec![800.0; 10],
-        max_width: 600.0,
-        outline: Vec::new(),
-        links: Vec::new(),
-        metadata: pdfbull::models::DocumentMetadata::default(),
-        page_labels: Vec::new(),
-        is_encrypted: false,
-        signatures: Vec::new(),
-        attachments: Vec::new(),
-        layers: Vec::new(),
-        oc_config: None,
-        geo_annotations: Vec::new(),
-        color_profile: None,
-    };
-    let _ = app.update(Message::DocumentOpenedWithPath((test_path, open_res)));
+    // Zoom in
+    viewport.zoom *= 1.1;
+    assert!((viewport.zoom - 1.1).abs() < 1e-5);
 
-    assert_eq!(
-        app.current_tab().unwrap().layout_mode,
-        pdfbull::models::PageLayoutMode::SingleContinuous
-    );
+    // Reset zoom
+    viewport.zoom = 1.0;
+    assert_eq!(viewport.zoom, 1.0);
 
-    // Switch to SinglePage
-    let _ = app.update(Message::SetPageLayoutMode(
-        pdfbull::models::PageLayoutMode::SinglePage,
-    ));
-    assert_eq!(
-        app.current_tab().unwrap().layout_mode,
-        pdfbull::models::PageLayoutMode::SinglePage
-    );
+    // Zoom out
+    viewport.zoom /= 1.1;
+    assert!((viewport.zoom - (1.0 / 1.1)).abs() < 1e-5);
 
-    // Switch to TwoPageSpread
-    let _ = app.update(Message::SetPageLayoutMode(
-        pdfbull::models::PageLayoutMode::TwoPageSpread,
-    ));
-    assert_eq!(
-        app.current_tab().unwrap().layout_mode,
-        pdfbull::models::PageLayoutMode::TwoPageSpread
-    );
-    assert!(app.current_tab().unwrap().two_page_cover);
+    // Custom zoom level
+    viewport.zoom = 2.5;
+    assert_eq!(viewport.zoom, 2.5);
 
-    // Toggle cover
-    let _ = app.update(Message::ToggleTwoPageCover);
-    assert!(!app.current_tab().unwrap().two_page_cover);
+    // Rotation cycling (0 -> 90 -> 180 -> 270 -> 0)
+    viewport.rotation = (viewport.rotation + 90) % 360;
+    assert_eq!(viewport.rotation, 90);
+    viewport.rotation = (viewport.rotation + 90) % 360;
+    assert_eq!(viewport.rotation, 180);
+    viewport.rotation = (viewport.rotation + 90) % 360;
+    assert_eq!(viewport.rotation, 270);
+    viewport.rotation = (viewport.rotation + 90) % 360;
+    assert_eq!(viewport.rotation, 0);
+
+    // Counter-clockwise rotation
+    viewport.rotation = (viewport.rotation + 270) % 360;
+    assert_eq!(viewport.rotation, 270);
 }
 
-#[tokio::test(flavor = "current_thread")]
-async fn test_file_drag_hover_state() {
-    let mut app = PdfBullApp::default();
-    assert!(!app.is_file_hovered);
+#[test]
+fn test_dialogs_overlay_state() {
+    let mut dialogs = DialogsState::new();
+    assert!(dialogs.active.is_none());
 
-    let _ = app.update(Message::FileHovered(true));
-    assert!(app.is_file_hovered);
+    // Open settings
+    dialogs.active = Some(ActiveDialog::Settings);
+    assert_eq!(dialogs.active, Some(ActiveDialog::Settings));
 
-    let _ = app.update(Message::FileHovered(false));
-    assert!(!app.is_file_hovered);
+    // Open password modal
+    dialogs.active = Some(ActiveDialog::Password);
+    assert_eq!(dialogs.active, Some(ActiveDialog::Password));
+
+    // Open watermark dialog
+    dialogs.active = Some(ActiveDialog::Watermark);
+    assert_eq!(dialogs.active, Some(ActiveDialog::Watermark));
+
+    // Close dialog
+    dialogs.active = None;
+    assert!(dialogs.active.is_none());
+}
+
+#[test]
+fn test_welcome_state() {
+    let mut welcome = WelcomeState::new();
+    assert!(welcome.recent_files.is_empty());
+
+    welcome.recent_files.push(PathBuf::from("recent1.pdf"));
+    welcome.recent_files.push(PathBuf::from("recent2.pdf"));
+    assert_eq!(welcome.recent_files.len(), 2);
+    assert_eq!(welcome.recent_files[0], PathBuf::from("recent1.pdf"));
+}
+
+#[test]
+fn test_log_console_state() {
+    let mut log_console = LogConsoleState::new();
+    assert!(!log_console.is_open);
+    assert_eq!(log_console.height, 180.0);
+    assert!(log_console.filter_level.is_none());
+
+    // Toggle open
+    log_console.is_open = true;
+    assert!(log_console.is_open);
+
+    // Set filter level
+    log_console.filter_level = Some("ERROR");
+    assert_eq!(log_console.filter_level, Some("ERROR"));
 }

@@ -3,9 +3,10 @@ use gpui_kit::component::button::{Button, ButtonVariants};
 use gpui_kit::*;
 use std::path::PathBuf;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum WelcomeAction {
     OpenFile,
+    DropFiles(Vec<PathBuf>),
     MergeFiles,
     PageOrganizer,
     DigitalSignatures,
@@ -39,11 +40,13 @@ impl WelcomeState {
         let border = cx.theme().border;
         let muted = cx.theme().muted;
         let muted_fg = cx.theme().muted_foreground;
+        let primary = cx.theme().primary;
 
         div()
             .flex()
             .flex_col()
-            .size_full()
+            .flex_1()
+            .w_full()
             .bg(bg)
             .items_center()
             .justify_center()
@@ -73,6 +76,7 @@ impl WelcomeState {
                     .border_dashed()
                     .border_color(border)
                     .bg(muted)
+                    .hover(move |s| s.border_color(primary))
                     .flex()
                     .flex_col()
                     .items_center()
@@ -84,6 +88,19 @@ impl WelcomeState {
                             on_action(v, WelcomeAction::OpenFile, w, cx)
                         }),
                     )
+                    .on_drop(cx.listener(move |v, paths: &ExternalPaths, w, cx| {
+                        let pdf_paths: Vec<PathBuf> = paths
+                            .paths()
+                            .iter()
+                            .filter(|p| {
+                                p.to_string_lossy().to_lowercase().ends_with(".pdf") || p.is_file()
+                            })
+                            .cloned()
+                            .collect();
+                        if !pdf_paths.is_empty() {
+                            on_action(v, WelcomeAction::DropFiles(pdf_paths), w, cx);
+                        }
+                    }))
                     .child(
                         div()
                             .text_base()

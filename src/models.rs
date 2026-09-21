@@ -1,5 +1,4 @@
 use crate::pdf_engine::RenderFilter;
-use iced::widget::image as iced_image;
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -526,9 +525,14 @@ pub struct AnnotationDrag {
     pub kind: PendingAnnotationKind,
 }
 
+pub const PAGE_SPACING: f32 = 20.0;
+pub const PAGE_PADDING: f32 = 30.0;
+pub const THUMBNAIL_HEIGHT: f32 = 60.0;
+pub const VIEWPORT_BUFFER: usize = 3;
+
 pub struct TabViewState {
-    pub rendered_pages: std::collections::HashMap<usize, (f32, iced_image::Handle)>,
-    pub thumbnails: std::collections::HashMap<usize, iced_image::Handle>,
+    pub rendered_pages: std::collections::HashMap<usize, (f32, Arc<[u8]>)>,
+    pub thumbnails: std::collections::HashMap<usize, Arc<[u8]>>,
     pub text_layers: std::collections::HashMap<usize, Vec<TextItem>>,
     pub detected_tables: std::collections::HashMap<usize, Vec<DetectedTable>>,
     pub viewport_y: f32,
@@ -707,8 +711,8 @@ impl DocumentTab {
             PageLayoutMode::SingleContinuous => {}
         }
 
-        let scaled_spacing = crate::ui::theme::PAGE_SPACING * self.zoom;
-        let scaled_padding = crate::ui::theme::PAGE_PADDING * self.zoom;
+        let scaled_spacing = PAGE_SPACING * self.zoom;
+        let scaled_padding = PAGE_PADDING * self.zoom;
         let mut y = scaled_padding;
 
         let v_height = if self.view_state.viewport_height > 0.0 {
@@ -765,15 +769,14 @@ impl DocumentTab {
     }
 
     pub fn get_visible_thumbnails(&self) -> std::ops::Range<usize> {
-        let start_idx = (self.view_state.sidebar_viewport_y / crate::ui::theme::THUMBNAIL_HEIGHT)
-            .max(0.0) as usize;
+        let start_idx = (self.view_state.sidebar_viewport_y / THUMBNAIL_HEIGHT).max(0.0) as usize;
 
         let v_height = if self.view_state.viewport_height > 0.0 {
             self.view_state.viewport_height
         } else {
             1000.0
         };
-        let visible_count = (v_height / crate::ui::theme::THUMBNAIL_HEIGHT).ceil() as usize + 5;
+        let visible_count = (v_height / THUMBNAIL_HEIGHT).ceil() as usize + 5;
         let end_idx = (start_idx + visible_count).min(self.total_pages);
 
         start_idx..end_idx
@@ -781,7 +784,7 @@ impl DocumentTab {
 
     pub fn cleanup_distant_pages(&mut self) {
         let (start, end) = self.view_state.visible_range;
-        let buffer = crate::ui::theme::VIEWPORT_BUFFER;
+        let buffer = VIEWPORT_BUFFER;
         let keep_start = start.saturating_sub(buffer);
         let keep_end = (end + buffer).min(self.total_pages);
 
@@ -789,9 +792,8 @@ impl DocumentTab {
             .rendered_pages
             .retain(|&p, _| p >= keep_start && p < keep_end);
 
-        let thumb_start_idx = (self.view_state.sidebar_viewport_y
-            / crate::ui::theme::THUMBNAIL_HEIGHT)
-            .max(0.0) as usize;
+        let thumb_start_idx =
+            (self.view_state.sidebar_viewport_y / THUMBNAIL_HEIGHT).max(0.0) as usize;
         let thumb_keep_start = thumb_start_idx.saturating_sub(15);
         let thumb_keep_end = thumb_start_idx.saturating_add(45).min(self.total_pages);
 
@@ -1195,7 +1197,7 @@ mod tests {
         for i in 0..20 {
             tab.view_state
                 .rendered_pages
-                .insert(i, (1.0, iced::widget::image::Handle::from_bytes(vec![])));
+                .insert(i, (1.0, Arc::from([])));
         }
 
         tab.zoom = 1.0;
@@ -1223,13 +1225,13 @@ mod tests {
 
         tab.view_state
             .rendered_pages
-            .insert(5, (2.0, iced::widget::image::Handle::from_bytes(vec![])));
+            .insert(5, (2.0, Arc::from([])));
         tab.view_state
             .rendered_pages
-            .insert(6, (1.0, iced::widget::image::Handle::from_bytes(vec![])));
+            .insert(6, (1.0, Arc::from([])));
         tab.view_state
             .rendered_pages
-            .insert(1, (1.0, iced::widget::image::Handle::from_bytes(vec![])));
+            .insert(1, (1.0, Arc::from([])));
 
         tab.zoom = 1.0;
         tab.cleanup_distant_pages();

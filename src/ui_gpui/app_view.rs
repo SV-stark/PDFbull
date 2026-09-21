@@ -47,6 +47,58 @@ impl PdfbullView {
         self.viewport.total_pages = 5;
         self.viewport.current_page = 0;
     }
+
+    pub fn open_pdf_path(&mut self, path_str: &str) {
+        let path = std::path::PathBuf::from(path_str);
+        let title = path
+            .file_name()
+            .and_then(|n| n.to_str())
+            .unwrap_or("Document.pdf")
+            .to_string();
+
+        let page_count = if let Ok(doc) = lopdf::Document::load(&path) {
+            doc.get_pages().len().max(1)
+        } else {
+            1
+        };
+
+        let new_id = self.tabs.tabs.len();
+        self.tabs.tabs.push(DocumentTab {
+            id: new_id,
+            title,
+            path: Some(path),
+            is_modified: false,
+        });
+        self.tabs.active_tab_index = new_id;
+        self.viewport.total_pages = page_count;
+        self.viewport.current_page = 0;
+    }
+
+    pub fn prompt_open_file(&self, cx: &mut Context<Self>) {
+        cx.spawn(async move |this, cx| {
+            let files = rfd::AsyncFileDialog::new()
+                .add_filter("PDF Documents (*.pdf)", &["pdf"])
+                .pick_files()
+                .await;
+
+            if let Some(files) = files {
+                let paths: Vec<std::path::PathBuf> =
+                    files.into_iter().map(|f| f.path().to_path_buf()).collect();
+
+                let _ = this.update(cx, |view, cx| {
+                    let mut opened = false;
+                    for path in paths {
+                        view.open_pdf_path(&path.to_string_lossy());
+                        opened = true;
+                    }
+                    if opened {
+                        cx.notify();
+                    }
+                });
+            }
+        })
+        .detach();
+    }
 }
 
 impl Render for PdfbullView {
@@ -100,7 +152,7 @@ impl Render for PdfbullView {
         let action_strip = self.ribbon.render_strip(cx, |this, action, _, cx| {
             match action {
                 RibbonAction::OpenFile => {
-                    this.open_sample_doc("Opened Document.pdf");
+                    this.prompt_open_file(cx);
                 }
                 RibbonAction::SaveFile => {}
                 RibbonAction::Print => {}
@@ -189,7 +241,7 @@ impl Render for PdfbullView {
                         }
                     }
                     TabAction::NewTab => {
-                        this.open_sample_doc("Untitled.pdf");
+                        this.prompt_open_file(cx);
                     }
                     TabAction::CloseOthers(keep_idx) => {
                         if keep_idx < this.tabs.tabs.len() {
@@ -241,31 +293,44 @@ impl Render for PdfbullView {
             div()
                 .flex()
                 .flex_row()
-                .size_full()
+                .flex_1()
+                .w_full()
                 .overflow_hidden()
                 .child(sidebar)
-                .child(div().flex_1().size_full().overflow_hidden().child(canvas))
+                .child(div().flex_1().h_full().overflow_hidden().child(canvas))
                 .into_any_element()
         } else {
             self.welcome
                 .render(cx, |this, action, _, cx| {
                     match action {
                         WelcomeAction::OpenFile => {
-                            this.open_sample_doc("Document.pdf");
+                            this.prompt_open_file(cx);
+                        }
+                        WelcomeAction::DropFiles(paths) => {
+                            let mut opened = false;
+                            for path in paths {
+                                this.open_pdf_path(&path.to_string_lossy());
+                                opened = true;
+                            }
+                            if opened {
+                                cx.notify();
+                            }
                         }
                         WelcomeAction::MergeFiles => {
-                            this.open_sample_doc("Merged.pdf");
+                            this.prompt_open_file(cx);
                         }
                         WelcomeAction::PageOrganizer => {
-                            this.open_sample_doc("Organizer.pdf");
+                            this.prompt_open_file(cx);
                             this.dialogs.active = Some(ActiveDialog::PageOrganizer);
                         }
                         WelcomeAction::DigitalSignatures => {
-                            this.open_sample_doc("Signed.pdf");
+                            this.prompt_open_file(cx);
                             this.dialogs.active = Some(ActiveDialog::Signature);
                         }
-                        WelcomeAction::OpenRecent(_) => {
-                            this.open_sample_doc("Recent.pdf");
+                        WelcomeAction::OpenRecent(idx) => {
+                            if let Some(path) = this.welcome.recent_files.get(idx).cloned() {
+                                this.open_pdf_path(&path.to_string_lossy());
+                            }
                         }
                     }
                     cx.notify();
@@ -302,7 +367,7 @@ impl Render for PdfbullView {
                     ))
                     .child(format!("Mode: {:?}", self.ribbon.layout_mode)),
             )
-            .child("PDFbull GPUI Core 0.16.0");
+            .child(concat!("PDFbull GPUI Core ", env!("CARGO_PKG_VERSION")));
 
         // Log Console Drawer (if open)
         let log_drawer = self.log_console.render(cx, |this, action, _, cx| {
@@ -340,16 +405,22 @@ impl Render for PdfbullView {
             .relative()
             .bg(bg)
             .text_color(fg)
+            .on_drop(cx.listener(|this, paths: &ExternalPaths, _, cx| {
+                let mut opened = false;
+                for path in paths.paths() {
+                    if path.to_string_lossy().to_lowercase().ends_with(".pdf") || path.is_file() {
+                        this.open_pdf_path(&path.to_string_lossy());
+                        opened = true;
+                    }
+                }
+                if opened {
+                    cx.notify();
+                }
+            }))
             .child(header_bar)
             .child(action_strip)
             .children(tabs_bar)
-            .child(
-                div()
-                    .flex_1()
-                    .size_full()
-                    .overflow_hidden()
-                    .child(center_area),
-            )
+            .child(div().flex_1().w_full().overflow_hidden().child(center_area))
             .children(log_drawer)
             .child(status_bar)
             .children(dialog_overlay)

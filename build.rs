@@ -1,5 +1,6 @@
 fn main() {
     if std::env::var("CARGO_CFG_TARGET_OS").unwrap_or_default() == "windows" {
+        println!("cargo:rustc-link-arg=/STACK:8388608");
         let mut res = winresource::WindowsResource::new();
         res.set("FileDescription", "PDFbull Document Reader");
         res.set("ProductName", "PDFbull");
