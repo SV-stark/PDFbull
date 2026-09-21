@@ -8,13 +8,14 @@
   <a href="https://crates.io/crates/pdfbull"><img src="https://img.shields.io/crates/d/pdfbull.svg" alt="Crates.io Downloads"></a>
   <a href="https://github.com/SV-stark/PDFbull/releases/tag/nightly"><img src="https://github.com/SV-stark/PDFbull/actions/workflows/release.yml/badge.svg" alt="Nightly Release"></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/License-MIT-green.svg" alt="License: MIT"></a>
-  <a href="https://iced.rs/"><img src="https://img.shields.io/badge/Built%20with-Iced-blue" alt="Built with Iced"></a>
+  <a href="https://github.com/longbridge/gpui-kit"><img src="https://img.shields.io/badge/UI-GPUI--Kit-blueviolet" alt="Built with GPUI-Kit"></a>
+  <a href="https://iced.rs/"><img src="https://img.shields.io/badge/Fallback%20UI-Iced-blue" alt="Iced Fallback"></a>
   <a href="https://www.rust-lang.org/"><img src="https://img.shields.io/badge/Backend-Rust-black?logo=rust" alt="Rust"></a>
 </p>
 
-**PDFbull** is a professional, high-performance PDF reader and editor engineered for efficiency. By combining the power of the **zpdf crate** with the safety of **Rust** and the declarative, native UI toolkit **Iced**, PDFbull delivers a desktop experience that is significantly faster and more resource-efficient than traditional Electron or WebView-based alternatives.
+**PDFbull** is a professional, high-performance PDF reader and editor engineered for efficiency. By combining the power of the **zpdf crate** with the safety of **Rust** and the modern, GPU-accelerated UI framework **GPUI-Kit** (with seamless **Iced** fallback), PDFbull delivers a desktop experience that is significantly faster, smoother, and more resource-efficient than traditional Electron or WebView-based alternatives.
 
-> **Engine note:** PDFbull utilizes the pure-Rust **[zpdf](https://crates.io/crates/zpdf)** engine with software rendering powered by **`zpdf-render-cpu`** (via **`tiny-skia`**). This backend is chosen by default to eliminate GPU driver-level overhead, adapter initialization delays, and slow texture memory readbacks.
+> **Engine note:** PDFbull utilizes the pure-Rust **[zpdf](https://crates.io/crates/zpdf)** engine with software rendering powered by **`zpdf-render-cpu`** (via **`tiny-skia`**). This backend eliminates GPU driver-level overhead, adapter initialization delays, and slow texture memory readbacks while pairing seamlessly with GPUI hardware-accelerated canvas surfaces.
 
 ---
 
@@ -22,7 +23,9 @@
 
 PDFbull is built from the ground up for speed, leveraging modern Rust ecosystem powerhouses:
 
-- **Native UI with Iced**: A lightweight, cross-platform UI toolkit written entirely in Rust, producing native code without any web dependencies.
+- **GPU-Accelerated UI with GPUI-Kit**: Next-gen desktop presentation layer delivering buttery-smooth 120Hz/60FPS rendering and instant layout passes with zero web runtime bloat.
+- **Lucide Vector Icons**: Fully resolution-independent vector icons across the ribbon, sidebars, search HUD, and dialogs.
+- **Multi-Engine Dual Compatibility**: Seamless support for both GPUI-Kit (default) and classic Iced UI (`--iced`), ensuring zero regressions across all workflows.
 - **CPU Rasterization via zpdf**: Pages are rasterized directly to system RAM using `zpdf-render-cpu` (powered by `tiny-skia`), avoiding CPU-GPU transfer bottlenecks and starting renders instantly.
 - **Parallel Processing**: Powered by **Rayon**, heavy computational tasks like rendering, filtering, and search are parallelized across all available CPU cores.
 - **Smart Caching**: Powered by **quick_cache**, a lightweight, concurrent cache library with custom weighters, ensuring instant access to recently viewed pages.
@@ -66,6 +69,21 @@ Timings measured across diverse document scales on Windows 11:
 > PDFbull's pure Rust architecture with `mimalloc` delivers **sub-80ms document readiness** even on massive 120MB+ multi-page files (**4.8x faster than SumatraPDF** and **8.7x faster than Chrome PDFium**), achieving **1,260 FPS** sequential page throughput while maintaining 100% memory safety.
 
 ## 🛠️ Feature Suite
+
+### 🖥️ Modern Desktop UI Overhaul (Powered by `gpui-kit`)
+- **GPU-Accelerated Window Architecture**: Powered by GPUI Kit (`gpui-component` / GPUI) for high-framerate, fluid hardware-rendered interfaces.
+- **Contextual 5-Mode Ribbon**: Dedicated ribbon strips for **Home**, **View**, **Annotate**, **Tools**, and **Convert**.
+- **Multi-Document Tab Bar**: Tab management with dirty state (`*`), instant switching, and individual tab closing.
+- **Collapsible Multi-Mode Sidebar**: 6 integrated navigation panels:
+  - **Pages / Thumbnails**: Interactive vertical page strip.
+  - **Bookmarks**: Hierarchical document outlines.
+  - **Notes / Annotations**: Comments and markup listing.
+  - **Fuzzy Content Search**: Fast in-document keyword discovery.
+  - **Embedded Files**: Attachments download manager.
+  - **Layers (OCG)**: CAD/drawing layer visibility controls.
+- **Comprehensive Modal Overlays**: Clean centered dialogs for Watermarking, Headers/Footers, Passwords, Security/Permissions, Signatures, Page Organizer, and Settings.
+- **Developer Log Drawer**: Bottom sliding console with severity log level filters (All, Info, Warn, Error), clipboard copy, and clear tools.
+- **Classic Iced Fallback**: Launch with `pdfbull --iced` at any time to access the legacy Iced UI backend.
 
 ### 📊 Table Extraction & Data Export (Powered by `zpdf::detect_tables`)
 - **Automatic Grid Detection**: Leverages `zpdf` table structure detection algorithms to locate cell grids, borders, and text spans.
@@ -174,8 +192,10 @@ Timings measured across diverse document scales on Windows 11:
 
 ## 🛰️ Technology Stack
 
-- **UI Toolkit**: [Iced](https://iced.rs/) (Native, Cross-platform, Pure Rust)
-- **Language**: [Rust](https://www.rust-lang.org/)
+- **Primary UI Toolkit**: [GPUI-Kit](https://github.com/longbridge/gpui-kit) / [GPUI](https://github.com/zed-industries/gpui) (GPU-Accelerated, Native Desktop Framework)
+- **Fallback UI Toolkit**: [Iced](https://iced.rs/) (`--iced` CLI fallback)
+- **Vector Icons**: [Lucide](https://lucide.dev/) (Crisp resolution-independent vector glyphs)
+- **Language**: [Rust](https://www.rust-lang.org/) (2024 Edition)
 - **Concurrency**: [Tokio](https://tokio.rs/) (Async Runtime) & [Rayon](https://github.com/rayon-rs/rayon) (Data Parallelism)
 - **PDF Engine**: [zpdf](https://crates.io/crates/zpdf) (pure-Rust PDF backend)
 - **CPU Rasterizer**: [zpdf-render-cpu](https://crates.io/crates/zpdf-render-cpu) (active)
@@ -191,6 +211,7 @@ Timings measured across diverse document scales on Windows 11:
 - [x] **Basic Annotation System** (Highlights, Rectangles, Text, Redaction)
 - [x] **Migration to zpdf engine** (replaced pdfium-render with pure-Rust zpdf + CPU rasterizer)
 - [x] **Migration to Iced UI** (Replaced Slint with Iced)
+- [x] **Modern UI Overhaul with GPUI-Kit** (GPU-accelerated presentation layer, 5-tab ribbon, multi-mode sidebar, modal overlays)
 - [x] **Form Field Detection & Filling**
 - [x] **GPU / WebGPU Rendering** (wire up `zpdf-render-wgpu`)
 - [x] **Advanced Shapes (Circles/Lines/Arrows) & Sticky Notes** (interactive creation & vector rendering)
@@ -214,7 +235,7 @@ Timings measured across diverse document scales on Windows 11:
 ## 📦 Installation & Development
 
 ### Release Builds
-Download the latest binaries from the [Releases Page](https://github.com/SV-stark/PDFbull/releases). The current release tag is **`v0.15.1`**.
+Download the latest binaries from the [Releases Page](https://github.com/SV-stark/PDFbull/releases). The current release tag is **`v0.16.0`**.
 
 ### Building from Source
 
