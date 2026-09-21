@@ -12,7 +12,7 @@ pub fn render<'a>(app: &'a PdfBullApp) -> Element<'a, crate::message::Message> {
 
         let select_tab_button = button(
             row![
-                text("📄").size(12),
+                text(icons::FILE_TEXT).size(12).font(LUCIDE),
                 text(&tab.name)
                     .size(12)
                     .font(if is_active { INTER_BOLD } else { INTER_REGULAR })
@@ -146,7 +146,7 @@ pub fn render_tab_context_menu<'a>(
                      msg: Option<crate::message::Message>|
      -> Element<'a, crate::message::Message> {
         let content = row![
-            text(icon).size(13),
+            text(icon).size(13).font(LUCIDE),
             text(label).size(12).font(INTER_REGULAR),
         ]
         .spacing(10)
@@ -162,7 +162,7 @@ pub fn render_tab_context_menu<'a>(
         } else {
             container(
                 row![
-                    text(icon).size(13).style(|_| text::Style {
+                    text(icon).size(13).font(LUCIDE).style(|_| text::Style {
                         color: Some(theme::COLOR_TEXT_DIM)
                     }),
                     text(label)
@@ -194,12 +194,12 @@ pub fn render_tab_context_menu<'a>(
         h_sep(),
         menu_item(
             "Close Tab",
-            "❌",
+            icons::CLOSE,
             Some(crate::message::Message::CloseTab(tab_idx))
         ),
         menu_item(
             "Close Others",
-            "🚫",
+            icons::BAN,
             if has_other_tabs {
                 Some(crate::message::Message::CloseOtherTabs(tab_idx))
             } else {
@@ -208,7 +208,7 @@ pub fn render_tab_context_menu<'a>(
         ),
         menu_item(
             "Close Tabs to the Right",
-            "⏩",
+            icons::ARROW_RIGHT,
             if has_tabs_to_right {
                 Some(crate::message::Message::CloseTabsToRight(tab_idx))
             } else {
@@ -218,7 +218,7 @@ pub fn render_tab_context_menu<'a>(
         h_sep(),
         menu_item(
             "Copy File Path",
-            "📋",
+            icons::COPY,
             if has_path {
                 Some(crate::message::Message::CopyTabPath(tab_idx))
             } else {
@@ -227,7 +227,7 @@ pub fn render_tab_context_menu<'a>(
         ),
         menu_item(
             "Open Containing Folder",
-            "📁",
+            icons::FOLDER_OPEN,
             if has_path {
                 Some(crate::message::Message::OpenTabFolder(tab_idx))
             } else {

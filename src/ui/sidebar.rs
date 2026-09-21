@@ -1,5 +1,5 @@
 use crate::app::PdfBullApp;
-use crate::app::{INTER_BOLD, INTER_REGULAR};
+use crate::app::{INTER_BOLD, INTER_REGULAR, LUCIDE, icons};
 use crate::models::{AnnotationStyle, FormFieldVariant, SidebarMode};
 use crate::ui::theme;
 use iced::widget::{
@@ -65,13 +65,18 @@ fn sidebar_tab_button<'a>(
 ) -> Element<'a, crate::message::Message> {
     let is_active = mode == current_mode;
     tooltip(
-        button(text(icon).size(15).style(move |_| text::Style {
-            color: Some(if is_active {
-                theme::COLOR_ACCENT
-            } else {
-                theme::COLOR_TEXT_DIM
-            }),
-        }))
+        button(
+            text(icon)
+                .size(15)
+                .font(LUCIDE)
+                .style(move |_| text::Style {
+                    color: Some(if is_active {
+                        theme::COLOR_ACCENT
+                    } else {
+                        theme::COLOR_TEXT_DIM
+                    }),
+                }),
+        )
         .style(move |_theme, status| {
             let base_bg = if is_active {
                 Some(theme::COLOR_BG_WIDGET.into())
@@ -120,26 +125,41 @@ pub fn render(app: &PdfBullApp) -> Element<'_, crate::message::Message> {
 
     let mode_tabs = row![
         sidebar_tab_button(
-            "🖼️",
+            icons::IMAGE,
             "Thumbnails",
             SidebarMode::Thumbnails,
             app.sidebar_mode
         ),
-        sidebar_tab_button("🔖", "Bookmarks", SidebarMode::Outline, app.sidebar_mode),
         sidebar_tab_button(
-            "📝",
+            icons::BOOKMARK,
+            "Bookmarks",
+            SidebarMode::Outline,
+            app.sidebar_mode
+        ),
+        sidebar_tab_button(
+            icons::HIGHLIGHT,
             "Annotations",
             SidebarMode::Annotations,
             app.sidebar_mode
         ),
-        sidebar_tab_button("🔍", "Search", SidebarMode::Search, app.sidebar_mode),
         sidebar_tab_button(
-            "📎",
+            icons::SEARCH,
+            "Search",
+            SidebarMode::Search,
+            app.sidebar_mode
+        ),
+        sidebar_tab_button(
+            icons::PAPERCLIP,
             "Attachments",
             SidebarMode::Attachments,
             app.sidebar_mode
         ),
-        sidebar_tab_button("🥞", "Layers", SidebarMode::Layers, app.sidebar_mode),
+        sidebar_tab_button(
+            icons::LAYERS,
+            "Layers",
+            SidebarMode::Layers,
+            app.sidebar_mode
+        ),
     ]
     .spacing(4)
     .padding([6, 8])
@@ -192,8 +212,12 @@ pub fn render(app: &PdfBullApp) -> Element<'_, crate::message::Message> {
                             .into()
                     } else {
                         container(
-                            text("📄")
+                            text(icons::FILE)
                                 .size(24)
+                                .font(LUCIDE)
+                                .style(|_| text::Style {
+                                    color: Some(theme::COLOR_TEXT_DIM),
+                                })
                                 .align_x(iced::alignment::Horizontal::Center)
                                 .align_y(iced::alignment::Vertical::Center),
                         )
@@ -278,7 +302,7 @@ pub fn render(app: &PdfBullApp) -> Element<'_, crate::message::Message> {
                     list_col = list_col.push(
                         button(
                             row![
-                                text("🔖").size(12),
+                                text(icons::BOOKMARK).size(12).font(LUCIDE),
                                 text(&bookmark.title)
                                     .size(12)
                                     .font(INTER_REGULAR)
@@ -320,7 +344,7 @@ pub fn render(app: &PdfBullApp) -> Element<'_, crate::message::Message> {
                         row![
                             button(
                                 row![
-                                    text("📌").size(12),
+                                    text(icons::BOOKMARK).size(12).font(LUCIDE),
                                     text(&bookmark.label).size(12).font(INTER_REGULAR),
                                 ]
                                 .spacing(6)
@@ -330,7 +354,7 @@ pub fn render(app: &PdfBullApp) -> Element<'_, crate::message::Message> {
                             .style(theme::button_ghost)
                             .padding([6, 8])
                             .width(Length::Fill),
-                            button("×")
+                            button(text(icons::CLOSE).size(10).font(LUCIDE))
                                 .on_press(crate::message::Message::RemoveBookmark(idx))
                                 .style(theme::button_ghost)
                                 .padding([4, 8])
@@ -375,19 +399,19 @@ pub fn render(app: &PdfBullApp) -> Element<'_, crate::message::Message> {
                     };
 
                     let icon = match &ann.style {
-                        AnnotationStyle::Highlight { .. } => "🖍️",
-                        AnnotationStyle::Rectangle { .. } => "🔲",
-                        AnnotationStyle::Text { .. } => "🔤",
-                        AnnotationStyle::Redact { .. } => "⬛",
-                        AnnotationStyle::Circle { .. } => "⭕",
-                        AnnotationStyle::Line { .. } => "📏",
-                        AnnotationStyle::Arrow { .. } => "➡️",
-                        AnnotationStyle::StickyNote { .. } => "📌",
+                        AnnotationStyle::Highlight { .. } => icons::HIGHLIGHT,
+                        AnnotationStyle::Rectangle { .. } => icons::RECTANGLE,
+                        AnnotationStyle::Text { .. } => icons::TEXT,
+                        AnnotationStyle::Redact { .. } => icons::BLOCK,
+                        AnnotationStyle::Circle { .. } => icons::CIRCLE,
+                        AnnotationStyle::Line { .. } => icons::MINUS,
+                        AnnotationStyle::Arrow { .. } => icons::ARROW_RIGHT,
+                        AnnotationStyle::StickyNote { .. } => icons::STICKY_NOTE,
                     };
 
                     let card = container(
                         row![
-                            text(icon).size(12),
+                            text(icon).size(12).font(LUCIDE),
                             text(label)
                                 .size(12)
                                 .font(INTER_REGULAR)
@@ -395,7 +419,7 @@ pub fn render(app: &PdfBullApp) -> Element<'_, crate::message::Message> {
                                     color: Some(theme::COLOR_TEXT_PRIMARY),
                                 }),
                             Space::new().width(Length::Fill),
-                            button("×")
+                            button(text(icons::CLOSE).size(10).font(LUCIDE))
                                 .on_press(crate::message::Message::DeleteAnnotation(idx))
                                 .style(theme::button_ghost)
                                 .padding([2, 6])
@@ -454,7 +478,7 @@ pub fn render(app: &PdfBullApp) -> Element<'_, crate::message::Message> {
             search_col = search_col.push(
                 container(
                     row![
-                        text("🔍").size(12),
+                        text(icons::SEARCH).size(12).font(LUCIDE),
                         text_input("Type term to search...", &app.search_query)
                             .on_input(crate::message::Message::Search)
                             .padding([4, 6])
@@ -557,7 +581,12 @@ pub fn render(app: &PdfBullApp) -> Element<'_, crate::message::Message> {
                     let card = container(
                         column![
                             row![
-                                text(format!("📎 {}", att.name))
+                                text(icons::PAPERCLIP).size(12).font(LUCIDE).style(|_| {
+                                    text::Style {
+                                        color: Some(theme::COLOR_ACCENT),
+                                    }
+                                }),
+                                text(&att.name)
                                     .font(INTER_BOLD)
                                     .size(12)
                                     .style(|_| text::Style {
@@ -752,19 +781,26 @@ pub fn render_forms(app: &PdfBullApp) -> Element<'_, crate::message::Message> {
         }
 
         fields_col = fields_col.push(
-            button(text("💾 Save Filled Form").font(INTER_BOLD).size(12))
-                .on_press(crate::message::Message::FillForm(app.form_fields.clone()))
-                .width(Length::Fill)
-                .padding(10)
-                .style(|_, _| iced::widget::button::Style {
-                    background: Some(theme::COLOR_ACCENT.into()),
-                    text_color: Color::WHITE,
-                    border: Border {
-                        radius: theme::BORDER_RADIUS_MD.into(),
-                        ..Default::default()
-                    },
+            button(
+                row![
+                    text(icons::SAVE).font(LUCIDE).size(13),
+                    text("Save Filled Form").font(INTER_BOLD).size(12),
+                ]
+                .spacing(6)
+                .align_y(Alignment::Center),
+            )
+            .on_press(crate::message::Message::FillForm(app.form_fields.clone()))
+            .width(Length::Fill)
+            .padding(10)
+            .style(|_, _| iced::widget::button::Style {
+                background: Some(theme::COLOR_ACCENT.into()),
+                text_color: Color::WHITE,
+                border: Border {
+                    radius: theme::BORDER_RADIUS_MD.into(),
                     ..Default::default()
-                }),
+                },
+                ..Default::default()
+            }),
         );
     }
 

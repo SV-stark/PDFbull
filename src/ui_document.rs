@@ -409,7 +409,8 @@ fn render_annotations<'a>(
                     let (r, g, b) = hex_to_rgb(color);
                     iced::widget::tooltip(
                         container(
-                            iced::widget::text("📝")
+                            iced::widget::text(icons::STICKY_NOTE)
+                                .font(LUCIDE)
                                 .size(14.0 * zoom)
                                 .color(Color::BLACK),
                         )
@@ -436,9 +437,9 @@ fn render_annotations<'a>(
             let ann_idx = tab.annotations.iter().position(|a| a.id == ann.id);
 
             let mut delete_btn = button(
-                iced::widget::text("×")
-                    .size(9)
-                    .font(INTER_BOLD)
+                iced::widget::text(icons::CLOSE)
+                    .size(8)
+                    .font(LUCIDE)
                     .color(Color::WHITE),
             )
             .padding([1, 4])
@@ -1183,7 +1184,12 @@ pub fn document_view<'a>(app: &'a PdfBullApp) -> Element<'a, crate::message::Mes
     let content: Element<crate::message::Message> = if tab.total_pages == 0 {
         let empty_content: Element<_> = if tab.view_state.is_loading {
             column![
-                text("⏳").size(40),
+                text(icons::LOADER)
+                    .size(40)
+                    .font(LUCIDE)
+                    .style(|_| text::Style {
+                        color: Some(theme::COLOR_ACCENT)
+                    }),
                 text("Loading Document...")
                     .font(INTER_BOLD)
                     .size(20)
@@ -1436,23 +1442,38 @@ fn render_search_hud(app: &PdfBullApp) -> Element<'_, crate::message::Message> {
         );
     }
 
-    let prev_btn = button(text("▲").size(10).style(|_| text::Style {
-        color: Some(Color::from_rgb8(200, 205, 215)),
-    }))
+    let prev_btn = button(
+        text(icons::CHEVRON_UP)
+            .size(12)
+            .font(LUCIDE)
+            .style(|_| text::Style {
+                color: Some(Color::from_rgb8(200, 205, 215)),
+            }),
+    )
     .on_press(crate::message::Message::PrevSearchResult)
     .style(theme::button_ghost)
     .padding([4, 6]);
 
-    let next_btn = button(text("▼").size(10).style(|_| text::Style {
-        color: Some(Color::from_rgb8(200, 205, 215)),
-    }))
+    let next_btn = button(
+        text(icons::CHEVRON_DOWN)
+            .size(12)
+            .font(LUCIDE)
+            .style(|_| text::Style {
+                color: Some(Color::from_rgb8(200, 205, 215)),
+            }),
+    )
     .on_press(crate::message::Message::NextSearchResult)
     .style(theme::button_ghost)
     .padding([4, 6]);
 
-    let close_btn = button(text("✕").size(11).style(|_| text::Style {
-        color: Some(Color::from_rgb8(170, 175, 185)),
-    }))
+    let close_btn = button(
+        text(icons::CLOSE)
+            .size(11)
+            .font(LUCIDE)
+            .style(|_| text::Style {
+                color: Some(Color::from_rgb8(170, 175, 185)),
+            }),
+    )
     .on_press(crate::message::Message::ToggleSearchHud(Some(false)))
     .style(theme::button_ghost)
     .padding([4, 6]);

@@ -4,7 +4,7 @@ pub mod theme;
 pub mod toolbar;
 
 use crate::app::PdfBullApp;
-use crate::app::{INTER_BOLD, INTER_REGULAR};
+use crate::app::{INTER_BOLD, INTER_REGULAR, LUCIDE, icons};
 use crate::ui_document::document_view;
 use crate::ui_keyboard_help::keyboard_help_view;
 use crate::ui_metadata::metadata_view;
@@ -118,12 +118,22 @@ impl<'a> canvas::Program<crate::message::Message> for SignatureCanvasProgram<'a>
 fn watermark_prompt_view(app: &PdfBullApp) -> Element<'_, crate::message::Message> {
     let modal_content = container(
         column![
-            text("🏷️ Add Document Watermark")
-                .size(18)
-                .font(INTER_BOLD)
-                .style(|_| text::Style {
-                    color: Some(Color::WHITE)
-                }),
+            row![
+                text(icons::DROPLET)
+                    .size(18)
+                    .font(LUCIDE)
+                    .style(|_| text::Style {
+                        color: Some(theme::COLOR_ACCENT)
+                    }),
+                text("Add Document Watermark")
+                    .size(18)
+                    .font(INTER_BOLD)
+                    .style(|_| text::Style {
+                        color: Some(Color::WHITE)
+                    }),
+            ]
+            .spacing(8)
+            .align_y(Alignment::Center),
             Space::new().height(6),
             text("Enter the text to overlay across all pages of the document:")
                 .size(13)
@@ -194,12 +204,22 @@ fn watermark_prompt_view(app: &PdfBullApp) -> Element<'_, crate::message::Messag
 fn header_footer_prompt_view(app: &PdfBullApp) -> Element<'_, crate::message::Message> {
     let modal_content = container(
         column![
-            text("🔢 Header & Page Numbering")
-                .size(18)
-                .font(INTER_BOLD)
-                .style(|_| text::Style {
-                    color: Some(Color::WHITE)
-                }),
+            row![
+                text(icons::HASH)
+                    .size(18)
+                    .font(LUCIDE)
+                    .style(|_| text::Style {
+                        color: Some(theme::COLOR_ACCENT)
+                    }),
+                text("Header & Page Numbering")
+                    .size(18)
+                    .font(INTER_BOLD)
+                    .style(|_| text::Style {
+                        color: Some(Color::WHITE)
+                    }),
+            ]
+            .spacing(8)
+            .align_y(Alignment::Center),
             Space::new().height(6),
             text("Inject top header text and bottom page numbers ('Page {page} of {pages}'):")
                 .size(13)
@@ -275,12 +295,22 @@ fn header_footer_prompt_view(app: &PdfBullApp) -> Element<'_, crate::message::Me
 fn permissions_prompt_view(app: &PdfBullApp) -> Element<'_, crate::message::Message> {
     let modal_content = container(
         column![
-            text("🔒 Security & Permission Rules")
-                .size(18)
-                .font(INTER_BOLD)
-                .style(|_| text::Style {
-                    color: Some(Color::WHITE)
-                }),
+            row![
+                text(icons::LOCK)
+                    .size(18)
+                    .font(LUCIDE)
+                    .style(|_| text::Style {
+                        color: Some(theme::COLOR_ACCENT)
+                    }),
+                text("Security & Permission Rules")
+                    .size(18)
+                    .font(INTER_BOLD)
+                    .style(|_| text::Style {
+                        color: Some(Color::WHITE)
+                    }),
+            ]
+            .spacing(8)
+            .align_y(Alignment::Center),
             Space::new().height(6),
             text("Configure document security policy & feature permissions:")
                 .size(13)
@@ -478,12 +508,22 @@ fn cert_signer_view(app: &PdfBullApp) -> Element<'_, crate::message::Message> {
 fn password_prompt_view(app: &PdfBullApp) -> Element<'_, crate::message::Message> {
     let modal_content = container(
         column![
-            text("🔑 Enter Password")
-                .size(18)
-                .font(INTER_BOLD)
-                .style(|_| text::Style {
-                    color: Some(Color::WHITE)
-                }),
+            row![
+                text(icons::KEY)
+                    .size(18)
+                    .font(LUCIDE)
+                    .style(|_| text::Style {
+                        color: Some(theme::COLOR_ACCENT)
+                    }),
+                text("Enter Password")
+                    .size(18)
+                    .font(INTER_BOLD)
+                    .style(|_| text::Style {
+                        color: Some(Color::WHITE)
+                    }),
+            ]
+            .spacing(8)
+            .align_y(Alignment::Center),
             Space::new().height(6),
             text("This document is password-protected. Please enter the password:")
                 .size(13)
@@ -562,12 +602,22 @@ fn signature_creator_view(app: &PdfBullApp) -> Element<'_, crate::message::Messa
 
     let modal_content = container(
         column![
-            text("✍️ Create Digital Signature")
-                .size(18)
-                .font(INTER_BOLD)
-                .style(|_| text::Style {
-                    color: Some(Color::WHITE)
-                }),
+            row![
+                text(icons::SIGNATURE)
+                    .size(18)
+                    .font(LUCIDE)
+                    .style(|_| text::Style {
+                        color: Some(theme::COLOR_ACCENT)
+                    }),
+                text("Create Digital Signature")
+                    .size(18)
+                    .font(INTER_BOLD)
+                    .style(|_| text::Style {
+                        color: Some(Color::WHITE)
+                    }),
+            ]
+            .spacing(8)
+            .align_y(Alignment::Center),
             Space::new().height(4),
             text("Draw your signature inside the box using mouse/trackpad:")
                 .size(13)
@@ -590,10 +640,17 @@ fn signature_creator_view(app: &PdfBullApp) -> Element<'_, crate::message::Messa
                     .on_press(crate::message::Message::ToggleSignatureCreator(false))
                     .style(theme::button_ghost)
                     .padding([8, 16]),
-                button(text("🧹 Clear").size(13).font(INTER_REGULAR))
-                    .on_press(crate::message::Message::ClearSignature)
-                    .style(theme::button_ghost)
-                    .padding([8, 16]),
+                button(
+                    row![
+                        text(icons::TRASH_2).size(13).font(LUCIDE),
+                        text("Clear").size(13).font(INTER_REGULAR),
+                    ]
+                    .spacing(6)
+                    .align_y(Alignment::Center),
+                )
+                .on_press(crate::message::Message::ClearSignature)
+                .style(theme::button_ghost)
+                .padding([8, 16]),
                 Space::new().width(Length::Fill),
                 button(text("Save Signature").size(13).font(INTER_BOLD))
                     .on_press(crate::message::Message::SaveSignature)
@@ -650,12 +707,22 @@ fn organizer_view(app: &PdfBullApp) -> Element<'_, crate::message::Message> {
     let header = container(
         row![
             column![
-                text("📂 Visual Page Organizer")
-                    .size(24)
-                    .font(INTER_BOLD)
-                    .style(|_| text::Style {
-                        color: Some(Color::WHITE)
-                    }),
+                row![
+                    text(icons::LAYOUT_GRID)
+                        .size(24)
+                        .font(LUCIDE)
+                        .style(|_| text::Style {
+                            color: Some(theme::COLOR_ACCENT)
+                        }),
+                    text("Visual Page Organizer")
+                        .size(24)
+                        .font(INTER_BOLD)
+                        .style(|_| text::Style {
+                            color: Some(Color::WHITE)
+                        }),
+                ]
+                .spacing(10)
+                .align_y(Alignment::Center),
                 text(format!(
                     "Rearrange, rotate, or delete pages • {} pages in document",
                     tab.page_mapping.len()
@@ -668,31 +735,45 @@ fn organizer_view(app: &PdfBullApp) -> Element<'_, crate::message::Message> {
             ]
             .spacing(4),
             Space::new().width(Length::Fill),
-            button(text("💾 Export PDF").size(13).font(INTER_BOLD))
-                .on_press(crate::message::Message::SaveOrganizedPDF)
-                .padding([10, 20])
-                .style(|_theme, _status| button::Style {
-                    background: Some(theme::COLOR_ACCENT.into()),
-                    text_color: Color::WHITE,
-                    border: Border {
-                        radius: theme::BORDER_RADIUS_MD.into(),
-                        ..Default::default()
-                    },
+            button(
+                row![
+                    text(icons::SAVE).size(13).font(LUCIDE),
+                    text("Export PDF").size(13).font(INTER_BOLD),
+                ]
+                .spacing(6)
+                .align_y(Alignment::Center),
+            )
+            .on_press(crate::message::Message::SaveOrganizedPDF)
+            .padding([10, 20])
+            .style(|_theme, _status| button::Style {
+                background: Some(theme::COLOR_ACCENT.into()),
+                text_color: Color::WHITE,
+                border: Border {
+                    radius: theme::BORDER_RADIUS_MD.into(),
                     ..Default::default()
-                }),
+                },
+                ..Default::default()
+            }),
             Space::new().width(10),
-            button(text("❌ Close Organizer").size(13).font(INTER_BOLD))
-                .on_press(crate::message::Message::TogglePageOrganizer(false))
-                .padding([10, 20])
-                .style(|_theme, _status| button::Style {
-                    background: Some(theme::COLOR_BG_WIDGET.into()),
-                    text_color: Color::WHITE,
-                    border: Border {
-                        radius: theme::BORDER_RADIUS_MD.into(),
-                        ..Default::default()
-                    },
+            button(
+                row![
+                    text(icons::CLOSE).size(13).font(LUCIDE),
+                    text("Close Organizer").size(13).font(INTER_BOLD),
+                ]
+                .spacing(6)
+                .align_y(Alignment::Center),
+            )
+            .on_press(crate::message::Message::TogglePageOrganizer(false))
+            .padding([10, 20])
+            .style(|_theme, _status| button::Style {
+                background: Some(theme::COLOR_BG_WIDGET.into()),
+                text_color: Color::WHITE,
+                border: Border {
+                    radius: theme::BORDER_RADIUS_MD.into(),
                     ..Default::default()
-                }),
+                },
+                ..Default::default()
+            }),
         ]
         .align_y(Alignment::Center),
     )
@@ -715,8 +796,12 @@ fn organizer_view(app: &PdfBullApp) -> Element<'_, crate::message::Message> {
                     .into()
             } else {
                 container(
-                    text("📄")
+                    text(icons::FILE)
                         .size(36)
+                        .font(LUCIDE)
+                        .style(|_| text::Style {
+                            color: Some(theme::COLOR_TEXT_DIM),
+                        })
                         .align_y(iced::alignment::Vertical::Center)
                         .align_x(iced::alignment::Horizontal::Center),
                 )
@@ -733,7 +818,7 @@ fn organizer_view(app: &PdfBullApp) -> Element<'_, crate::message::Message> {
                 .into()
             };
 
-        let mut move_left_btn = button(text("◀").size(11))
+        let mut move_left_btn = button(text(icons::PREV).size(12).font(LUCIDE))
             .style(theme::button_ghost)
             .padding(6);
         if ui_idx > 0 {
@@ -741,7 +826,7 @@ fn organizer_view(app: &PdfBullApp) -> Element<'_, crate::message::Message> {
                 move_left_btn.on_press(crate::message::Message::OrganizerMovePage(ui_idx, -1));
         }
 
-        let mut move_right_btn = button(text("▶").size(11))
+        let mut move_right_btn = button(text(icons::NEXT).size(12).font(LUCIDE))
             .style(theme::button_ghost)
             .padding(6);
         if ui_idx + 1 < tab.page_mapping.len() {
@@ -778,11 +863,11 @@ fn organizer_view(app: &PdfBullApp) -> Element<'_, crate::message::Message> {
                 Space::new().height(5),
                 row![
                     move_left_btn,
-                    button(text("🔄").size(11))
+                    button(text(icons::ROTATE).size(12).font(LUCIDE))
                         .on_press(crate::message::Message::OrganizerRotatePage(ui_idx, 90))
                         .style(theme::button_ghost)
                         .padding(6),
-                    button(text("🗑️").size(11))
+                    button(text(icons::TRASH_2).size(12).font(LUCIDE))
                         .on_press(crate::message::Message::OrganizerDeletePage(ui_idx))
                         .style(theme::button_ghost)
                         .padding(6),
@@ -956,12 +1041,22 @@ fn signatures_detail_view(app: &PdfBullApp) -> Element<'_, crate::message::Messa
 
     let modal_content = container(
         column![
-            text("✍️ Digital Signatures")
-                .size(18)
-                .font(INTER_BOLD)
-                .style(|_| text::Style {
-                    color: Some(Color::WHITE)
-                }),
+            row![
+                text(icons::SIGNATURE)
+                    .size(18)
+                    .font(LUCIDE)
+                    .style(|_| text::Style {
+                        color: Some(theme::COLOR_ACCENT)
+                    }),
+                text("Digital Signatures")
+                    .size(18)
+                    .font(INTER_BOLD)
+                    .style(|_| text::Style {
+                        color: Some(Color::WHITE)
+                    }),
+            ]
+            .spacing(8)
+            .align_y(Alignment::Center),
             Space::new().height(6),
             text("Cryptographic status of digital signatures found in this document:")
                 .size(13)
@@ -1334,7 +1429,12 @@ pub fn view(app: &PdfBullApp) -> Element<'_, crate::message::Message> {
 fn render_file_drop_overlay<'a>() -> Element<'a, crate::message::Message> {
     let drop_box = container(
         column![
-            text("📥").size(54),
+            text(icons::FILE_TEXT)
+                .size(54)
+                .font(LUCIDE)
+                .style(|_| text::Style {
+                    color: Some(theme::COLOR_ACCENT),
+                }),
             text("Drop PDF to Open")
                 .size(22)
                 .font(INTER_BOLD)

@@ -13,7 +13,13 @@ pub fn render(app: &PdfBullApp) -> Element<'_, crate::message::Message> {
 
     // --- 1. Top Header Segmented Ribbon Selector Bar ---
     let logo_and_title = row![
-        text("🐂 PDFbull")
+        text(icons::BOOK_OPEN)
+            .size(16)
+            .font(LUCIDE)
+            .style(|_| text::Style {
+                color: Some(theme::COLOR_ACCENT),
+            }),
+        text("PDFbull")
             .size(15)
             .font(INTER_BOLD)
             .style(|_| text::Style {
@@ -31,9 +37,12 @@ pub fn render(app: &PdfBullApp) -> Element<'_, crate::message::Message> {
 
     let ribbon_tabs = row![
         button(
-            row![text("🏠").size(13), text("Home").size(12).font(INTER_BOLD)]
-                .spacing(6)
-                .align_y(Alignment::Center)
+            row![
+                text(icons::HOME).size(13).font(LUCIDE),
+                text("Home").size(12).font(INTER_BOLD)
+            ]
+            .spacing(6)
+            .align_y(Alignment::Center)
         )
         .on_press(crate::message::Message::SetRibbonTab(RibbonTab::Home))
         .padding([6, 14])
@@ -41,9 +50,12 @@ pub fn render(app: &PdfBullApp) -> Element<'_, crate::message::Message> {
             app.active_ribbon_tab == RibbonTab::Home
         )),
         button(
-            row![text("👁️").size(13), text("View").size(12).font(INTER_BOLD)]
-                .spacing(6)
-                .align_y(Alignment::Center)
+            row![
+                text(icons::EYE).size(13).font(LUCIDE),
+                text("View").size(12).font(INTER_BOLD)
+            ]
+            .spacing(6)
+            .align_y(Alignment::Center)
         )
         .on_press(crate::message::Message::SetRibbonTab(RibbonTab::View))
         .padding([6, 14])
@@ -52,7 +64,7 @@ pub fn render(app: &PdfBullApp) -> Element<'_, crate::message::Message> {
         )),
         button(
             row![
-                text("✏️").size(13),
+                text(icons::PEN_TOOL).size(13).font(LUCIDE),
                 text("Annotate").size(12).font(INTER_BOLD)
             ]
             .spacing(6)
@@ -65,7 +77,7 @@ pub fn render(app: &PdfBullApp) -> Element<'_, crate::message::Message> {
         )),
         button(
             row![
-                text("🛠️").size(13),
+                text(icons::WRENCH).size(13).font(LUCIDE),
                 text("Page & Tools").size(12).font(INTER_BOLD)
             ]
             .spacing(6)
@@ -78,7 +90,7 @@ pub fn render(app: &PdfBullApp) -> Element<'_, crate::message::Message> {
         )),
         button(
             row![
-                text("🔄").size(13),
+                text(icons::REFRESH_CW).size(13).font(LUCIDE),
                 text("Convert").size(12).font(INTER_BOLD)
             ]
             .spacing(6)
@@ -128,10 +140,10 @@ pub fn render(app: &PdfBullApp) -> Element<'_, crate::message::Message> {
             .signatures
             .iter()
             .all(|sig| sig.digest_verified && sig.crypto_valid);
-        let badge_text = if all_valid {
-            "✍️ Signed"
+        let (badge_icon, badge_label) = if all_valid {
+            (icons::SIGNATURE, "Signed")
         } else {
-            "⚠️ Signature Warning"
+            (icons::SHIELD, "Signature Warning")
         };
         let badge_color = if all_valid {
             theme::COLOR_SUCCESS
@@ -141,12 +153,22 @@ pub fn render(app: &PdfBullApp) -> Element<'_, crate::message::Message> {
 
         button(
             container(
-                text(badge_text)
-                    .font(INTER_BOLD)
-                    .size(11)
-                    .style(|_| text::Style {
-                        color: Some(Color::WHITE),
-                    }),
+                row![
+                    text(badge_icon)
+                        .font(LUCIDE)
+                        .size(12)
+                        .style(|_| text::Style {
+                            color: Some(Color::WHITE),
+                        }),
+                    text(badge_label)
+                        .font(INTER_BOLD)
+                        .size(11)
+                        .style(|_| text::Style {
+                            color: Some(Color::WHITE),
+                        }),
+                ]
+                .spacing(5)
+                .align_y(Alignment::Center),
             )
             .padding([4, 10])
             .style(move |_| iced::widget::container::Style {
@@ -323,8 +345,8 @@ pub fn render(app: &PdfBullApp) -> Element<'_, crate::message::Message> {
         }
         RibbonTab::View => {
             let is_midnight = tab.render_filter == RenderFilter::Inverted;
-            let midnight_btn = tool_button_emoji(
-                "🌙",
+            let midnight_btn = tool_button(
+                icons::MOON,
                 "Midnight",
                 crate::message::Message::SetFilter(if is_midnight {
                     RenderFilter::None
@@ -336,22 +358,22 @@ pub fn render(app: &PdfBullApp) -> Element<'_, crate::message::Message> {
             );
 
             let layout_controls = row![
-                tool_button_emoji(
-                    "📜",
+                tool_button(
+                    icons::SCROLL,
                     "Continuous",
                     crate::message::Message::SetPageLayoutMode(PageLayoutMode::SingleContinuous),
                     tab.layout_mode == PageLayoutMode::SingleContinuous,
                     "Continuous vertical scrolling mode"
                 ),
-                tool_button_emoji(
-                    "📄",
+                tool_button(
+                    icons::FILE,
                     "Single",
                     crate::message::Message::SetPageLayoutMode(PageLayoutMode::SinglePage),
                     tab.layout_mode == PageLayoutMode::SinglePage,
                     "Single page presentation mode (PgUp/PgDn/Arrows)"
                 ),
-                tool_button_emoji(
-                    "📖",
+                tool_button(
+                    icons::BOOK_OPEN,
                     "Spread",
                     crate::message::Message::SetPageLayoutMode(PageLayoutMode::TwoPageSpread),
                     tab.layout_mode == PageLayoutMode::TwoPageSpread,
@@ -361,8 +383,8 @@ pub fn render(app: &PdfBullApp) -> Element<'_, crate::message::Message> {
             .spacing(4);
 
             let cover_toggle = if tab.layout_mode == PageLayoutMode::TwoPageSpread {
-                Some(tool_button_emoji(
-                    "📕",
+                Some(tool_button(
+                    icons::BOOK,
                     if tab.two_page_cover {
                         "Cover: On"
                     } else {
@@ -439,29 +461,29 @@ pub fn render(app: &PdfBullApp) -> Element<'_, crate::message::Message> {
                     app.annotation_mode == Some(PendingAnnotationKind::Rectangle),
                     "Draw rectangle shape"
                 ),
-                tool_button_emoji(
-                    "⭕",
+                tool_button(
+                    icons::CIRCLE,
                     "Circle",
                     crate::message::Message::SetAnnotationMode(Some(PendingAnnotationKind::Circle)),
                     app.annotation_mode == Some(PendingAnnotationKind::Circle),
                     "Draw circle shape"
                 ),
-                tool_button_emoji(
-                    "📏",
+                tool_button(
+                    icons::MINUS,
                     "Line",
                     crate::message::Message::SetAnnotationMode(Some(PendingAnnotationKind::Line)),
                     app.annotation_mode == Some(PendingAnnotationKind::Line),
                     "Draw straight line"
                 ),
-                tool_button_emoji(
-                    "➡️",
+                tool_button(
+                    icons::ARROW_RIGHT,
                     "Arrow",
                     crate::message::Message::SetAnnotationMode(Some(PendingAnnotationKind::Arrow)),
                     app.annotation_mode == Some(PendingAnnotationKind::Arrow),
                     "Draw directional arrow"
                 ),
-                tool_button_emoji(
-                    "📌",
+                tool_button(
+                    icons::STICKY_NOTE,
                     "Note",
                     crate::message::Message::SetAnnotationMode(Some(
                         PendingAnnotationKind::StickyNote
@@ -486,25 +508,40 @@ pub fn render(app: &PdfBullApp) -> Element<'_, crate::message::Message> {
             ]
             .spacing(6);
 
-            let style_section: Element<'_, crate::message::Message> = if let Some(mode) =
-                app.annotation_mode
-            {
-                let colors = [
-                    ("#3b82f6", "🔵"),
-                    ("#ef4444", "🔴"),
-                    ("#10b981", "🟢"),
-                    ("#f59e0b", "🟡"),
-                    ("#1f2937", "⚫"),
-                ];
+            let style_section: Element<'_, crate::message::Message> =
+                if let Some(mode) = app.annotation_mode {
+                    let colors = [
+                        ("#3b82f6", Color::from_rgb(0.23, 0.51, 0.96)),
+                        ("#ef4444", Color::from_rgb(0.94, 0.27, 0.27)),
+                        ("#10b981", Color::from_rgb(0.06, 0.73, 0.51)),
+                        ("#f59e0b", Color::from_rgb(0.96, 0.62, 0.04)),
+                        ("#1f2937", Color::from_rgb(0.12, 0.16, 0.22)),
+                    ];
 
-                let mut color_swatches = row![text("Color: ").size(11).font(INTER_BOLD)]
-                    .spacing(4)
-                    .align_y(Alignment::Center);
+                    let mut color_swatches = row![text("Color: ").size(11).font(INTER_BOLD)]
+                        .spacing(4)
+                        .align_y(Alignment::Center);
 
-                for (hex, emoji) in colors {
-                    let is_active = app.annotation_color == hex;
-                    color_swatches = color_swatches.push(
-                        button(text(emoji).size(14))
+                    for (hex, color) in colors {
+                        let is_active = app.annotation_color == hex;
+                        color_swatches = color_swatches.push(
+                            button(
+                                container(Space::new().width(12).height(12)).style(move |_| {
+                                    iced::widget::container::Style {
+                                        background: Some(color.into()),
+                                        border: Border {
+                                            radius: theme::BORDER_RADIUS_FULL.into(),
+                                            width: if is_active { 1.5 } else { 1.0 },
+                                            color: if is_active {
+                                                Color::WHITE
+                                            } else {
+                                                Color::from_rgba(1.0, 1.0, 1.0, 0.2)
+                                            },
+                                        },
+                                        ..Default::default()
+                                    }
+                                }),
+                            )
                             .on_press(crate::message::Message::SetAnnotationColor(hex.to_string()))
                             .style(move |_, _| iced::widget::button::Style {
                                 background: if is_active {
@@ -519,64 +556,64 @@ pub fn render(app: &PdfBullApp) -> Element<'_, crate::message::Message> {
                                 },
                                 ..Default::default()
                             })
-                            .padding(2),
-                    );
-                }
+                            .padding(4),
+                        );
+                    }
 
-                let thickness_label = format!("Size: {:.0}px", app.annotation_thickness);
-                let thickness_control = row![
-                    text(thickness_label).size(11).font(INTER_BOLD),
-                    button("-")
-                        .on_press(crate::message::Message::SetAnnotationThickness(
-                            (app.annotation_thickness - 1.0).max(1.0)
-                        ))
-                        .padding([2, 6]),
-                    button("+")
-                        .on_press(crate::message::Message::SetAnnotationThickness(
-                            (app.annotation_thickness + 1.0).min(10.0)
-                        ))
-                        .padding([2, 6]),
-                ]
-                .spacing(4)
-                .align_y(Alignment::Center);
-
-                let text_content_control: Element<'_, crate::message::Message> = if mode
-                    == PendingAnnotationKind::Text
-                    || mode == PendingAnnotationKind::StickyNote
-                {
-                    let placeholder = if mode == PendingAnnotationKind::Text {
-                        "Annotation text..."
-                    } else {
-                        "Note content..."
-                    };
-                    row![
-                        text("Content: ").size(11).font(INTER_BOLD),
-                        text_input(placeholder, &app.annotation_text)
-                            .on_input(crate::message::Message::AnnotationTextChanged)
-                            .width(Length::Fixed(160.0))
-                            .padding([4, 8])
-                            .size(12),
+                    let thickness_label = format!("Size: {:.0}px", app.annotation_thickness);
+                    let thickness_control = row![
+                        text(thickness_label).size(11).font(INTER_BOLD),
+                        button("-")
+                            .on_press(crate::message::Message::SetAnnotationThickness(
+                                (app.annotation_thickness - 1.0).max(1.0)
+                            ))
+                            .padding([2, 6]),
+                        button("+")
+                            .on_press(crate::message::Message::SetAnnotationThickness(
+                                (app.annotation_thickness + 1.0).min(10.0)
+                            ))
+                            .padding([2, 6]),
                     ]
                     .spacing(4)
+                    .align_y(Alignment::Center);
+
+                    let text_content_control: Element<'_, crate::message::Message> = if mode
+                        == PendingAnnotationKind::Text
+                        || mode == PendingAnnotationKind::StickyNote
+                    {
+                        let placeholder = if mode == PendingAnnotationKind::Text {
+                            "Annotation text..."
+                        } else {
+                            "Note content..."
+                        };
+                        row![
+                            text("Content: ").size(11).font(INTER_BOLD),
+                            text_input(placeholder, &app.annotation_text)
+                                .on_input(crate::message::Message::AnnotationTextChanged)
+                                .width(Length::Fixed(160.0))
+                                .padding([4, 8])
+                                .size(12),
+                        ]
+                        .spacing(4)
+                        .align_y(Alignment::Center)
+                        .into()
+                    } else {
+                        Space::new().into()
+                    };
+
+                    row![
+                        v_sep(),
+                        color_swatches,
+                        v_sep(),
+                        thickness_control,
+                        text_content_control,
+                    ]
+                    .spacing(12)
                     .align_y(Alignment::Center)
                     .into()
                 } else {
                     Space::new().into()
                 };
-
-                row![
-                    v_sep(),
-                    color_swatches,
-                    v_sep(),
-                    thickness_control,
-                    text_content_control,
-                ]
-                .spacing(12)
-                .align_y(Alignment::Center)
-                .into()
-            } else {
-                Space::new().into()
-            };
 
             let save_btn = button(
                 row![
@@ -649,7 +686,7 @@ pub fn render(app: &PdfBullApp) -> Element<'_, crate::message::Message> {
                         v_sep(),
                         button(
                             row![
-                                text("✨").size(12),
+                                text(icons::SPARKLES).size(12).font(LUCIDE),
                                 text("Highlight Selection").size(11).font(INTER_BOLD)
                             ]
                             .spacing(6)
@@ -700,15 +737,15 @@ pub fn render(app: &PdfBullApp) -> Element<'_, crate::message::Message> {
         }
         RibbonTab::Tools => {
             let tool_action_buttons = row![
-                tool_button_emoji(
-                    "📂",
+                tool_button(
+                    icons::LAYOUT_GRID,
                     "Organizer",
                     crate::message::Message::TogglePageOrganizer(!app.show_page_organizer),
                     app.show_page_organizer,
                     "Visual page grid to rotate, reorder, or delete pages"
                 ),
-                tool_button_emoji(
-                    "📊",
+                tool_button(
+                    icons::TABLE,
                     "Tables",
                     crate::message::Message::ToggleTableMode,
                     app.table_mode_active,
@@ -721,36 +758,36 @@ pub fn render(app: &PdfBullApp) -> Element<'_, crate::message::Message> {
                     app.show_forms_sidebar,
                     "Spec-compliant PDF form filler sidebar"
                 ),
-                tool_button_emoji(
-                    "🏷️",
+                tool_button(
+                    icons::DROPLET,
                     "Watermark",
                     crate::message::Message::ToggleWatermarkPrompt(true),
                     false,
                     "Overlay custom text watermark across document pages"
                 ),
-                tool_button_emoji(
-                    "🔢",
+                tool_button(
+                    icons::HASH,
                     "Header & Page #",
                     crate::message::Message::ToggleHeaderFooterPrompt(true),
                     false,
                     "Inject headers and page numbers ('Page X of Y')"
                 ),
-                tool_button_emoji(
-                    "🔒",
+                tool_button(
+                    icons::LOCK,
                     "Security Rules",
                     crate::message::Message::TogglePermissionsPrompt(true),
                     false,
                     "Configure printing, text copying, and editing permissions"
                 ),
-                tool_button_emoji(
-                    "📁",
+                tool_button(
+                    icons::FOLDER_OPEN,
                     "Open Folder",
                     crate::message::Message::OpenContainingFolder,
                     false,
                     "Reveal active PDF location in File Explorer"
                 ),
-                tool_button_emoji(
-                    "✍️",
+                tool_button(
+                    icons::SIGNATURE,
                     "Signature",
                     crate::message::Message::ToggleSignatureCreator(true),
                     app.show_signature_creator,
@@ -763,57 +800,57 @@ pub fn render(app: &PdfBullApp) -> Element<'_, crate::message::Message> {
                     false,
                     "Combine multiple PDF files into one"
                 ),
-                tool_button_emoji(
-                    "✂️",
+                tool_button(
+                    icons::SCISSORS,
                     "Split",
                     crate::message::Message::SplitPDF(vec![]),
                     false,
                     "Extract or split pages into separate PDF files"
                 ),
-                tool_button_emoji(
-                    "\u{26a1}",
+                tool_button(
+                    icons::ZAP,
                     "Optimize",
                     crate::message::Message::OptimizePDF,
                     false,
                     "Compress streams & sanitize document metadata"
                 ),
-                tool_button_emoji(
-                    "\u{1f6e1}",
+                tool_button(
+                    icons::SHIELD_CHECK,
                     "Validate",
                     crate::message::Message::ToggleConformanceValidator(!app.show_conformance_validator),
                     app.show_conformance_validator,
                     "Validate PDF/A, PDF/X, and PDF/UA standard compliance"
                 ),
-                tool_button_emoji(
-                    "\u{1f5a5}",
+                tool_button(
+                    icons::TERMINAL,
                     "Logs",
                     crate::message::Message::ToggleLogConsole(None),
                     app.show_log_console,
                     "Open in-app developer log console (Ctrl+L)"
                 ),
-                tool_button_emoji(
-                    "\u{1f4c4}",
+                tool_button(
+                    icons::FILE_PLUS,
                     "New Doc",
                     crate::message::Message::CreateBlankDocument,
                     false,
                     "Create a new blank PDF document from scratch (A4 format)"
                 ),
-                tool_button_emoji(
-                    "\u{1f510}",
+                tool_button(
+                    icons::KEY,
                     "Sign Cert",
                     crate::message::Message::ToggleCertSigner(!app.show_cert_signer),
                     app.show_cert_signer,
                     "Apply a cryptographic PKCS#12 digital signature (.p12/.pfx certificate)"
                 ),
-                tool_button_emoji(
-                    "\u{1f3a8}",
+                tool_button(
+                    icons::PALETTE,
                     "CMYK",
                     crate::message::Message::ToggleCmykInspector(!app.show_cmyk_inspector),
                     app.show_cmyk_inspector,
                     "Live CMYK \u{2194} RGB color converter using zpdf_core naive subtractive model"
                 ),
-                tool_button_emoji(
-                    "\u{1f50d}",
+                tool_button(
+                    icons::SCAN_TEXT,
                     "OCR Page",
                     crate::message::Message::TriggerOcrCurrentPage(app.selected_ocr_script),
                     app.ocr_pending,
@@ -844,22 +881,22 @@ pub fn render(app: &PdfBullApp) -> Element<'_, crate::message::Message> {
         }
         RibbonTab::Convert => {
             let convert_buttons = row![
-                tool_button_emoji(
-                    "📝",
+                tool_button(
+                    icons::FILE_CODE,
                     "To Markdown",
                     crate::message::Message::ExportDocumentMarkdown,
                     false,
                     "Export entire PDF to structured Markdown (.md)"
                 ),
-                tool_button_emoji(
-                    "🌐",
+                tool_button(
+                    icons::GLOBE,
                     "To HTML5",
                     crate::message::Message::ExportDocumentHtml,
                     false,
                     "Export entire PDF to semantic HTML5 (.html)"
                 ),
-                tool_button_emoji(
-                    "📄",
+                tool_button(
+                    icons::FILE_TEXT,
                     "To Plain Text",
                     crate::message::Message::ExportDocumentTxt,
                     false,
@@ -937,39 +974,6 @@ fn tool_button<'a>(
     .into()
 }
 
-fn tool_button_emoji<'a>(
-    icon: &'a str,
-    label: &'a str,
-    msg: crate::message::Message,
-    active: bool,
-    tooltip_text: &'a str,
-) -> Element<'a, crate::message::Message> {
-    tooltip(
-        button(
-            row![
-                text(icon).size(14),
-                text(label).size(11).font(INTER_REGULAR).style(move |_| {
-                    text::Style {
-                        color: Some(if active {
-                            Color::WHITE
-                        } else {
-                            theme::COLOR_TEXT_DIM
-                        }),
-                    }
-                })
-            ]
-            .spacing(6)
-            .align_y(Alignment::Center),
-        )
-        .on_press(msg)
-        .padding([5, 9])
-        .style(theme::button_tool(active)),
-        tooltip_text,
-        tooltip::Position::Bottom,
-    )
-    .into()
-}
-
 fn zoom_control(zoom: f32) -> Element<'static, crate::message::Message> {
     container(
         row![
@@ -990,7 +994,7 @@ fn zoom_control(zoom: f32) -> Element<'static, crate::message::Message> {
                 .style(theme::button_ghost)
                 .padding(4),
             tooltip(
-                button(text("↔").size(12).font(INTER_BOLD))
+                button(text(icons::EXPAND_HORIZONTAL).size(12).font(LUCIDE))
                     .on_press(crate::message::Message::FitWidth)
                     .style(theme::button_ghost)
                     .padding([2, 5]),
@@ -998,7 +1002,7 @@ fn zoom_control(zoom: f32) -> Element<'static, crate::message::Message> {
                 tooltip::Position::Bottom,
             ),
             tooltip(
-                button(text("⛶").size(12).font(INTER_BOLD))
+                button(text(icons::MAXIMIZE).size(12).font(LUCIDE))
                     .on_press(crate::message::Message::FitPage)
                     .style(theme::button_ghost)
                     .padding([2, 5]),

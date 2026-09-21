@@ -5,7 +5,7 @@ use iced::widget::{Space, button, column, container, row, scrollable, text};
 use iced::{Alignment, Border, Color, Element, Length, Shadow, Vector};
 
 fn feature_card<'a>(
-    emoji: &'static str,
+    icon: &'static str,
     title: &'static str,
     description: &'static str,
     action_msg: crate::message::Message,
@@ -14,7 +14,11 @@ fn feature_card<'a>(
         container(
             column![
                 row![
-                    container(text(emoji).size(24)).padding(10).style(|_| {
+                    container(text(icon).size(22).font(LUCIDE).style(|_| text::Style {
+                        color: Some(theme::COLOR_ACCENT),
+                    }))
+                    .padding(10)
+                    .style(|_| {
                         iced::widget::container::Style {
                             background: Some(theme::COLOR_BG_HEADER.into()),
                             border: Border {
@@ -25,9 +29,12 @@ fn feature_card<'a>(
                         }
                     }),
                     Space::new().width(Length::Fill),
-                    text("➡️").size(14).style(|_| text::Style {
-                        color: Some(theme::COLOR_TEXT_DIM)
-                    }),
+                    text(icons::ARROW_RIGHT)
+                        .size(14)
+                        .font(LUCIDE)
+                        .style(|_| text::Style {
+                            color: Some(theme::COLOR_TEXT_DIM)
+                        }),
                 ]
                 .align_y(Alignment::Center),
                 Space::new().height(16),
@@ -87,12 +94,22 @@ pub fn welcome_view(app: &crate::app::PdfBullApp) -> Element<'_, crate::message:
     let recent_section: Element<'_, crate::message::Message> = if app.recent_files.is_empty() {
         container(
             column![
-                text("📂 No Recent Documents")
-                    .size(14)
-                    .font(INTER_BOLD)
-                    .style(|_| text::Style {
-                        color: Some(theme::COLOR_TEXT_DIM)
-                    }),
+                row![
+                    text(icons::FOLDER)
+                        .size(16)
+                        .font(LUCIDE)
+                        .style(|_| text::Style {
+                            color: Some(theme::COLOR_TEXT_DIM)
+                        }),
+                    text("No Recent Documents")
+                        .size(14)
+                        .font(INTER_BOLD)
+                        .style(|_| text::Style {
+                            color: Some(theme::COLOR_TEXT_DIM)
+                        }),
+                ]
+                .spacing(8)
+                .align_y(Alignment::Center),
                 Space::new().height(4),
                 text("Open a PDF file or drag and drop one into PDFbull to start reading.")
                     .size(12)
@@ -208,22 +225,29 @@ pub fn welcome_view(app: &crate::app::PdfBullApp) -> Element<'_, crate::message:
 
     let hero_header = column![
         row![
-            container(text("🐂").size(36))
-                .padding(16)
-                .style(|_| container::Style {
-                    background: Some(theme::COLOR_BG_WIDGET.into()),
-                    border: Border {
-                        radius: theme::BORDER_RADIUS_LG.into(),
-                        width: 1.0,
-                        color: theme::COLOR_ACCENT,
-                    },
-                    shadow: Shadow {
-                        color: Color::from_rgba8(59, 130, 246, 0.3),
-                        offset: Vector::new(0.0, 4.0),
-                        blur_radius: 16.0,
-                    },
-                    ..Default::default()
-                }),
+            container(
+                text(icons::BOOK_OPEN)
+                    .size(36)
+                    .font(LUCIDE)
+                    .style(|_| text::Style {
+                        color: Some(theme::COLOR_ACCENT)
+                    })
+            )
+            .padding(16)
+            .style(|_| container::Style {
+                background: Some(theme::COLOR_BG_WIDGET.into()),
+                border: Border {
+                    radius: theme::BORDER_RADIUS_LG.into(),
+                    width: 1.0,
+                    color: theme::COLOR_ACCENT,
+                },
+                shadow: Shadow {
+                    color: Color::from_rgba8(59, 130, 246, 0.3),
+                    offset: Vector::new(0.0, 4.0),
+                    blur_radius: 16.0,
+                },
+                ..Default::default()
+            }),
             column![
                 row![
                     text("PDFbull")
@@ -268,13 +292,13 @@ pub fn welcome_view(app: &crate::app::PdfBullApp) -> Element<'_, crate::message:
 
     let quick_cards_row1 = row![
         feature_card(
-            "📂",
+            icons::FOLDER_OPEN,
             "Open Document (Ctrl + O)",
             "Browse and open local PDF files instantly",
             crate::message::Message::OpenDocument
         ),
         feature_card(
-            "🔀",
+            icons::MERGE,
             "Merge PDFs",
             "Combine multiple PDF documents into a single file",
             crate::message::Message::MergeDocuments(vec![])
@@ -285,13 +309,13 @@ pub fn welcome_view(app: &crate::app::PdfBullApp) -> Element<'_, crate::message:
 
     let quick_cards_row2 = row![
         feature_card(
-            "📑",
+            icons::LAYOUT_GRID,
             "Page Organizer",
             "Rotate, reorder, or delete pages visually",
             crate::message::Message::TogglePageOrganizer(true)
         ),
         feature_card(
-            "✍️",
+            icons::SIGNATURE,
             "Digital Signatures",
             "Draw, save, and stamp custom signatures",
             crate::message::Message::ToggleSignatureCreator(true)
@@ -302,7 +326,12 @@ pub fn welcome_view(app: &crate::app::PdfBullApp) -> Element<'_, crate::message:
 
     let dropzone_banner = container(
         row![
-            text("📥").size(20),
+            text(icons::FILE_TEXT)
+                .size(20)
+                .font(LUCIDE)
+                .style(|_| text::Style {
+                    color: Some(theme::COLOR_ACCENT)
+                }),
             text("Tip: You can drag and drop any PDF file directly into this window to open it.")
                 .size(12)
                 .font(INTER_REGULAR)

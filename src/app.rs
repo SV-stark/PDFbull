@@ -35,6 +35,66 @@ pub mod icons {
     pub const PRINT: &str = "\u{e13f}";
     pub const BLOCK: &str = "\u{e021}";
     pub const TEXT: &str = "\u{e25b}";
+
+    // Ribbon Tabs & Navigation
+    pub const HOME: &str = "\u{e0f5}";
+    pub const EYE: &str = "\u{e0ba}";
+    pub const PEN_TOOL: &str = "\u{e131}";
+    pub const WRENCH: &str = "\u{e1b1}";
+    pub const REFRESH_CW: &str = "\u{e145}";
+
+    // View & Layout
+    pub const MOON: &str = "\u{e11e}";
+    pub const SCROLL: &str = "\u{e2ed}";
+    pub const FILE: &str = "\u{e0c0}";
+    pub const BOOK_OPEN: &str = "\u{e05f}";
+    pub const BOOK: &str = "\u{e05e}";
+
+    // Annotation Shapes
+    pub const CIRCLE: &str = "\u{e076}";
+    pub const MINUS: &str = "\u{e11c}";
+    pub const ARROW_RIGHT: &str = "\u{e049}";
+    pub const STICKY_NOTE: &str = "\u{e303}";
+
+    // Page & Tools
+    pub const LAYOUT_GRID: &str = "\u{e0ff}";
+    pub const TABLE: &str = "\u{e17d}";
+    pub const DROPLET: &str = "\u{e0b4}";
+    pub const HASH: &str = "\u{e0ef}";
+    pub const LOCK: &str = "\u{e10b}";
+    pub const SHIELD: &str = "\u{e158}";
+    pub const SHIELD_CHECK: &str = "\u{e1ff}";
+    pub const FOLDER_OPEN: &str = "\u{e247}";
+    pub const SIGNATURE: &str = "\u{e5f2}";
+    pub const SCISSORS: &str = "\u{e14e}";
+    pub const ZAP: &str = "\u{e1b4}";
+    pub const TERMINAL: &str = "\u{e181}";
+    pub const FILE_PLUS: &str = "\u{e0c9}";
+    pub const KEY: &str = "\u{e0fd}";
+    pub const PALETTE: &str = "\u{e1dd}";
+    pub const SCAN_TEXT: &str = "\u{e538}";
+
+    // Conversions
+    pub const FILE_CODE: &str = "\u{e0c3}";
+    pub const GLOBE: &str = "\u{e0e8}";
+    pub const FILE_TEXT: &str = "\u{e0cc}";
+
+    // Sidebar & UI Controls
+    pub const IMAGE: &str = "\u{e0f6}";
+    pub const PAPERCLIP: &str = "\u{e12d}";
+    pub const LAYERS: &str = "\u{e529}";
+    pub const FOLDER: &str = "\u{e0d7}";
+    pub const TRASH_2: &str = "\u{e18e}";
+    pub const CHEVRON_UP: &str = "\u{e070}";
+    pub const CHEVRON_DOWN: &str = "\u{e06d}";
+    pub const CHEVRONS_DOWN: &str = "\u{e065}";
+    pub const PAUSE: &str = "\u{e130}";
+    pub const LOADER: &str = "\u{e10a}";
+    pub const CHECK: &str = "\u{e06c}";
+    pub const EXPAND_HORIZONTAL: &str = "\u{e24a}";
+    pub const MAXIMIZE: &str = "\u{e113}";
+    pub const SPARKLES: &str = "\u{e412}";
+    pub const BAN: &str = "\u{e051}";
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]

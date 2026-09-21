@@ -1,4 +1,4 @@
-use crate::app::{INTER_BOLD, INTER_REGULAR, PdfBullApp};
+use crate::app::{INTER_BOLD, INTER_REGULAR, LUCIDE, PdfBullApp, icons};
 use crate::logging::{LogEntry, LogLevelFilter};
 use crate::message::Message;
 use iced::widget::{Space, button, column, container, pick_list, row, scrollable, text};
@@ -24,12 +24,22 @@ pub fn log_console_view<'a>(app: &'a PdfBullApp) -> Element<'a, Message> {
     }
 
     let header = row![
-        text("🖥️ Developer Log Console")
-            .size(15)
-            .font(INTER_BOLD)
-            .style(|_| text::Style {
-                color: Some(Color::WHITE),
-            }),
+        row![
+            text(icons::TERMINAL)
+                .size(16)
+                .font(LUCIDE)
+                .style(|_| text::Style {
+                    color: Some(Color::from_rgb8(100, 160, 255)),
+                }),
+            text("Developer Log Console")
+                .size(15)
+                .font(INTER_BOLD)
+                .style(|_| text::Style {
+                    color: Some(Color::WHITE),
+                }),
+        ]
+        .spacing(8)
+        .align_y(Alignment::Center),
         container(
             text(format!("{filtered_count} / {total_count}"))
                 .size(11)
@@ -68,16 +78,30 @@ pub fn log_console_view<'a>(app: &'a PdfBullApp) -> Element<'a, Message> {
         .align_y(Alignment::Center),
         // Autoscroll toggle
         button(
-            text(if app.log_autoscroll {
-                "⏬ Auto-scroll: ON"
-            } else {
-                "⏸️ Auto-scroll: OFF"
-            })
-            .size(12)
-            .font(INTER_REGULAR)
-            .style(|_| text::Style {
-                color: Some(Color::WHITE),
-            })
+            row![
+                text(if app.log_autoscroll {
+                    icons::CHEVRONS_DOWN
+                } else {
+                    icons::PAUSE
+                })
+                .size(12)
+                .font(LUCIDE)
+                .style(|_| text::Style {
+                    color: Some(Color::WHITE),
+                }),
+                text(if app.log_autoscroll {
+                    "Auto-scroll: ON"
+                } else {
+                    "Auto-scroll: OFF"
+                })
+                .size(12)
+                .font(INTER_REGULAR)
+                .style(|_| text::Style {
+                    color: Some(Color::WHITE),
+                }),
+            ]
+            .spacing(6)
+            .align_y(Alignment::Center)
         )
         .on_press(Message::ToggleLogAutoscroll)
         .padding([4, 10])
@@ -99,12 +123,22 @@ pub fn log_console_view<'a>(app: &'a PdfBullApp) -> Element<'a, Message> {
         }),
         // Copy All Button
         button(
-            text("📋 Copy All")
-                .size(12)
-                .font(INTER_REGULAR)
-                .style(|_| text::Style {
-                    color: Some(Color::WHITE),
-                })
+            row![
+                text(icons::COPY)
+                    .size(12)
+                    .font(LUCIDE)
+                    .style(|_| text::Style {
+                        color: Some(Color::WHITE),
+                    }),
+                text("Copy All")
+                    .size(12)
+                    .font(INTER_REGULAR)
+                    .style(|_| text::Style {
+                        color: Some(Color::WHITE),
+                    }),
+            ]
+            .spacing(6)
+            .align_y(Alignment::Center)
         )
         .on_press(Message::CopyToClipboard(clipboard_text))
         .padding([4, 10])
@@ -126,12 +160,22 @@ pub fn log_console_view<'a>(app: &'a PdfBullApp) -> Element<'a, Message> {
         }),
         // Clear Button
         button(
-            text("🗑️ Clear")
-                .size(12)
-                .font(INTER_REGULAR)
-                .style(|_| text::Style {
-                    color: Some(Color::WHITE),
-                })
+            row![
+                text(icons::TRASH_2)
+                    .size(12)
+                    .font(LUCIDE)
+                    .style(|_| text::Style {
+                        color: Some(Color::WHITE),
+                    }),
+                text("Clear")
+                    .size(12)
+                    .font(INTER_REGULAR)
+                    .style(|_| text::Style {
+                        color: Some(Color::WHITE),
+                    }),
+            ]
+            .spacing(6)
+            .align_y(Alignment::Center)
         )
         .on_press(Message::ClearLogs)
         .padding([4, 10])
@@ -152,9 +196,14 @@ pub fn log_console_view<'a>(app: &'a PdfBullApp) -> Element<'a, Message> {
             }
         }),
         // Close Button
-        button(text("✕").size(14).font(INTER_BOLD).style(|_| text::Style {
-            color: Some(Color::from_rgb8(200, 200, 210)),
-        }))
+        button(
+            text(icons::CLOSE)
+                .size(13)
+                .font(LUCIDE)
+                .style(|_| text::Style {
+                    color: Some(Color::from_rgb8(200, 200, 210)),
+                })
+        )
         .on_press(Message::ToggleLogConsole(Some(false)))
         .padding([4, 8])
         .style(button::text),
