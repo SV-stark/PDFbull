@@ -15,6 +15,7 @@ pub mod ui;
 pub mod ui_cmyk;
 pub mod ui_conformance;
 pub mod ui_document;
+pub mod ui_gpui;
 pub mod ui_keyboard_help;
 pub mod ui_log_console;
 pub mod ui_metadata;

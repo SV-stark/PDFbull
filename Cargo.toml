@@ -1,6 +1,6 @@
 [package]
 name = "pdfbull"
-version = "0.15.3"
+version = "0.16.0"
 description = "A lightweight PDF reader"
 authors = ["SV-stark"]
 edition = "2024"
@@ -20,6 +20,7 @@ exclude = [
 ]
 
 [dependencies]
+gpui-kit = { git = "https://github.com/longbridge/gpui-kit" }
 iced = { version = "0.14", features = ["image", "svg", "canvas", "tokio", "advanced"] }
 zpdf = { version = "=0.13.0", features = ["cpu-render"] }
 zpdf-writer = "=0.13.0"

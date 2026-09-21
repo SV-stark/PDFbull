@@ -90,6 +90,13 @@ fn main() -> iced::Result {
         return Ok(());
     }
 
+    let use_iced = args.iter().any(|arg| arg == "--iced");
+    if !use_iced {
+        tracing::info!("Starting PDFbull with GPUI-Kit presentation engine...");
+        pdfbull::ui_gpui::run_gpui_app();
+        return Ok(());
+    }
+
     const ICON_RGBA: &[u8] = include_bytes!("assets/icon_32x32.rgba");
     let icon = iced::window::icon::from_rgba(ICON_RGBA.to_vec(), 32, 32).ok();
 
