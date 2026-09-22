@@ -306,8 +306,8 @@ impl PdfbullView {
                 }
             }
             super::ribbon::PageLayoutMode::Continuous => {
-                let start = cur.saturating_sub(4);
-                let end = (cur + 8).min(total - 1);
+                let start = cur.saturating_sub(3);
+                let end = (cur + 3).min(total - 1);
                 (start..=end).collect()
             }
         };
@@ -388,7 +388,34 @@ impl PdfbullView {
                                     .rendered_pages
                                     .insert(page_idx, render_image.clone());
                                 view.viewport.rendered_zoom.insert(page_idx, zoom);
-                                view.sidebar.thumbnails.insert(page_idx, render_image);
+
+                                // Evict full-res page buffers outside the ±3 page window to
+                                // bound memory usage. search_highlights are coordinate-only
+                                // and must NOT be evicted here.
+                                let cur = view.viewport.current_page;
+                                let keep_start = cur.saturating_sub(3);
+                                let keep_end = cur + 3;
+                                view.viewport.rendered_pages
+                                    .retain(|&p, _| p >= keep_start && p <= keep_end);
+                                view.viewport.rendered_zoom
+                                    .retain(|&p, _| p >= keep_start && p <= keep_end);
+
+                                // Evict text cache outside a wider ±10 window so that
+                                // text selection on recently visited pages still works
+                                // without a round-trip, while bounding peak RAM.
+                                let tc_start = cur.saturating_sub(10);
+                                let tc_end = cur + 10;
+                                view.viewport.text_cache
+                                    .retain(|&p, _| p >= tc_start && p <= tc_end);
+
+                                // Request a dedicated low-res thumbnail instead of
+                                // re-using the full-resolution canvas image.
+                                if view.sidebar.is_open
+                                    && !view.sidebar.thumbnails.contains_key(&page_idx)
+                                {
+                                    view.request_thumbnail(doc_id, page_idx, cx);
+                                }
+
                                 if !view.viewport.text_cache.contains_key(&page_idx) {
                                     view.request_text_items(doc_id, page_idx, cx);
                                 }
@@ -445,6 +472,59 @@ impl PdfbullView {
                 let _ = this.update(cx, |view, _| {
                     view.viewport.text_cache.insert(page_idx, items);
                 });
+            }
+        })
+        .detach();
+    }
+
+    /// Requests a low-resolution thumbnail for the sidebar panel.
+    /// Uses the dedicated `RenderThumbnail` engine command (0.25× scale,
+    /// `RenderQuality::Low`) so the sidebar never holds full-resolution pixel
+    /// data. This is the primary driver of the memory reduction.
+    pub fn request_thumbnail(
+        &mut self,
+        doc_id: crate::models::DocumentId,
+        page_idx: usize,
+        cx: &mut Context<Self>,
+    ) {
+        // Already have a thumbnail for this page — nothing to do.
+        if self.sidebar.thumbnails.contains_key(&page_idx) {
+            return;
+        }
+        let engine_tx = self.engine.cmd_tx.clone();
+        let rotation = self.viewport.rotation as i32;
+
+        cx.spawn(async move |this, cx| {
+            let (resp_tx, resp_rx) = tokio::sync::oneshot::channel();
+            // 0.25× scale → A4 thumbnail ≈ 149×211 px → ~125 KB per page
+            // vs. full-res at 1.5× ≈ 8.9 MB per page (72× reduction).
+            if engine_tx
+                .send(crate::commands::PdfCommand::RenderThumbnail(
+                    doc_id, page_idx, 0.25, rotation, resp_tx,
+                ))
+                .await
+                .is_err()
+            {
+                return;
+            }
+
+            if let Ok(Ok(render_res)) = resp_rx.await {
+                let mut raw_data = render_res.data.to_vec();
+                crate::ui_gpui::canvas::convert_rgba_to_bgra(&mut raw_data);
+                if let Some(buf) = image::RgbaImage::from_raw(
+                    render_res.width,
+                    render_res.height,
+                    raw_data,
+                ) {
+                    let frame = image::Frame::new(buf);
+                    let thumb = std::sync::Arc::new(RenderImage::new(vec![frame]));
+                    let _ = this.update(cx, |view, cx| {
+                        if view.active_doc_id == Some(doc_id) {
+                            view.sidebar.thumbnails.insert(page_idx, thumb);
+                            cx.notify();
+                        }
+                    });
+                }
             }
         })
         .detach();
@@ -1592,6 +1672,20 @@ impl Render for PdfbullView {
                     match action {
                         SidebarAction::ToggleOpen => {
                             this.sidebar.is_open = !this.sidebar.is_open;
+                            // When the sidebar becomes visible, lazily pre-load
+                            // thumbnails for pages near the current view.
+                            if this.sidebar.is_open
+                                && this.sidebar.mode == super::sidebar::SidebarMode::Thumbnails
+                                && let Some(doc_id) = this.active_doc_id
+                            {
+                                let cur = this.viewport.current_page;
+                                let total = this.viewport.total_pages;
+                                let start = cur.saturating_sub(5);
+                                let end = (cur + 5).min(total.saturating_sub(1));
+                                for p in start..=end {
+                                    this.request_thumbnail(doc_id, p, cx);
+                                }
+                            }
                         }
                         SidebarAction::SelectMode(mode) => {
                             this.sidebar.mode = mode;

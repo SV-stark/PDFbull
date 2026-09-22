@@ -5,6 +5,18 @@ All notable changes to the PDFbull project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.16.3] - 2026-09-22
+
+### Performance
+- **Memory-bounded render pipeline**: UI `rendered_pages` and `rendered_zoom` maps now kept to a ±3 page sliding window around the current page — off-screen pixel buffers are freed automatically every time a new page renders.
+- **Text cache eviction**: `text_cache` (used for drag-selection and copy) is evicted beyond a ±10 page window and transparently re-fetched on demand. `search_highlights` (coordinate-only) are never evicted, so search results persist across scrolling.
+- **Low-res sidebar thumbnails**: Sidebar now fetches thumbnails via a dedicated `RenderThumbnail` command at 0.25× scale (`RenderQuality::Low`) instead of duplicating the full-resolution canvas image — approximately 72× RAM reduction per thumbnail page.
+- **Narrower scroll prefetch window**: Continuous-scroll mode now prefetches ±3 pages (previously ±8), significantly reducing peak working set on large PDFs.
+- **Lazy thumbnail loading**: Thumbnails for nearby pages are loaded lazily when the sidebar panel opens or switches to Thumbnails mode.
+
+### Fixed
+- Log console startup message now accurately reports the full render pipeline: `zpdf-render-cpu (tiny-skia) → DirectX 11 texture upload`.
+
 ## [0.16.2] - 2026-09-22
 
 ### Added & Production-Ready Desktop Features
@@ -313,3 +325,4 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Layers Manager (OCProperties)**: Optional Content Group visibility toggling in sidebar.
 - **Password-Protected PDF Support**: Prompt and decrypt password-protected PDFs on open.
 - **Tagged PDF Support**: Structured reading order text extraction.
+

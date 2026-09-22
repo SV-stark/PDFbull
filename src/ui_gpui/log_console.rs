@@ -42,7 +42,7 @@ impl LogConsoleState {
                     "info",
                 ),
                 (
-                    "[INFO] GPU acceleration active via DirectX 11 / tiny-skia.".to_string(),
+                    "[INFO] GPU acceleration active: zpdf-render-cpu (tiny-skia) → DirectX 11 texture pipeline. Memory-bounded render cache enabled.".to_string(),
                     "info",
                 ),
             ],
