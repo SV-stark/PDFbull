@@ -68,10 +68,11 @@ pub enum RibbonAction {
     Compress,
     Ocr,
     PageOrganizer,
-    // Convert
+    // Convert & Tables
     ConvertMarkdown,
     ConvertHtml,
     ConvertText,
+    ExtractTables,
 }
 
 pub struct RibbonState {
@@ -646,6 +647,16 @@ fn render_tools_strip<V: 'static>(
                     cx.listener(move |v, _, w, cx| on_action(v, RibbonAction::Compress, w, cx)),
                 )
                 .into_any_element(),
+            Button::new("tool-tables")
+                .label("Tables")
+                .outline()
+                .small()
+                .on_click(
+                    cx.listener(move |v, _, w, cx| {
+                        on_action(v, RibbonAction::ExtractTables, w, cx)
+                    }),
+                )
+                .into_any_element(),
         ],
         muted_fg,
     );
@@ -670,36 +681,45 @@ fn render_convert_strip<V: 'static>(
 ) -> AnyElement {
     let muted_fg = cx.theme().muted_foreground;
 
-    let export_group = ribbon_group(
-        "Export Documents",
-        vec![
-            Button::new("conv-md")
-                .label("Markdown (.md)")
-                .outline()
-                .small()
-                .on_click(cx.listener(move |v, _, w, cx| {
-                    on_action(v, RibbonAction::ConvertMarkdown, w, cx)
-                }))
-                .into_any_element(),
-            Button::new("conv-html")
-                .label("HTML5 (.html)")
-                .outline()
-                .small()
-                .on_click(
-                    cx.listener(move |v, _, w, cx| on_action(v, RibbonAction::ConvertHtml, w, cx)),
-                )
-                .into_any_element(),
-            Button::new("conv-txt")
-                .label("Plain Text (.txt)")
-                .outline()
-                .small()
-                .on_click(
-                    cx.listener(move |v, _, w, cx| on_action(v, RibbonAction::ConvertText, w, cx)),
-                )
-                .into_any_element(),
-        ],
-        muted_fg,
-    );
+    let export_group =
+        ribbon_group(
+            "Export Documents",
+            vec![
+                Button::new("conv-md")
+                    .label("Markdown (.md)")
+                    .outline()
+                    .small()
+                    .on_click(cx.listener(move |v, _, w, cx| {
+                        on_action(v, RibbonAction::ConvertMarkdown, w, cx)
+                    }))
+                    .into_any_element(),
+                Button::new("conv-html")
+                    .label("HTML5 (.html)")
+                    .outline()
+                    .small()
+                    .on_click(cx.listener(move |v, _, w, cx| {
+                        on_action(v, RibbonAction::ConvertHtml, w, cx)
+                    }))
+                    .into_any_element(),
+                Button::new("conv-txt")
+                    .label("Plain Text (.txt)")
+                    .outline()
+                    .small()
+                    .on_click(cx.listener(move |v, _, w, cx| {
+                        on_action(v, RibbonAction::ConvertText, w, cx)
+                    }))
+                    .into_any_element(),
+                Button::new("conv-tables")
+                    .label("Tables (.csv)")
+                    .outline()
+                    .small()
+                    .on_click(cx.listener(move |v, _, w, cx| {
+                        on_action(v, RibbonAction::ExtractTables, w, cx)
+                    }))
+                    .into_any_element(),
+            ],
+            muted_fg,
+        );
 
     div()
         .flex()

@@ -5,6 +5,32 @@ All notable changes to the PDFbull project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.16.4] - 2026-09-22
+
+### Added & Upgraded (zpdf v0.14.0 & X.509 Trust Chain)
+- **Upgraded zpdf and zpdf-writer to v0.14.0**:
+  - **Precision Rule-Based Table Detection (`detect_tables_with_rules`)**: Enabled border-and-rule line detection sinking vector lines (`RuleLine`) via `ContentInterpreter::with_rule_sink(&mut rules)` for tabular data parsing. Wired "Tables (.csv)" export buttons into the Convert and Tools ribbon tabs with automatic clipboard copy and status toast notification.
+  - **Granular CPU Render Diagnostics (`StageStats`)**: Enabled `.with_stage_timing(true)` on `CpuRenderer` during page rendering and PNG export to profile nanosecond timing breakdowns (glyphs, fills/strokes, images, soft masks).
+  - **Shared Font Cache (`SharedFonts`)**: Leveraged document-wide `Arc<LoadedFont>` sharing in `PdfDocument::load_page_fonts` to eliminate redundant font re-parsing across pages.
+  - **Scoped Blend-Group Compositing**: Integrated bounded transparency compositing for soft masks and blend groups.
+- **X.509 Certificate Chain Trust Verification (`zpdf::trust`)**:
+  - Integrated Windows System Root (`ROOT`) and Intermediate CA (`CA`) certificate stores using native Win32 CryptoAPI (`CertOpenSystemStoreW`, `CertEnumCertificatesInStore`).
+  - Implemented `verify_certificate_chain` for digital signature CMS blobs, classifying chains into `Trusted(cns)`, `Untrusted(msg)`, and `Unsupported(msg)`.
+  - Added visual trust badges in signature models and UI:
+    - 🟢 **Verified & Trusted Root CA**: Valid cryptographic signature chaining up to a trusted Windows root authority.
+    - 🟡 **Valid Signature (Untrusted Root / Self-Signed)**: Cryptographically intact signature whose certificate root is self-signed or not in the Windows trust store.
+    - 🔴 **Invalid Signature / Digest Mismatch**: Corrupted byte-range or digest mismatch.
+  - Enhanced the Digital Signatures inspection dialog with full signer details, reason, location, validity status, and the complete evaluated X.509 certificate chain hierarchy.
+
+### Fixed (Canvas Scrolling & Viewport Navigation)
+- **Canvas Scrolling & Page 1 Lock Resolution**:
+  - Fixed viewer lock to page 1 caused by `ScrollHandle::top_item()` returning 0 on non-virtualized `div` containers, which reset `current_page = 0` on every render pass.
+  - Implemented dynamic visible page calculation (`calculate_visible_page_continuous`), accurately deriving the active page from the physical vertical scroll offset (`-scroll_handle.offset().y`) divided by page height plus gap.
+  - Implemented `scroll_to_page` for exact, immediate jumping across pages without resetting scroll state.
+  - Enabled continuous mouse wheel scrolling in `handle_canvas_scroll_wheel` by applying wheel delta to `scroll_handle.offset().y`, clamping within document bounds, and updating `scroll_handle.set_offset`.
+  - Resolved Taffy flexbox minimum size expansion by adding `.min_h_0()` to canvas scroll containers and parent flex column/row containers.
+  - Synchronized Next/Prev buttons, PageUp/PageDown/arrow keys, and sidebar thumbnail/search/bookmark clicks to navigate smoothly via `scroll_to_page`.
+
 ## [0.16.3] - 2026-09-22
 
 ### Performance

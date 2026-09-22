@@ -80,18 +80,47 @@ impl DocumentViewport {
         }
     }
 
+    pub fn scroll_to_page(&mut self, page_idx: usize) {
+        let total = self.total_pages;
+        if total == 0 {
+            return;
+        }
+        let target_page = page_idx.min(total.saturating_sub(1));
+        self.current_page = target_page;
+
+        match self.layout_mode {
+            PageLayoutMode::Continuous => {
+                let page_h = px(self.page_height * self.zoom);
+                let item_h = page_h + px(24.0);
+                let target_y = -item_h * target_page;
+                self.scroll_handle
+                    .set_offset(Point::new(px(0.0), target_y));
+            }
+            PageLayoutMode::SinglePage | PageLayoutMode::TwoPageSpread => {
+                self.scroll_handle.set_offset(Point::default());
+            }
+        }
+    }
+
+    pub fn calculate_visible_page_continuous(&self) -> usize {
+        let total = self.total_pages;
+        if total == 0 {
+            return 0;
+        }
+        let page_h = px(self.page_height * self.zoom);
+        let item_h = page_h + px(24.0);
+        let scrolled_px = (-self.scroll_handle.offset().y).max(px(0.0));
+        let visible_page = ((scrolled_px + px(32.0)) / item_h.max(px(1.0))).floor() as usize;
+        visible_page.min(total.saturating_sub(1))
+    }
+
     fn render_page_card<V: 'static>(
         &self,
         cx: &mut Context<V>,
         page_idx: usize,
-        on_page_click: impl Fn(&mut V, usize, &mut Window, &mut Context<V>) + 'static + Copy,
         on_drag_start: impl Fn(&mut V, usize, Point<Pixels>, &mut Window, &mut Context<V>)
         + 'static
         + Copy,
-        on_drag_move: impl Fn(&mut V, usize, Point<Pixels>, &mut Window, &mut Context<V>)
-        + 'static
-        + Copy,
-        on_drag_end: impl Fn(&mut V, usize, &mut Window, &mut Context<V>) + 'static + Copy,
     ) -> AnyElement {
         let primary = cx.theme().primary;
         let border = cx.theme().border;
@@ -104,13 +133,11 @@ impl DocumentViewport {
         let down_listener = cx.listener(move |v, event: &MouseDownEvent, w, cx| {
             on_drag_start(v, page_idx, event.position, w, cx);
         });
-        let move_listener = cx.listener(move |v, event: &MouseMoveEvent, w, cx| {
-            on_drag_move(v, page_idx, event.position, w, cx);
-        });
-        let up_listener = cx.listener(move |v, _event: &MouseUpEvent, w, cx| {
-            on_drag_end(v, page_idx, w, cx);
-        });
-        let click_listener = cx.listener(move |v, _, w, cx| on_page_click(v, page_idx, w, cx));
+        // on_mouse_move and on_mouse_up are intentionally NOT on the page card.
+        // They live on the outer scroll container (added in render()) so that drag
+        // events are captured even when the cursor leaves the card bounds or enters
+        // the gap between pages. Only on_mouse_down stays per-card so we know which
+        // page started the drag.
 
         let is_sel_page = self.selection_page == Some(page_idx);
         let sel_start = self.selection_start;
@@ -134,10 +161,10 @@ impl DocumentViewport {
 
         let selection_overlay = canvas(
             move |bounds, _, _| bounds,
-            move |_bounds, card_bounds, window, _| {
+            move |paint_bounds, card_bounds, window, _| {
                 // Record the actual window origin of this page card for coordinate mapping
                 if let Ok(mut origins) = page_origins.write() {
-                    origins.insert(page_idx, card_bounds.origin);
+                    origins.insert(page_idx, paint_bounds.origin);
                 }
 
                 // 0. Paint search matches on this page
@@ -482,9 +509,6 @@ impl DocumentViewport {
             .overflow_hidden()
             .cursor_text()
             .on_mouse_down(MouseButton::Left, down_listener)
-            .on_mouse_move(move_listener)
-            .on_mouse_up(MouseButton::Left, up_listener)
-            .on_click(click_listener)
             .child(card_content)
             .child(selection_overlay)
             .child(page_badge)
@@ -494,7 +518,6 @@ impl DocumentViewport {
     pub fn render<V: 'static>(
         &self,
         cx: &mut Context<V>,
-        on_page_click: impl Fn(&mut V, usize, &mut Window, &mut Context<V>) + 'static + Copy,
         on_drag_start: impl Fn(&mut V, usize, Point<Pixels>, &mut Window, &mut Context<V>)
         + 'static
         + Copy,
@@ -514,27 +537,36 @@ impl DocumentViewport {
             on_scroll_wheel(v, event, w, cx);
         });
 
+        // Container-level move/up listeners: these fire regardless of which child the
+        // cursor is over, so a drag that started on page N and moves into the gap or
+        // onto page M still updates selection_end and commits on release.
+        // We pass page_idx=0 as a dummy; both closures ignore _page_idx (Bug 2/3 fixes).
+        let container_move_listener = cx.listener(move |v, event: &MouseMoveEvent, w, cx| {
+            if event.pressed_button == Some(MouseButton::Left) {
+                on_drag_move(v, 0, event.position, w, cx);
+            }
+        });
+        let container_up_listener = cx.listener(move |v, _event: &MouseUpEvent, w, cx| {
+            on_drag_end(v, 0, w, cx);
+        });
+
         match self.layout_mode {
             PageLayoutMode::SinglePage => {
-                let card = self.render_page_card(
-                    cx,
-                    cur_page.min(total - 1),
-                    on_page_click,
-                    on_drag_start,
-                    on_drag_move,
-                    on_drag_end,
-                );
+                let card = self.render_page_card(cx, cur_page.min(total - 1), on_drag_start);
                 div()
                     .id("canvas-single-scroll")
                     .flex()
                     .flex_col()
                     .flex_1()
+                    .min_h_0()
                     .size_full()
                     .bg(muted)
                     .overflow_y_scroll()
                     .track_scroll(&self.scroll_handle)
                     .vertical_scrollbar(&self.scroll_handle)
                     .on_scroll_wheel(scroll_listener)
+                    .on_mouse_move(container_move_listener)
+                    .on_mouse_up(MouseButton::Left, container_up_listener)
                     .items_center()
                     .py_8()
                     .child(card)
@@ -568,36 +600,24 @@ impl DocumentViewport {
                     )
                 };
 
-                let left_card = self.render_page_card(
-                    cx,
-                    left_idx.min(total - 1),
-                    on_page_click,
-                    on_drag_start,
-                    on_drag_move,
-                    on_drag_end,
-                );
-                let right_card = right_idx.map(|r_idx| {
-                    self.render_page_card(
-                        cx,
-                        r_idx.min(total - 1),
-                        on_page_click,
-                        on_drag_start,
-                        on_drag_move,
-                        on_drag_end,
-                    )
-                });
+                let left_card = self.render_page_card(cx, left_idx.min(total - 1), on_drag_start);
+                let right_card = right_idx
+                    .map(|r_idx| self.render_page_card(cx, r_idx.min(total - 1), on_drag_start));
 
                 div()
                     .id("canvas-twopage-scroll")
                     .flex()
                     .flex_col()
                     .flex_1()
+                    .min_h_0()
                     .size_full()
                     .bg(muted)
                     .overflow_y_scroll()
                     .track_scroll(&self.scroll_handle)
                     .vertical_scrollbar(&self.scroll_handle)
                     .on_scroll_wheel(scroll_listener)
+                    .on_mouse_move(container_move_listener)
+                    .on_mouse_up(MouseButton::Left, container_up_listener)
                     .items_center()
                     .py_8()
                     .child(
@@ -613,16 +633,7 @@ impl DocumentViewport {
             }
             PageLayoutMode::Continuous => {
                 let page_cards: Vec<AnyElement> = (0..total)
-                    .map(|idx| {
-                        self.render_page_card(
-                            cx,
-                            idx,
-                            on_page_click,
-                            on_drag_start,
-                            on_drag_move,
-                            on_drag_end,
-                        )
-                    })
+                    .map(|idx| self.render_page_card(cx, idx, on_drag_start))
                     .collect();
 
                 div()
@@ -630,12 +641,15 @@ impl DocumentViewport {
                     .flex()
                     .flex_col()
                     .flex_1()
+                    .min_h_0()
                     .size_full()
                     .bg(muted)
                     .overflow_y_scroll()
                     .track_scroll(&self.scroll_handle)
                     .vertical_scrollbar(&self.scroll_handle)
                     .on_scroll_wheel(scroll_listener)
+                    .on_mouse_move(container_move_listener)
+                    .on_mouse_up(MouseButton::Left, container_up_listener)
                     .items_center()
                     .py_8()
                     .gap_6()

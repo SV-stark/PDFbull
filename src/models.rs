@@ -117,6 +117,31 @@ pub struct SignatureInfo {
     pub reason: Option<String>,
     pub digest_verified: bool,
     pub crypto_valid: bool,
+    pub is_trusted: bool,
+    pub trust_status: Option<String>,
+    pub cert_chain: Vec<String>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum SignatureBadgeKind {
+    /// 🟢 Signature valid and certificate chains to a trusted root CA
+    TrustedRoot,
+    /// 🟡 Cryptographically valid signature, but certificate is self-signed or not chained to a trusted root CA
+    UntrustedRoot,
+    /// 🔴 Signature invalid, digest mismatch, or document modified after signing
+    Invalid,
+}
+
+impl SignatureInfo {
+    pub fn badge_kind(&self) -> SignatureBadgeKind {
+        if !self.digest_verified || !self.crypto_valid {
+            SignatureBadgeKind::Invalid
+        } else if self.is_trusted {
+            SignatureBadgeKind::TrustedRoot
+        } else {
+            SignatureBadgeKind::UntrustedRoot
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]

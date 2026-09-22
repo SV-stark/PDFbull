@@ -12,7 +12,7 @@ use std::sync::Arc;
 use zpdf::{
     AnnotationSpec, ContentInterpreter, FieldKind, FieldValue, FormFiller, IccCache, ImageCache,
     IncrementalWriter, MarkupKind, ParseLimits, PdfDocument, Rect as ZpdfRect, RenderBackend,
-    cpu::CpuRenderer, detect_tables, output_intent_cmyk_profile, spans_to_text,
+    cpu::CpuRenderer, detect_tables_with_rules, output_intent_cmyk_profile, spans_to_text,
     struct_ordered_text,
 };
 use zpdf::{RewriteOptions, rewrite_pdf};
@@ -383,19 +383,8 @@ impl DocumentStore {
             })
             .collect();
         let is_encrypted = doc.is_encrypted();
-        let signatures = doc
-            .signatures()
-            .into_iter()
-            .map(|sig| crate::models::SignatureInfo {
-                field_name: sig.field_name,
-                signer_name: sig.signer_common_name.or(sig.name),
-                signing_time: sig.signing_time,
-                location: sig.location,
-                reason: sig.reason,
-                digest_verified: matches!(sig.digest, zpdf::DigestStatus::Verified),
-                crypto_valid: matches!(sig.crypto, zpdf::CryptoStatus::Valid),
-            })
-            .collect();
+        let system_anchors = Self::load_system_trust_anchors();
+        let signatures = Self::extract_signatures_internal(&doc, &system_anchors);
 
         let attachments = doc
             .embedded_files()
@@ -504,19 +493,8 @@ impl DocumentStore {
             })
             .collect();
         let is_encrypted = doc.is_encrypted();
-        let signatures = doc
-            .signatures()
-            .into_iter()
-            .map(|sig| crate::models::SignatureInfo {
-                field_name: sig.field_name,
-                signer_name: sig.signer_common_name.or(sig.name),
-                signing_time: sig.signing_time,
-                location: sig.location,
-                reason: sig.reason,
-                digest_verified: matches!(sig.digest, zpdf::DigestStatus::Verified),
-                crypto_valid: matches!(sig.crypto, zpdf::CryptoStatus::Valid),
-            })
-            .collect();
+        let system_anchors = Self::load_system_trust_anchors();
+        let signatures = Self::extract_signatures_internal(doc, &system_anchors);
 
         let attachments = doc
             .embedded_files()
@@ -564,6 +542,95 @@ impl DocumentStore {
         self.image_caches.remove(&doc_id);
         self.cache_keys.remove(&doc_id);
         self.render_cache.remove_document(doc_id);
+    }
+
+    /// Load trusted root certificates from the OS (e.g. Windows ROOT & CA stores)
+    pub fn load_system_trust_anchors() -> Vec<zpdf::trust::TrustAnchor> {
+        #[cfg(windows)]
+        {
+            use windows::Win32::Security::Cryptography::{
+                CertCloseStore, CertEnumCertificatesInStore, CertOpenSystemStoreW,
+            };
+            use windows::core::w;
+
+            let mut anchors = Vec::new();
+            for store_name in [w!("ROOT"), w!("CA")] {
+                unsafe {
+                    if let Ok(store) = CertOpenSystemStoreW(None, store_name) {
+                        let mut p_ctx = CertEnumCertificatesInStore(store, None);
+                        while !p_ctx.is_null() {
+                            let cert_slice = std::slice::from_raw_parts(
+                                (*p_ctx).pbCertEncoded,
+                                (*p_ctx).cbCertEncoded as usize,
+                            );
+                            let mut parsed = zpdf::trust::parse_trust_anchors(cert_slice);
+                            anchors.append(&mut parsed);
+                            p_ctx = CertEnumCertificatesInStore(store, Some(p_ctx));
+                        }
+                        let _ = CertCloseStore(Some(store), 0);
+                    }
+                }
+            }
+            anchors
+        }
+        #[cfg(not(windows))]
+        {
+            Vec::new()
+        }
+    }
+
+    /// Evaluate X.509 certificate chain trust against given anchors
+    pub fn evaluate_signature_trust(
+        cms_blob: Option<&[u8]>,
+        anchors: &[zpdf::trust::TrustAnchor],
+    ) -> (bool, Option<String>, Vec<String>) {
+        if let Some(cms) = cms_blob {
+            let status = zpdf::trust::verify_certificate_chain(cms, anchors, None);
+            match status {
+                zpdf::trust::ChainStatus::Trusted(cns) => {
+                    let chain_str = cns.join(" → ");
+                    (true, Some(format!("Trusted Root CA ({chain_str})")), cns)
+                }
+                zpdf::trust::ChainStatus::Untrusted(msg) => (
+                    false,
+                    Some(format!("Untrusted Root / Self-Signed: {msg}")),
+                    Vec::new(),
+                ),
+                zpdf::trust::ChainStatus::Unsupported(msg) => (
+                    false,
+                    Some(format!("Unsupported Certificate: {msg}")),
+                    Vec::new(),
+                ),
+            }
+        } else {
+            (false, Some("No CMS contents".to_string()), Vec::new())
+        }
+    }
+
+    /// Extract signature information and evaluate trust chains
+    fn extract_signatures_internal(
+        doc: &PdfDocument,
+        anchors: &[zpdf::trust::TrustAnchor],
+    ) -> Vec<crate::models::SignatureInfo> {
+        doc.signatures()
+            .into_iter()
+            .map(|sig| {
+                let (is_trusted, trust_status, cert_chain) =
+                    Self::evaluate_signature_trust(sig.cms_blob.as_deref(), anchors);
+                crate::models::SignatureInfo {
+                    field_name: sig.field_name,
+                    signer_name: sig.signer_common_name.or(sig.name),
+                    signing_time: sig.signing_time,
+                    location: sig.location,
+                    reason: sig.reason,
+                    digest_verified: matches!(sig.digest, zpdf::DigestStatus::Verified),
+                    crypto_valid: matches!(sig.crypto, zpdf::CryptoStatus::Valid),
+                    is_trusted,
+                    trust_status,
+                    cert_chain,
+                }
+            })
+            .collect()
     }
 
     /// Extract layer information from a document's `OCProperties` dictionary.
@@ -969,10 +1036,30 @@ impl DocumentStore {
 
         let display_list = interp.interpret(&content);
 
-        let mut renderer = CpuRenderer::new().with_fonts(&fonts).with_images(images);
+        let mut renderer = CpuRenderer::new()
+            .with_fonts(&fonts)
+            .with_images(images)
+            .with_stage_timing(true);
         let page_img = renderer
             .render_display_list(&display_list, options.scale)
             .map_err(|e| PdfError::RenderFailed(e.to_string()))?;
+        if let Some(stats) = renderer.stage_stats() {
+            tracing::debug!(
+                page = page_num,
+                total_ms = stats.total_ns / 1_000_000,
+                glyphs = stats.glyphs,
+                glyph_ms = stats.glyph_ns() / 1_000_000,
+                fills = stats.fills,
+                fill_ms = stats.fill_ns / 1_000_000,
+                strokes = stats.strokes,
+                stroke_ms = stats.stroke_ns / 1_000_000,
+                images = stats.images,
+                image_ms = stats.image_ns / 1_000_000,
+                masks = stats.soft_mask_planes,
+                mask_ms = stats.soft_mask_ns / 1_000_000,
+                "Page render stage diagnostics"
+            );
+        }
         let w = page_img.width;
         let h = page_img.height;
 
@@ -1138,16 +1225,18 @@ impl DocumentStore {
             .map_err(|e| PdfError::SearchError(e.to_string()))?;
 
         let mut spans = Vec::new();
+        let mut rules = Vec::new();
         {
             let interp = ContentInterpreter::new(page.effective_box())
                 .with_fonts(&mut fonts)
                 .with_document(doc.file(), &page.resources)
                 .with_images(&mut images)
-                .with_text_sink(&mut spans);
+                .with_text_sink(&mut spans)
+                .with_rule_sink(&mut rules);
             let _ = interp.interpret(&content);
         }
 
-        let tables = detect_tables(&spans);
+        let tables = detect_tables_with_rules(&spans, &rules);
         let page_height = page.effective_box().height() as f32;
 
         let detected = tables
@@ -1398,10 +1487,21 @@ impl DocumentStore {
             .with_images(&mut images)
             .interpret(&content);
 
-        let mut renderer = CpuRenderer::new().with_fonts(&fonts).with_images(&images);
+        let mut renderer = CpuRenderer::new()
+            .with_fonts(&fonts)
+            .with_images(&images)
+            .with_stage_timing(true);
         let page_img = renderer
             .render_display_list(&display_list, scale)
             .map_err(|e| PdfError::RenderFailed(e.to_string()))?;
+        if let Some(stats) = renderer.stage_stats() {
+            tracing::debug!(
+                page = page_num,
+                total_ms = stats.total_ns / 1_000_000,
+                glyphs = stats.glyphs,
+                "PNG export render stage diagnostics"
+            );
+        }
         let width = page_img.width as usize;
         let height = page_img.height as usize;
 
@@ -2050,7 +2150,11 @@ impl DocumentStore {
             .documents
             .get(&doc_id)
             .ok_or(PdfError::EngineError(EngineErrorKind::DocumentNotFound))?;
-        let anchors = zpdf::trust::parse_trust_anchors(trust_anchors_bytes);
+        let anchors = if trust_anchors_bytes.is_empty() {
+            Self::load_system_trust_anchors()
+        } else {
+            zpdf::trust::parse_trust_anchors(trust_anchors_bytes)
+        };
         let sigs = doc.signatures();
         let mut results = Vec::new();
         for sig in sigs {

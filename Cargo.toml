@@ -1,6 +1,6 @@
 [package]
 name = "pdfbull"
-version = "0.16.3"
+version = "0.16.4"
 description = "A lightweight PDF reader"
 authors = ["SV-stark"]
 edition = "2024"
@@ -22,8 +22,8 @@ exclude = [
 [dependencies]
 gpui-kit = { git = "https://github.com/longbridge/gpui-kit" }
 image = { version = "0.25", default-features = false }
-zpdf = { version = "=0.13.0", features = ["cpu-render"] }
-zpdf-writer = "=0.13.0"
+zpdf = { version = "=0.14.0", features = ["cpu-render"] }
+zpdf-writer = "=0.14.0"
 tokio = { version = "1.0", features = ["rt-multi-thread", "sync", "time", "process", "fs", "io-util", "macros"] }
 rfd = "0.17"
 zune-image = "0.5"
@@ -65,6 +65,7 @@ windows = { version = "0.62.2", features = [
     "Win32_UI_WindowsAndMessaging",
     "Win32_System_Threading",
     "Win32_System_Registry",
+    "Win32_Security_Cryptography",
 ] }
 
 [features]

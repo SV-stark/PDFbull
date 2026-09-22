@@ -1,5 +1,7 @@
+use gpui_kit::base::StyledExt;
 use gpui_kit::component::ActiveTheme;
 use gpui_kit::component::button::{Button, ButtonVariants};
+use gpui_kit::component::scroll::ScrollableElement;
 use gpui_kit::prelude::FluentBuilder;
 use gpui_kit::*;
 
@@ -31,6 +33,7 @@ pub struct DialogsState {
     pub header_text: String,
     pub footer_text: String,
     pub password_input: String,
+    pub signatures: Vec<crate::models::SignatureInfo>,
 }
 
 impl Default for DialogsState {
@@ -47,6 +50,7 @@ impl DialogsState {
             header_text: "Confidential Document".to_string(),
             footer_text: "Page %PAGE% of %TOTAL%".to_string(),
             password_input: String::new(),
+            signatures: Vec::new(),
         }
     }
 
@@ -82,8 +86,8 @@ impl DialogsState {
                 "This document is encrypted. Enter password to unlock.",
             ),
             ActiveDialog::Signature => (
-                "Digital Signature",
-                "Place a cryptographic digital signature on the document.",
+                "Digital Signatures & Trust Status",
+                "Cryptographic byte-range digest & X.509 certificate chain verification.",
             ),
             ActiveDialog::PageOrganizer => {
                 ("Visual Page Organizer", "Rotate or remove document pages.")
@@ -273,6 +277,164 @@ impl DialogsState {
                 )
                 .into_any_element(),
 
+            ActiveDialog::Signature => {
+                let sigs = self.signatures.clone();
+                if sigs.is_empty() {
+                    div()
+                        .flex()
+                        .flex_col()
+                        .items_center()
+                        .justify_center()
+                        .p_6()
+                        .gap_2()
+                        .bg(muted)
+                        .rounded_md()
+                        .border_1()
+                        .border_color(border)
+                        .child(
+                            div()
+                                .text_sm()
+                                .font_bold()
+                                .text_color(fg)
+                                .child("No Digital Signatures Found"),
+                        )
+                        .child(
+                            div()
+                                .text_xs()
+                                .text_color(muted_fg)
+                                .text_center()
+                                .child(
+                                    "This document does not contain cryptographic signature fields or CMS signatures.",
+                                ),
+                        )
+                        .into_any_element()
+                } else {
+                    let mut cards = Vec::new();
+                    for sig in sigs {
+                        let badge_kind = sig.badge_kind();
+                        let (badge_text, badge_bg, badge_border, badge_text_color, icon_sym) =
+                            match badge_kind {
+                                crate::models::SignatureBadgeKind::TrustedRoot => (
+                                    "Verified & Trusted Root CA",
+                                    gpui_kit::rgba(0x22c55e26),
+                                    gpui_kit::rgba(0x22c55e80),
+                                    gpui_kit::rgba(0x16a34aff),
+                                    "✓",
+                                ),
+                                crate::models::SignatureBadgeKind::UntrustedRoot => (
+                                    "Valid Signature (Untrusted Root / Self-Signed)",
+                                    gpui_kit::rgba(0xeab30826),
+                                    gpui_kit::rgba(0xeab30880),
+                                    gpui_kit::rgba(0xca8a04ff),
+                                    "⚠",
+                                ),
+                                crate::models::SignatureBadgeKind::Invalid => (
+                                    "Invalid Signature / Digest Mismatch",
+                                    gpui_kit::rgba(0xef444426),
+                                    gpui_kit::rgba(0xef444480),
+                                    gpui_kit::rgba(0xdc2626ff),
+                                    "✕",
+                                ),
+                            };
+
+                        let signer = sig
+                            .signer_name
+                            .clone()
+                            .unwrap_or_else(|| "Unknown Signer".to_string());
+                        let time_str = sig
+                            .signing_time
+                            .clone()
+                            .unwrap_or_else(|| "Date not recorded".to_string());
+                        let reason_str = sig
+                            .reason
+                            .clone()
+                            .unwrap_or_else(|| "None specified".to_string());
+                        let location_str = sig
+                            .location
+                            .clone()
+                            .unwrap_or_else(|| "Not provided".to_string());
+
+                        let card = div()
+                            .flex()
+                            .flex_col()
+                            .p_3()
+                            .gap_2()
+                            .bg(muted)
+                            .rounded_md()
+                            .border_1()
+                            .border_color(border)
+                            .child(
+                                div()
+                                    .flex()
+                                    .flex_row()
+                                    .items_center()
+                                    .justify_between()
+                                    .gap_2()
+                                    .child(
+                                        div()
+                                            .text_sm()
+                                            .font_bold()
+                                            .text_color(fg)
+                                            .child(format!("{} (Field: {})", signer, sig.field_name)),
+                                    )
+                                    .child(
+                                        div()
+                                            .flex()
+                                            .flex_row()
+                                            .items_center()
+                                            .gap_1()
+                                            .px_2()
+                                            .py_0p5()
+                                            .rounded_full()
+                                            .bg(badge_bg)
+                                            .border_1()
+                                            .border_color(badge_border)
+                                            .text_xs()
+                                            .font_bold()
+                                            .text_color(badge_text_color)
+                                            .child(icon_sym)
+                                            .child(badge_text),
+                                    ),
+                            )
+                            .child(
+                                div()
+                                    .flex()
+                                    .flex_col()
+                                    .gap_1()
+                                    .text_xs()
+                                    .text_color(muted_fg)
+                                    .child(format!("• Signing Date: {}", time_str))
+                                    .child(format!("• Reason: {}", reason_str))
+                                    .child(format!("• Location: {}", location_str))
+                                    .child(format!(
+                                        "• Cryptographic Integrity: {}",
+                                        if sig.crypto_valid && sig.digest_verified {
+                                            "Byte-range intact, CMS digest matches document"
+                                        } else if !sig.crypto_valid {
+                                            "Cryptographic signature check failed"
+                                        } else {
+                                            "Digest verification failed (document altered after signing)"
+                                        }
+                                    ))
+                                    .when_some(sig.trust_status.clone(), |el, status| {
+                                        el.child(format!("• Certificate Chain: {}", status))
+                                    }),
+                            );
+
+                        cards.push(card);
+                    }
+
+                    div()
+                        .flex()
+                        .flex_col()
+                        .gap_3()
+                        .max_h(px(320.0))
+                        .overflow_y_scrollbar()
+                        .children(cards)
+                        .into_any_element()
+                }
+            }
+
             _ => div()
                 .h_24()
                 .bg(muted)
@@ -286,10 +448,16 @@ impl DialogsState {
                 .into_any_element(),
         };
 
+        let dialog_width = if matches!(active, ActiveDialog::Signature) {
+            px(560.0)
+        } else {
+            px(480.0)
+        };
+
         let dialog_el = div()
             .flex()
             .flex_col()
-            .w(px(480.0))
+            .w(dialog_width)
             .bg(bg)
             .border_1()
             .border_color(border)
@@ -318,35 +486,37 @@ impl DialogsState {
                             .outline()
                             .on_click(cx.listener(move |v, _, w, cx| on_close(v, w, cx))),
                     )
-                    .child(
-                        Button::new("btn-dialog-apply")
-                            .label("Apply")
-                            .primary()
-                            .on_click(cx.listener(move |v, _, w, cx| match active {
-                                ActiveDialog::Watermark => on_action(
-                                    v,
-                                    DialogAction::SetWatermark(cur_watermark.clone()),
-                                    w,
-                                    cx,
-                                ),
-                                ActiveDialog::HeaderFooter => on_action(
-                                    v,
-                                    DialogAction::SetHeaderFooter(
-                                        cur_header.clone(),
-                                        cur_footer.clone(),
+                    .when(!matches!(active, ActiveDialog::Signature), |el| {
+                        el.child(
+                            Button::new("btn-dialog-apply")
+                                .label("Apply")
+                                .primary()
+                                .on_click(cx.listener(move |v, _, w, cx| match active {
+                                    ActiveDialog::Watermark => on_action(
+                                        v,
+                                        DialogAction::SetWatermark(cur_watermark.clone()),
+                                        w,
+                                        cx,
                                     ),
-                                    w,
-                                    cx,
-                                ),
-                                ActiveDialog::Security => on_action(
-                                    v,
-                                    DialogAction::ApplySecurity("AES-256".to_string()),
-                                    w,
-                                    cx,
-                                ),
-                                _ => on_close(v, w, cx),
-                            })),
-                    ),
+                                    ActiveDialog::HeaderFooter => on_action(
+                                        v,
+                                        DialogAction::SetHeaderFooter(
+                                            cur_header.clone(),
+                                            cur_footer.clone(),
+                                        ),
+                                        w,
+                                        cx,
+                                    ),
+                                    ActiveDialog::Security => on_action(
+                                        v,
+                                        DialogAction::ApplySecurity("AES-256".to_string()),
+                                        w,
+                                        cx,
+                                    ),
+                                    _ => {}
+                                })),
+                        )
+                    }),
             );
 
         // Render full screen backdrop with centered modal

@@ -480,14 +480,35 @@ fn test_continuous_scroll_handle() {
     let mut viewport = DocumentViewport::new();
     viewport.total_pages = 20;
     viewport.layout_mode = PageLayoutMode::Continuous;
+    viewport.page_height = 842.0;
+    viewport.zoom = 1.0;
 
     assert_eq!(viewport.layout_mode, PageLayoutMode::Continuous);
     assert_eq!(viewport.current_page, 0);
 
-    // Verify scroll handle exists and can be scrolled to a target item
-    viewport.scroll_handle.scroll_to_item(5);
-    viewport.current_page = 5;
+    // Initial visible page at top
+    assert_eq!(viewport.calculate_visible_page_continuous(), 0);
+
+    // Scroll to page 5 via scroll_to_page
+    viewport.scroll_to_page(5);
     assert_eq!(viewport.current_page, 5);
+    assert_eq!(viewport.calculate_visible_page_continuous(), 5);
+
+    // Scroll to page 10
+    viewport.scroll_to_page(10);
+    assert_eq!(viewport.current_page, 10);
+    assert_eq!(viewport.calculate_visible_page_continuous(), 10);
+
+    // Scroll back to page 0
+    viewport.scroll_to_page(0);
+    assert_eq!(viewport.current_page, 0);
+    assert_eq!(viewport.calculate_visible_page_continuous(), 0);
+
+    // Offset direct modification check
+    let mut offset = viewport.scroll_handle.offset();
+    offset.y = gpui_kit::px(-100.0);
+    viewport.scroll_handle.set_offset(offset);
+    assert_eq!(viewport.scroll_handle.offset().y, gpui_kit::px(-100.0));
 }
 
 #[test]
@@ -872,4 +893,251 @@ fn test_two_page_spread_with_standalone_cover() {
     assert_eq!(pairs[0], vec![0]);
     assert_eq!(pairs[1], vec![1, 2]);
     assert_eq!(pairs[2], vec![3, 4]);
+}
+
+#[test]
+fn test_page_navigation_and_sliding_window_eviction() {
+    let mut viewport = DocumentViewport::new();
+    viewport.total_pages = 10;
+    viewport.current_page = 0;
+
+    // Simulate page navigation
+    assert_eq!(viewport.current_page, 0);
+
+    // In SinglePage mode, wheel scrolling down advances page
+    let total_pages = viewport.total_pages;
+    let delta_y = -50.0; // scrolling down
+    if delta_y < -10.0 && viewport.current_page + 1 < total_pages {
+        viewport.current_page += 1;
+    }
+    assert_eq!(viewport.current_page, 1);
+
+    // Advance further to page 5
+    viewport.current_page = 5;
+
+    // Verify sliding window retention logic (prevents getting stuck on page 1)
+    let keep_start = viewport.current_page.saturating_sub(2);
+    let keep_end = (viewport.current_page + 3).min(total_pages);
+    assert_eq!(keep_start, 3);
+    assert_eq!(keep_end, 8);
+
+    // Verify pages within [3..8) are retained, while page 0 is evicted
+    let retained_pages: Vec<usize> = (keep_start..keep_end).collect();
+    assert!(retained_pages.contains(&5));
+    assert!(retained_pages.contains(&3));
+    assert!(retained_pages.contains(&7));
+    assert!(!retained_pages.contains(&0));
+
+    // In TwoPageSpread mode, test spread stepping
+    viewport.layout_mode = PageLayoutMode::TwoPageSpread;
+    viewport.standalone_cover = true;
+    viewport.current_page = 0;
+
+    // Next spread from cover (page 0) moves to page 1
+    let step = if viewport.current_page == 0 { 1 } else { 2 };
+    viewport.current_page = (viewport.current_page + step).min(total_pages - 1);
+    assert_eq!(viewport.current_page, 1);
+
+    // Next spread from page 1 moves to page 3 (spread: 1 & 2 -> 3 & 4)
+    let step = if viewport.current_page == 0 { 1 } else { 2 };
+    viewport.current_page = (viewport.current_page + step).min(total_pages - 1);
+    assert_eq!(viewport.current_page, 3);
+
+    // Previous spread from page 3 moves back to page 1
+    let step = if viewport.current_page <= 2 { 1 } else { 2 };
+    viewport.current_page = viewport.current_page.saturating_sub(step);
+    assert_eq!(viewport.current_page, 1);
+}
+
+#[test]
+fn test_zpdf_v14_table_detection_with_rules() {
+    let spans = vec![
+        zpdf::TextSpan {
+            text: "Header A".to_string(),
+            x: 10.0,
+            y: 100.0,
+            size: 10.0,
+            advance: 35.0,
+            mcid: None,
+        },
+        zpdf::TextSpan {
+            text: "Header B".to_string(),
+            x: 60.0,
+            y: 100.0,
+            size: 10.0,
+            advance: 35.0,
+            mcid: None,
+        },
+        zpdf::TextSpan {
+            text: "Value 1".to_string(),
+            x: 10.0,
+            y: 80.0,
+            size: 10.0,
+            advance: 35.0,
+            mcid: None,
+        },
+        zpdf::TextSpan {
+            text: "Value 2".to_string(),
+            x: 60.0,
+            y: 80.0,
+            size: 10.0,
+            advance: 35.0,
+            mcid: None,
+        },
+    ];
+
+    let rules = vec![
+        // Horizontal rule line at y = 75.0 spanning x from 5.0 to 105.0
+        zpdf::RuleLine {
+            vertical: false,
+            pos: 75.0,
+            start: 5.0,
+            end: 105.0,
+        },
+        // Horizontal rule line at y = 95.0 spanning x from 5.0 to 105.0
+        zpdf::RuleLine {
+            vertical: false,
+            pos: 95.0,
+            start: 5.0,
+            end: 105.0,
+        },
+    ];
+
+    let tables = zpdf::detect_tables_with_rules(&spans, &rules);
+    assert!(tables.len() <= 1);
+}
+
+#[test]
+fn test_zpdf_v14_render_stage_stats() {
+    use zpdf::RenderBackend;
+    use zpdf::cpu::CpuRenderer;
+    use zpdf::display_list::DisplayList;
+
+    let dl = DisplayList::new(zpdf::Rect::new(0.0, 0.0, 100.0, 100.0));
+    let mut renderer = CpuRenderer::new().with_stage_timing(true);
+    let result = renderer.render_display_list(&dl, 1.0);
+    assert!(result.is_ok());
+
+    let stats = renderer.stage_stats();
+    assert!(stats.is_some());
+    let s = stats.unwrap();
+    assert!(s.total_ns > 0);
+    assert_eq!(s.glyphs, 0);
+    assert_eq!(s.fills, 0);
+}
+
+#[test]
+fn test_zpdf_trust_anchors_and_verification() {
+    let empty_anchors = zpdf::trust::parse_trust_anchors(&[]);
+    assert_eq!(empty_anchors.len(), 0);
+
+    // Test verifying a dummy CMS blob against empty anchors
+    let dummy_cms = b"not-a-real-cms";
+    let status = zpdf::trust::verify_certificate_chain(dummy_cms, &empty_anchors, None);
+    // Should return Unsupported or Untrusted because CMS is invalid/unparseable
+    assert!(matches!(
+        status,
+        zpdf::trust::ChainStatus::Unsupported(_) | zpdf::trust::ChainStatus::Untrusted(_)
+    ));
+}
+
+#[test]
+#[cfg(windows)]
+fn test_windows_system_root_anchors() {
+    use windows::Win32::Security::Cryptography::{
+        CertCloseStore, CertEnumCertificatesInStore, CertOpenSystemStoreW,
+    };
+    use windows::core::w;
+
+    let mut anchors = Vec::new();
+    unsafe {
+        if let Ok(store) = CertOpenSystemStoreW(None, w!("ROOT")) {
+            let mut p_ctx = CertEnumCertificatesInStore(store, None);
+            let mut count = 0;
+            while !p_ctx.is_null() {
+                count += 1;
+                let cert_slice = std::slice::from_raw_parts(
+                    (*p_ctx).pbCertEncoded,
+                    (*p_ctx).cbCertEncoded as usize,
+                );
+                let mut parsed = zpdf::trust::parse_trust_anchors(cert_slice);
+                anchors.append(&mut parsed);
+                p_ctx = CertEnumCertificatesInStore(store, Some(p_ctx));
+            }
+            let _ = CertCloseStore(Some(store), 0);
+            assert!(count > 0, "Windows should have system root certificates");
+            assert!(
+                !anchors.is_empty(),
+                "Should have parsed trust anchors from Windows ROOT store"
+            );
+        }
+    }
+}
+
+#[test]
+fn test_signature_trust_badges_and_evaluation() {
+    use pdfbull::models::{SignatureBadgeKind, SignatureInfo};
+    use pdfbull::pdf_engine::DocumentStore;
+
+    // 1. Green badge: Valid crypto, verified digest, and trusted root
+    let trusted_sig = SignatureInfo {
+        field_name: "Sig1".to_string(),
+        signer_name: Some("Alice Corp Root".to_string()),
+        signing_time: Some("2026-09-22".to_string()),
+        location: Some("New York".to_string()),
+        reason: Some("Approval".to_string()),
+        digest_verified: true,
+        crypto_valid: true,
+        is_trusted: true,
+        trust_status: Some("Trusted Root CA (Alice Corp Root)".to_string()),
+        cert_chain: vec!["Alice Corp Root".to_string()],
+    };
+    assert_eq!(trusted_sig.badge_kind(), SignatureBadgeKind::TrustedRoot);
+
+    // 2. Yellow badge: Valid crypto, verified digest, but untrusted/self-signed root
+    let untrusted_sig = SignatureInfo {
+        field_name: "Sig2".to_string(),
+        signer_name: Some("Self Signed Dev".to_string()),
+        signing_time: Some("2026-09-22".to_string()),
+        location: None,
+        reason: None,
+        digest_verified: true,
+        crypto_valid: true,
+        is_trusted: false,
+        trust_status: Some("Untrusted Root / Self-Signed: no path to trusted anchor".to_string()),
+        cert_chain: Vec::new(),
+    };
+    assert_eq!(
+        untrusted_sig.badge_kind(),
+        SignatureBadgeKind::UntrustedRoot
+    );
+
+    // 3. Red badge: Tampered/invalid digest
+    let invalid_sig = SignatureInfo {
+        field_name: "Sig3".to_string(),
+        signer_name: Some("Tampered Doc".to_string()),
+        signing_time: None,
+        location: None,
+        reason: None,
+        digest_verified: false,
+        crypto_valid: true,
+        is_trusted: false,
+        trust_status: None,
+        cert_chain: Vec::new(),
+    };
+    assert_eq!(invalid_sig.badge_kind(), SignatureBadgeKind::Invalid);
+
+    // 4. Test evaluate_signature_trust with None CMS
+    let (is_trusted, trust_status, cert_chain) = DocumentStore::evaluate_signature_trust(None, &[]);
+    assert!(!is_trusted);
+    assert_eq!(trust_status, Some("No CMS contents".to_string()));
+    assert!(cert_chain.is_empty());
+
+    // 5. Test load_system_trust_anchors
+    let anchors = DocumentStore::load_system_trust_anchors();
+    #[cfg(windows)]
+    assert!(
+        !anchors.is_empty(),
+        "Windows system anchors should load successfully"
+    );
 }

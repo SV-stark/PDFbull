@@ -98,6 +98,7 @@ impl PdfbullView {
         self.viewport.rendered_zoom.clear();
         self.sidebar.thumbnails.clear();
         self.rendering_pages.clear();
+        self.dialogs.signatures.clear();
     }
 
     pub fn open_pdf_path(&mut self, path_str: &str, cx: &mut Context<Self>) {
@@ -155,6 +156,7 @@ impl PdfbullView {
         self.viewport.rendered_zoom.clear();
         self.sidebar.thumbnails.clear();
         self.rendering_pages.clear();
+        self.dialogs.signatures.clear();
 
         let engine_tx = self.engine.cmd_tx.clone();
         let path_str_cloned = path.to_string_lossy().to_string();
@@ -175,6 +177,15 @@ impl PdfbullView {
                         let _ = this.update(cx, |view, cx| {
                             if view.active_doc_id == Some(doc_id) {
                                 view.viewport.total_pages = open_res.page_count;
+                                if open_res.max_width > 0.0 {
+                                    view.viewport.page_width = open_res.max_width;
+                                }
+                                if let Some(&first_h) = open_res.page_heights.first()
+                                    && first_h > 0.0
+                                {
+                                    view.viewport.page_height = first_h;
+                                }
+                                view.dialogs.signatures = open_res.signatures;
                                 view.render_needed_pages(cx);
                                 cx.notify();
                             }
@@ -193,6 +204,7 @@ impl PdfbullView {
                                 view.sidebar.bookmarks = meta.outline;
                                 view.sidebar.attachments = meta.attachments;
                                 view.sidebar.layers = meta.layers;
+                                view.dialogs.signatures = meta.signatures;
                                 cx.notify();
                             });
                         }
@@ -395,9 +407,11 @@ impl PdfbullView {
                                 let cur = view.viewport.current_page;
                                 let keep_start = cur.saturating_sub(3);
                                 let keep_end = cur + 3;
-                                view.viewport.rendered_pages
+                                view.viewport
+                                    .rendered_pages
                                     .retain(|&p, _| p >= keep_start && p <= keep_end);
-                                view.viewport.rendered_zoom
+                                view.viewport
+                                    .rendered_zoom
                                     .retain(|&p, _| p >= keep_start && p <= keep_end);
 
                                 // Evict text cache outside a wider ±10 window so that
@@ -405,7 +419,8 @@ impl PdfbullView {
                                 // without a round-trip, while bounding peak RAM.
                                 let tc_start = cur.saturating_sub(10);
                                 let tc_end = cur + 10;
-                                view.viewport.text_cache
+                                view.viewport
+                                    .text_cache
                                     .retain(|&p, _| p >= tc_start && p <= tc_end);
 
                                 // Request a dedicated low-res thumbnail instead of
@@ -511,11 +526,9 @@ impl PdfbullView {
             if let Ok(Ok(render_res)) = resp_rx.await {
                 let mut raw_data = render_res.data.to_vec();
                 crate::ui_gpui::canvas::convert_rgba_to_bgra(&mut raw_data);
-                if let Some(buf) = image::RgbaImage::from_raw(
-                    render_res.width,
-                    render_res.height,
-                    raw_data,
-                ) {
+                if let Some(buf) =
+                    image::RgbaImage::from_raw(render_res.width, render_res.height, raw_data)
+                {
                     let frame = image::Frame::new(buf);
                     let thumb = std::sync::Arc::new(RenderImage::new(vec![frame]));
                     let _ = this.update(cx, |view, cx| {
@@ -595,11 +608,70 @@ impl PdfbullView {
                 cx.notify();
             }
         } else {
-            let top_item = self.viewport.scroll_handle.top_item();
-            if top_item < self.viewport.total_pages && top_item != self.viewport.current_page {
-                self.viewport.current_page = top_item;
-                self.render_needed_pages(cx);
-                cx.notify();
+            match self.viewport.layout_mode {
+                super::ribbon::PageLayoutMode::SinglePage => {
+                    let delta_y = match event.delta {
+                        ScrollDelta::Pixels(p) => p.y / px(1.0),
+                        ScrollDelta::Lines(l) => l.y * 20.0,
+                    };
+                    if delta_y < -5.0 && self.viewport.current_page + 1 < self.viewport.total_pages
+                    {
+                        self.viewport.scroll_to_page(self.viewport.current_page + 1);
+                        self.render_needed_pages(cx);
+                        cx.notify();
+                    } else if delta_y > 5.0 && self.viewport.current_page > 0 {
+                        self.viewport.scroll_to_page(self.viewport.current_page - 1);
+                        self.render_needed_pages(cx);
+                        cx.notify();
+                    }
+                }
+                super::ribbon::PageLayoutMode::TwoPageSpread => {
+                    let delta_y = match event.delta {
+                        ScrollDelta::Pixels(p) => p.y / px(1.0),
+                        ScrollDelta::Lines(l) => l.y * 20.0,
+                    };
+                    let step = if self.viewport.standalone_cover && self.viewport.current_page == 0
+                    {
+                        1
+                    } else {
+                        2
+                    };
+                    if delta_y < -5.0 && self.viewport.current_page + 1 < self.viewport.total_pages
+                    {
+                        let target = (self.viewport.current_page + step).min(self.viewport.total_pages - 1);
+                        self.viewport.scroll_to_page(target);
+                        self.render_needed_pages(cx);
+                        cx.notify();
+                    } else if delta_y > 5.0 && self.viewport.current_page > 0 {
+                        let target = self.viewport.current_page.saturating_sub(step);
+                        self.viewport.scroll_to_page(target);
+                        self.render_needed_pages(cx);
+                        cx.notify();
+                    }
+                }
+                super::ribbon::PageLayoutMode::Continuous => {
+                    let delta_y = match event.delta {
+                        ScrollDelta::Pixels(p) => p.y,
+                        ScrollDelta::Lines(l) => px(l.y * 60.0),
+                    };
+                    let total = self.viewport.total_pages;
+                    if total > 0 {
+                        let page_h = px(self.viewport.page_height * self.viewport.zoom);
+                        let item_h = page_h + px(24.0);
+                        let mut offset = self.viewport.scroll_handle.offset();
+                        let max_scroll = px(0.0);
+                        let min_scroll = -(px(64.0) + item_h * total);
+                        offset.y = (offset.y + delta_y).clamp(min_scroll, max_scroll);
+                        self.viewport.scroll_handle.set_offset(offset);
+
+                        let visible_page = self.viewport.calculate_visible_page_continuous();
+                        if visible_page != self.viewport.current_page {
+                            self.viewport.current_page = visible_page;
+                        }
+                        self.render_needed_pages(cx);
+                        cx.notify();
+                    }
+                }
             }
         }
     }
@@ -617,10 +689,7 @@ impl PdfbullView {
 
         let prev_click = cx.listener(|this, _, _, cx| {
             if this.viewport.current_page > 0 {
-                this.viewport.current_page -= 1;
-                this.viewport
-                    .scroll_handle
-                    .scroll_to_item(this.viewport.current_page);
+                this.viewport.scroll_to_page(this.viewport.current_page - 1);
                 this.render_needed_pages(cx);
                 cx.notify();
             }
@@ -628,10 +697,7 @@ impl PdfbullView {
 
         let next_click = cx.listener(|this, _, _, cx| {
             if this.viewport.current_page + 1 < this.viewport.total_pages {
-                this.viewport.current_page += 1;
-                this.viewport
-                    .scroll_handle
-                    .scroll_to_item(this.viewport.current_page);
+                this.viewport.scroll_to_page(this.viewport.current_page + 1);
                 this.render_needed_pages(cx);
                 cx.notify();
             }
@@ -909,8 +975,7 @@ impl PdfbullView {
                             .push((item.x, item.y, item.width, item.height));
                     }
                     if let Some(first) = results.first() {
-                        view.viewport.current_page = first.page_index;
-                        view.viewport.scroll_handle.scroll_to_item(first.page_index);
+                        view.viewport.scroll_to_page(first.page_index);
                         view.render_needed_pages(cx);
                     }
                     cx.notify();
@@ -1326,6 +1391,83 @@ impl PdfbullView {
         .detach();
     }
 
+    pub fn extract_tables_active_page(&mut self, cx: &mut Context<Self>) {
+        let Some(doc_id) = self.active_doc_id else {
+            self.log_console
+                .log("[WARN] No active document to extract tables from.", "warn");
+            self.status_message = Some("Open a document first to extract tables.".into());
+            cx.notify();
+            return;
+        };
+        let page_idx = self.viewport.current_page;
+        let cmd_tx = self.engine.cmd_tx.clone();
+
+        cx.spawn(async move |this, cx| {
+            let (tx, rx) = tokio::sync::oneshot::channel();
+            if let Err(e) = cmd_tx
+                .send(crate::commands::PdfCommand::DetectTables(
+                    doc_id, page_idx, tx,
+                ))
+                .await
+            {
+                tracing::error!("Failed to send DetectTables command: {e}");
+                return;
+            }
+
+            match rx.await {
+                Ok(Ok(tables)) => {
+                    let _ = this.update(cx, |view, cx| {
+                        if tables.is_empty() {
+                            view.log_console.log(
+                                format!("[INFO] No tables detected on Page {}.", page_idx + 1),
+                                "info",
+                            );
+                            view.status_message =
+                                Some(format!("No tables found on Page {}.", page_idx + 1));
+                        } else {
+                            let mut combined_csv = String::new();
+                            for (i, t) in tables.iter().enumerate() {
+                                if i > 0 {
+                                    combined_csv.push_str("\n\n");
+                                }
+                                if tables.len() > 1 {
+                                    combined_csv.push_str(&format!("# Table {}\n", i + 1));
+                                }
+                                combined_csv.push_str(&t.csv);
+                            }
+                            cx.write_to_clipboard(ClipboardItem::new_string(combined_csv));
+                            let msg = format!(
+                                "Detected {} table(s) on Page {}. Copied CSV to clipboard!",
+                                tables.len(),
+                                page_idx + 1
+                            );
+                            view.log_console.log(format!("[SUCCESS] {msg}"), "info");
+                            view.status_message = Some(msg);
+                        }
+                        cx.notify();
+                    });
+                }
+                Ok(Err(e)) => {
+                    let _ = this.update(cx, |view, cx| {
+                        view.log_console.log(
+                            format!(
+                                "[ERROR] Failed to detect tables on Page {}: {e}",
+                                page_idx + 1
+                            ),
+                            "error",
+                        );
+                        view.status_message = Some("Table extraction failed.".into());
+                        cx.notify();
+                    });
+                }
+                Err(e) => {
+                    tracing::error!("DetectTables channel dropped: {e}");
+                }
+            }
+        })
+        .detach();
+    }
+
     pub fn handle_key_down(&mut self, event: &gpui::KeyDownEvent, cx: &mut Context<Self>) {
         let key = event.keystroke.key.to_lowercase();
         let ctrl = event.keystroke.modifiers.control || event.keystroke.modifiers.platform;
@@ -1400,20 +1542,14 @@ impl PdfbullView {
                     }
                 }
                 "pageup" | "left" if self.viewport.current_page > 0 => {
-                    self.viewport.current_page -= 1;
-                    self.viewport
-                        .scroll_handle
-                        .scroll_to_item(self.viewport.current_page);
+                    self.viewport.scroll_to_page(self.viewport.current_page - 1);
                     self.render_needed_pages(cx);
                     cx.notify();
                 }
                 "pagedown" | "right"
                     if self.viewport.current_page + 1 < self.viewport.total_pages =>
                 {
-                    self.viewport.current_page += 1;
-                    self.viewport
-                        .scroll_handle
-                        .scroll_to_item(self.viewport.current_page);
+                    self.viewport.scroll_to_page(self.viewport.current_page + 1);
                     self.render_needed_pages(cx);
                     cx.notify();
                 }
@@ -1496,20 +1632,16 @@ impl Render for PdfbullView {
                 }
                 RibbonAction::PrevPage => {
                     if this.viewport.current_page > 0 {
-                        this.viewport.current_page -= 1;
-                        this.viewport
-                            .scroll_handle
-                            .scroll_to_item(this.viewport.current_page);
+                        this.viewport.scroll_to_page(this.viewport.current_page - 1);
                         this.render_needed_pages(cx);
+                        cx.notify();
                     }
                 }
                 RibbonAction::NextPage => {
                     if this.viewport.current_page + 1 < this.viewport.total_pages {
-                        this.viewport.current_page += 1;
-                        this.viewport
-                            .scroll_handle
-                            .scroll_to_item(this.viewport.current_page);
+                        this.viewport.scroll_to_page(this.viewport.current_page + 1);
                         this.render_needed_pages(cx);
+                        cx.notify();
                     }
                 }
                 RibbonAction::SetLayout(mode) => {
@@ -1586,6 +1718,9 @@ impl Render for PdfbullView {
                 RibbonAction::ConvertText => {
                     this.convert_active_document("txt", "Text", "Text files (*.txt)", cx);
                 }
+                RibbonAction::ExtractTables => {
+                    this.extract_tables_active_page(cx);
+                }
             }
             cx.notify();
         });
@@ -1659,6 +1794,14 @@ impl Render for PdfbullView {
 
         // Main Center Area (Welcome vs Document Workspace)
         let center_area: AnyElement = if has_tabs {
+            if self.viewport.layout_mode == super::ribbon::PageLayoutMode::Continuous
+                && self.viewport.total_pages > 0
+            {
+                let visible_page = self.viewport.calculate_visible_page_continuous();
+                if visible_page != self.viewport.current_page {
+                    self.viewport.current_page = visible_page;
+                }
+            }
             self.render_needed_pages(cx);
             let total = self.viewport.total_pages;
             let current = self.viewport.current_page;
@@ -1691,8 +1834,7 @@ impl Render for PdfbullView {
                             this.sidebar.mode = mode;
                         }
                         SidebarAction::SelectPage(page_idx) => {
-                            this.viewport.current_page = page_idx;
-                            this.viewport.scroll_handle.scroll_to_item(page_idx);
+                            this.viewport.scroll_to_page(page_idx);
                             this.render_needed_pages(cx);
                         }
                         SidebarAction::SearchQuery(q) => {
@@ -1709,8 +1851,7 @@ impl Render for PdfbullView {
                             this.sidebar.is_searching = false;
                         }
                         SidebarAction::SelectSearchResult(page, ..) => {
-                            this.viewport.current_page = page;
-                            this.viewport.scroll_handle.scroll_to_item(page);
+                            this.viewport.scroll_to_page(page);
                             this.render_needed_pages(cx);
                         }
                         SidebarAction::DeleteAnnotation(id) => {
@@ -1720,8 +1861,7 @@ impl Render for PdfbullView {
                             }
                         }
                         SidebarAction::SelectBookmark(page) => {
-                            this.viewport.current_page = page;
-                            this.viewport.scroll_handle.scroll_to_item(page);
+                            this.viewport.scroll_to_page(page);
                             this.render_needed_pages(cx);
                         }
                         SidebarAction::ToggleLayer(idx, visible) => {
@@ -1736,11 +1876,6 @@ impl Render for PdfbullView {
 
             let canvas = self.viewport.render(
                 cx,
-                |this, page_idx, _, cx| {
-                    this.viewport.current_page = page_idx;
-                    this.render_needed_pages(cx);
-                    cx.notify();
-                },
                 |this, page_idx, pos, _, cx| {
                     this.viewport.is_selecting = true;
                     this.viewport.selection_page = Some(page_idx);
@@ -1749,29 +1884,47 @@ impl Render for PdfbullView {
                     this.viewport.selected_text = None;
                     cx.notify();
                 },
-                |this, page_idx, pos, _, cx| {
-                    if this.viewport.is_selecting && this.viewport.selection_page == Some(page_idx)
-                    {
+                |this, _page_idx, pos, _, cx| {
+                    // Bug 2 fix: gate only on is_selecting, not on which card fired.
+                    // In Continuous mode every card has its own listener; ignoring
+                    // _page_idx lets the end-point update when the cursor crosses a
+                    // page boundary. pos is in window space and is authoritative.
+                    if this.viewport.is_selecting {
                         this.viewport.selection_end = Some(pos);
                         cx.notify();
                     }
                 },
-                |this, page_idx, _, cx| {
-                    if this.viewport.is_selecting && this.viewport.selection_page == Some(page_idx)
-                    {
+                |this, _page_idx, _, cx| {
+                    // Bug 3 fix: gate only on is_selecting; do NOT check selection_page ==
+                    // Some(_page_idx).  When mousedown is on page 3 and mouseup fires on
+                    // page 4, _page_idx==4 but selection_page==Some(3) — the old guard
+                    // silently dropped the commit.  We always resolve against the stored
+                    // selection_page so text extraction and annotation coordinates are
+                    // relative to the correct page origin.
+                    if this.viewport.is_selecting {
+                        // Always clear is_selecting first so no edge-case can leave the
+                        // viewport stuck in selecting mode.
                         this.viewport.is_selecting = false;
+                        // Authoritative page: where mousedown happened, not where mouseup did.
+                        let commit_page = this.viewport.selection_page.unwrap_or(_page_idx);
                         if let (Some(start), Some(end)) =
                             (this.viewport.selection_start, this.viewport.selection_end)
                         {
                             let dx = (start.x - end.x).abs();
                             let dy = (start.y - end.y).abs();
                             if dx < px(4.0) && dy < px(4.0) {
+                                // Treat as a click: clear selection state.
                                 this.viewport.selection_start = None;
                                 this.viewport.selection_end = None;
                                 this.viewport.selection_page = None;
                                 this.viewport.selected_text = None;
+                                // Bug 4 (b): fold page-focus into drag_end for the click case
+                                // so on_click becomes redundant and can be removed.
+                                this.viewport.current_page = commit_page;
+                                this.render_needed_pages(cx);
                             } else {
-                                this.extract_selected_text(page_idx, start, end, cx);
+                                // Real drag: extract text against the page where the drag started.
+                                this.extract_selected_text(commit_page, start, end, cx);
 
                                 if this.ribbon.active_tool != super::ribbon::AnnotationTool::Pointer
                                 {
@@ -1780,7 +1933,7 @@ impl Render for PdfbullView {
                                         .page_origins
                                         .read()
                                         .ok()
-                                        .and_then(|m| m.get(&page_idx).copied())
+                                        .and_then(|m| m.get(&commit_page).copied())
                                         .unwrap_or_default();
                                     let zoom = this.viewport.zoom.max(0.1);
                                     let min_x = ((start.x.min(end.x) - origin.x) / px(1.0)) / zoom;
@@ -1851,9 +2004,10 @@ impl Render for PdfbullView {
                                         },
                                     };
 
+                                    // Annotation is stored against commit_page (the drag-start page).
                                     this.viewport.annotations.push(crate::models::Annotation {
                                         id: ann_id,
-                                        page: page_idx,
+                                        page: commit_page,
                                         style,
                                         x: min_x,
                                         y: min_y,
@@ -1883,6 +2037,7 @@ impl Render for PdfbullView {
                 .flex_row()
                 .flex_1()
                 .w_full()
+                .min_h_0()
                 .overflow_hidden()
                 .child(sidebar)
                 .child(
@@ -1891,8 +2046,18 @@ impl Render for PdfbullView {
                         .flex_col()
                         .flex_1()
                         .h_full()
+                        .min_h_0()
                         .overflow_hidden()
-                        .child(div().flex_1().w_full().overflow_hidden().child(canvas))
+                        .child(
+                            div()
+                                .flex()
+                                .flex_col()
+                                .flex_1()
+                                .w_full()
+                                .min_h_0()
+                                .overflow_hidden()
+                                .child(canvas),
+                        )
                         .child(status_bar),
                 )
                 .into_any_element()
