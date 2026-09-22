@@ -1,4 +1,5 @@
 use super::ribbon::PageLayoutMode;
+use gpui_kit::base::StyledExt;
 use gpui_kit::component::ActiveTheme;
 use gpui_kit::component::scroll::ScrollableElement;
 use gpui_kit::gpui::{BorderStyle, fill, outline};
@@ -37,6 +38,11 @@ pub struct DocumentViewport {
     pub rendered_pages: std::collections::HashMap<usize, std::sync::Arc<RenderImage>>,
     pub rendered_zoom: std::collections::HashMap<usize, f32>,
     pub scroll_handle: ScrollHandle,
+    pub page_origins:
+        std::sync::Arc<std::sync::RwLock<std::collections::HashMap<usize, Point<Pixels>>>>,
+    pub highlight_color: Option<Hsla>,
+    pub annotations: Vec<crate::models::Annotation>,
+    pub search_highlights: std::collections::HashMap<usize, Vec<(f32, f32, f32, f32)>>,
 }
 
 impl Default for DocumentViewport {
@@ -65,6 +71,12 @@ impl DocumentViewport {
             rendered_pages: std::collections::HashMap::new(),
             rendered_zoom: std::collections::HashMap::new(),
             scroll_handle: ScrollHandle::new(),
+            page_origins: std::sync::Arc::new(std::sync::RwLock::new(
+                std::collections::HashMap::new(),
+            )),
+            highlight_color: None,
+            annotations: Vec::new(),
+            search_highlights: std::collections::HashMap::new(),
         }
     }
 
@@ -73,8 +85,12 @@ impl DocumentViewport {
         cx: &mut Context<V>,
         page_idx: usize,
         on_page_click: impl Fn(&mut V, usize, &mut Window, &mut Context<V>) + 'static + Copy,
-        on_drag_start: impl Fn(&mut V, usize, Point<Pixels>, &mut Window, &mut Context<V>) + 'static + Copy,
-        on_drag_move: impl Fn(&mut V, usize, Point<Pixels>, &mut Window, &mut Context<V>) + 'static + Copy,
+        on_drag_start: impl Fn(&mut V, usize, Point<Pixels>, &mut Window, &mut Context<V>)
+        + 'static
+        + Copy,
+        on_drag_move: impl Fn(&mut V, usize, Point<Pixels>, &mut Window, &mut Context<V>)
+        + 'static
+        + Copy,
         on_drag_end: impl Fn(&mut V, usize, &mut Window, &mut Context<V>) + 'static + Copy,
     ) -> AnyElement {
         let primary = cx.theme().primary;
@@ -99,28 +115,285 @@ impl DocumentViewport {
         let is_sel_page = self.selection_page == Some(page_idx);
         let sel_start = self.selection_start;
         let sel_end = self.selection_end;
+        let is_selecting = self.is_selecting;
+        let text_items = self.text_cache.get(&page_idx).cloned();
+        let page_origins = self.page_origins.clone();
+        let zoom = self.zoom;
+        let hl_color = self.highlight_color;
+        let page_annotations: Vec<crate::models::Annotation> = self
+            .annotations
+            .iter()
+            .filter(|a| a.page == page_idx)
+            .cloned()
+            .collect();
+        let page_search_matches = self
+            .search_highlights
+            .get(&page_idx)
+            .cloned()
+            .unwrap_or_default();
 
         let selection_overlay = canvas(
             move |bounds, _, _| bounds,
             move |_bounds, card_bounds, window, _| {
-                if is_sel_page
-                    && let (Some(start), Some(end)) = (sel_start, sel_end)
-                {
+                // Record the actual window origin of this page card for coordinate mapping
+                if let Ok(mut origins) = page_origins.write() {
+                    origins.insert(page_idx, card_bounds.origin);
+                }
+
+                // 0. Paint search matches on this page
+                let search_fill = hsla(45.0 / 360.0, 1.0, 0.5, 0.45);
+                for (mx, my, mw, mh) in &page_search_matches {
+                    let quad = Bounds {
+                        origin: Point::new(
+                            card_bounds.origin.x + px(mx * zoom),
+                            card_bounds.origin.y + px(my * zoom),
+                        ),
+                        size: Size {
+                            width: px(mw * zoom),
+                            height: px(mh * zoom),
+                        },
+                    };
+                    let clipped = quad.intersect(&card_bounds);
+                    if clipped.size.width > px(1.0) && clipped.size.height > px(1.0) {
+                        window.paint_quad(fill(clipped, search_fill));
+                    }
+                }
+
+                // 1. Paint saved permanent annotations on this page
+                for ann in &page_annotations {
+                    let ann_quad = Bounds {
+                        origin: Point::new(
+                            card_bounds.origin.x + px(ann.x * zoom),
+                            card_bounds.origin.y + px(ann.y * zoom),
+                        ),
+                        size: Size {
+                            width: px(ann.width * zoom),
+                            height: px(ann.height * zoom),
+                        },
+                    };
+                    let clipped_ann = ann_quad.intersect(&card_bounds);
+                    if clipped_ann.size.width > px(1.0) && clipped_ann.size.height > px(1.0) {
+                        match &ann.style {
+                            crate::models::AnnotationStyle::Highlight { .. } => {
+                                window.paint_quad(fill(
+                                    clipped_ann,
+                                    hsla(50.0 / 360.0, 1.0, 0.5, 0.45),
+                                ));
+                            }
+                            crate::models::AnnotationStyle::Redact { .. } => {
+                                window.paint_quad(fill(clipped_ann, hsla(0.0, 0.0, 0.05, 0.98)));
+                            }
+                            crate::models::AnnotationStyle::Rectangle { .. } => {
+                                let stroke_c = hsla(215.0 / 360.0, 0.9, 0.5, 0.9);
+                                let t = px(2.0);
+                                window.paint_quad(fill(
+                                    Bounds {
+                                        origin: clipped_ann.origin,
+                                        size: Size {
+                                            width: clipped_ann.size.width,
+                                            height: t,
+                                        },
+                                    },
+                                    stroke_c,
+                                ));
+                                window.paint_quad(fill(
+                                    Bounds {
+                                        origin: Point::new(
+                                            clipped_ann.origin.x,
+                                            clipped_ann.origin.y + clipped_ann.size.height - t,
+                                        ),
+                                        size: Size {
+                                            width: clipped_ann.size.width,
+                                            height: t,
+                                        },
+                                    },
+                                    stroke_c,
+                                ));
+                                window.paint_quad(fill(
+                                    Bounds {
+                                        origin: clipped_ann.origin,
+                                        size: Size {
+                                            width: t,
+                                            height: clipped_ann.size.height,
+                                        },
+                                    },
+                                    stroke_c,
+                                ));
+                                window.paint_quad(fill(
+                                    Bounds {
+                                        origin: Point::new(
+                                            clipped_ann.origin.x + clipped_ann.size.width - t,
+                                            clipped_ann.origin.y,
+                                        ),
+                                        size: Size {
+                                            width: t,
+                                            height: clipped_ann.size.height,
+                                        },
+                                    },
+                                    stroke_c,
+                                ));
+                            }
+                            crate::models::AnnotationStyle::Circle { .. } => {
+                                let stroke_c = hsla(140.0 / 360.0, 0.8, 0.45, 0.9);
+                                let t = px(2.0);
+                                window.paint_quad(fill(
+                                    Bounds {
+                                        origin: clipped_ann.origin,
+                                        size: Size {
+                                            width: clipped_ann.size.width,
+                                            height: t,
+                                        },
+                                    },
+                                    stroke_c,
+                                ));
+                                window.paint_quad(fill(
+                                    Bounds {
+                                        origin: Point::new(
+                                            clipped_ann.origin.x,
+                                            clipped_ann.origin.y + clipped_ann.size.height - t,
+                                        ),
+                                        size: Size {
+                                            width: clipped_ann.size.width,
+                                            height: t,
+                                        },
+                                    },
+                                    stroke_c,
+                                ));
+                                window.paint_quad(fill(
+                                    Bounds {
+                                        origin: clipped_ann.origin,
+                                        size: Size {
+                                            width: t,
+                                            height: clipped_ann.size.height,
+                                        },
+                                    },
+                                    stroke_c,
+                                ));
+                                window.paint_quad(fill(
+                                    Bounds {
+                                        origin: Point::new(
+                                            clipped_ann.origin.x + clipped_ann.size.width - t,
+                                            clipped_ann.origin.y,
+                                        ),
+                                        size: Size {
+                                            width: t,
+                                            height: clipped_ann.size.height,
+                                        },
+                                    },
+                                    stroke_c,
+                                ));
+                            }
+                            crate::models::AnnotationStyle::Line { .. }
+                            | crate::models::AnnotationStyle::Arrow { .. } => {
+                                let line_b = Bounds {
+                                    origin: Point::new(
+                                        clipped_ann.origin.x,
+                                        clipped_ann.origin.y + clipped_ann.size.height - px(2.0),
+                                    ),
+                                    size: Size {
+                                        width: clipped_ann.size.width,
+                                        height: px(2.0),
+                                    },
+                                };
+                                window.paint_quad(fill(line_b, hsla(0.0, 0.9, 0.5, 0.9)));
+                            }
+                            crate::models::AnnotationStyle::StickyNote { .. } => {
+                                let note_b = Bounds {
+                                    origin: clipped_ann.origin,
+                                    size: Size {
+                                        width: px(24.0),
+                                        height: px(24.0),
+                                    },
+                                };
+                                window.paint_quad(fill(note_b, hsla(48.0 / 360.0, 1.0, 0.6, 0.95)));
+                            }
+                            _ => {
+                                window.paint_quad(fill(
+                                    clipped_ann,
+                                    hsla(215.0 / 360.0, 0.9, 0.55, 0.35),
+                                ));
+                            }
+                        }
+                    }
+                }
+
+                // 2. Paint active selection and word-level text highlighting
+                if is_sel_page && let (Some(start), Some(end)) = (sel_start, sel_end) {
+                    let sel_win_min_x = start.x.min(end.x);
+                    let sel_win_max_x = start.x.max(end.x);
+                    let sel_win_min_y = start.y.min(end.y);
+                    let sel_win_max_y = start.y.max(end.y);
+
                     let sel_bounds = Bounds {
-                        origin: Point::new(start.x.min(end.x), start.y.min(end.y)),
+                        origin: Point::new(sel_win_min_x, sel_win_min_y),
                         size: Size {
                             width: (start.x - end.x).abs(),
                             height: (start.y - end.y).abs(),
                         },
                     };
                     let clipped = sel_bounds.intersect(&card_bounds);
-                    if clipped.size.width > px(2.0) && clipped.size.height > px(2.0) {
-                        window.paint_quad(fill(clipped, hsla(215.0 / 360.0, 0.85, 0.55, 0.35)));
-                        window.paint_quad(outline(
-                            clipped,
-                            hsla(215.0 / 360.0, 0.9, 0.45, 0.7),
-                            BorderStyle::Solid,
-                        ));
+
+                    // Convert selection box to page PDF point coordinates
+                    let page_min_x = ((sel_win_min_x - card_bounds.origin.x) / px(1.0)) / zoom;
+                    let page_max_x = ((sel_win_max_x - card_bounds.origin.x) / px(1.0)) / zoom;
+                    let page_min_y = ((sel_win_min_y - card_bounds.origin.y) / px(1.0)) / zoom;
+                    let page_max_y = ((sel_win_max_y - card_bounds.origin.y) / px(1.0)) / zoom;
+
+                    let word_fill = hl_color.unwrap_or_else(|| hsla(215.0 / 360.0, 0.9, 0.55, 0.4));
+                    let word_border = hl_color
+                        .map(|c| c.opacity(0.8))
+                        .unwrap_or_else(|| hsla(215.0 / 360.0, 0.9, 0.45, 0.65));
+
+                    let mut matched_any_text = false;
+
+                    if let Some(items) = &text_items {
+                        for item in items {
+                            let ix2 = item.x + item.width;
+                            let iy2 = item.y + item.height;
+                            if ix2 >= page_min_x
+                                && item.x <= page_max_x
+                                && iy2 >= page_min_y
+                                && item.y <= page_max_y
+                            {
+                                matched_any_text = true;
+                                let word_quad = Bounds {
+                                    origin: Point::new(
+                                        card_bounds.origin.x + px(item.x * zoom),
+                                        card_bounds.origin.y + px(item.y * zoom),
+                                    ),
+                                    size: Size {
+                                        width: px(item.width * zoom),
+                                        height: px(item.height * zoom),
+                                    },
+                                };
+                                let clipped_word = word_quad.intersect(&card_bounds);
+                                if clipped_word.size.width > px(1.0)
+                                    && clipped_word.size.height > px(1.0)
+                                {
+                                    window.paint_quad(fill(clipped_word, word_fill));
+                                    window.paint_quad(outline(
+                                        clipped_word,
+                                        word_border,
+                                        BorderStyle::Solid,
+                                    ));
+                                }
+                            }
+                        }
+                    }
+
+                    // While actively dragging, or if no text items matched (e.g. image-only PDF),
+                    // paint the drag marquee quad
+                    if (is_selecting || !matched_any_text)
+                        && clipped.size.width > px(2.0)
+                        && clipped.size.height > px(2.0)
+                    {
+                        let marquee_fill = if matched_any_text {
+                            hsla(215.0 / 360.0, 0.85, 0.55, 0.15)
+                        } else {
+                            word_fill.opacity(0.35)
+                        };
+                        window.paint_quad(fill(clipped, marquee_fill));
+                        window.paint_quad(outline(clipped, word_border, BorderStyle::Solid));
                     }
                 }
             },
@@ -183,6 +456,19 @@ impl DocumentViewport {
                 .into_any_element()
         };
 
+        let page_badge = div()
+            .absolute()
+            .bottom_2()
+            .right_2()
+            .px_2()
+            .py_0p5()
+            .rounded_md()
+            .bg(gpui_kit::hsla(0.0, 0.0, 0.1, 0.6))
+            .text_color(gpui_kit::white())
+            .text_xs()
+            .font_medium()
+            .child(format!("{}/{}", page_idx + 1, total));
+
         div()
             .id(SharedString::from(format!("canvas-page-{}", page_idx)))
             .w(scaled_w)
@@ -201,6 +487,7 @@ impl DocumentViewport {
             .on_click(click_listener)
             .child(card_content)
             .child(selection_overlay)
+            .child(page_badge)
             .into_any_element()
     }
 
@@ -208,10 +495,16 @@ impl DocumentViewport {
         &self,
         cx: &mut Context<V>,
         on_page_click: impl Fn(&mut V, usize, &mut Window, &mut Context<V>) + 'static + Copy,
-        on_drag_start: impl Fn(&mut V, usize, Point<Pixels>, &mut Window, &mut Context<V>) + 'static + Copy,
-        on_drag_move: impl Fn(&mut V, usize, Point<Pixels>, &mut Window, &mut Context<V>) + 'static + Copy,
+        on_drag_start: impl Fn(&mut V, usize, Point<Pixels>, &mut Window, &mut Context<V>)
+        + 'static
+        + Copy,
+        on_drag_move: impl Fn(&mut V, usize, Point<Pixels>, &mut Window, &mut Context<V>)
+        + 'static
+        + Copy,
         on_drag_end: impl Fn(&mut V, usize, &mut Window, &mut Context<V>) + 'static + Copy,
-        on_scroll_wheel: impl Fn(&mut V, &ScrollWheelEvent, &mut Window, &mut Context<V>) + 'static + Copy,
+        on_scroll_wheel: impl Fn(&mut V, &ScrollWheelEvent, &mut Window, &mut Context<V>)
+        + 'static
+        + Copy,
     ) -> AnyElement {
         let muted = cx.theme().muted;
         let cur_page = self.current_page;
@@ -248,27 +541,51 @@ impl DocumentViewport {
                     .into_any_element()
             }
             PageLayoutMode::TwoPageSpread => {
-                let left_idx = cur_page.min(total - 1);
+                let (left_idx, right_idx) = if self.standalone_cover {
+                    if cur_page == 0 {
+                        (0, None)
+                    } else {
+                        let odd = if cur_page % 2 == 1 {
+                            cur_page
+                        } else {
+                            cur_page - 1
+                        };
+                        (odd, if odd + 1 < total { Some(odd + 1) } else { None })
+                    }
+                } else {
+                    let even = if cur_page.is_multiple_of(2) {
+                        cur_page
+                    } else {
+                        cur_page - 1
+                    };
+                    (
+                        even,
+                        if even + 1 < total {
+                            Some(even + 1)
+                        } else {
+                            None
+                        },
+                    )
+                };
+
                 let left_card = self.render_page_card(
                     cx,
-                    left_idx,
+                    left_idx.min(total - 1),
                     on_page_click,
                     on_drag_start,
                     on_drag_move,
                     on_drag_end,
                 );
-                let right_card = if left_idx + 1 < total {
-                    Some(self.render_page_card(
+                let right_card = right_idx.map(|r_idx| {
+                    self.render_page_card(
                         cx,
-                        left_idx + 1,
+                        r_idx.min(total - 1),
                         on_page_click,
                         on_drag_start,
                         on_drag_move,
                         on_drag_end,
-                    ))
-                } else {
-                    None
-                };
+                    )
+                });
 
                 div()
                     .id("canvas-twopage-scroll")

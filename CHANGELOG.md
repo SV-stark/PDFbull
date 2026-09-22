@@ -5,9 +5,31 @@ All notable changes to the PDFbull project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.16.2] - 2026-09-22
+
+### Added & Production-Ready Desktop Features
+- **Comprehensive Desktop Feature Wiring**:
+  - **Save & Save As**: Wired `Ctrl+S` and Ribbon Save action to execute incremental `PdfCommand::SaveAnnotations` and full `PdfCommand::ExportPdf` via asynchronous file dialogs, persisting all annotations back to PDF files.
+  - **Print Pipeline**: Wired `Ctrl+P` and Ribbon Print action to invoke `PdfCommand::PrintPdf` with native Windows printer spooling.
+  - **Global Desktop Keyboard Shortcuts**: Registered cross-platform hotkeys including `Ctrl+O` (Open), `Ctrl+S` (Save), `Ctrl+P` (Print), `Ctrl+W` (Close Tab), `Ctrl+F` (Open Search), `Ctrl+=` / `Ctrl+-` / `Ctrl+0` (Zoom In/Out/Reset), `PageUp` / `Left` and `PageDown` / `Right` (Page Navigation), and `Esc` (Dismiss Dialogs/Selections).
+  - **Interactive Search Engine & In-Page Highlights**: Connected sidebar search bar with query execution via `PdfCommand::Search`, occurrence count tracking, snippet listing, click-to-jump page navigation, and amber translucent search match highlights overlaid directly on the PDF document canvas.
+  - **Rich Sidebar Panels**: Implemented live panels for Bookmarks outline navigation (`LoadDocumentMeta`), Annotations list with per-item jump and delete buttons, Attachments inspection with file size formatting, and optional PDF Layers toggles.
+  - **Multi-Style Annotation Tools**: Extended canvas drag creation beyond basic highlights to support Underline, Strikeout, Rectangle, Circle, Line, Arrow, StickyNote, and Redact annotations with distinct rendering styles and modified-document state tracking.
+  - **Dark / Midnight Inversion Mode**: Connected Midnight mode toggle to `RenderFilter::Inverted` in `request_render_page` with instant cache clearing and re-rendering for high-contrast nighttime reading.
+  - **Book Spread View with Standalone Cover**: Updated `TwoPageSpread` layout to support `standalone_cover`, correctly displaying cover page 0 centered as a single page while pairing subsequent pages as true two-page spreads.
+  - **PDF Utility Workflows**: Wired interactive modal dialogs and file operations for Merge (multi-PDF picker and merge), Split (directory export), Compress (`PdfCommand::Optimize`), Add Watermark (preset and custom stamps), Add Header & Footer, Document Encryption (AES-128/256), and Page Organizer (90° CW/CCW rotation and page deletion).
+  - **Document Conversion**: Integrated export actions for Markdown (`.md`), HTML (`.html`), and Plain Text (`.txt`) via `PdfCommand::ConvertPdf`.
+  - **Developer Log Console**: Built a slide-up log drawer with streaming log entries, severity level filtering (`all`, `info`, `warn`, `error`), one-click Copy to Clipboard, and Clear Log capability.
+  - **Status Message Banner**: Integrated live operation feedback (save status, encryption, OCR progress, print spooling notifications) directly into the bottom persistent status bar.
+
 ## [0.16.1] - 2026-09-21
 
 ### Fixed & Improved (GPUI-Kit Integration)
+- **Visual & UX Redesign (GPUI-Kit)**:
+  - Redesigned Welcome Hub with branded hero monogram, version badge, glowing drag-and-drop zone, 2×2 rich action cards (Open, Page Organizer, Digital Signatures, Security), and structured recent document cards.
+  - Upgraded Ribbon toolbar with native desktop tab navigation, segmented action groups separated by hairline dividers, and muted section captions (`File`, `Page`, `Zoom`, `Layout`, `Markup`, `Shapes`, `Security`, etc.).
+  - Added bottom persistent status bar with document geometry (`pt`), layout mode indicator, interactive page stepper, and quick zoom controls.
+  - Enhanced document canvas with floating translucent page badges (`Page X of Y`), physical drop shadows, and refined tab strip styling.
 - **Continuous Scroll & Viewport Navigation**:
   - Implemented stable virtual scroll container (`canvas-continuous-scroll`) with GPUI `ScrollHandle` and `.vertical_scrollbar(&self.scroll_handle)`.
   - Added full document page layout in continuous mode with dynamic top-item detection and pre-rendering as the user scrolls.
@@ -20,6 +42,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Color Correction for Direct3D 11 Textures**:
   - Resolved inverted/reversed color balance (where red appeared blue and blue appeared red) by implementing `convert_rgba_to_bgra`.
   - Converted tiny-skia RGBA byte buffers to BGRA and un-premultiplied alpha as required by GPUI DirectX 11 textures.
+- **Text Selection Highlighting & Word-Level Highlighting**:
+  - Fixed text selection highlighting where selecting text did not visually highlight the words on the page.
+  - Implemented precise word-level highlight quads (`window.paint_quad(fill(clipped_word, ...))`) painted directly over every intersecting `TextItem` in the page's text stream.
+  - Added true coordinate translation between window pixels and PDF page points by tracking dynamic page card window origins (`viewport.page_origins`), ensuring selection accuracy regardless of window size, continuous scroll offset, or zoom level.
+  - Corrected `TextItem` vertical coordinate calculation in `pdf_engine.rs` (`(page_height - span.y - span.size).max(0.0)`) to align with the top-left of font glyph bounding boxes rather than the baseline.
+  - Added proactive text stream prefetching in `render_needed_pages` so text items and bounding boxes are immediately available when the user begins selecting.
+  - Wired `RibbonTab::Annotate` -> `AnnotationTool::Highlight` and custom palette colors, allowing users to apply permanent yellow (or custom) highlights to selected text that persist across page interactions.
 - **Mouse Drag Text Selection**:
   - Added mouse drag selection handlers (`on_mouse_down`, `on_mouse_move`, `on_mouse_up`) to canvas page cards.
   - Painted dynamic translucent blue selection highlight boxes over selected text via `canvas` quad clipping.

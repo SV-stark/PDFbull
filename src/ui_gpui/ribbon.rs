@@ -1,4 +1,6 @@
+use gpui_kit::base::StyledExt;
 use gpui_kit::component::ActiveTheme;
+use gpui_kit::component::Sizable;
 use gpui_kit::component::button::{Button, ButtonVariants};
 use gpui_kit::prelude::FluentBuilder;
 use gpui_kit::*;
@@ -104,6 +106,11 @@ impl RibbonState {
         cx: &mut Context<V>,
         on_tab_change: impl Fn(&mut V, RibbonTab, &mut Window, &mut Context<V>) + 'static + Copy,
     ) -> AnyElement {
+        let primary = cx.theme().primary;
+        let fg = cx.theme().foreground;
+        let muted_fg = cx.theme().muted_foreground;
+        let accent = cx.theme().accent;
+
         let tabs = [
             (RibbonTab::Home, "Home"),
             (RibbonTab::View, "View"),
@@ -119,24 +126,46 @@ impl RibbonState {
             let click_listener = cx.listener(move |this, _, window, cx| {
                 on_tab_change(this, tab, window, cx);
             });
-            let mut btn =
-                Button::new(SharedString::from(format!("ribbon-tab-{:?}", tab))).label(label);
 
-            if is_active {
-                btn = btn.primary();
-            } else {
-                btn = btn.ghost();
-            }
+            let tab_el = div()
+                .id(SharedString::from(format!("ribbon-tab-{:?}", tab)))
+                .flex()
+                .items_center()
+                .h(px(28.0))
+                .px_3()
+                .rounded_t_md()
+                .border_b_2()
+                .border_color(if is_active {
+                    primary
+                } else {
+                    gpui_kit::transparent_black()
+                })
+                .bg(if is_active {
+                    accent
+                } else {
+                    gpui_kit::transparent_black()
+                })
+                .hover(move |s| if !is_active { s.bg(accent) } else { s })
+                .cursor_pointer()
+                .on_click(click_listener)
+                .child(
+                    div()
+                        .text_xs()
+                        .font_medium()
+                        .text_color(if is_active { fg } else { muted_fg })
+                        .child(label),
+                );
 
-            tab_buttons.push(btn.on_click(click_listener));
+            tab_buttons.push(tab_el);
         }
 
         div()
             .flex()
             .flex_row()
+            .items_end()
+            .h(px(32.0))
             .gap_1()
-            .px_2()
-            .pt_1()
+            .px_3()
             .children(tab_buttons)
             .into_any_element()
     }
@@ -147,7 +176,7 @@ impl RibbonState {
         on_action: impl Fn(&mut V, RibbonAction, &mut Window, &mut Context<V>) + 'static + Copy,
     ) -> AnyElement {
         let border = cx.theme().border;
-        let muted = cx.theme().muted;
+        let group_box = cx.theme().group_box;
 
         let content = match self.active_tab {
             RibbonTab::Home => render_home_strip(border, cx, on_action),
@@ -168,9 +197,9 @@ impl RibbonState {
             .flex()
             .flex_row()
             .items_center()
-            .h_11()
+            .h(px(54.0))
             .px_3()
-            .bg(muted)
+            .bg(group_box)
             .border_b_1()
             .border_color(border)
             .child(content)
@@ -178,71 +207,129 @@ impl RibbonState {
     }
 }
 
+fn ribbon_divider(border: Hsla) -> AnyElement {
+    div()
+        .w_px()
+        .h(px(32.0))
+        .mx_1()
+        .bg(border)
+        .into_any_element()
+}
+
+fn ribbon_group(label: &'static str, children: Vec<AnyElement>, muted_fg: Hsla) -> AnyElement {
+    div()
+        .flex()
+        .flex_col()
+        .items_center()
+        .gap_1()
+        .child(
+            div()
+                .flex()
+                .flex_row()
+                .items_center()
+                .gap_1()
+                .children(children),
+        )
+        .child(
+            div()
+                .text_xs()
+                .font_normal()
+                .text_color(muted_fg)
+                .child(label),
+        )
+        .into_any_element()
+}
+
 #[inline(never)]
-#[allow(clippy::vec_init_then_push)]
 fn render_home_strip<V: 'static>(
     border: Hsla,
     cx: &mut Context<V>,
     on_action: impl Fn(&mut V, RibbonAction, &mut Window, &mut Context<V>) + 'static + Copy,
 ) -> AnyElement {
-    let mut items: Vec<AnyElement> = Vec::with_capacity(10);
-    items.push(
-        Button::new("btn-open")
-            .label("Open")
-            .outline()
-            .on_click(cx.listener(move |v, _, w, cx| on_action(v, RibbonAction::OpenFile, w, cx)))
-            .into_any_element(),
+    let muted_fg = cx.theme().muted_foreground;
+
+    // Group 1: Document
+    let doc_group = ribbon_group(
+        "File",
+        vec![
+            Button::new("btn-open")
+                .label("Open")
+                .outline()
+                .small()
+                .on_click(
+                    cx.listener(move |v, _, w, cx| on_action(v, RibbonAction::OpenFile, w, cx)),
+                )
+                .into_any_element(),
+            Button::new("btn-save")
+                .label("Save")
+                .outline()
+                .small()
+                .on_click(
+                    cx.listener(move |v, _, w, cx| on_action(v, RibbonAction::SaveFile, w, cx)),
+                )
+                .into_any_element(),
+            Button::new("btn-print")
+                .label("Print")
+                .ghost()
+                .small()
+                .on_click(cx.listener(move |v, _, w, cx| on_action(v, RibbonAction::Print, w, cx)))
+                .into_any_element(),
+        ],
+        muted_fg,
     );
-    items.push(
-        Button::new("btn-save")
-            .label("Save")
-            .outline()
-            .on_click(cx.listener(move |v, _, w, cx| on_action(v, RibbonAction::SaveFile, w, cx)))
-            .into_any_element(),
+
+    // Group 2: Navigation
+    let nav_group = ribbon_group(
+        "Page",
+        vec![
+            Button::new("btn-page-prev")
+                .label("◀ Prev")
+                .ghost()
+                .small()
+                .on_click(
+                    cx.listener(move |v, _, w, cx| on_action(v, RibbonAction::PrevPage, w, cx)),
+                )
+                .into_any_element(),
+            Button::new("btn-page-next")
+                .label("Next ▶")
+                .ghost()
+                .small()
+                .on_click(
+                    cx.listener(move |v, _, w, cx| on_action(v, RibbonAction::NextPage, w, cx)),
+                )
+                .into_any_element(),
+        ],
+        muted_fg,
     );
-    items.push(
-        Button::new("btn-print")
-            .label("Print")
-            .ghost()
-            .on_click(cx.listener(move |v, _, w, cx| on_action(v, RibbonAction::Print, w, cx)))
-            .into_any_element(),
-    );
-    items.push(div().w_px().h_6().bg(border).into_any_element());
-    items.push(
-        Button::new("btn-zoom-in")
-            .label("Zoom +")
-            .ghost()
-            .on_click(cx.listener(move |v, _, w, cx| on_action(v, RibbonAction::ZoomIn, w, cx)))
-            .into_any_element(),
-    );
-    items.push(
-        Button::new("btn-zoom-out")
-            .label("Zoom -")
-            .ghost()
-            .on_click(cx.listener(move |v, _, w, cx| on_action(v, RibbonAction::ZoomOut, w, cx)))
-            .into_any_element(),
-    );
-    items.push(
-        Button::new("btn-zoom-reset")
-            .label("100%")
-            .ghost()
-            .on_click(cx.listener(move |v, _, w, cx| on_action(v, RibbonAction::ZoomReset, w, cx)))
-            .into_any_element(),
-    );
-    items.push(div().w_px().h_6().bg(border).into_any_element());
-    items.push(
-        Button::new("btn-page-prev")
-            .label("Prev")
-            .ghost()
-            .on_click(cx.listener(move |v, _, w, cx| on_action(v, RibbonAction::PrevPage, w, cx)))
-            .into_any_element(),
-    );
-    items.push(
-        Button::new("btn-page-next")
-            .label("Next")
-            .ghost()
-            .on_click(cx.listener(move |v, _, w, cx| on_action(v, RibbonAction::NextPage, w, cx)))
-            .into_any_element(),
+
+    // Group 3: Zoom
+    let zoom_group = ribbon_group(
+        "Zoom",
+        vec![
+            Button::new("btn-zoom-out")
+                .label("－")
+                .ghost()
+                .small()
+                .on_click(
+                    cx.listener(move |v, _, w, cx| on_action(v, RibbonAction::ZoomOut, w, cx)),
+                )
+                .into_any_element(),
+            Button::new("btn-zoom-reset")
+                .label("100%")
+                .outline()
+                .small()
+                .on_click(
+                    cx.listener(move |v, _, w, cx| on_action(v, RibbonAction::ZoomReset, w, cx)),
+                )
+                .into_any_element(),
+            Button::new("btn-zoom-in")
+                .label("＋")
+                .ghost()
+                .small()
+                .on_click(cx.listener(move |v, _, w, cx| on_action(v, RibbonAction::ZoomIn, w, cx)))
+                .into_any_element(),
+        ],
+        muted_fg,
     );
 
     div()
@@ -250,7 +337,11 @@ fn render_home_strip<V: 'static>(
         .flex_row()
         .items_center()
         .gap_2()
-        .children(items)
+        .child(doc_group)
+        .child(ribbon_divider(border))
+        .child(nav_group)
+        .child(ribbon_divider(border))
+        .child(zoom_group)
         .into_any_element()
 }
 
@@ -263,82 +354,95 @@ fn render_view_strip<V: 'static>(
     cx: &mut Context<V>,
     on_action: impl Fn(&mut V, RibbonAction, &mut Window, &mut Context<V>) + 'static + Copy,
 ) -> AnyElement {
-    let mut items: Vec<AnyElement> = Vec::with_capacity(6);
-    items.push(
-        Button::new("btn-continuous")
-            .label("Continuous")
-            .when(layout == PageLayoutMode::Continuous, |b| b.primary())
-            .when(layout != PageLayoutMode::Continuous, |b| b.outline())
-            .on_click(cx.listener(move |v, _, w, cx| {
-                on_action(
-                    v,
-                    RibbonAction::SetLayout(PageLayoutMode::Continuous),
-                    w,
-                    cx,
-                )
-            }))
-            .into_any_element(),
+    let muted_fg = cx.theme().muted_foreground;
+
+    let layout_group = ribbon_group(
+        "Page Layout",
+        vec![
+            Button::new("btn-continuous")
+                .label("Continuous")
+                .small()
+                .when(layout == PageLayoutMode::Continuous, |b| b.primary())
+                .when(layout != PageLayoutMode::Continuous, |b| b.outline())
+                .on_click(cx.listener(move |v, _, w, cx| {
+                    on_action(
+                        v,
+                        RibbonAction::SetLayout(PageLayoutMode::Continuous),
+                        w,
+                        cx,
+                    )
+                }))
+                .into_any_element(),
+            Button::new("btn-single")
+                .label("Single")
+                .small()
+                .when(layout == PageLayoutMode::SinglePage, |b| b.primary())
+                .when(layout != PageLayoutMode::SinglePage, |b| b.outline())
+                .on_click(cx.listener(move |v, _, w, cx| {
+                    on_action(
+                        v,
+                        RibbonAction::SetLayout(PageLayoutMode::SinglePage),
+                        w,
+                        cx,
+                    )
+                }))
+                .into_any_element(),
+            Button::new("btn-spread")
+                .label("Two-Page")
+                .small()
+                .when(layout == PageLayoutMode::TwoPageSpread, |b| b.primary())
+                .when(layout != PageLayoutMode::TwoPageSpread, |b| b.outline())
+                .on_click(cx.listener(move |v, _, w, cx| {
+                    on_action(
+                        v,
+                        RibbonAction::SetLayout(PageLayoutMode::TwoPageSpread),
+                        w,
+                        cx,
+                    )
+                }))
+                .into_any_element(),
+        ],
+        muted_fg,
     );
-    items.push(
-        Button::new("btn-single")
-            .label("Single")
-            .when(layout == PageLayoutMode::SinglePage, |b| b.primary())
-            .when(layout != PageLayoutMode::SinglePage, |b| b.outline())
-            .on_click(cx.listener(move |v, _, w, cx| {
-                on_action(
-                    v,
-                    RibbonAction::SetLayout(PageLayoutMode::SinglePage),
-                    w,
-                    cx,
-                )
-            }))
-            .into_any_element(),
-    );
-    items.push(
-        Button::new("btn-spread")
-            .label("Spread")
-            .when(layout == PageLayoutMode::TwoPageSpread, |b| b.primary())
-            .when(layout != PageLayoutMode::TwoPageSpread, |b| b.outline())
-            .on_click(cx.listener(move |v, _, w, cx| {
-                on_action(
-                    v,
-                    RibbonAction::SetLayout(PageLayoutMode::TwoPageSpread),
-                    w,
-                    cx,
-                )
-            }))
-            .into_any_element(),
-    );
-    items.push(div().w_px().h_6().bg(border).into_any_element());
-    items.push(
-        Button::new("btn-cover")
-            .label(if cover { "Cover: On" } else { "Cover: Off" })
-            .ghost()
-            .on_click(
-                cx.listener(move |v, _, w, cx| on_action(v, RibbonAction::ToggleCover, w, cx)),
-            )
-            .into_any_element(),
-    );
-    items.push(
-        Button::new("btn-midnight")
-            .label(if midnight {
-                "Midnight: On"
-            } else {
-                "Midnight: Off"
-            })
-            .ghost()
-            .on_click(
-                cx.listener(move |v, _, w, cx| on_action(v, RibbonAction::ToggleMidnight, w, cx)),
-            )
-            .into_any_element(),
-    );
+
+    let display_group =
+        ribbon_group(
+            "Display Mode",
+            vec![
+                Button::new("btn-cover")
+                    .label(if cover { "Cover: On" } else { "Cover: Off" })
+                    .small()
+                    .when(cover, |b| b.primary())
+                    .when(!cover, |b| b.ghost())
+                    .on_click(cx.listener(move |v, _, w, cx| {
+                        on_action(v, RibbonAction::ToggleCover, w, cx)
+                    }))
+                    .into_any_element(),
+                Button::new("btn-midnight")
+                    .label(if midnight {
+                        "Midnight: On"
+                    } else {
+                        "Midnight: Off"
+                    })
+                    .small()
+                    .when(midnight, |b| b.primary())
+                    .when(!midnight, |b| b.ghost())
+                    .on_click(cx.listener(move |v, _, w, cx| {
+                        on_action(v, RibbonAction::ToggleMidnight, w, cx)
+                    }))
+                    .into_any_element(),
+            ],
+            muted_fg,
+        );
 
     div()
         .flex()
         .flex_row()
         .items_center()
         .gap_2()
-        .children(items)
+        .child(layout_group)
+        .child(ribbon_divider(border))
+        .child(display_group)
         .into_any_element()
 }
 
@@ -348,41 +452,88 @@ fn render_annotate_strip<V: 'static>(
     cx: &mut Context<V>,
     on_action: impl Fn(&mut V, RibbonAction, &mut Window, &mut Context<V>) + 'static + Copy,
 ) -> AnyElement {
-    let tools = [
+    let border = cx.theme().border;
+    let muted_fg = cx.theme().muted_foreground;
+
+    let text_tools = [
         (AnnotationTool::Pointer, "Pointer"),
         (AnnotationTool::Highlight, "Highlight"),
         (AnnotationTool::Underline, "Underline"),
         (AnnotationTool::Strikeout, "Strikeout"),
+    ];
+
+    let mut text_btns = Vec::new();
+    for (tool, label) in text_tools {
+        let is_selected = tool == cur_tool;
+        let click_listener =
+            cx.listener(move |v, _, w, cx| on_action(v, RibbonAction::SelectTool(tool), w, cx));
+        let mut btn = Button::new(SharedString::from(format!("tool-{:?}", tool)))
+            .label(label)
+            .small();
+        if is_selected {
+            btn = btn.primary();
+        } else {
+            btn = btn.ghost();
+        }
+        text_btns.push(btn.on_click(click_listener).into_any_element());
+    }
+
+    let shape_tools = [
         (AnnotationTool::Rectangle, "Rectangle"),
         (AnnotationTool::Circle, "Circle"),
         (AnnotationTool::Line, "Line"),
         (AnnotationTool::Arrow, "Arrow"),
+    ];
+
+    let mut shape_btns = Vec::new();
+    for (tool, label) in shape_tools {
+        let is_selected = tool == cur_tool;
+        let click_listener =
+            cx.listener(move |v, _, w, cx| on_action(v, RibbonAction::SelectTool(tool), w, cx));
+        let mut btn = Button::new(SharedString::from(format!("tool-{:?}", tool)))
+            .label(label)
+            .small();
+        if is_selected {
+            btn = btn.primary();
+        } else {
+            btn = btn.ghost();
+        }
+        shape_btns.push(btn.on_click(click_listener).into_any_element());
+    }
+
+    let draw_tools = [
         (AnnotationTool::Ink, "Ink"),
         (AnnotationTool::StickyNote, "Note"),
         (AnnotationTool::Text, "Text"),
         (AnnotationTool::Redact, "Redact"),
     ];
 
-    let mut tool_buttons: Vec<AnyElement> = Vec::with_capacity(tools.len());
-    for (tool, label) in tools {
+    let mut draw_btns = Vec::new();
+    for (tool, label) in draw_tools {
         let is_selected = tool == cur_tool;
         let click_listener =
             cx.listener(move |v, _, w, cx| on_action(v, RibbonAction::SelectTool(tool), w, cx));
-        let mut btn = Button::new(SharedString::from(format!("tool-{:?}", tool))).label(label);
+        let mut btn = Button::new(SharedString::from(format!("tool-{:?}", tool)))
+            .label(label)
+            .small();
         if is_selected {
             btn = btn.primary();
         } else {
             btn = btn.ghost();
         }
-        tool_buttons.push(btn.on_click(click_listener).into_any_element());
+        draw_btns.push(btn.on_click(click_listener).into_any_element());
     }
 
     div()
         .flex()
         .flex_row()
         .items_center()
-        .gap_1()
-        .children(tool_buttons)
+        .gap_2()
+        .child(ribbon_group("Text & Markup", text_btns, muted_fg))
+        .child(ribbon_divider(border))
+        .child(ribbon_group("Shapes", shape_btns, muted_fg))
+        .child(ribbon_divider(border))
+        .child(ribbon_group("Draw & Notes", draw_btns, muted_fg))
         .into_any_element()
 }
 
@@ -391,135 +542,112 @@ fn render_tools_strip<V: 'static>(
     cx: &mut Context<V>,
     on_action: impl Fn(&mut V, RibbonAction, &mut Window, &mut Context<V>) + 'static + Copy,
 ) -> AnyElement {
-    let mut items: Vec<AnyElement> = Vec::with_capacity(11);
-    items.push(
-        Button::new("tool-merge")
-            .label("Merge")
-            .ghost()
-            .on_click(cx.listener(move |v, _, w, cx| on_action(v, RibbonAction::Merge, w, cx)))
-            .into_any_element(),
+    let border = cx.theme().border;
+    let muted_fg = cx.theme().muted_foreground;
+
+    let organize_group = ribbon_group(
+        "Organize",
+        vec![
+            Button::new("tool-organizer")
+                .label("Organizer")
+                .primary()
+                .small()
+                .on_click(
+                    cx.listener(move |v, _, w, cx| {
+                        on_action(v, RibbonAction::PageOrganizer, w, cx)
+                    }),
+                )
+                .into_any_element(),
+            Button::new("tool-merge")
+                .label("Merge")
+                .outline()
+                .small()
+                .on_click(cx.listener(move |v, _, w, cx| on_action(v, RibbonAction::Merge, w, cx)))
+                .into_any_element(),
+            Button::new("tool-split")
+                .label("Split")
+                .outline()
+                .small()
+                .on_click(cx.listener(move |v, _, w, cx| on_action(v, RibbonAction::Split, w, cx)))
+                .into_any_element(),
+        ],
+        muted_fg,
     );
-    items.push(
-        Button::new("tool-split")
-            .label("Split")
-            .ghost()
-            .on_click(cx.listener(move |v, _, w, cx| on_action(v, RibbonAction::Split, w, cx)))
-            .into_any_element(),
-    );
-    items.push(
-        Button::new("tool-watermark")
-            .label("Watermark")
-            .ghost()
-            .on_click(cx.listener(move |v, _, w, cx| on_action(v, RibbonAction::Watermark, w, cx)))
-            .into_any_element(),
-    );
-    items.push(
-        Button::new("tool-header")
-            .label("Header/Footer")
-            .ghost()
-            .on_click(
-                cx.listener(move |v, _, w, cx| on_action(v, RibbonAction::HeaderFooter, w, cx)),
-            )
-            .into_any_element(),
-    );
-    items.push(
-        Button::new("tool-forms")
-            .label("Form Fields")
-            .ghost()
-            .on_click(cx.listener(move |v, _, w, cx| on_action(v, RibbonAction::FormFields, w, cx)))
-            .into_any_element(),
-    );
-    items.push(
-        Button::new("tool-sigs")
-            .label("Signatures")
-            .ghost()
-            .on_click(
-                cx.listener(move |v, _, w, cx| {
+
+    let security_group = ribbon_group(
+        "Security & Signing",
+        vec![
+            Button::new("tool-sigs")
+                .label("Signatures")
+                .outline()
+                .small()
+                .on_click(cx.listener(move |v, _, w, cx| {
                     on_action(v, RibbonAction::DigitalSignatures, w, cx)
-                }),
-            )
-            .into_any_element(),
-    );
-    items.push(
-        Button::new("tool-encrypt")
-            .label("Encrypt")
-            .ghost()
-            .on_click(cx.listener(move |v, _, w, cx| on_action(v, RibbonAction::Encrypt, w, cx)))
-            .into_any_element(),
-    );
-    items.push(
-        Button::new("tool-decrypt")
-            .label("Decrypt")
-            .ghost()
-            .on_click(cx.listener(move |v, _, w, cx| on_action(v, RibbonAction::Decrypt, w, cx)))
-            .into_any_element(),
-    );
-    items.push(
-        Button::new("tool-compress")
-            .label("Compress")
-            .ghost()
-            .on_click(cx.listener(move |v, _, w, cx| on_action(v, RibbonAction::Compress, w, cx)))
-            .into_any_element(),
-    );
-    items.push(
-        Button::new("tool-ocr")
-            .label("OCR")
-            .ghost()
-            .on_click(cx.listener(move |v, _, w, cx| on_action(v, RibbonAction::Ocr, w, cx)))
-            .into_any_element(),
-    );
-    items.push(
-        Button::new("tool-organizer")
-            .label("Page Organizer")
-            .primary()
-            .on_click(
-                cx.listener(move |v, _, w, cx| on_action(v, RibbonAction::PageOrganizer, w, cx)),
-            )
-            .into_any_element(),
+                }))
+                .into_any_element(),
+            Button::new("tool-encrypt")
+                .label("Encrypt")
+                .ghost()
+                .small()
+                .on_click(
+                    cx.listener(move |v, _, w, cx| on_action(v, RibbonAction::Encrypt, w, cx)),
+                )
+                .into_any_element(),
+            Button::new("tool-decrypt")
+                .label("Decrypt")
+                .ghost()
+                .small()
+                .on_click(
+                    cx.listener(move |v, _, w, cx| on_action(v, RibbonAction::Decrypt, w, cx)),
+                )
+                .into_any_element(),
+        ],
+        muted_fg,
     );
 
-    div()
-        .flex()
-        .flex_row()
-        .items_center()
-        .gap_1()
-        .children(items)
-        .into_any_element()
-}
-
-#[inline(never)]
-#[allow(clippy::vec_init_then_push)]
-fn render_convert_strip<V: 'static>(
-    cx: &mut Context<V>,
-    on_action: impl Fn(&mut V, RibbonAction, &mut Window, &mut Context<V>) + 'static + Copy,
-) -> AnyElement {
-    let mut items: Vec<AnyElement> = Vec::with_capacity(3);
-    items.push(
-        Button::new("conv-md")
-            .label("Convert to Markdown")
-            .outline()
-            .on_click(
-                cx.listener(move |v, _, w, cx| on_action(v, RibbonAction::ConvertMarkdown, w, cx)),
-            )
-            .into_any_element(),
-    );
-    items.push(
-        Button::new("conv-html")
-            .label("Convert to HTML5")
-            .outline()
-            .on_click(
-                cx.listener(move |v, _, w, cx| on_action(v, RibbonAction::ConvertHtml, w, cx)),
-            )
-            .into_any_element(),
-    );
-    items.push(
-        Button::new("conv-txt")
-            .label("Extract Plain Text")
-            .outline()
-            .on_click(
-                cx.listener(move |v, _, w, cx| on_action(v, RibbonAction::ConvertText, w, cx)),
-            )
-            .into_any_element(),
+    let content_group = ribbon_group(
+        "Content",
+        vec![
+            Button::new("tool-watermark")
+                .label("Watermark")
+                .ghost()
+                .small()
+                .on_click(
+                    cx.listener(move |v, _, w, cx| on_action(v, RibbonAction::Watermark, w, cx)),
+                )
+                .into_any_element(),
+            Button::new("tool-header")
+                .label("Header/Footer")
+                .ghost()
+                .small()
+                .on_click(
+                    cx.listener(move |v, _, w, cx| on_action(v, RibbonAction::HeaderFooter, w, cx)),
+                )
+                .into_any_element(),
+            Button::new("tool-forms")
+                .label("Form Fields")
+                .ghost()
+                .small()
+                .on_click(
+                    cx.listener(move |v, _, w, cx| on_action(v, RibbonAction::FormFields, w, cx)),
+                )
+                .into_any_element(),
+            Button::new("tool-ocr")
+                .label("OCR")
+                .ghost()
+                .small()
+                .on_click(cx.listener(move |v, _, w, cx| on_action(v, RibbonAction::Ocr, w, cx)))
+                .into_any_element(),
+            Button::new("tool-compress")
+                .label("Compress")
+                .ghost()
+                .small()
+                .on_click(
+                    cx.listener(move |v, _, w, cx| on_action(v, RibbonAction::Compress, w, cx)),
+                )
+                .into_any_element(),
+        ],
+        muted_fg,
     );
 
     div()
@@ -527,6 +655,57 @@ fn render_convert_strip<V: 'static>(
         .flex_row()
         .items_center()
         .gap_2()
-        .children(items)
+        .child(organize_group)
+        .child(ribbon_divider(border))
+        .child(security_group)
+        .child(ribbon_divider(border))
+        .child(content_group)
+        .into_any_element()
+}
+
+#[inline(never)]
+fn render_convert_strip<V: 'static>(
+    cx: &mut Context<V>,
+    on_action: impl Fn(&mut V, RibbonAction, &mut Window, &mut Context<V>) + 'static + Copy,
+) -> AnyElement {
+    let muted_fg = cx.theme().muted_foreground;
+
+    let export_group = ribbon_group(
+        "Export Documents",
+        vec![
+            Button::new("conv-md")
+                .label("Markdown (.md)")
+                .outline()
+                .small()
+                .on_click(cx.listener(move |v, _, w, cx| {
+                    on_action(v, RibbonAction::ConvertMarkdown, w, cx)
+                }))
+                .into_any_element(),
+            Button::new("conv-html")
+                .label("HTML5 (.html)")
+                .outline()
+                .small()
+                .on_click(
+                    cx.listener(move |v, _, w, cx| on_action(v, RibbonAction::ConvertHtml, w, cx)),
+                )
+                .into_any_element(),
+            Button::new("conv-txt")
+                .label("Plain Text (.txt)")
+                .outline()
+                .small()
+                .on_click(
+                    cx.listener(move |v, _, w, cx| on_action(v, RibbonAction::ConvertText, w, cx)),
+                )
+                .into_any_element(),
+        ],
+        muted_fg,
+    );
+
+    div()
+        .flex()
+        .flex_row()
+        .items_center()
+        .gap_2()
+        .child(export_group)
         .into_any_element()
 }

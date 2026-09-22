@@ -1111,7 +1111,7 @@ impl DocumentStore {
             text_items.push(crate::models::TextItem {
                 text: span.text,
                 x: span.x as f32,
-                y: page_height - span.y as f32,
+                y: (page_height - span.y as f32 - span.size).max(0.0),
                 width: span.advance.abs() as f32,
                 height: span.size,
             });

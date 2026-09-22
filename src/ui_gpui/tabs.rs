@@ -1,5 +1,7 @@
+use gpui_kit::base::StyledExt;
 use gpui_kit::component::ActiveTheme;
 use gpui_kit::component::button::{Button, ButtonVariants};
+use gpui_kit::prelude::FluentBuilder;
 use gpui_kit::*;
 use std::path::PathBuf;
 
@@ -47,40 +49,48 @@ impl TabsState {
     ) -> AnyElement {
         let primary = cx.theme().primary;
         let border = cx.theme().border;
-        let accent = cx.theme().accent;
-        let muted = cx.theme().muted;
         let bg = cx.theme().background;
         let fg = cx.theme().foreground;
+        let muted = cx.theme().muted;
         let muted_fg = cx.theme().muted_foreground;
         let active_idx = self.active_tab_index;
 
         let mut tab_items = Vec::new();
         for (idx, tab) in self.tabs.iter().enumerate() {
             let is_active = idx == active_idx;
-            let tab_title = format!("{}{}", tab.title, if tab.is_modified { " *" } else { "" });
 
             let tab_el = div()
                 .id(SharedString::from(format!("tab-item-{}", idx)))
                 .flex()
                 .flex_row()
                 .items_center()
-                .h_7()
-                .px_2()
-                .rounded_md()
+                .h(px(32.0))
+                .px_2p5()
+                .rounded_t_md()
                 .border_1()
                 .border_color(if is_active { primary } else { border })
-                .bg(if is_active { accent } else { muted })
+                .bg(if is_active {
+                    bg
+                } else {
+                    gpui_kit::transparent_black()
+                })
+                .hover(move |s| if !is_active { s.bg(muted) } else { s })
                 .cursor_pointer()
                 .gap_2()
                 .on_click(
                     cx.listener(move |v, _, w, cx| on_action(v, TabAction::SelectTab(idx), w, cx)),
                 )
+                .child(div().text_xs().child("📄"))
                 .child(
                     div()
-                        .text_sm()
+                        .text_xs()
+                        .font_medium()
                         .text_color(if is_active { fg } else { muted_fg })
-                        .child(tab_title),
+                        .child(tab.title.clone()),
                 )
+                .when(tab.is_modified, |this| {
+                    this.child(div().size_2().rounded_full().bg(primary))
+                })
                 .child(
                     Button::new(SharedString::from(format!("close-tab-{}", idx)))
                         .label("×")
@@ -100,15 +110,16 @@ impl TabsState {
         div()
             .flex()
             .flex_row()
-            .items_center()
-            .h_9()
+            .items_end()
+            .h(px(36.0))
             .px_2()
-            .bg(bg)
+            .pt_1()
+            .bg(muted)
             .border_b_1()
             .border_color(border)
             .gap_1()
             .children(tab_items)
-            .child(new_tab_btn)
+            .child(div().pb_0p5().child(new_tab_btn))
             .into_any_element()
     }
 }
