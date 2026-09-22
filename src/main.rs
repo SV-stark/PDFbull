@@ -81,6 +81,22 @@ fn main() {
 
     let args: Vec<String> = std::env::args().collect();
 
+    if args.iter().any(|a| a == "--help" || a == "-h") {
+        println!(
+            "PDFbull {} - A lightweight, high-performance PDF reader",
+            env!("CARGO_PKG_VERSION")
+        );
+        println!("\nUsage: pdfbull [OPTIONS] [FILE]");
+        println!("\nOptions:");
+        println!("  -h, --help       Print help information");
+        println!("  -V, --version    Print version information");
+        return;
+    }
+    if args.iter().any(|a| a == "--version" || a == "-V") {
+        println!("PDFbull {}", env!("CARGO_PKG_VERSION"));
+        return;
+    }
+
     // Feature 10: Deep Windows Integration (Single Instance Mode)
     if let Ok(is_secondary) = platform::ensure_single_instance(&args)
         && is_secondary

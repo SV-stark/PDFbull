@@ -8,6 +8,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [0.16.1] - 2026-09-21
 
 ### Fixed & Improved (GPUI-Kit Integration)
+- **Continuous Scroll & Viewport Navigation**:
+  - Implemented stable virtual scroll container (`canvas-continuous-scroll`) with GPUI `ScrollHandle` and `.vertical_scrollbar(&self.scroll_handle)`.
+  - Added full document page layout in continuous mode with dynamic top-item detection and pre-rendering as the user scrolls.
+  - Linked thumbnail clicks to `scroll_handle.scroll_to_item(page_idx)` for smooth jumping across pages.
+- **Ctrl + Mouse Wheel Zoom & Smooth Progressive Scaling**:
+  - Eliminated the brief white flash during zooming by retaining existing GPU textures (`rendered_pages`) during zoom level changes instead of discarding them.
+  - Implemented progressive scaling where GPUI's hardware-accelerated bilinear texture filter scales current page images in real time at 60+ FPS while higher-resolution rasterization proceeds asynchronously.
+  - Added `rendered_zoom` tracking in `DocumentViewport` to seamlessly swap in crisp high-resolution renders without layout jumping or intermediate blank frames.
+  - Handled rapid multi-step zooming gracefully with race condition prevention and in-flight render re-triggering.
+- **Color Correction for Direct3D 11 Textures**:
+  - Resolved inverted/reversed color balance (where red appeared blue and blue appeared red) by implementing `convert_rgba_to_bgra`.
+  - Converted tiny-skia RGBA byte buffers to BGRA and un-premultiplied alpha as required by GPUI DirectX 11 textures.
+- **Mouse Drag Text Selection**:
+  - Added mouse drag selection handlers (`on_mouse_down`, `on_mouse_move`, `on_mouse_up`) to canvas page cards.
+  - Painted dynamic translucent blue selection highlight boxes over selected text via `canvas` quad clipping.
+  - Integrated `PdfCommand::GetTextItems` to extract overlapping words within the selection bounding box and automatically copy to the system clipboard.
+- **PDF Page Rasterization & Rendering Pipeline**:
+  - Connected the multi-threaded `PdfEngine` worker pool (`spawn_engine_thread`) to the GPUI presentation layer.
+  - Resolved the blank/white page display issue when opening PDF documents by piping `RenderResult` RGBA buffers into native GPUI `RenderImage` elements (`img(render_image).w_full().h_full()`).
+  - Implemented asynchronous, non-blocking `request_render_page` pipeline using `cx.spawn` with automatic HiDPI scaling (1.5x multiplier).
+  - Added live page thumbnail rasterization and rendering to the collapsible Sidebar page navigation list.
+  - Wired zoom scaling, tab switching, and page navigation to synchronize viewport state and trigger automatic re-rendering.
 - **Native File Dialog Integration**:
   - Wired native asynchronous file dialogs via `rfd::AsyncFileDialog` into GPUI's async task runner (`cx.spawn`).
   - Connected file browsing to the Welcome screen "Browse Files..." button, Welcome dropzone click, Ribbon Home tab "Open" action, and Tab Bar `+` button.

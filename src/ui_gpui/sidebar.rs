@@ -1,5 +1,6 @@
 use gpui_kit::component::ActiveTheme;
 use gpui_kit::component::button::{Button, ButtonVariants};
+use gpui_kit::component::scroll::ScrollableElement;
 use gpui_kit::*;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -24,6 +25,7 @@ pub struct SidebarState {
     pub is_open: bool,
     pub mode: SidebarMode,
     pub width: f32,
+    pub thumbnails: std::collections::HashMap<usize, std::sync::Arc<RenderImage>>,
 }
 
 impl Default for SidebarState {
@@ -38,6 +40,7 @@ impl SidebarState {
             is_open: true,
             mode: SidebarMode::Thumbnails,
             width: 250.0,
+            thumbnails: std::collections::HashMap::new(),
         }
     }
 
@@ -109,7 +112,17 @@ impl SidebarState {
                             .bg(if is_selected { accent } else { background })
                             .cursor_pointer()
                             .on_click(click_listener)
-                            .child(
+                            .child(if let Some(thumb_img) = self.thumbnails.get(&page_idx) {
+                                div()
+                                    .w_32()
+                                    .h(px(160.0))
+                                    .bg(gpui_kit::white())
+                                    .overflow_hidden()
+                                    .rounded_sm()
+                                    .border_1()
+                                    .border_color(border)
+                                    .child(img(thumb_img.clone()).w_full().h_full())
+                            } else {
                                 div()
                                     .w_32()
                                     .h(px(160.0))
@@ -119,8 +132,8 @@ impl SidebarState {
                                     .justify_center()
                                     .text_xs()
                                     .text_color(muted_fg)
-                                    .child(format!("Page {}", page_idx + 1)),
-                            )
+                                    .child(format!("Page {}", page_idx + 1))
+                            })
                             .child(
                                 div()
                                     .pt_1()
@@ -136,7 +149,7 @@ impl SidebarState {
                     .flex_col()
                     .gap_2()
                     .p_2()
-                    .overflow_hidden()
+                    .overflow_y_scrollbar()
                     .children(thumb_cards)
                     .into_any_element()
             }

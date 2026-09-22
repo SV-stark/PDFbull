@@ -21,6 +21,7 @@ exclude = [
 
 [dependencies]
 gpui-kit = { git = "https://github.com/longbridge/gpui-kit" }
+image = { version = "0.25", default-features = false }
 zpdf = { version = "=0.13.0", features = ["cpu-render"] }
 zpdf-writer = "=0.13.0"
 tokio = { version = "1.0", features = ["rt-multi-thread", "sync", "time", "process", "fs", "io-util", "macros"] }

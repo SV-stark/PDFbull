@@ -6,6 +6,7 @@ use std::path::PathBuf;
 #[derive(Debug, Clone)]
 pub struct DocumentTab {
     pub id: usize,
+    pub doc_id: Option<crate::models::DocumentId>,
     pub title: String,
     pub path: Option<PathBuf>,
     pub is_modified: bool,

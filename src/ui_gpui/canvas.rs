@@ -1,6 +1,23 @@
 use super::ribbon::PageLayoutMode;
 use gpui_kit::component::ActiveTheme;
+use gpui_kit::component::scroll::ScrollableElement;
+use gpui_kit::gpui::{BorderStyle, fill, outline};
 use gpui_kit::*;
+
+/// Converts an RGBA pixel buffer (potentially with tiny-skia premultiplied alpha)
+/// to BGRA format as expected by GPUI Direct3D 11 textures.
+pub fn convert_rgba_to_bgra(data: &mut [u8]) {
+    for pixel in data.as_chunks_mut::<4>().0 {
+        pixel.swap(0, 2);
+        let a = pixel[3];
+        if a > 0 && a < 255 {
+            let alpha = a as f32 / 255.0;
+            pixel[0] = ((pixel[0] as f32 / alpha).min(255.0)) as u8;
+            pixel[1] = ((pixel[1] as f32 / alpha).min(255.0)) as u8;
+            pixel[2] = ((pixel[2] as f32 / alpha).min(255.0)) as u8;
+        }
+    }
+}
 
 pub struct DocumentViewport {
     pub zoom: f32,
@@ -11,8 +28,15 @@ pub struct DocumentViewport {
     pub page_height: f32,
     pub layout_mode: PageLayoutMode,
     pub standalone_cover: bool,
+    pub is_selecting: bool,
+    pub selection_page: Option<usize>,
     pub selection_start: Option<Point<Pixels>>,
     pub selection_end: Option<Point<Pixels>>,
+    pub selected_text: Option<String>,
+    pub text_cache: std::collections::HashMap<usize, Vec<crate::models::TextItem>>,
+    pub rendered_pages: std::collections::HashMap<usize, std::sync::Arc<RenderImage>>,
+    pub rendered_zoom: std::collections::HashMap<usize, f32>,
+    pub scroll_handle: ScrollHandle,
 }
 
 impl Default for DocumentViewport {
@@ -32,87 +56,275 @@ impl DocumentViewport {
             page_height: 842.0, // Standard A4 height in pt
             layout_mode: PageLayoutMode::Continuous,
             standalone_cover: false,
+            is_selecting: false,
+            selection_page: None,
             selection_start: None,
             selection_end: None,
+            selected_text: None,
+            text_cache: std::collections::HashMap::new(),
+            rendered_pages: std::collections::HashMap::new(),
+            rendered_zoom: std::collections::HashMap::new(),
+            scroll_handle: ScrollHandle::new(),
         }
+    }
+
+    fn render_page_card<V: 'static>(
+        &self,
+        cx: &mut Context<V>,
+        page_idx: usize,
+        on_page_click: impl Fn(&mut V, usize, &mut Window, &mut Context<V>) + 'static + Copy,
+        on_drag_start: impl Fn(&mut V, usize, Point<Pixels>, &mut Window, &mut Context<V>) + 'static + Copy,
+        on_drag_move: impl Fn(&mut V, usize, Point<Pixels>, &mut Window, &mut Context<V>) + 'static + Copy,
+        on_drag_end: impl Fn(&mut V, usize, &mut Window, &mut Context<V>) + 'static + Copy,
+    ) -> AnyElement {
+        let primary = cx.theme().primary;
+        let border = cx.theme().border;
+        let muted_fg = cx.theme().muted_foreground;
+        let scaled_w = px(self.page_width * self.zoom);
+        let scaled_h = px(self.page_height * self.zoom);
+        let is_active = page_idx == self.current_page;
+        let total = self.total_pages;
+
+        let down_listener = cx.listener(move |v, event: &MouseDownEvent, w, cx| {
+            on_drag_start(v, page_idx, event.position, w, cx);
+        });
+        let move_listener = cx.listener(move |v, event: &MouseMoveEvent, w, cx| {
+            on_drag_move(v, page_idx, event.position, w, cx);
+        });
+        let up_listener = cx.listener(move |v, _event: &MouseUpEvent, w, cx| {
+            on_drag_end(v, page_idx, w, cx);
+        });
+        let click_listener = cx.listener(move |v, _, w, cx| on_page_click(v, page_idx, w, cx));
+
+        let is_sel_page = self.selection_page == Some(page_idx);
+        let sel_start = self.selection_start;
+        let sel_end = self.selection_end;
+
+        let selection_overlay = canvas(
+            move |bounds, _, _| bounds,
+            move |_bounds, card_bounds, window, _| {
+                if is_sel_page
+                    && let (Some(start), Some(end)) = (sel_start, sel_end)
+                {
+                    let sel_bounds = Bounds {
+                        origin: Point::new(start.x.min(end.x), start.y.min(end.y)),
+                        size: Size {
+                            width: (start.x - end.x).abs(),
+                            height: (start.y - end.y).abs(),
+                        },
+                    };
+                    let clipped = sel_bounds.intersect(&card_bounds);
+                    if clipped.size.width > px(2.0) && clipped.size.height > px(2.0) {
+                        window.paint_quad(fill(clipped, hsla(215.0 / 360.0, 0.85, 0.55, 0.35)));
+                        window.paint_quad(outline(
+                            clipped,
+                            hsla(215.0 / 360.0, 0.9, 0.45, 0.7),
+                            BorderStyle::Solid,
+                        ));
+                    }
+                }
+            },
+        )
+        .absolute()
+        .size_full();
+
+        let card_content = if let Some(render_image) = self.rendered_pages.get(&page_idx) {
+            img(render_image.clone())
+                .w_full()
+                .h_full()
+                .into_any_element()
+        } else {
+            div()
+                .size_full()
+                .bg(gpui_kit::white())
+                .flex()
+                .flex_col()
+                .justify_between()
+                .p_8()
+                .child(
+                    div()
+                        .flex()
+                        .flex_row()
+                        .justify_between()
+                        .text_xs()
+                        .text_color(muted_fg)
+                        .child(format!("PDFbull Page {}", page_idx + 1))
+                        .child(format!("{}/{}", page_idx + 1, total)),
+                )
+                .child(
+                    div()
+                        .flex_1()
+                        .flex()
+                        .flex_col()
+                        .items_center()
+                        .justify_center()
+                        .gap_2()
+                        .text_color(muted_fg)
+                        .child(div().text_sm().child("Rendering page..."))
+                        .child(
+                            div()
+                                .text_xs()
+                                .text_color(muted_fg)
+                                .child(format!("Page {}", page_idx + 1)),
+                        ),
+                )
+                .child(
+                    div()
+                        .flex()
+                        .justify_center()
+                        .text_xs()
+                        .text_color(muted_fg)
+                        .child(format!(
+                            "{} × {} pt",
+                            self.page_width.round() as u32,
+                            self.page_height.round() as u32
+                        )),
+                )
+                .into_any_element()
+        };
+
+        div()
+            .id(SharedString::from(format!("canvas-page-{}", page_idx)))
+            .w(scaled_w)
+            .h(scaled_h)
+            .relative()
+            .bg(gpui_kit::white())
+            .shadow_lg()
+            .rounded_sm()
+            .border_1()
+            .border_color(if is_active { primary } else { border })
+            .overflow_hidden()
+            .cursor_text()
+            .on_mouse_down(MouseButton::Left, down_listener)
+            .on_mouse_move(move_listener)
+            .on_mouse_up(MouseButton::Left, up_listener)
+            .on_click(click_listener)
+            .child(card_content)
+            .child(selection_overlay)
+            .into_any_element()
     }
 
     pub fn render<V: 'static>(
         &self,
         cx: &mut Context<V>,
         on_page_click: impl Fn(&mut V, usize, &mut Window, &mut Context<V>) + 'static + Copy,
+        on_drag_start: impl Fn(&mut V, usize, Point<Pixels>, &mut Window, &mut Context<V>) + 'static + Copy,
+        on_drag_move: impl Fn(&mut V, usize, Point<Pixels>, &mut Window, &mut Context<V>) + 'static + Copy,
+        on_drag_end: impl Fn(&mut V, usize, &mut Window, &mut Context<V>) + 'static + Copy,
+        on_scroll_wheel: impl Fn(&mut V, &ScrollWheelEvent, &mut Window, &mut Context<V>) + 'static + Copy,
     ) -> AnyElement {
-        let primary = cx.theme().primary;
-        let border = cx.theme().border;
         let muted = cx.theme().muted;
-        let muted_fg = cx.theme().muted_foreground;
-        let scaled_w = px(self.page_width * self.zoom);
-        let scaled_h = px(self.page_height * self.zoom);
         let cur_page = self.current_page;
-        let total = self.total_pages;
+        let total = self.total_pages.max(1);
 
-        let mut page_cards = Vec::new();
-        for page_idx in 0..total {
-            let is_active = page_idx == cur_page;
-            let click_listener = cx.listener(move |v, _, w, cx| on_page_click(v, page_idx, w, cx));
+        let scroll_listener = cx.listener(move |v, event: &ScrollWheelEvent, w, cx| {
+            on_scroll_wheel(v, event, w, cx);
+        });
 
-            page_cards.push(
+        match self.layout_mode {
+            PageLayoutMode::SinglePage => {
+                let card = self.render_page_card(
+                    cx,
+                    cur_page.min(total - 1),
+                    on_page_click,
+                    on_drag_start,
+                    on_drag_move,
+                    on_drag_end,
+                );
                 div()
-                    .id(SharedString::from(format!("canvas-page-{}", page_idx)))
-                    .w(scaled_w)
-                    .h(scaled_h)
-                    .bg(gpui_kit::white())
-                    .shadow_lg()
-                    .rounded_sm()
-                    .border_1()
-                    .border_color(if is_active { primary } else { border })
-                    .cursor_text()
+                    .id("canvas-single-scroll")
                     .flex()
                     .flex_col()
-                    .justify_between()
-                    .p_8()
-                    .on_click(click_listener)
+                    .flex_1()
+                    .size_full()
+                    .bg(muted)
+                    .overflow_y_scroll()
+                    .track_scroll(&self.scroll_handle)
+                    .vertical_scrollbar(&self.scroll_handle)
+                    .on_scroll_wheel(scroll_listener)
+                    .items_center()
+                    .py_8()
+                    .child(card)
+                    .into_any_element()
+            }
+            PageLayoutMode::TwoPageSpread => {
+                let left_idx = cur_page.min(total - 1);
+                let left_card = self.render_page_card(
+                    cx,
+                    left_idx,
+                    on_page_click,
+                    on_drag_start,
+                    on_drag_move,
+                    on_drag_end,
+                );
+                let right_card = if left_idx + 1 < total {
+                    Some(self.render_page_card(
+                        cx,
+                        left_idx + 1,
+                        on_page_click,
+                        on_drag_start,
+                        on_drag_move,
+                        on_drag_end,
+                    ))
+                } else {
+                    None
+                };
+
+                div()
+                    .id("canvas-twopage-scroll")
+                    .flex()
+                    .flex_col()
+                    .flex_1()
+                    .size_full()
+                    .bg(muted)
+                    .overflow_y_scroll()
+                    .track_scroll(&self.scroll_handle)
+                    .vertical_scrollbar(&self.scroll_handle)
+                    .on_scroll_wheel(scroll_listener)
+                    .items_center()
+                    .py_8()
                     .child(
                         div()
                             .flex()
                             .flex_row()
-                            .justify_between()
-                            .text_xs()
-                            .text_color(muted_fg)
-                            .child(format!("PDFbull Page {}", page_idx + 1))
-                            .child(format!("{}/{}", page_idx + 1, total)),
-                    )
-                    .child(
-                        div()
-                            .flex_1()
-                            .flex()
-                            .items_center()
                             .justify_center()
-                            .text_color(muted_fg)
-                            .child(format!("Document Viewport — Page {}", page_idx + 1)),
+                            .gap_6()
+                            .child(left_card)
+                            .children(right_card),
                     )
-                    .child(
-                        div()
-                            .flex()
-                            .justify_center()
-                            .text_xs()
-                            .text_color(muted_fg)
-                            .child(format!("{} × {} pt", 595, 842)),
-                    ),
-            );
-        }
+                    .into_any_element()
+            }
+            PageLayoutMode::Continuous => {
+                let page_cards: Vec<AnyElement> = (0..total)
+                    .map(|idx| {
+                        self.render_page_card(
+                            cx,
+                            idx,
+                            on_page_click,
+                            on_drag_start,
+                            on_drag_move,
+                            on_drag_end,
+                        )
+                    })
+                    .collect();
 
-        div()
-            .flex()
-            .flex_col()
-            .flex_1()
-            .w_full()
-            .bg(muted)
-            .overflow_hidden()
-            .items_center()
-            .py_8()
-            .gap_6()
-            .children(page_cards)
-            .into_any_element()
+                div()
+                    .id("canvas-continuous-scroll")
+                    .flex()
+                    .flex_col()
+                    .flex_1()
+                    .size_full()
+                    .bg(muted)
+                    .overflow_y_scroll()
+                    .track_scroll(&self.scroll_handle)
+                    .vertical_scrollbar(&self.scroll_handle)
+                    .on_scroll_wheel(scroll_listener)
+                    .items_center()
+                    .py_8()
+                    .gap_6()
+                    .children(page_cards)
+                    .into_any_element()
+            }
+        }
     }
 }

@@ -30,6 +30,15 @@ impl WelcomeState {
         }
     }
 
+    pub fn load_recent_files(&mut self) {
+        let loaded = crate::storage::load_recent_files();
+        self.recent_files = loaded
+            .into_iter()
+            .map(|f| PathBuf::from(f.path))
+            .filter(|p| p.exists())
+            .collect();
+    }
+
     pub fn render<V: 'static>(
         &self,
         cx: &mut Context<V>,
@@ -42,7 +51,7 @@ impl WelcomeState {
         let muted_fg = cx.theme().muted_foreground;
         let primary = cx.theme().primary;
 
-        div()
+        let container = div()
             .flex()
             .flex_col()
             .flex_1()
@@ -145,7 +154,68 @@ impl WelcomeState {
                                 on_action(v, WelcomeAction::DigitalSignatures, w, cx)
                             })),
                     ),
+            );
+
+        let recent_section = if !self.recent_files.is_empty() {
+            let mut items = Vec::new();
+            for (idx, p) in self.recent_files.iter().take(5).enumerate() {
+                let file_name = p
+                    .file_name()
+                    .and_then(|n| n.to_str())
+                    .unwrap_or("Document.pdf")
+                    .to_string();
+                let path_str = p.to_string_lossy().to_string();
+
+                items.push(
+                    div()
+                        .id(SharedString::from(format!("recent-item-{}", idx)))
+                        .flex()
+                        .flex_row()
+                        .items_center()
+                        .justify_between()
+                        .w_full()
+                        .px_3()
+                        .py_2()
+                        .rounded_md()
+                        .cursor_pointer()
+                        .hover(move |s| s.bg(muted))
+                        .on_click(cx.listener(move |v, _, w, cx| {
+                            on_action(v, WelcomeAction::OpenRecent(idx), w, cx);
+                        }))
+                        .child(
+                            div()
+                                .flex()
+                                .flex_col()
+                                .gap_1()
+                                .child(div().text_sm().text_color(fg).child(file_name))
+                                .child(div().text_xs().text_color(muted_fg).child(path_str)),
+                        ),
+                );
+            }
+
+            Some(
+                div()
+                    .w(px(540.0))
+                    .flex()
+                    .flex_col()
+                    .gap_2()
+                    .child(div().text_xs().text_color(muted_fg).child("RECENT FILES"))
+                    .child(
+                        div()
+                            .flex()
+                            .flex_col()
+                            .gap_1()
+                            .p_2()
+                            .rounded_lg()
+                            .border_1()
+                            .border_color(border)
+                            .children(items),
+                    ),
             )
-            .into_any_element()
+        } else {
+            None
+        };
+
+        container.children(recent_section).into_any_element()
     }
 }

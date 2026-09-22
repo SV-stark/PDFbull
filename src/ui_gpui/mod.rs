@@ -27,7 +27,7 @@ pub fn run_gpui_app() {
                     let view = cx.new(|cx| {
                         let mut v = app_view::PdfbullView::new(window, cx);
                         if let Some(ref path) = initial_file_clone {
-                            v.open_pdf_path(path);
+                            v.open_pdf_path(path, cx);
                         }
                         v
                     });
