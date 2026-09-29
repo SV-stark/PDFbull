@@ -7,7 +7,9 @@ use std::path::PathBuf;
 
 #[derive(Debug, Clone)]
 pub struct DocumentTab {
-    pub id: usize,
+    /// Stable, monotonically increasing identity for this tab. Used for element
+    /// ids so a tab keeps its hover/focus state when the list is reordered.
+    pub id: u64,
     pub doc_id: Option<crate::models::DocumentId>,
     pub title: String,
     pub path: Option<PathBuf>,
@@ -26,6 +28,8 @@ pub enum TabAction {
 pub struct TabsState {
     pub tabs: Vec<DocumentTab>,
     pub active_tab_index: usize,
+    /// Next stable tab id to hand out (never reused, so element ids stay unique).
+    next_id: u64,
 }
 
 impl Default for TabsState {
@@ -39,7 +43,16 @@ impl TabsState {
         Self {
             tabs: Vec::new(),
             active_tab_index: 0,
+            next_id: 1,
         }
+    }
+
+    /// Append a tab and return its stable id.
+    pub fn push(&mut self, tab: DocumentTab) -> u64 {
+        let id = self.next_id;
+        self.next_id += 1;
+        self.tabs.push(DocumentTab { id, ..tab });
+        id
     }
 
     pub fn render<V: 'static>(
@@ -58,9 +71,14 @@ impl TabsState {
         let mut tab_items = Vec::new();
         for (idx, tab) in self.tabs.iter().enumerate() {
             let is_active = idx == active_idx;
+            // Element ids are derived from the tab's stable id, not its
+            // position. Position-based ids shift whenever a tab is closed or
+            // inserted, which handed one tab's retained focus/hover state to a
+            // different document.
+            let tab_id = tab.id;
 
             let tab_el = div()
-                .id(SharedString::from(format!("tab-item-{}", idx)))
+                .id(SharedString::from(format!("tab-item-{}", tab_id)))
                 .flex()
                 .flex_row()
                 .items_center()
@@ -77,9 +95,9 @@ impl TabsState {
                 .hover(move |s| if !is_active { s.bg(muted) } else { s })
                 .cursor_pointer()
                 .gap_2()
-                .on_click(
-                    cx.listener(move |v, _, w, cx| on_action(v, TabAction::SelectTab(idx), w, cx)),
-                )
+                .on_click(cx.listener(move |v, _, w, cx| {
+                    on_action(v, TabAction::SelectTab(idx), w, cx);
+                }))
                 .child(div().text_xs().child("📄"))
                 .child(
                     div()
@@ -92,11 +110,20 @@ impl TabsState {
                     this.child(div().size_2().rounded_full().bg(primary))
                 })
                 .child(
-                    Button::new(SharedString::from(format!("close-tab-{}", idx)))
+                    Button::new(SharedString::from(format!("close-tab-{}", tab_id)))
                         .label("×")
                         .ghost()
                         .on_click(cx.listener(move |v, _, w, cx| {
-                            on_action(v, TabAction::CloseTab(idx), w, cx)
+                            // The close button is nested inside the tab's own
+                            // clickable div. gpui-kit's Button only stops click
+                            // propagation when disabled or loading, and GPUI
+                            // dispatches bubble-phase listeners in reverse paint
+                            // order (child first), so without this the parent
+                            // also received SelectTab(idx) — which ran *after*
+                            // CloseTab(idx) and reset `active_tab_index` to the
+                            // index of the tab that had just been removed.
+                            cx.stop_propagation();
+                            on_action(v, TabAction::CloseTab(idx), w, cx);
                         })),
                 );
             tab_items.push(tab_el);

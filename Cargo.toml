@@ -1,10 +1,11 @@
 [package]
 name = "pdfbull"
-version = "0.16.4"
+version = "0.16.5"
 description = "A lightweight PDF reader"
 authors = ["SV-stark"]
 edition = "2024"
 resolver = "3"
+rust-version = "1.90" # edition 2024 + let-chains
 license = "MIT"
 homepage = "https://github.com/SV-stark/PDFbull"
 repository = "https://github.com/SV-stark/PDFbull"
@@ -88,19 +89,24 @@ harness = false
 [lints.clippy]
 all = { level = "warn", priority = -1 }
 
-# The profile that 'dist' will build with
+# The profile that 'dist' will build with.
+#
+# NOTE: `panic` is deliberately left as the default ("unwind"). The engine wraps
+# every command in `catch_worker_panic` (see src/engine.rs) and src/main.rs
+# installs a panic hook that writes a crash report, but `catch_unwind` cannot
+# observe a panic under `panic = "abort"` — a single panic inside zpdf/lopdf
+# would take the whole app down with no report. Unwinding costs a negligible
+# amount of code size here and keeps that safety net real.
 [profile.release]
 opt-level = 3
 lto = "fat"
 codegen-units = 1
 strip = true
-panic = "abort"
 
 [profile.dist]
 inherits = "release"
 lto = "fat"
 strip = true
-panic = "abort"
 
 
 

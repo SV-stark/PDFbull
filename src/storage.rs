@@ -2,6 +2,7 @@ use crate::models::{AppSettings, AppTheme, RecentFile, SessionData};
 use std::fs;
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};
+use std::sync::{LazyLock, Mutex};
 use time::OffsetDateTime;
 
 pub fn time_ago(unix_secs: u64) -> String {
@@ -65,9 +66,17 @@ pub fn get_config_dir() -> PathBuf {
 }
 
 fn atomic_write(path: &Path, data: &str) -> io::Result<()> {
+    atomic_write_bytes(path, data.as_bytes())
+}
+
+/// Write `data` to `path` via a temp file in the same directory followed by a
+/// rename, so a failure part-way through never leaves a truncated file behind.
+/// Callers that overwrite a user's document (e.g. saving annotations into an
+/// existing PDF) must go through this rather than `fs::write`.
+pub fn atomic_write_bytes(path: &Path, data: &[u8]) -> io::Result<()> {
     let parent = path.parent().unwrap_or_else(|| Path::new("."));
     if let Ok(mut temp) = tempfile::NamedTempFile::new_in(parent)
-        && temp.write_all(data.as_bytes()).is_ok()
+        && temp.write_all(data).is_ok()
         && temp.persist(path).is_ok()
     {
         return Ok(());
@@ -112,70 +121,105 @@ pub fn load_settings() -> AppSettings {
     settings
 }
 
-pub fn save_settings(settings: &AppSettings) {
-    let settings = settings.clone();
-    std::thread::spawn(move || {
-        let dir = get_config_dir();
-        if let Err(e) = fs::create_dir_all(&dir) {
-            eprintln!("Failed to create config directory: {e}");
-            return;
-        }
-        let path = dir.join("settings.json");
-        if let Ok(data) = serde_json::to_string_pretty(&settings)
-            && let Err(e) = atomic_write(&path, &data)
-        {
-            tracing::error!("Failed to save settings: {}", e);
-        }
-    });
-}
+/// Serializes the background config writers, and the one-time config-directory
+/// migration. Without this, two concurrent saves can interleave their
+/// temp-file-then-rename on the same path, and two threads can both attempt the
+/// legacy-directory migration.
+static WRITE_SERIAL: Mutex<()> = Mutex::new(());
 
-pub fn load_recent_files() -> Vec<RecentFile> {
-    let path = get_config_dir().join("recent_files.json");
-    if let Ok(data) = fs::read_to_string(&path) {
-        if let Ok(files) = serde_json::from_str(&data) {
-            return files;
-        }
-        tracing::warn!("Corrupted recent_files.json, using empty list");
-    }
-    Vec::new()
-}
-
-pub fn save_recent_files(recent_files: &[RecentFile]) {
-    let recent_files = recent_files.to_vec();
+/// Write `json` to `name` inside the config dir on a background thread, with
+/// writes serialized.
+fn write_json_in_background(name: &str, json: String) {
+    let name = name.to_string();
     std::thread::spawn(move || {
+        // Held across `get_config_dir` so the one-time legacy-directory
+        // migration cannot be run twice concurrently.
+        let _serial = WRITE_SERIAL.lock().unwrap_or_else(|e| e.into_inner());
         let dir = get_config_dir();
         if let Err(e) = fs::create_dir_all(&dir) {
             tracing::error!("Failed to create config directory: {}", e);
             return;
         }
-        let path = dir.join("recent_files.json");
-        if let Ok(data) = serde_json::to_string_pretty(&recent_files)
-            && let Err(e) = atomic_write(&path, &data)
-        {
-            tracing::error!("Failed to save recent files: {}", e);
+        if let Err(e) = atomic_write(&dir.join(&name), &json) {
+            tracing::error!("Failed to save {name}: {e}");
         }
     });
 }
 
-pub fn add_recent_file(recent_files: &mut Vec<RecentFile>, path: &std::path::Path) {
-    let name = path
-        .file_name()
-        .map(|n| n.to_string_lossy().to_string())
-        .unwrap_or_default();
+pub fn save_settings(settings: &AppSettings) {
+    let settings = settings.clone();
+    if let Ok(data) = serde_json::to_string_pretty(&settings) {
+        write_json_in_background("settings.json", data);
+    }
+}
 
-    recent_files.retain(|f| f.path != path.to_string_lossy());
+/// Single source of truth for the recent-file list, cached after the first
+/// disk read. Keeping it here (rather than read-modify-write on a caller-owned
+/// `Vec`) means opening N files at once can't race and silently drop entries.
+static RECENT_FILES: LazyLock<Mutex<Option<Vec<RecentFile>>>> = LazyLock::new(|| Mutex::new(None));
 
-    let new_file = RecentFile {
-        path: path.to_string_lossy().to_string(),
-        name,
-        last_opened: OffsetDateTime::now_utc().unix_timestamp() as u64,
+fn recent_files_lock() -> std::sync::MutexGuard<'static, Option<Vec<RecentFile>>> {
+    RECENT_FILES.lock().unwrap_or_else(|e| e.into_inner())
+}
+
+pub fn load_recent_files() -> Vec<RecentFile> {
+    let mut guard = recent_files_lock();
+    if let Some(list) = guard.as_ref() {
+        return list.clone();
+    }
+    let path = get_config_dir().join("recent_files.json");
+    let loaded = match fs::read_to_string(&path) {
+        Ok(data) => match serde_json::from_str::<Vec<RecentFile>>(&data) {
+            Ok(files) => files,
+            Err(_) => {
+                tracing::warn!("Corrupted recent_files.json, using empty list");
+                Vec::new()
+            }
+        },
+        Err(_) => Vec::new(),
+    };
+    *guard = Some(loaded.clone());
+    loaded
+}
+
+/// Record `path` as the most recently opened file, de-duplicating any earlier
+/// entry for the same path and capping the list at 20 items.
+pub fn add_recent_file(path: &Path) {
+    let snapshot = {
+        let mut guard = recent_files_lock();
+        let list = guard.get_or_insert_with(Vec::new);
+        let path_str = path.to_string_lossy().to_string();
+
+        list.retain(|f| f.path != path_str);
+        let name = path
+            .file_name()
+            .map(|n| n.to_string_lossy().to_string())
+            .unwrap_or_default();
+
+        list.insert(
+            0,
+            RecentFile {
+                path: path_str,
+                name,
+                last_opened: OffsetDateTime::now_utc().unix_timestamp().max(0) as u64,
+            },
+        );
+        if list.len() > 20 {
+            list.truncate(20);
+        }
+        list.clone()
     };
 
-    recent_files.insert(0, new_file);
-    if recent_files.len() > 20 {
-        recent_files.truncate(20);
+    if let Ok(json) = serde_json::to_string_pretty(&snapshot) {
+        write_json_in_background("recent_files.json", json);
     }
-    save_recent_files(recent_files);
+}
+
+pub fn save_recent_files(recent_files: &[RecentFile]) {
+    *recent_files_lock() = Some(recent_files.to_vec());
+    if let Ok(json) = serde_json::to_string_pretty(recent_files) {
+        write_json_in_background("recent_files.json", json);
+    }
 }
 
 pub fn load_session() -> Option<SessionData> {
@@ -193,21 +237,9 @@ pub fn load_session() -> Option<SessionData> {
 }
 
 pub fn save_session(session: &SessionData) {
-    let session = session.clone();
-    std::thread::spawn(move || {
-        let dir = get_config_dir();
-        if let Err(e) = fs::create_dir_all(&dir) {
-            tracing::error!("Failed to create config directory: {}", e);
-            return;
-        }
-        let path = dir.join("session.json");
-
-        if let Ok(data) = serde_json::to_string_pretty(&session)
-            && let Err(e) = atomic_write(&path, &data)
-        {
-            tracing::error!("Failed to save session: {}", e);
-        }
-    });
+    if let Ok(data) = serde_json::to_string_pretty(session) {
+        write_json_in_background("session.json", data);
+    }
 }
 
 #[cfg(test)]

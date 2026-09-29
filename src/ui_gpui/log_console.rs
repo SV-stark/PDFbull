@@ -12,11 +12,20 @@ pub enum LogAction {
     SetFilter(&'static str),
 }
 
+/// Maximum number of log lines kept in the developer console.
+const MAX_LOG_ENTRIES: usize = 1000;
+
 pub struct LogConsoleState {
     pub is_open: bool,
     pub height: f32,
     pub filter_level: Option<&'static str>,
-    pub entries: Vec<(String, &'static str)>,
+    /// `VecDeque` + a monotonically increasing sequence number: the old
+    /// `Vec::remove(0)` memmoved every surviving `String` on each log line once
+    /// the buffer was full, and index-derived element ids shifted on every
+    /// append (and re-indexed entirely on every filter change), churning up to
+    /// 1000 keyed element states per frame.
+    pub entries: std::collections::VecDeque<(u64, String, &'static str)>,
+    next_seq: u64,
 }
 
 impl Default for LogConsoleState {
@@ -27,33 +36,41 @@ impl Default for LogConsoleState {
 
 impl LogConsoleState {
     pub fn new() -> Self {
-        Self {
+        let mut state = Self {
             is_open: false,
             height: 180.0,
             filter_level: None,
-            entries: vec![
-                (
-                    concat!(
-                        "[INFO] PDFbull GPUI Engine v",
-                        env!("CARGO_PKG_VERSION"),
-                        " initialized."
-                    )
-                    .to_string(),
-                    "info",
-                ),
-                (
-                    "[INFO] GPU acceleration active: zpdf-render-cpu (tiny-skia) → DirectX 11 texture pipeline. Memory-bounded render cache enabled.".to_string(),
-                    "info",
-                ),
-            ],
-        }
+            entries: std::collections::VecDeque::new(),
+            next_seq: 0,
+        };
+        state.log(
+            concat!(
+                "[INFO] PDFbull GPUI Engine v",
+                env!("CARGO_PKG_VERSION"),
+                " initialized."
+            ),
+            "info",
+        );
+        state.log("[INFO] GPU acceleration active: zpdf-render-cpu (tiny-skia) → DirectX 11 texture pipeline. Memory-bounded render cache enabled.", "info");
+        state
     }
 
     pub fn log(&mut self, msg: impl Into<String>, level: &'static str) {
-        self.entries.push((msg.into(), level));
-        if self.entries.len() > 1000 {
-            self.entries.remove(0);
+        let seq = self.next_seq;
+        self.next_seq += 1;
+        self.entries.push_back((seq, msg.into(), level));
+        while self.entries.len() > MAX_LOG_ENTRIES {
+            self.entries.pop_front();
         }
+    }
+
+    /// Plain-text dump of the buffer, for the clipboard.
+    pub fn as_text(&self) -> String {
+        self.entries
+            .iter()
+            .map(|(_, msg, _)| msg.as_str())
+            .collect::<Vec<_>>()
+            .join("\n")
     }
 
     pub fn render<V: 'static>(
@@ -75,22 +92,21 @@ impl LogConsoleState {
         let filtered_entries: Vec<AnyElement> = self
             .entries
             .iter()
-            .filter(|(_, lvl)| {
+            .filter(|(_, _, lvl)| {
                 if cur_filter == "all" {
                     true
                 } else {
                     lvl == &cur_filter
                 }
             })
-            .enumerate()
-            .map(|(idx, (msg, lvl))| {
+            .map(|(seq, msg, lvl)| {
                 let color = match *lvl {
                     "error" => gpui_kit::red(),
                     "warn" => gpui_kit::yellow(),
                     _ => muted_fg,
                 };
                 div()
-                    .id(SharedString::from(format!("log-entry-{}", idx)))
+                    .id(SharedString::from(format!("log-entry-{}", seq)))
                     .text_xs()
                     .text_color(color)
                     .child(msg.clone())

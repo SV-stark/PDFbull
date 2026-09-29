@@ -73,7 +73,7 @@ fn test_tabs_state_management() {
 
 #[test]
 fn test_sidebar_state_and_thumbnails() {
-    let mut sidebar = SidebarState::new();
+    let mut sidebar = SidebarState::new_for_test();
     assert!(sidebar.is_open);
     assert_eq!(sidebar.mode, SidebarMode::Thumbnails);
     assert_eq!(sidebar.width, 250.0);
@@ -775,7 +775,7 @@ fn test_multi_style_annotations() {
 
 #[test]
 fn test_search_highlights_and_navigation() {
-    let mut sidebar = SidebarState::new();
+    let mut sidebar = SidebarState::new_for_test();
     let mut viewport = DocumentViewport::new();
 
     sidebar.search_query = "Invoice".to_string();
@@ -857,17 +857,17 @@ fn test_log_console_filtering_and_clear() {
     let info_count = logs
         .entries
         .iter()
-        .filter(|(_, lvl)| *lvl == "info")
+        .filter(|(_, _, lvl)| *lvl == "info")
         .count();
     let warn_count = logs
         .entries
         .iter()
-        .filter(|(_, lvl)| *lvl == "warn")
+        .filter(|(_, _, lvl)| *lvl == "warn")
         .count();
     let err_count = logs
         .entries
         .iter()
-        .filter(|(_, lvl)| *lvl == "error")
+        .filter(|(_, _, lvl)| *lvl == "error")
         .count();
 
     assert!(info_count >= 1);

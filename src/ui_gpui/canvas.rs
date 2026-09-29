@@ -3,7 +3,34 @@ use gpui_kit::base::StyledExt;
 use gpui_kit::component::ActiveTheme;
 use gpui_kit::component::scroll::ScrollableElement;
 use gpui_kit::gpui::{BorderStyle, fill, outline};
+use gpui_kit::prelude::FluentBuilder;
 use gpui_kit::*;
+use std::ops::Range;
+
+/// Vertical padding on the canvas scroll container (`.py_8()` = 2rem).
+/// Kept in sync with the layout below so scroll maths and layout agree.
+const CANVAS_PADDING_Y: f32 = 32.0;
+/// Gap between page cards in Continuous mode (`.gap_6()` = 1.5rem).
+const CANVAS_PAGE_GAP: f32 = 24.0;
+/// Hard cap on the number of page cards built per frame, independent of layout
+/// state. ~5 screens' worth at typical page sizes; anything beyond this is
+/// cheap to rebuild on the next scroll.
+const MAX_CARD_WINDOW: usize = 48;
+
+/// Layout of the virtualized Continuous-mode strip.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct ContinuousStripGeometry {
+    /// First page index whose card is built (inclusive).
+    pub first: usize,
+    /// Last page index whose card is built (exclusive).
+    pub last: usize,
+    /// Height of the spacer above the first built card.
+    pub top_spacer: Pixels,
+    /// Height of the spacer below the last built card.
+    pub bottom_spacer: Pixels,
+    /// Height of one page slot: the card plus the gap beneath it.
+    pub slot_height: Pixels,
+}
 
 /// Converts an RGBA pixel buffer (potentially with tiny-skia premultiplied alpha)
 /// to BGRA format as expected by GPUI Direct3D 11 textures.
@@ -42,6 +69,9 @@ pub struct DocumentViewport {
         std::sync::Arc<std::sync::RwLock<std::collections::HashMap<usize, Point<Pixels>>>>,
     pub highlight_color: Option<Hsla>,
     pub annotations: Vec<crate::models::Annotation>,
+    /// `annotations` grouped by page, so painting a page is O(annotations on
+    /// that page) instead of a full scan of every annotation.
+    pub annotations_by_page: std::collections::HashMap<usize, Vec<crate::models::Annotation>>,
     pub search_highlights: std::collections::HashMap<usize, Vec<(f32, f32, f32, f32)>>,
 }
 
@@ -76,7 +106,90 @@ impl DocumentViewport {
             )),
             highlight_color: None,
             annotations: Vec::new(),
+            annotations_by_page: std::collections::HashMap::new(),
             search_highlights: std::collections::HashMap::new(),
+        }
+    }
+
+    /// Drop every piece of per-document state so a new document never inherits
+    /// the previous one's pages, annotations, text layer, search hits, cached
+    /// page origins or scroll position.
+    ///
+    /// `rendered_pages` and `rendered_zoom` MUST be cleared together: a zoom
+    /// entry without its image (or vice versa) makes `request_render_page`
+    /// skip the page forever, leaving it stuck on the "Rendering page..."
+    /// placeholder.
+    pub fn reset_for_document(&mut self) {
+        self.current_page = 0;
+        self.is_selecting = false;
+        self.selection_page = None;
+        self.selection_start = None;
+        self.selection_end = None;
+        self.selected_text = None;
+        self.rendered_pages.clear();
+        self.rendered_zoom.clear();
+        self.text_cache.clear();
+        self.search_highlights.clear();
+        self.annotations.clear();
+        self.annotations_by_page.clear();
+        if let Ok(mut origins) = self.page_origins.write() {
+            origins.clear();
+        }
+        self.scroll_handle.set_offset(Point::default());
+    }
+
+    /// Force a re-render of every visible page (zoom, rotation or render
+    /// filter changed). Clears the image cache *and* its companion zoom map so
+    /// the next `request_render_page` actually issues a command.
+    pub fn invalidate_rendered_pages(&mut self) {
+        self.rendered_pages.clear();
+        self.rendered_zoom.clear();
+    }
+
+    /// Page-slot pitch in Continuous mode: one page height plus the gap that
+    /// follows it. Every scroll calculation must use this same value.
+    pub fn continuous_item_height(&self) -> Pixels {
+        px(self.page_height * self.zoom) + px(CANVAS_PAGE_GAP)
+    }
+
+    /// Absolute content-space Y of page `page_idx`'s top edge.
+    ///
+    /// Single source of truth for "where is page N on screen", shared by the
+    /// scroll maths and the virtualized layout. If those two ever disagree the
+    /// canvas scrolls to the wrong page and the built card window drifts out of
+    /// sync with the viewport.
+    pub fn page_top_in_content(&self, page_idx: usize) -> Pixels {
+        px(CANVAS_PADDING_Y) + self.continuous_item_height() * page_idx as f32
+    }
+
+    /// Layout for the virtualized Continuous-mode strip.
+    ///
+    /// Each built slot is exactly `slot_height` tall and holds a page card
+    /// top-aligned, so the gap beneath a card is the slack in its own slot.
+    /// That is what makes `page_top_in_content` exact — the scroll container
+    /// must therefore carry **no** vertical padding and **no** flex gap, or the
+    /// two get double-counted and every card sits a further
+    /// `CANVAS_PADDING_Y + CANVAS_PAGE_GAP` below where the scroll maths thinks
+    /// it is. That drift is what made continuous scrolling skip pages and left
+    /// the last page unreachable at full scroll.
+    pub fn continuous_strip_geometry(&self, total: usize) -> ContinuousStripGeometry {
+        let slot_height = self.continuous_item_height();
+        if total == 0 {
+            return ContinuousStripGeometry {
+                first: 0,
+                last: 0,
+                top_spacer: px(0.0),
+                bottom_spacer: px(0.0),
+                slot_height,
+            };
+        }
+        let window = self.visible_card_window(total);
+        ContinuousStripGeometry {
+            first: window.start,
+            last: window.end,
+            top_spacer: self.page_top_in_content(window.start),
+            bottom_spacer: px(CANVAS_PADDING_Y) + slot_height * (total - window.end) as f32,
+            slot_height,
         }
     }
 
@@ -90,11 +203,8 @@ impl DocumentViewport {
 
         match self.layout_mode {
             PageLayoutMode::Continuous => {
-                let page_h = px(self.page_height * self.zoom);
-                let item_h = page_h + px(24.0);
-                let target_y = -item_h * target_page;
-                self.scroll_handle
-                    .set_offset(Point::new(px(0.0), target_y));
+                let target_y = -self.page_top_in_content(target_page);
+                self.scroll_handle.set_offset(Point::new(px(0.0), target_y));
             }
             PageLayoutMode::SinglePage | PageLayoutMode::TwoPageSpread => {
                 self.scroll_handle.set_offset(Point::default());
@@ -107,11 +217,100 @@ impl DocumentViewport {
         if total == 0 {
             return 0;
         }
-        let page_h = px(self.page_height * self.zoom);
-        let item_h = page_h + px(24.0);
+        let item_h = self.continuous_item_height().max(px(1.0));
         let scrolled_px = (-self.scroll_handle.offset().y).max(px(0.0));
-        let visible_page = ((scrolled_px + px(32.0)) / item_h.max(px(1.0))).floor() as usize;
+        // Invert `page_top_in_content`: page N occupies
+        // `[PADDING + N*item, PADDING + (N+1)*item)`, so the page at the
+        // viewport's top edge is `floor((scrolled + PADDING) / item)`.
+        let visible_page = ((scrolled_px + px(CANVAS_PADDING_Y)) / item_h).floor() as usize;
         visible_page.min(total.saturating_sub(1))
+    }
+
+    /// Half-open range of page indices whose element subtrees should be built
+    /// in Continuous mode.
+    ///
+    /// The window is derived from the live scroll offset (GPUI sets `max_offset`
+    /// to `content_size - bounds` on every prepaint, so
+    /// `content_size - max_offset` is the viewport height) and is *always*
+    /// capped at [`MAX_CARD_WINDOW`] pages. The cap matters: before the first
+    /// layout pass `max_offset` is zero, which would make the derived viewport
+    /// height equal the whole document and reintroduce the O(total_pages)
+    /// build this function exists to avoid.
+    ///
+    /// The window always contains `current_page`, which is the page the engine
+    /// rasterizes.
+    pub fn visible_card_window(&self, total: usize) -> Range<usize> {
+        if total == 0 {
+            return 0..0;
+        }
+        let anchor = self.current_page.min(total - 1);
+
+        let item_h = self.continuous_item_height();
+        if item_h <= px(1.0) {
+            return Self::window_around(anchor, total, MAX_CARD_WINDOW);
+        }
+
+        // The *real* page count feeds the content height: `max_offset` is
+        // `content_size - bounds`, so a clamped page count here would report a
+        // viewport a fraction of the actual size and cut the overscan short.
+        let content_h = self.page_top_in_content(total) - px(CANVAS_PAGE_GAP);
+        let viewport_h = (content_h - self.scroll_handle.max_offset().y).max(px(0.0));
+        let scrolled = (-self.scroll_handle.offset().y).max(px(0.0));
+        // One viewport of overscan each way keeps cards built ahead of the
+        // scroll direction, so fast scrolling never lands on an unbuilt page.
+        let overscan = viewport_h + px(96.0);
+
+        let first_px = (scrolled - overscan).max(px(0.0));
+        let last_px = scrolled + viewport_h + overscan;
+
+        let derived_start =
+            ((first_px / item_h).floor().max(0.0) as usize).min(total.saturating_sub(1));
+        let derived_end =
+            ((((last_px + item_h) / item_h).ceil() as usize).min(total)).max(derived_start + 1);
+
+        let start = derived_start.min(anchor);
+        let end = derived_end.max(anchor + 1);
+        if end - start <= MAX_CARD_WINDOW {
+            return start..end;
+        }
+        // Too wide (or, before the first layout, "everything"): fall back to a
+        // window centred on the page the engine is actually rendering.
+        Self::window_around(anchor, total, MAX_CARD_WINDOW)
+    }
+
+    /// At most `count` pages containing `anchor`, biased to put equal amounts
+    /// of context on either side. Clamped to `total`.
+    fn window_around(anchor: usize, total: usize, count: usize) -> Range<usize> {
+        if total <= count {
+            return 0..total;
+        }
+        let room_before = anchor.min(count / 2);
+        let room_after = (total - anchor - 1).min(count - 1 - room_before);
+        let start = anchor - room_before;
+        let end = (anchor + 1 + room_after).min(total);
+        start..end
+    }
+
+    /// Annotations for `page_idx`, borrowed rather than cloned.
+    ///
+    /// The per-page `filter(..).cloned()` this replaces was O(total_pages ×
+    /// total_annotations) string clones on every frame.
+    pub fn annotations_on_page(&self, page_idx: usize) -> &[crate::models::Annotation] {
+        self.annotations_by_page
+            .get(&page_idx)
+            .map_or(&[], Vec::as_slice)
+    }
+
+    /// Rebuild `annotations_by_page` from `annotations`. Call after any change
+    /// to the annotation list.
+    pub fn reindex_annotations(&mut self) {
+        self.annotations_by_page.clear();
+        for ann in &self.annotations {
+            self.annotations_by_page
+                .entry(ann.page)
+                .or_default()
+                .push(ann.clone());
+        }
     }
 
     fn render_page_card<V: 'static>(
@@ -143,33 +342,43 @@ impl DocumentViewport {
         let sel_start = self.selection_start;
         let sel_end = self.selection_end;
         let is_selecting = self.is_selecting;
-        let text_items = self.text_cache.get(&page_idx).cloned();
+        // `Arc`-share the per-page text layer and annotations instead of deep
+        // cloning them (every `TextItem` and `AnnotationStyle` owns `String`s).
+        // The paint closures below only read them.
+        let text_items: Option<std::sync::Arc<Vec<crate::models::TextItem>>> = self
+            .text_cache
+            .get(&page_idx)
+            .cloned()
+            .map(std::sync::Arc::new);
+        let page_annotations: std::sync::Arc<Vec<crate::models::Annotation>> =
+            std::sync::Arc::new(self.annotations_on_page(page_idx).to_vec());
+        let page_search_matches: std::sync::Arc<Vec<(f32, f32, f32, f32)>> = std::sync::Arc::new(
+            self.search_highlights
+                .get(&page_idx)
+                .cloned()
+                .unwrap_or_default(),
+        );
         let page_origins = self.page_origins.clone();
         let zoom = self.zoom;
         let hl_color = self.highlight_color;
-        let page_annotations: Vec<crate::models::Annotation> = self
-            .annotations
-            .iter()
-            .filter(|a| a.page == page_idx)
-            .cloned()
-            .collect();
-        let page_search_matches = self
-            .search_highlights
-            .get(&page_idx)
-            .cloned()
-            .unwrap_or_default();
 
         let selection_overlay = canvas(
             move |bounds, _, _| bounds,
             move |paint_bounds, card_bounds, window, _| {
-                // Record the actual window origin of this page card for coordinate mapping
-                if let Ok(mut origins) = page_origins.write() {
+                // Record the actual window origin of this page card for
+                // coordinate mapping. Skip the write when it hasn't moved —
+                // this runs in the paint phase for every visible card, every
+                // frame, and a redundant RwLock write per card per frame is
+                // pure overhead.
+                if let Ok(mut origins) = page_origins.write()
+                    && origins.get(&page_idx) != Some(&paint_bounds.origin)
+                {
                     origins.insert(page_idx, paint_bounds.origin);
                 }
 
                 // 0. Paint search matches on this page
                 let search_fill = hsla(45.0 / 360.0, 1.0, 0.5, 0.45);
-                for (mx, my, mw, mh) in &page_search_matches {
+                for (mx, my, mw, mh) in page_search_matches.iter() {
                     let quad = Bounds {
                         origin: Point::new(
                             card_bounds.origin.x + px(mx * zoom),
@@ -187,7 +396,7 @@ impl DocumentViewport {
                 }
 
                 // 1. Paint saved permanent annotations on this page
-                for ann in &page_annotations {
+                for ann in page_annotations.iter() {
                     let ann_quad = Bounds {
                         origin: Point::new(
                             card_bounds.origin.x + px(ann.x * zoom),
@@ -360,7 +569,15 @@ impl DocumentViewport {
                     };
                     let clipped = sel_bounds.intersect(&card_bounds);
 
-                    // Convert selection box to page PDF point coordinates
+                    // Convert selection box to page PDF point coordinates.
+                    // `zoom` is clamped defensively: `f32::clamp` propagates
+                    // NaN, and a NaN here would silently blank every selection
+                    // and annotation coordinate.
+                    let zoom = if zoom.is_finite() && zoom > 0.01 {
+                        zoom
+                    } else {
+                        1.0
+                    };
                     let page_min_x = ((sel_win_min_x - card_bounds.origin.x) / px(1.0)) / zoom;
                     let page_max_x = ((sel_win_max_x - card_bounds.origin.x) / px(1.0)) / zoom;
                     let page_min_y = ((sel_win_min_y - card_bounds.origin.y) / px(1.0)) / zoom;
@@ -374,7 +591,7 @@ impl DocumentViewport {
                     let mut matched_any_text = false;
 
                     if let Some(items) = &text_items {
-                        for item in items {
+                        for item in items.iter() {
                             let ix2 = item.x + item.width;
                             let iy2 = item.y + item.height;
                             if ix2 >= page_min_x
@@ -561,7 +778,7 @@ impl DocumentViewport {
                     .min_h_0()
                     .size_full()
                     .bg(muted)
-                    .overflow_y_scroll()
+                    .overflow_y_hidden()
                     .track_scroll(&self.scroll_handle)
                     .vertical_scrollbar(&self.scroll_handle)
                     .on_scroll_wheel(scroll_listener)
@@ -612,7 +829,7 @@ impl DocumentViewport {
                     .min_h_0()
                     .size_full()
                     .bg(muted)
-                    .overflow_y_scroll()
+                    .overflow_y_hidden()
                     .track_scroll(&self.scroll_handle)
                     .vertical_scrollbar(&self.scroll_handle)
                     .on_scroll_wheel(scroll_listener)
@@ -632,8 +849,26 @@ impl DocumentViewport {
                     .into_any_element()
             }
             PageLayoutMode::Continuous => {
-                let page_cards: Vec<AnyElement> = (0..total)
-                    .map(|idx| self.render_page_card(cx, idx, on_drag_start))
+                // Virtualized: only build cards for the pages near the scroll
+                // position, with spacers above and below so the total scrollable
+                // height (and therefore the scrollbar) is unchanged. Building all
+                // `total` cards every frame was O(total_pages) element subtrees
+                // per frame and made large documents unusable.
+                let strip = self.continuous_strip_geometry(total);
+
+                // Each slot is `slot_height` tall and holds the card top-aligned;
+                // the slack beneath it is the inter-page gap. Encoding the gap
+                // here (rather than via `.gap_6()` on the container) is what
+                // keeps `page_top_in_content` exact — see
+                // `continuous_strip_geometry`.
+                let slots: Vec<AnyElement> = (strip.first..strip.last)
+                    .map(|idx| {
+                        div()
+                            .flex_none()
+                            .h(strip.slot_height)
+                            .child(self.render_page_card(cx, idx, on_drag_start))
+                            .into_any_element()
+                    })
                     .collect();
 
                 div()
@@ -644,16 +879,34 @@ impl DocumentViewport {
                     .min_h_0()
                     .size_full()
                     .bg(muted)
-                    .overflow_y_scroll()
+                    // `overflow_y_hidden` (not `overflow_y_scroll`) is
+                    // deliberate: `track_scroll` alone already applies the
+                    // offset, clamps it and feeds the scrollbar, while
+                    // `overflow: Scroll` additionally installs GPUI's own
+                    // wheel handler. That handler runs on the same
+                    // ScrollHandle, so it applied the wheel delta a second time
+                    // on top of the one handled in `handle_canvas_scroll_wheel`
+                    // (2x scroll speed), and it also panned the view during
+                    // Ctrl+wheel zoom. The app is now the single owner of the
+                    // scroll offset.
+                    .overflow_y_hidden()
                     .track_scroll(&self.scroll_handle)
                     .vertical_scrollbar(&self.scroll_handle)
                     .on_scroll_wheel(scroll_listener)
                     .on_mouse_move(container_move_listener)
                     .on_mouse_up(MouseButton::Left, container_up_listener)
                     .items_center()
-                    .py_8()
-                    .gap_6()
-                    .children(page_cards)
+                    // No `.py_8()` and no `.gap_6()`: both are already encoded
+                    // in the spacers and slots above. Applying them here as well
+                    // shifted every card down by CANVAS_PADDING_Y +
+                    // CANVAS_PAGE_GAP relative to the scroll maths.
+                    .when(strip.top_spacer > px(0.0), |this| {
+                        this.child(div().flex_none().h(strip.top_spacer))
+                    })
+                    .children(slots)
+                    .when(strip.bottom_spacer > px(0.0), |this| {
+                        this.child(div().flex_none().h(strip.bottom_spacer))
+                    })
                     .into_any_element()
             }
         }

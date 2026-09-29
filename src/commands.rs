@@ -5,7 +5,9 @@ use crate::models::{
 use crate::pdf_engine::RenderOptions;
 use tokio::sync::oneshot;
 
-#[derive(Debug)]
+/// Engine work queue. `Open` carries the document password, so `Debug` is
+/// implemented by hand (see below) rather than derived — a derived `Debug`
+/// would print the secret into any `tracing::debug!("{:?}", cmd)` we ever add.
 pub enum PdfCommand {
     Open(
         String,
@@ -151,4 +153,48 @@ pub enum PdfCommand {
         crate::ocr::OcrScript,
         oneshot::Sender<PdfResult<crate::ocr::OcrPageResult>>,
     ),
+}
+
+impl std::fmt::Debug for PdfCommand {
+    /// Renders the variant name only, and never the `Open` password.
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let name = match self {
+            Self::Open(..) => "Open",
+            Self::Render(..) => "Render",
+            Self::RenderThumbnail(..) => "RenderThumbnail",
+            Self::Close(_) => "Close",
+            Self::ExtractText(..) => "ExtractText",
+            Self::GetTextItems(..) => "GetTextItems",
+            Self::LoadDocumentMeta(..) => "LoadDocumentMeta",
+            Self::Search(..) => "Search",
+            Self::SaveAnnotations(..) => "SaveAnnotations",
+            Self::LoadAnnotations(..) => "LoadAnnotations",
+            Self::ExportImage(..) => "ExportImage",
+            Self::ExportImages(..) => "ExportImages",
+            Self::ExportPdf(..) => "ExportPdf",
+            Self::Merge(..) => "Merge",
+            Self::Split(..) => "Split",
+            Self::GetFormFields(..) => "GetFormFields",
+            Self::FillForm(..) => "FillForm",
+            Self::PrintPdf(..) => "PrintPdf",
+            Self::ListPrinters(_) => "ListPrinters",
+            Self::AddWatermark(..) => "AddWatermark",
+            Self::AddHeaderFooter(..) => "AddHeaderFooter",
+            Self::Optimize(..) => "Optimize",
+            Self::ReorderPages(..) => "ReorderPages",
+            Self::ToggleLayer(..) => "ToggleLayer",
+            Self::GetAttachmentBytes(..) => "GetAttachmentBytes",
+            Self::DetectTables(..) => "DetectTables",
+            Self::EncryptPdf(..) => "EncryptPdf",
+            Self::LinearizePdf(..) => "LinearizePdf",
+            Self::ValidateConformance(..) => "ValidateConformance",
+            Self::VerifySignatureTrust(..) => "VerifySignatureTrust",
+            Self::ConvertPdf(..) => "ConvertPdf",
+            Self::CreateBlankDocument(..) => "CreateBlankDocument",
+            Self::SignDocumentWithCert(..) => "SignDocumentWithCert",
+            Self::ApplyStamp(..) => "ApplyStamp",
+            Self::OcrPage(..) => "OcrPage",
+        };
+        f.write_str(name)
+    }
 }

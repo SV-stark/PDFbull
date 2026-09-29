@@ -18,6 +18,10 @@ pub enum ActiveDialog {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum DialogAction {
+    /// Pick a preset in the Watermark dialog. Selects only — it must not close
+    /// the dialog, which is what made clicking a chip immediately stamp the
+    /// document with the (still default) `CONFIDENTIAL` text.
+    SelectWatermark(String),
     SetWatermark(String),
     SetHeaderFooter(String, String),
     SetPassword(String),
@@ -25,6 +29,15 @@ pub enum DialogAction {
     DeleteCurrentPage,
     ApplySecurity(String),
     Close,
+}
+
+/// Dialogs that present no configurable state must not offer an Apply button
+/// that does nothing.
+pub fn dialog_has_apply(active: &ActiveDialog) -> bool {
+    matches!(
+        active,
+        ActiveDialog::Watermark | ActiveDialog::HeaderFooter | ActiveDialog::Security
+    )
 }
 
 pub struct DialogsState {
@@ -115,13 +128,18 @@ impl DialogsState {
                 let mut chips = Vec::new();
                 for text in presets {
                     let is_sel = cur_watermark == text;
+                    // A chip click previously dispatched `SetWatermark`, which
+                    // the view handled by *closing* the dialog and applying the
+                    // stamp — so picking a preset immediately stamped the
+                    // document and `selected_watermark` never changed (Apply
+                    // always sent "CONFIDENTIAL"). Chips now only select.
                     chips.push(
                         Button::new(format!("wm-chip-{}", text))
                             .label(text)
                             .ghost()
                             .when(is_sel, |b| b.primary())
                             .on_click(cx.listener(move |v, _, w, cx| {
-                                on_action(v, DialogAction::SetWatermark(text.to_string()), w, cx)
+                                on_action(v, DialogAction::SelectWatermark(text.to_string()), w, cx)
                             })),
                     );
                 }
@@ -486,7 +504,7 @@ impl DialogsState {
                             .outline()
                             .on_click(cx.listener(move |v, _, w, cx| on_close(v, w, cx))),
                     )
-                    .when(!matches!(active, ActiveDialog::Signature), |el| {
+                    .when(dialog_has_apply(&active), |el| {
                         el.child(
                             Button::new("btn-dialog-apply")
                                 .label("Apply")
@@ -518,7 +536,6 @@ impl DialogsState {
                         )
                     }),
             );
-
         // Render full screen backdrop with centered modal
         Some(
             div()

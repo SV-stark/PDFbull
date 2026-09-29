@@ -1,6 +1,7 @@
-use gpui_kit::component::ActiveTheme;
 use gpui_kit::component::button::{Button, ButtonVariants};
+use gpui_kit::component::input::{Input, InputState};
 use gpui_kit::component::scroll::ScrollableElement;
+use gpui_kit::component::{ActiveTheme, Sizable};
 use gpui_kit::prelude::FluentBuilder;
 use gpui_kit::*;
 
@@ -14,6 +15,14 @@ pub enum SidebarMode {
     Attachments,
     Layers,
 }
+
+/// Approximate vertical stride of one thumbnail card (160px image + label +
+/// padding + gap). Used to map scroll offsets to page indices.
+const THUMB_STRIDE: f32 = 200.0;
+/// Pixels of thumbnail content to keep built above and below the viewport.
+const THUMB_OVERSCAN: f32 = 400.0;
+/// Hard cap on thumbnail cards built per frame, independent of layout state.
+const MAX_THUMB_WINDOW: usize = 64;
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum SidebarAction {
@@ -34,7 +43,16 @@ pub struct SidebarState {
     pub mode: SidebarMode,
     pub width: f32,
     pub thumbnails: std::collections::HashMap<usize, std::sync::Arc<RenderImage>>,
+    /// Scroll position of the thumbnail strip, so the visible window can follow
+    /// it. `overflow_y_scrollbar()` creates its own private handle, which the
+    /// windowing maths could not read.
+    pub thumb_scroll: ScrollHandle,
     pub search_query: String,
+    /// Backing editor for the search box. `None` outside a live GPUI context
+    /// (see [`SidebarState::new_for_test`]). The panel previously had no input
+    /// at all, so `search_query` was never set from the UI and in-document
+    /// search was unreachable.
+    pub search_input: Option<Entity<InputState>>,
     pub search_results: Vec<crate::models::SearchResultItem>,
     pub is_searching: bool,
     pub bookmarks: Vec<crate::pdf_engine::Bookmark>,
@@ -42,26 +60,114 @@ pub struct SidebarState {
     pub layers: Vec<crate::models::LayerInfo>,
 }
 
-impl Default for SidebarState {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
 impl SidebarState {
-    pub fn new() -> Self {
+    /// Build the sidebar. The search editor must be created from the *owner's*
+    /// entity scope (an `InputState` needs its own `Context`), so `owner` is
+    /// the `Context` of whichever entity embeds this state — `SidebarState` is
+    /// plain data, not an `Entity` of its own.
+    pub fn new<O: 'static>(window: &mut Window, owner: &mut Context<O>) -> Self {
+        Self {
+            search_input: Some(owner.new(|cx| InputState::new(window, cx))),
+            ..Self::new_for_test()
+        }
+    }
+
+    /// Build a sidebar with no editor attached, for tests and for any context
+    /// that has no window to create an `InputState` in. The search panel renders
+    /// without its input field in that case.
+    pub fn new_for_test() -> Self {
         Self {
             is_open: true,
             mode: SidebarMode::Thumbnails,
             width: 250.0,
             thumbnails: std::collections::HashMap::new(),
+            thumb_scroll: ScrollHandle::new(),
             search_query: String::new(),
+            search_input: None,
             search_results: Vec::new(),
             is_searching: false,
             bookmarks: Vec::new(),
             attachments: Vec::new(),
             layers: Vec::new(),
         }
+    }
+
+    /// Mirror the editor's contents into `search_query`.
+    ///
+    /// Called from the owner's `InputEvent::Change` subscription. The old panel
+    /// had no input at all, so `search_query` stayed permanently empty and
+    /// `execute_search` always short-circuited.
+    pub fn on_search_input_changed(&mut self, cx: &mut gpui_kit::App) {
+        if let Some(input) = &self.search_input {
+            self.search_query = input.read(cx).value().to_string();
+        }
+    }
+
+    /// Clear the query in both the editor and the mirror string.
+    pub fn clear_search(&mut self, window: &mut Window, cx: &mut gpui_kit::App) {
+        self.search_query.clear();
+        if let Some(input) = &self.search_input {
+            input.update(cx, |input, cx| input.set_value(String::new(), window, cx));
+        }
+    }
+
+    /// Half-open range of page indices whose thumbnail cards should be built,
+    /// derived from the strip's live scroll position.
+    ///
+    /// The viewport height comes from the scroll handle: GPUI sets `max_offset`
+    /// to `content_size - bounds` on each prepaint, so
+    /// `content_size - max_offset` is the current viewport height. The width is
+    /// *always* capped at [`MAX_THUMB_WINDOW`]: before the first layout pass
+    /// `max_offset` is zero, which would make the derived viewport equal the
+    /// whole document and reintroduce the O(total_pages) build.
+    pub fn thumbnail_window(&self, total_pages: usize) -> (usize, usize) {
+        if total_pages == 0 {
+            return (0, 0);
+        }
+        let content_h = px(THUMB_STRIDE * total_pages as f32);
+        let viewport_h = (content_h - self.thumb_scroll.max_offset().y).max(px(0.0));
+        let scrolled = (-self.thumb_scroll.offset().y).max(px(0.0));
+
+        let first_px = (scrolled - px(THUMB_OVERSCAN)).max(px(0.0));
+        let last_px = scrolled + viewport_h + px(THUMB_OVERSCAN);
+
+        let first = ((first_px / px(THUMB_STRIDE)).floor().max(0.0) as usize)
+            .min(total_pages.saturating_sub(1));
+        let last =
+            (((last_px + px(THUMB_STRIDE)) / px(THUMB_STRIDE)).ceil() as usize).min(total_pages);
+        let last = last.max(first + 1);
+
+        if last - first <= MAX_THUMB_WINDOW {
+            (first, last)
+        } else {
+            // Too wide: keep the window around the scroll position instead.
+            let start = first.min(total_pages.saturating_sub(MAX_THUMB_WINDOW));
+            (start, start + MAX_THUMB_WINDOW)
+        }
+    }
+
+    /// True when `path` is something this app should try to open.
+    ///
+    /// Kept in one place so every entry point (drop handler, command line,
+    /// recent files) applies the same rule. A directory or a non-PDF produced
+    /// a permanent unrenderable tab before this was centralised.
+    pub fn is_openable_pdf(path: &std::path::Path) -> bool {
+        path.extension()
+            .is_some_and(|e| e.eq_ignore_ascii_case("pdf"))
+            && path.is_file()
+    }
+
+    /// Bring `page_idx`'s thumbnail into view in the strip.
+    ///
+    /// Clamped against the strip's own content height rather than the scroll
+    /// handle's `max_offset`: before the first layout pass `max_offset` is zero,
+    /// which would pin the strip at the top and make "jump to page N" a no-op.
+    /// GPUI re-clamps against the real bounds on the next prepaint regardless.
+    pub fn scroll_thumbnails_to(&mut self, page_idx: usize, total_pages: usize) {
+        let target = px(-THUMB_STRIDE * page_idx as f32);
+        let min = px(-THUMB_STRIDE * total_pages as f32);
+        self.thumb_scroll
+            .set_offset(Point::new(px(0.0), target.clamp(min, px(0.0))));
     }
 
     pub fn render<V: 'static>(
@@ -114,8 +220,19 @@ impl SidebarState {
 
         let content: AnyElement = match cur_mode {
             SidebarMode::Thumbnails => {
-                let mut thumb_cards = Vec::new();
-                for page_idx in 0..total_pages {
+                // Virtualized on the *scroll position*, not the selected page,
+                // so the panel still navigates the whole document. Building one
+                // card per page meant a 1000-page document created 1000 element
+                // subtrees every frame, on top of the canvas's own cards.
+                let (first, last) = self.thumbnail_window(total_pages);
+                let top_pad = THUMB_STRIDE * first as f32;
+                let bottom_pad = THUMB_STRIDE * total_pages.saturating_sub(last) as f32;
+
+                let mut thumb_cards: Vec<AnyElement> = Vec::new();
+                if top_pad > 0.0 {
+                    thumb_cards.push(div().flex_none().h(px(top_pad)).into_any_element());
+                }
+                for page_idx in first..last {
                     let is_selected = page_idx == current_page;
                     let click_listener = cx.listener(move |v, _, w, cx| {
                         on_action(v, SidebarAction::SelectPage(page_idx), w, cx)
@@ -161,16 +278,30 @@ impl SidebarState {
                                     .text_xs()
                                     .text_color(muted_fg)
                                     .child(format!("{}", page_idx + 1)),
-                            ),
+                            )
+                            .into_any_element(),
                     );
                 }
+                if bottom_pad > 0.0 {
+                    thumb_cards.push(div().flex_none().h(px(bottom_pad)).into_any_element());
+                }
 
+                // `overflow_y_scroll` + `track_scroll`: GPUI owns the wheel
+                // handling and clamping, and notifies on every change so this
+                // window is recomputed. We deliberately do *not* also apply the
+                // wheel delta ourselves (that combination is what made the
+                // canvas scroll at 2x speed).
                 div()
+                    .id("sidebar-thumbnails-scroll")
                     .flex()
                     .flex_col()
+                    .flex_1()
+                    .min_h_0()
                     .gap_2()
                     .p_2()
-                    .overflow_y_scrollbar()
+                    .overflow_y_scroll()
+                    .track_scroll(&self.thumb_scroll)
+                    .vertical_scrollbar(&self.thumb_scroll)
                     .children(thumb_cards)
                     .into_any_element()
             }
@@ -362,6 +493,21 @@ impl SidebarState {
                                     })),
                             ),
                     )
+                    // The actual query field. Its absence was why
+                    // `SidebarAction::SearchQuery` was never constructed and
+                    // in-document search could not be started at all.
+                    .when(self.search_input.is_some(), |el| {
+                        el.child(
+                            Input::new(
+                                self.search_input
+                                    .as_ref()
+                                    .expect("checked by the when() guard"),
+                            )
+                            .id("sidebar-search-input")
+                            .small()
+                            .w_full(),
+                        )
+                    })
                     .child(
                         div().flex().flex_row().gap_1().child(
                             Button::new("btn-exec-search")
@@ -372,7 +518,12 @@ impl SidebarState {
                                 })
                                 .primary()
                                 .on_click(cx.listener(move |v, _, w, cx| {
-                                    on_action(v, SidebarAction::ExecuteSearch, w, cx)
+                                    // Guard rather than disable: a disabled button
+                                    // is easy to add later, and clicking while a
+                                    // search is in flight just re-issues it.
+                                    if !is_searching {
+                                        on_action(v, SidebarAction::ExecuteSearch, w, cx);
+                                    }
                                 })),
                         ),
                     )
@@ -387,14 +538,18 @@ impl SidebarState {
                     }));
 
                 let mut result_items = Vec::new();
-                for (idx, item) in self.search_results.iter().enumerate() {
+                for item in self.search_results.iter() {
                     let page = item.page_index;
                     let snippet = item.text.clone();
                     let (x, y, w, h) = (item.x, item.y, item.width, item.height);
+                    // Keyed on the hit's position rather than its list index: a
+                    // new search replaces the whole list, and index-keyed ids
+                    // made every row inherit the previous search's element state.
+                    let res_id = format!("search-res-{page}-{:.0}-{:.0}", x, y);
 
                     result_items.push(
                         div()
-                            .id(SharedString::from(format!("search-res-{}", idx)))
+                            .id(SharedString::from(res_id))
                             .flex()
                             .flex_col()
                             .p_2()

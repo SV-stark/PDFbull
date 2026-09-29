@@ -2,6 +2,7 @@ use gpui_kit::base::StyledExt;
 use gpui_kit::component::ActiveTheme;
 use gpui_kit::component::Sizable;
 use gpui_kit::component::button::{Button, ButtonVariants};
+use gpui_kit::component::input::InputEvent;
 use gpui_kit::*;
 
 use super::{
@@ -27,7 +28,15 @@ pub struct PdfbullView {
     pub log_console: LogConsoleState,
     pub focus_handle: FocusHandle,
     pub status_message: Option<String>,
+    /// Keeps `sidebar.search_query` in sync with the sidebar's search editor.
+    _search_sub: Option<Subscription>,
 }
+
+/// Upper bound on in-document search hits kept in memory and painted.
+/// The engine returns every occurrence, which for a common word in a large
+/// document is tens of thousands of entries feeding both the sidebar list and
+/// the highlight overlay.
+const MAX_SEARCH_RESULTS: usize = 5_000;
 
 pub fn inspect_pdf_geometry(path: &std::path::Path) -> Option<(usize, f32, f32)> {
     let doc = lopdf::Document::load(path).ok()?;
@@ -64,6 +73,18 @@ impl PdfbullView {
         let mut welcome = WelcomeState::new();
         welcome.load_recent_files();
         let focus_handle = _cx.focus_handle();
+        let sidebar = SidebarState::new(_window, _cx);
+        // Mirror the search editor's contents into `sidebar.search_query`.
+        // `SidebarState` is plain data rather than an `Entity`, so the
+        // subscription lives here on the view that owns it.
+        let _search_sub = sidebar.search_input.as_ref().map(|input| {
+            _cx.subscribe(input, |this, _, ev: &InputEvent, cx| {
+                if matches!(ev, InputEvent::Change) {
+                    this.sidebar.on_search_input_changed(cx);
+                    cx.notify();
+                }
+            })
+        });
 
         Self {
             engine: crate::engine::spawn_engine_thread(64, 512),
@@ -71,39 +92,27 @@ impl PdfbullView {
             rendering_pages: std::collections::HashSet::new(),
             ribbon: RibbonState::new(),
             tabs: TabsState::new(),
-            sidebar: SidebarState::new(),
+            sidebar,
             viewport: DocumentViewport::new(),
             dialogs: DialogsState::new(),
             welcome,
             log_console: LogConsoleState::new(),
             focus_handle,
             status_message: None,
+            _search_sub,
         }
-    }
-
-    pub fn open_sample_doc(&mut self, title: &str) {
-        let new_id = self.tabs.tabs.len();
-        self.tabs.tabs.push(DocumentTab {
-            id: new_id,
-            doc_id: None,
-            title: title.to_string(),
-            path: None,
-            is_modified: false,
-        });
-        self.tabs.active_tab_index = new_id;
-        self.active_doc_id = None;
-        self.viewport.total_pages = 5;
-        self.viewport.current_page = 0;
-        self.viewport.rendered_pages.clear();
-        self.viewport.rendered_zoom.clear();
-        self.sidebar.thumbnails.clear();
-        self.rendering_pages.clear();
-        self.dialogs.signatures.clear();
     }
 
     pub fn open_pdf_path(&mut self, path_str: &str, cx: &mut Context<Self>) {
         let path = std::path::PathBuf::from(path_str);
-        if !path.exists() {
+        // Reject anything that isn't a readable regular PDF. Previously this
+        // only checked `exists()`, so dropping a PNG (or passing a directory
+        // on the command line) created a tab that could never render and
+        // reported nothing but a `tracing::error!` the user never sees.
+        if !SidebarState::is_openable_pdf(&path) {
+            self.status_message = Some(format!("Skipped {}: not a PDF file.", path.display()));
+            tracing::warn!("Refusing to open non-PDF path: {}", path.display());
+            cx.notify();
             return;
         }
 
@@ -128,33 +137,42 @@ impl PdfbullView {
         let (page_count, page_width, page_height) =
             inspect_pdf_geometry(&path).unwrap_or((1, 595.0, 842.0));
 
-        let mut loaded_recents = crate::storage::load_recent_files();
-        crate::storage::add_recent_file(&mut loaded_recents, &path);
-        self.welcome.recent_files = loaded_recents
+        crate::storage::add_recent_file(&path);
+        self.welcome.recent_files = crate::storage::load_recent_files()
             .into_iter()
             .map(|f| std::path::PathBuf::from(f.path))
-            .filter(|p| p.exists())
+            .filter(|p| p.is_file())
             .collect();
 
         let doc_id = crate::models::next_doc_id();
         self.active_doc_id = Some(doc_id);
 
         let new_id = self.tabs.tabs.len();
-        self.tabs.tabs.push(DocumentTab {
-            id: new_id,
+        self.tabs.push(DocumentTab {
+            id: 0,
             doc_id: Some(doc_id),
             title,
             path: Some(path.clone()),
             is_modified: false,
         });
         self.tabs.active_tab_index = new_id;
+        // `reset_for_document` drops every scrap of the *previous* document:
+        // rendered pages, the zoom map, the text layer, search hits, cached
+        // page origins, annotations, and the scroll offset. Previously only the
+        // first three were cleared, so opening B after A showed A's highlights
+        // and A's text — and Ctrl+S then wrote A's annotations into B's file.
+        self.viewport.reset_for_document();
         self.viewport.page_width = page_width;
         self.viewport.page_height = page_height;
         self.viewport.total_pages = page_count;
         self.viewport.current_page = 0;
-        self.viewport.rendered_pages.clear();
-        self.viewport.rendered_zoom.clear();
         self.sidebar.thumbnails.clear();
+        self.sidebar.bookmarks.clear();
+        self.sidebar.attachments.clear();
+        self.sidebar.layers.clear();
+        self.sidebar.search_results.clear();
+        self.sidebar.search_query.clear();
+        self.sidebar.is_searching = false;
         self.rendering_pages.clear();
         self.dialogs.signatures.clear();
 
@@ -163,7 +181,7 @@ impl PdfbullView {
 
         cx.spawn(async move |this, cx| {
             let (tx, rx) = tokio::sync::oneshot::channel();
-            if let Ok(()) = engine_tx
+            if let Err(e) = engine_tx
                 .send(crate::commands::PdfCommand::Open(
                     path_str_cloned.clone(),
                     None,
@@ -172,66 +190,104 @@ impl PdfbullView {
                 ))
                 .await
             {
-                match rx.await {
-                    Ok(Ok(open_res)) => {
-                        let _ = this.update(cx, |view, cx| {
-                            if view.active_doc_id == Some(doc_id) {
-                                view.viewport.total_pages = open_res.page_count;
-                                if open_res.max_width > 0.0 {
-                                    view.viewport.page_width = open_res.max_width;
-                                }
-                                if let Some(&first_h) = open_res.page_heights.first()
-                                    && first_h > 0.0
-                                {
-                                    view.viewport.page_height = first_h;
-                                }
-                                view.dialogs.signatures = open_res.signatures;
-                                view.render_needed_pages(cx);
-                                cx.notify();
+                tracing::error!("Failed to send Open command: {e}");
+                let _ = this.update(cx, |view, cx| {
+                    if view.active_doc_id == Some(doc_id) {
+                        view.status_message =
+                            Some("Engine is unavailable — cannot open the document.".into());
+                        cx.notify();
+                    }
+                });
+                return;
+            }
+            match rx.await {
+                Ok(Ok(open_res)) => {
+                    let _ = this.update(cx, |view, cx| {
+                        if view.active_doc_id == Some(doc_id) {
+                            view.viewport.total_pages = open_res.page_count;
+                            if open_res.max_width > 0.0 {
+                                view.viewport.page_width = open_res.max_width;
                             }
+                            if let Some(&first_h) = open_res.page_heights.first()
+                                && first_h > 0.0
+                            {
+                                view.viewport.page_height = first_h;
+                            }
+                            view.dialogs.signatures = open_res.signatures;
+                            view.render_needed_pages(cx);
+                            cx.notify();
+                        }
+                    });
+
+                    // Load document metadata (outline bookmarks, attachments, layers)
+                    let (meta_tx, meta_rx) = tokio::sync::oneshot::channel();
+                    if let Ok(()) = engine_tx
+                        .send(crate::commands::PdfCommand::LoadDocumentMeta(
+                            doc_id, meta_tx,
+                        ))
+                        .await
+                        && let Ok(Ok(meta)) = meta_rx.await
+                    {
+                        let _ = this.update(cx, |view, cx| {
+                            // Guard: without this, a response for a document the
+                            // user has since switched away from overwrites the
+                            // sidebar of whatever is on screen now.
+                            if view.active_doc_id != Some(doc_id) {
+                                return;
+                            }
+                            view.sidebar.bookmarks = meta.outline;
+                            view.sidebar.attachments = meta.attachments;
+                            view.sidebar.layers = meta.layers;
+                            view.dialogs.signatures = meta.signatures;
+                            cx.notify();
                         });
+                    }
 
-                        // Load document metadata (outline bookmarks, attachments, layers)
-                        let (meta_tx, meta_rx) = tokio::sync::oneshot::channel();
-                        if let Ok(()) = engine_tx
-                            .send(crate::commands::PdfCommand::LoadDocumentMeta(
-                                doc_id, meta_tx,
-                            ))
-                            .await
-                            && let Ok(Ok(meta)) = meta_rx.await
-                        {
-                            let _ = this.update(cx, |view, cx| {
-                                view.sidebar.bookmarks = meta.outline;
-                                view.sidebar.attachments = meta.attachments;
-                                view.sidebar.layers = meta.layers;
-                                view.dialogs.signatures = meta.signatures;
-                                cx.notify();
-                            });
+                    // Load previously saved annotations
+                    let (ann_tx, ann_rx) = tokio::sync::oneshot::channel();
+                    if let Ok(()) = engine_tx
+                        .send(crate::commands::PdfCommand::LoadAnnotations(
+                            doc_id,
+                            path_str_cloned.clone(),
+                            ann_tx,
+                        ))
+                        .await
+                        && let Ok(Ok(loaded_anns)) = ann_rx.await
+                    {
+                        let _ = this.update(cx, |view, cx| {
+                            // Guard on doc *and* only replace when the document
+                            // still has no annotations. An unconditional
+                            // assignment silently threw away a highlight the user
+                            // drew while this request was in flight.
+                            if view.active_doc_id != Some(doc_id)
+                                || !view.viewport.annotations.is_empty()
+                            {
+                                return;
+                            }
+                            view.viewport.annotations = loaded_anns;
+                            view.viewport.reindex_annotations();
+                            cx.notify();
+                        });
+                    }
+                }
+                Ok(Err(e)) => {
+                    tracing::error!("Failed to open PDF in engine worker: {e:?}");
+                    let _ = this.update(cx, |view, cx| {
+                        if view.active_doc_id == Some(doc_id) {
+                            view.status_message = Some(format!("Failed to open PDF: {e}"));
+                            cx.notify();
                         }
-
-                        // Load previously saved annotations
-                        let (ann_tx, ann_rx) = tokio::sync::oneshot::channel();
-                        if let Ok(()) = engine_tx
-                            .send(crate::commands::PdfCommand::LoadAnnotations(
-                                doc_id,
-                                path_str_cloned.clone(),
-                                ann_tx,
-                            ))
-                            .await
-                            && let Ok(Ok(loaded_anns)) = ann_rx.await
-                        {
-                            let _ = this.update(cx, |view, cx| {
-                                view.viewport.annotations = loaded_anns;
-                                cx.notify();
-                            });
+                    });
+                }
+                Err(e) => {
+                    tracing::error!("Open response channel dropped: {e}");
+                    let _ = this.update(cx, |view, cx| {
+                        if view.active_doc_id == Some(doc_id) {
+                            view.status_message =
+                                Some("The engine stopped responding while opening.".into());
+                            cx.notify();
                         }
-                    }
-                    Ok(Err(e)) => {
-                        tracing::error!("Failed to open PDF in engine worker: {e:?}");
-                    }
-                    Err(e) => {
-                        tracing::error!("Open response channel dropped: {e}");
-                    }
+                    });
                 }
             }
         })
@@ -267,21 +323,35 @@ impl PdfbullView {
     }
 
     pub fn sync_viewport_to_active_tab(&mut self, cx: &mut Context<Self>) {
-        if let Some(tab) = self.tabs.tabs.get(self.tabs.active_tab_index) {
-            let doc_id = tab.doc_id;
-            if self.active_doc_id != doc_id {
-                self.active_doc_id = doc_id;
-                self.viewport.rendered_pages.clear();
-                self.viewport.rendered_zoom.clear();
-                self.sidebar.thumbnails.clear();
-                self.rendering_pages.clear();
-                self.viewport.selection_page = None;
-                self.viewport.selection_start = None;
-                self.viewport.selection_end = None;
-                self.viewport.selected_text = None;
-                self.viewport.annotations.clear();
-            }
-            if let Some(ref path) = tab.path
+        let Some(tab) = self.tabs.tabs.get(self.tabs.active_tab_index) else {
+            return;
+        };
+        let doc_id = tab.doc_id;
+        if self.active_doc_id != doc_id {
+            self.active_doc_id = doc_id;
+            // Full per-document reset. The old code cleared only the render
+            // caches, so switching tabs leaked the previous document's text
+            // layer, search hits, page origins, scroll offset and — worst of
+            // all — its annotations, which then got saved into the new
+            // document's file.
+            self.viewport.reset_for_document();
+            self.sidebar.thumbnails.clear();
+            self.sidebar.bookmarks.clear();
+            self.sidebar.attachments.clear();
+            self.sidebar.layers.clear();
+            self.sidebar.search_results.clear();
+            self.sidebar.search_query.clear();
+            self.sidebar.is_searching = false;
+            self.rendering_pages.clear();
+            self.dialogs.signatures.clear();
+        }
+        if let Some(ref path) = tab.path {
+            // Only re-derive geometry when we have no authoritative numbers
+            // yet. `inspect_pdf_geometry` parses the entire file, and this runs
+            // on every tab click / Ctrl+W / Ctrl+Tab, so re-parsing on each
+            // switch froze the UI for seconds on large documents.
+            let needs_geometry = self.viewport.total_pages == 0 || self.viewport.page_width <= 0.0;
+            if needs_geometry
                 && let Some((page_count, page_width, page_height)) = inspect_pdf_geometry(path)
             {
                 self.viewport.total_pages = page_count;
@@ -291,8 +361,8 @@ impl PdfbullView {
                     self.viewport.current_page = 0;
                 }
             }
-            self.render_needed_pages(cx);
         }
+        self.render_needed_pages(cx);
     }
 
     pub fn render_needed_pages(&mut self, cx: &mut Context<Self>) {
@@ -394,8 +464,8 @@ impl PdfbullView {
                         let render_image = std::sync::Arc::new(RenderImage::new(vec![frame]));
 
                         let _ = this.update(cx, |view, cx| {
-                            view.rendering_pages.remove(&page_idx);
                             if view.active_doc_id == Some(doc_id) {
+                                view.rendering_pages.remove(&page_idx);
                                 view.viewport
                                     .rendered_pages
                                     .insert(page_idx, render_image.clone());
@@ -443,20 +513,26 @@ impl PdfbullView {
                     } else {
                         tracing::error!("Failed to create RgbaImage for page {page_idx}");
                         let _ = this.update(cx, |view, _| {
-                            view.rendering_pages.remove(&page_idx);
+                            if view.active_doc_id == Some(doc_id) {
+                                view.rendering_pages.remove(&page_idx);
+                            }
                         });
                     }
                 }
                 Ok(Err(e)) => {
                     tracing::error!("Render page {page_idx} error: {e:?}");
                     let _ = this.update(cx, |view, _| {
-                        view.rendering_pages.remove(&page_idx);
+                        if view.active_doc_id == Some(doc_id) {
+                            view.rendering_pages.remove(&page_idx);
+                        }
                     });
                 }
                 Err(e) => {
                     tracing::error!("Render response dropped: {e}");
                     let _ = this.update(cx, |view, _| {
-                        view.rendering_pages.remove(&page_idx);
+                        if view.active_doc_id == Some(doc_id) {
+                            view.rendering_pages.remove(&page_idx);
+                        }
                     });
                 }
             }
@@ -485,7 +561,13 @@ impl PdfbullView {
                 && let Ok(Ok(items)) = resp_rx.await
             {
                 let _ = this.update(cx, |view, _| {
-                    view.viewport.text_cache.insert(page_idx, items);
+                    // Guard on doc: `text_cache` is keyed by page index only, so
+                    // an unguarded write let document A's text layer answer
+                    // selection requests (and paint word highlights) for
+                    // document B.
+                    if view.active_doc_id == Some(doc_id) {
+                        view.viewport.text_cache.insert(page_idx, items);
+                    }
                 });
             }
         })
@@ -587,6 +669,143 @@ impl PdfbullView {
         }
     }
 
+    /// Fetch the active document's AcroForm fields and report them.
+    ///
+    /// The "Form Fields" ribbon button was wired to an empty match arm, so it
+    /// looked interactive but did nothing at all.
+    fn list_form_fields(&mut self, cx: &mut Context<Self>) {
+        let Some(tab) = self.tabs.tabs.get(self.tabs.active_tab_index) else {
+            return;
+        };
+        let Some(path) = tab.path.clone() else {
+            self.status_message = Some("Open a document first to list form fields.".into());
+            cx.notify();
+            return;
+        };
+        let path_str = path.to_string_lossy().to_string();
+        let cmd_tx = self.engine.cmd_tx.clone();
+
+        cx.spawn(async move |this, cx| {
+            let (tx, rx) = tokio::sync::oneshot::channel();
+            if let Err(e) = cmd_tx
+                .send(crate::commands::PdfCommand::GetFormFields(
+                    path_str.clone(),
+                    tx,
+                ))
+                .await
+            {
+                tracing::error!("Failed to send GetFormFields command: {e}");
+            }
+            let outcome = match rx.await {
+                Ok(Ok(fields)) => Some(fields),
+                Ok(Err(e)) => {
+                    tracing::error!("GetFormFields failed: {e:?}");
+                    None
+                }
+                Err(e) => {
+                    tracing::error!("GetFormFields response dropped: {e}");
+                    None
+                }
+            };
+            let _ = this.update(cx, |view, cx| {
+                match outcome {
+                    Some(fields) if fields.is_empty() => {
+                        view.status_message =
+                            Some("This document has no interactive form fields.".into());
+                        view.log_console
+                            .log("[INFO] No AcroForm fields found.", "info");
+                    }
+                    Some(fields) => {
+                        view.log_console.log(
+                            format!("[INFO] {} form field(s) found:", fields.len()),
+                            "info",
+                        );
+                        for f in &fields {
+                            let kind = match &f.variant {
+                                crate::models::FormFieldVariant::Text { .. } => "text",
+                                crate::models::FormFieldVariant::Checkbox { .. } => "checkbox",
+                                crate::models::FormFieldVariant::RadioButton { .. } => "radio",
+                                crate::models::FormFieldVariant::ComboBox { .. } => "combo",
+                            };
+                            view.log_console.log(
+                                format!("  - {} ({kind}, page {})", f.name, f.page + 1),
+                                "info",
+                            );
+                        }
+                        view.status_message =
+                            Some(format!("Found {} form field(s).", fields.len()));
+                    }
+                    None => {
+                        view.status_message = Some("Could not read form fields.".into());
+                    }
+                }
+                cx.notify();
+            });
+        })
+        .detach();
+    }
+
+    /// Show or hide an optional-content layer.
+    ///
+    /// The toggle used to only flip a local flag, so nothing ever re-rendered
+    /// and the change was purely cosmetic. Send the command to the engine *and*
+    /// drop this side's cached bitmaps — the engine invalidates its own cache
+    /// entries, but the viewport holds separate `Arc<RenderImage>`s that would
+    /// otherwise keep showing the old layer state.
+    fn set_layer_visibility(&mut self, idx: usize, visible: bool, cx: &mut Context<Self>) {
+        let Some(doc_id) = self.active_doc_id else {
+            return;
+        };
+        let Some(obj_id) = self.sidebar.layers.get(idx).map(|l| l.object_id) else {
+            return;
+        };
+        if let Some(layer) = self.sidebar.layers.get_mut(idx) {
+            layer.visible = visible;
+        }
+
+        let cmd_tx = self.engine.cmd_tx.clone();
+        cx.spawn(async move |this, cx| {
+            if let Err(e) = cmd_tx
+                .send(crate::commands::PdfCommand::ToggleLayer(
+                    doc_id, obj_id, visible,
+                ))
+                .await
+            {
+                tracing::error!("Failed to send ToggleLayer command: {e}");
+            }
+            let _ = this.update(cx, |view, cx| {
+                if view.active_doc_id == Some(doc_id) {
+                    view.viewport.invalidate_rendered_pages();
+                    view.rendering_pages.clear();
+                    view.render_needed_pages(cx);
+                    cx.notify();
+                }
+            });
+        })
+        .detach();
+    }
+
+    /// Reconcile `viewport.current_page` with the scroll offset and request the
+    /// pages that became visible.
+    ///
+    /// This is the single place the current page is derived from scroll
+    /// position. It used to run inside `render`, which meant a speculative or
+    /// discarded frame mutated the model and queued engine commands; it is now
+    /// driven by the wheel handler and the canvas mouse-move handler instead.
+    fn sync_current_page_from_scroll(&mut self, cx: &mut Context<Self>) {
+        if self.viewport.layout_mode != super::ribbon::PageLayoutMode::Continuous
+            || self.viewport.total_pages == 0
+        {
+            return;
+        }
+        let visible_page = self.viewport.calculate_visible_page_continuous();
+        if visible_page != self.viewport.current_page {
+            self.viewport.current_page = visible_page;
+            self.render_needed_pages(cx);
+            cx.notify();
+        }
+    }
+
     pub fn handle_canvas_scroll_wheel(&mut self, event: &ScrollWheelEvent, cx: &mut Context<Self>) {
         let is_ctrl = event.modifiers.control || event.modifiers.platform;
         if is_ctrl {
@@ -638,7 +857,8 @@ impl PdfbullView {
                     };
                     if delta_y < -5.0 && self.viewport.current_page + 1 < self.viewport.total_pages
                     {
-                        let target = (self.viewport.current_page + step).min(self.viewport.total_pages - 1);
+                        let target =
+                            (self.viewport.current_page + step).min(self.viewport.total_pages - 1);
                         self.viewport.scroll_to_page(target);
                         self.render_needed_pages(cx);
                         cx.notify();
@@ -656,19 +876,17 @@ impl PdfbullView {
                     };
                     let total = self.viewport.total_pages;
                     if total > 0 {
-                        let page_h = px(self.viewport.page_height * self.viewport.zoom);
-                        let item_h = page_h + px(24.0);
+                        // Clamp against the handle's real `max_offset`, which GPUI
+                        // recomputes from the actual laid-out content size on
+                        // every frame. The previous hand-rolled bound ignored the
+                        // container padding and inter-page gaps, so it let the
+                        // content be dragged past its end.
+                        let min_scroll_y = -self.viewport.scroll_handle.max_offset().y;
                         let mut offset = self.viewport.scroll_handle.offset();
-                        let max_scroll = px(0.0);
-                        let min_scroll = -(px(64.0) + item_h * total);
-                        offset.y = (offset.y + delta_y).clamp(min_scroll, max_scroll);
+                        offset.y = (offset.y + delta_y).clamp(min_scroll_y, px(0.0));
                         self.viewport.scroll_handle.set_offset(offset);
 
-                        let visible_page = self.viewport.calculate_visible_page_continuous();
-                        if visible_page != self.viewport.current_page {
-                            self.viewport.current_page = visible_page;
-                        }
-                        self.render_needed_pages(cx);
+                        self.sync_current_page_from_scroll(cx);
                         cx.notify();
                     }
                 }
@@ -825,31 +1043,53 @@ impl PdfbullView {
 
         cx.spawn(async move |this, cx| {
             let (tx, rx) = tokio::sync::oneshot::channel();
-            let _ = cmd_tx
+            if let Err(e) = cmd_tx
                 .send(crate::commands::PdfCommand::SaveAnnotations(
                     doc_id,
                     annotations,
                     tx,
                 ))
-                .await;
-            match rx.await {
-                Ok(Ok(_)) => {
-                    let _ = this.update(cx, |view, cx| {
-                        if let Some(t) = view.tabs.tabs.get_mut(active_idx) {
-                            t.is_modified = false;
-                        }
-                        view.status_message = Some("Document saved successfully.".into());
-                        cx.notify();
-                    });
+                .await
+            {
+                tracing::error!("Failed to send SaveAnnotations command: {e}");
+            }
+            let outcome = match rx.await {
+                Ok(res) => Some(res),
+                Err(e) => {
+                    tracing::error!("Save response dropped: {e}");
+                    None
                 }
-                Ok(Err(e)) => {
-                    let _ = this.update(cx, |view, cx| {
+            };
+            let _ = this.update(cx, |view, cx| {
+                // Match on `doc_id`, not the index captured before the await:
+                // if a tab before it was closed meanwhile, that index now
+                // addresses a different document and would clear the wrong
+                // tab's unsaved-changes marker.
+                let saved_path = match outcome {
+                    Some(Ok(path)) => Some(path),
+                    Some(Err(e)) => {
                         view.status_message = Some(format!("Save error: {e}"));
                         cx.notify();
-                    });
+                        return;
+                    }
+                    None => {
+                        view.status_message = Some("Save failed: engine unavailable.".into());
+                        cx.notify();
+                        return;
+                    }
+                };
+                if let Some(t) = view.tabs.tabs.iter_mut().find(|t| t.doc_id == Some(doc_id)) {
+                    t.is_modified = false;
                 }
-                Err(_) => {}
-            }
+                // Report where it actually landed — the engine may have chosen a
+                // sidecar path if the document's own path was unresolvable.
+                let name = std::path::Path::new(saved_path.as_deref().unwrap_or_default())
+                    .file_name()
+                    .map(|f| f.to_string_lossy().to_string())
+                    .unwrap_or_default();
+                view.status_message = Some(format!("Saved as {name}."));
+                cx.notify();
+            });
         })
         .detach();
     }
@@ -878,28 +1118,50 @@ impl PdfbullView {
             let out_path = file.path().to_string_lossy().to_string();
 
             let (tx, rx) = tokio::sync::oneshot::channel();
-            let _ = cmd_tx
+            if let Err(e) = cmd_tx
                 .send(crate::commands::PdfCommand::ExportPdf(
                     doc_id,
                     out_path.clone(),
                     annotations,
                     tx,
                 ))
-                .await;
-            if let Ok(Ok(_)) = rx.await {
-                let _ = this.update(cx, |view, cx| {
-                    if let Some(t) = view.tabs.tabs.get_mut(active_idx) {
-                        t.path = Some(std::path::PathBuf::from(&out_path));
-                        t.title = std::path::Path::new(&out_path)
-                            .file_name()
-                            .map(|f| f.to_string_lossy().to_string())
-                            .unwrap_or_else(|| "document.pdf".into());
-                        t.is_modified = false;
-                    }
-                    view.status_message = Some("Exported PDF successfully.".into());
-                    cx.notify();
-                });
+                .await
+            {
+                tracing::error!("Failed to send ExportPdf command: {e}");
             }
+            let outcome = match rx.await {
+                Ok(res) => Some(res),
+                Err(e) => {
+                    tracing::error!("Export response dropped: {e}");
+                    None
+                }
+            };
+            let _ = this.update(cx, |view, cx| {
+                match outcome {
+                    Some(Ok(_)) => {
+                        // Repoint the tab by `doc_id`: the captured index may no
+                        // longer refer to this document after an await.
+                        if let Some(t) =
+                            view.tabs.tabs.iter_mut().find(|t| t.doc_id == Some(doc_id))
+                        {
+                            t.path = Some(std::path::PathBuf::from(&out_path));
+                            t.title = std::path::Path::new(&out_path)
+                                .file_name()
+                                .map(|f| f.to_string_lossy().to_string())
+                                .unwrap_or_else(|| "document.pdf".into());
+                            t.is_modified = false;
+                        }
+                        view.status_message = Some("Exported PDF successfully.".into());
+                    }
+                    Some(Err(e)) => {
+                        view.status_message = Some(format!("Export error: {e}"));
+                    }
+                    None => {
+                        view.status_message = Some("Export failed: engine unavailable.".into());
+                    }
+                }
+                cx.notify();
+            });
         })
         .detach();
     }
@@ -959,28 +1221,59 @@ impl PdfbullView {
 
         cx.spawn(async move |this, cx| {
             let (tx, rx) = tokio::sync::oneshot::channel();
-            let _ = cmd_tx
+            if let Err(e) = cmd_tx
                 .send(crate::commands::PdfCommand::Search(doc_id, query_str, tx))
-                .await;
-            if let Ok(Ok(results)) = rx.await {
-                let _ = this.update(cx, |view, cx| {
-                    view.sidebar.is_searching = false;
-                    view.sidebar.search_results = results.clone();
-                    view.viewport.search_highlights.clear();
-                    for item in &results {
-                        view.viewport
-                            .search_highlights
-                            .entry(item.page_index)
-                            .or_default()
-                            .push((item.x, item.y, item.width, item.height));
-                    }
-                    if let Some(first) = results.first() {
-                        view.viewport.scroll_to_page(first.page_index);
-                        view.render_needed_pages(cx);
-                    }
-                    cx.notify();
-                });
+                .await
+            {
+                tracing::error!("Failed to send Search command: {e}");
             }
+            let outcome = match rx.await {
+                Ok(Ok(results)) => Some(results),
+                Ok(Err(e)) => {
+                    tracing::error!("Search failed: {e:?}");
+                    None
+                }
+                Err(e) => {
+                    tracing::error!("Search response dropped: {e}");
+                    None
+                }
+            };
+            let _ = this.update(cx, |view, cx| {
+                // Guard on doc: a search started in A used to land in B's
+                // results and then scrolled B to A's first hit.
+                if view.active_doc_id != Some(doc_id) {
+                    return;
+                }
+                // Always clear the spinner. Previously it was only reset on
+                // success, so any engine error left the panel stuck on
+                // "Searching..." forever with no way out.
+                view.sidebar.is_searching = false;
+                let Some(results) = outcome else {
+                    view.sidebar.search_results.clear();
+                    view.viewport.search_highlights.clear();
+                    view.status_message = Some("Search failed.".into());
+                    cx.notify();
+                    return;
+                };
+                // Bound the result set: the sidebar and the highlight overlay
+                // both grow linearly with the hit count.
+                let results: Vec<crate::models::SearchResultItem> =
+                    results.into_iter().take(MAX_SEARCH_RESULTS).collect();
+                view.sidebar.search_results = results.clone();
+                view.viewport.search_highlights.clear();
+                for item in &results {
+                    view.viewport
+                        .search_highlights
+                        .entry(item.page_index)
+                        .or_default()
+                        .push((item.x, item.y, item.width, item.height));
+                }
+                if let Some(first) = results.first() {
+                    view.viewport.scroll_to_page(first.page_index);
+                    view.render_needed_pages(cx);
+                }
+                cx.notify();
+            });
         })
         .detach();
     }
@@ -1119,7 +1412,14 @@ impl PdfbullView {
 
     pub fn rotate_active_pages(&mut self, angle: i32, cx: &mut Context<Self>) {
         self.viewport.rotation = (self.viewport.rotation as i32 + angle).rem_euclid(360) as u16;
-        self.viewport.rendered_pages.clear();
+        // Rotation is part of the engine's render key but *not* of the zoom map
+        // `request_render_page` gates on. Clearing only `rendered_pages` left
+        // `rendered_zoom` populated, so every page short-circuited forever and
+        // the canvas sat on the "Rendering page..." placeholder until the user
+        // changed zoom. Thumbnails carry the same rotation, so they must go too.
+        self.viewport.invalidate_rendered_pages();
+        self.sidebar.thumbnails.clear();
+        self.rendering_pages.clear();
         self.render_needed_pages(cx);
         self.status_message = Some(format!("Rotated by {} degrees.", angle));
         cx.notify();
@@ -1334,15 +1634,27 @@ impl PdfbullView {
                 ))
                 .await;
 
-            if let Ok(Ok(ocr_res)) = rx.await {
-                let _ = this.update(cx, |view, cx| {
-                    view.status_message = Some(format!(
-                        "OCR complete: extracted {} lines.",
-                        ocr_res.lines.len()
-                    ));
-                    cx.notify();
+            // Always replace the pending "Running OCR..." message. Previously
+            // only the success arm ran, so any engine error left the status bar
+            // claiming OCR was running forever.
+            let outcome = match rx.await {
+                Ok(Ok(res)) => Some(res.lines.len()),
+                Ok(Err(e)) => {
+                    tracing::error!("OCR failed: {e:?}");
+                    None
+                }
+                Err(e) => {
+                    tracing::error!("OCR response dropped: {e}");
+                    None
+                }
+            };
+            let _ = this.update(cx, |view, cx| {
+                view.status_message = Some(match outcome {
+                    Some(lines) => format!("OCR complete: extracted {lines} lines."),
+                    None => "OCR failed.".into(),
                 });
-            }
+                cx.notify();
+            });
         })
         .detach();
     }
@@ -1371,22 +1683,67 @@ impl PdfbullView {
             let out_path = save_file.path().to_string_lossy().to_string();
 
             let (tx, rx) = tokio::sync::oneshot::channel();
-            let _ = cmd_tx
+            if let Err(e) = cmd_tx
                 .send(crate::commands::PdfCommand::ConvertPdf(
                     doc_id,
                     "document".to_string(),
                     format_name.to_string(),
                     tx,
                 ))
+                .await
+            {
+                tracing::error!("Failed to send ConvertPdf command: {e}");
+            }
+
+            let content = match rx.await {
+                Ok(Ok(content)) => content,
+                Ok(Err(e)) => {
+                    tracing::error!("Convert failed: {e:?}");
+                    let _ = this.update(cx, |view, cx| {
+                        view.status_message = Some(format!("Convert failed: {e}"));
+                        cx.notify();
+                    });
+                    return;
+                }
+                Err(e) => {
+                    tracing::error!("Convert response dropped: {e}");
+                    let _ = this.update(cx, |view, cx| {
+                        view.status_message = Some("Convert failed: engine unavailable.".into());
+                        cx.notify();
+                    });
+                    return;
+                }
+            };
+
+            // Write atomically, on a blocking thread, and only claim success
+            // once the bytes are actually on disk. The old code discarded the
+            // write error and then reported "Exported ... successfully." even
+            // for a permission-denied or disk-full failure.
+            let out_for_status = out_path.clone();
+            // `background_spawn` already surfaces a panic as a task failure, so
+            // the result is a plain `io::Result`.
+            let result = cx
+                .background_spawn(async move {
+                    crate::storage::atomic_write_bytes(
+                        std::path::Path::new(&out_path),
+                        content.as_bytes(),
+                    )
+                })
                 .await;
 
-            if let Ok(Ok(content)) = rx.await {
-                let _ = std::fs::write(&out_path, content);
-                let _ = this.update(cx, |view, cx| {
-                    view.status_message = Some(format!("Exported to {} successfully.", out_path));
-                    cx.notify();
-                });
-            }
+            let _ = this.update(cx, |view, cx| {
+                match result {
+                    Ok(()) => {
+                        view.status_message =
+                            Some(format!("Exported to {out_for_status} successfully."));
+                    }
+                    Err(e) => {
+                        tracing::error!("Failed writing {out_for_status}: {e}");
+                        view.status_message = Some(format!("Export failed: {e}"));
+                    }
+                }
+                cx.notify();
+            });
         })
         .detach();
     }
@@ -1654,7 +2011,12 @@ impl Render for PdfbullView {
                 }
                 RibbonAction::ToggleMidnight => {
                     this.ribbon.midnight_mode = !this.ribbon.midnight_mode;
-                    this.viewport.rendered_pages.clear();
+                    // The render filter is not part of the zoom map that gates
+                    // `request_render_page`, so the zoom map has to be cleared
+                    // alongside the images or the toggle would blank every page
+                    // permanently.
+                    this.viewport.invalidate_rendered_pages();
+                    this.rendering_pages.clear();
                     this.render_needed_pages(cx);
                 }
                 RibbonAction::SelectTool(tool) => {
@@ -1681,7 +2043,9 @@ impl Render for PdfbullView {
                 RibbonAction::HeaderFooter => {
                     this.dialogs.active = Some(ActiveDialog::HeaderFooter);
                 }
-                RibbonAction::FormFields => {}
+                RibbonAction::FormFields => {
+                    this.list_form_fields(cx);
+                }
                 RibbonAction::DigitalSignatures => {
                     this.dialogs.active = Some(ActiveDialog::Signature);
                 }
@@ -1730,22 +2094,41 @@ impl Render for PdfbullView {
             Some(self.tabs.render(cx, |this, action, _, cx| {
                 match action {
                     TabAction::SelectTab(idx) => {
-                        this.tabs.active_tab_index = idx;
-                        this.sync_viewport_to_active_tab(cx);
+                        // Bounds-check: an out-of-range index here left
+                        // `active_tab_index == tabs.len()`, which made every
+                        // downstream `tabs.get(active_idx)` silently fail —
+                        // the canvas kept showing the closed document, no tab
+                        // rendered as active, and Save/Print/OCR no-opped.
+                        if idx < this.tabs.tabs.len() {
+                            this.tabs.active_tab_index = idx;
+                            this.sync_viewport_to_active_tab(cx);
+                        } else {
+                            tracing::warn!("Ignoring SelectTab({idx}): out of range");
+                        }
                     }
                     TabAction::CloseTab(idx) => {
                         if idx < this.tabs.tabs.len() {
                             let removed = this.tabs.tabs.remove(idx);
-                            if let Some(doc_id) = removed.doc_id {
-                                let _ = this
+                            if let Some(doc_id) = removed.doc_id
+                                && let Err(e) = this
                                     .engine
                                     .cmd_tx
-                                    .try_send(crate::commands::PdfCommand::Close(doc_id));
-                            }
-                            if this.tabs.active_tab_index >= this.tabs.tabs.len()
-                                && !this.tabs.tabs.is_empty()
+                                    .try_send(crate::commands::PdfCommand::Close(doc_id))
                             {
-                                this.tabs.active_tab_index = this.tabs.tabs.len() - 1;
+                                // Dropping this left the parsed document and its
+                                // render-cache entries resident forever, with no
+                                // user-visible sign.
+                                tracing::error!(
+                                    "Failed to release document {doc_id:?} to the engine: {e}"
+                                );
+                                this.status_message =
+                                    Some("Document closed, but the engine kept its cache.".into());
+                            }
+                            if !this.tabs.tabs.is_empty() {
+                                this.tabs.active_tab_index =
+                                    this.tabs.active_tab_index.min(this.tabs.tabs.len() - 1);
+                            } else {
+                                this.tabs.active_tab_index = 0;
                             }
                             this.sync_viewport_to_active_tab(cx);
                         }
@@ -1759,11 +2142,14 @@ impl Render for PdfbullView {
                             for (i, tab) in this.tabs.tabs.iter().enumerate() {
                                 if i != keep_idx
                                     && let Some(doc_id) = tab.doc_id
-                                {
-                                    let _ = this
+                                    && let Err(e) = this
                                         .engine
                                         .cmd_tx
-                                        .try_send(crate::commands::PdfCommand::Close(doc_id));
+                                        .try_send(crate::commands::PdfCommand::Close(doc_id))
+                                {
+                                    tracing::error!(
+                                        "Failed to release document {doc_id:?} to the engine: {e}"
+                                    );
                                 }
                             }
                             this.tabs.tabs = vec![kept];
@@ -1773,14 +2159,20 @@ impl Render for PdfbullView {
                     }
                     TabAction::CloseToRight(idx) => {
                         for tab in this.tabs.tabs.drain((idx + 1)..) {
-                            if let Some(doc_id) = tab.doc_id {
-                                let _ = this
+                            if let Some(doc_id) = tab.doc_id
+                                && let Err(e) = this
                                     .engine
                                     .cmd_tx
-                                    .try_send(crate::commands::PdfCommand::Close(doc_id));
+                                    .try_send(crate::commands::PdfCommand::Close(doc_id))
+                            {
+                                tracing::error!(
+                                    "Failed to release document {doc_id:?} to the engine: {e}"
+                                );
                             }
                         }
-                        if this.tabs.active_tab_index >= this.tabs.tabs.len() {
+                        if this.tabs.tabs.is_empty() {
+                            this.tabs.active_tab_index = 0;
+                        } else if this.tabs.active_tab_index >= this.tabs.tabs.len() {
                             this.tabs.active_tab_index = this.tabs.tabs.len() - 1;
                         }
                         this.sync_viewport_to_active_tab(cx);
@@ -1793,16 +2185,24 @@ impl Render for PdfbullView {
         };
 
         // Main Center Area (Welcome vs Document Workspace)
+        //
+        // NOTE: `render` must stay side-effect free. It used to write
+        // `viewport.current_page` and then call `render_needed_pages`, which
+        // mutates `rendering_pages` and detaches engine tasks. A render pass
+        // can be speculative and discarded, so that both mutated the model
+        // outside the event loop and queued engine commands from inside the
+        // frame. Page tracking is now driven by the scroll handler and
+        // `sync_viewport_to_active_tab`; if the offset moved without an event
+        // (e.g. a scrollbar drag), only an explicit `cx.notify()` is issued
+        // and the follow-up `on_window_event` pass does the work.
         let center_area: AnyElement = if has_tabs {
-            if self.viewport.layout_mode == super::ribbon::PageLayoutMode::Continuous
-                && self.viewport.total_pages > 0
-            {
-                let visible_page = self.viewport.calculate_visible_page_continuous();
-                if visible_page != self.viewport.current_page {
-                    self.viewport.current_page = visible_page;
-                }
+            let visible_page = self.viewport.calculate_visible_page_continuous();
+            if visible_page != self.viewport.current_page {
+                tracing::debug!(
+                    "Visible page drifted: current={} visible={visible_page}",
+                    self.viewport.current_page
+                );
             }
-            self.render_needed_pages(cx);
             let total = self.viewport.total_pages;
             let current = self.viewport.current_page;
 
@@ -1811,7 +2211,7 @@ impl Render for PdfbullView {
                 total,
                 current,
                 &self.viewport.annotations,
-                |this, action, _, cx| {
+                |this, action, window, cx| {
                     match action {
                         SidebarAction::ToggleOpen => {
                             this.sidebar.is_open = !this.sidebar.is_open;
@@ -1838,36 +2238,53 @@ impl Render for PdfbullView {
                             this.render_needed_pages(cx);
                         }
                         SidebarAction::SearchQuery(q) => {
-                            this.sidebar.search_query = q;
+                            // The search editor is the source of truth; keep it in
+                            // sync so the two can never disagree.
+                            this.sidebar.search_query = q.clone();
+                            if let Some(input) = this.sidebar.search_input.clone() {
+                                input.update(cx, |input, cx| input.set_value(q, window, cx));
+                            }
                         }
                         SidebarAction::ExecuteSearch => {
                             let q = this.sidebar.search_query.clone();
                             this.execute_search(&q, cx);
                         }
                         SidebarAction::ClearSearch => {
-                            this.sidebar.search_query.clear();
+                            this.sidebar.clear_search(window, cx);
                             this.sidebar.search_results.clear();
                             this.viewport.search_highlights.clear();
                             this.sidebar.is_searching = false;
                         }
                         SidebarAction::SelectSearchResult(page, ..) => {
                             this.viewport.scroll_to_page(page);
+                            this.sidebar
+                                .scroll_thumbnails_to(page, this.viewport.total_pages);
                             this.render_needed_pages(cx);
                         }
                         SidebarAction::DeleteAnnotation(id) => {
-                            this.viewport.annotations.retain(|a| a.id != id);
-                            if let Some(tab) = this.tabs.tabs.get_mut(this.tabs.active_tab_index) {
-                                tab.is_modified = true;
+                            // Remove exactly one match. `retain(|a| a.id != id)`
+                            // dropped every annotation sharing the id, so a single
+                            // click could remove two notes.
+                            if let Some(pos) =
+                                this.viewport.annotations.iter().position(|a| a.id == id)
+                            {
+                                this.viewport.annotations.remove(pos);
+                                this.viewport.reindex_annotations();
+                                if let Some(tab) =
+                                    this.tabs.tabs.get_mut(this.tabs.active_tab_index)
+                                {
+                                    tab.is_modified = true;
+                                }
                             }
                         }
                         SidebarAction::SelectBookmark(page) => {
                             this.viewport.scroll_to_page(page);
+                            this.sidebar
+                                .scroll_thumbnails_to(page, this.viewport.total_pages);
                             this.render_needed_pages(cx);
                         }
                         SidebarAction::ToggleLayer(idx, visible) => {
-                            if let Some(layer) = this.sidebar.layers.get_mut(idx) {
-                                layer.visible = visible;
-                            }
+                            this.set_layer_visibility(idx, visible, cx);
                         }
                     }
                     cx.notify();
@@ -1889,6 +2306,11 @@ impl Render for PdfbullView {
                     // In Continuous mode every card has its own listener; ignoring
                     // _page_idx lets the end-point update when the cursor crosses a
                     // page boundary. pos is in window space and is authoritative.
+                    // Keep the current-page readout in sync here too: this fires on
+                    // every mouse move over the canvas, which covers scrollbar
+                    // drags (the scrollbar is a child, so its events bubble here)
+                    // now that render no longer writes this field.
+                    this.sync_current_page_from_scroll(cx);
                     if this.viewport.is_selecting {
                         this.viewport.selection_end = Some(pos);
                         cx.notify();
@@ -1935,7 +2357,11 @@ impl Render for PdfbullView {
                                         .ok()
                                         .and_then(|m| m.get(&commit_page).copied())
                                         .unwrap_or_default();
-                                    let zoom = this.viewport.zoom.max(0.1);
+                                    let zoom = if this.viewport.zoom.is_finite() {
+                                        this.viewport.zoom.clamp(0.01, 100.0)
+                                    } else {
+                                        1.0
+                                    };
                                     let min_x = ((start.x.min(end.x) - origin.x) / px(1.0)) / zoom;
                                     let max_x = ((start.x.max(end.x) - origin.x) / px(1.0)) / zoom;
                                     let min_y = ((start.y.min(end.y) - origin.y) / px(1.0)) / zoom;
@@ -1943,7 +2369,13 @@ impl Render for PdfbullView {
                                     let w = (max_x - min_x).max(10.0);
                                     let h = (max_y - min_y).max(10.0);
 
-                                    let ann_id = this.viewport.annotations.len() as u64 + 1;
+                                    // Use the global monotonic counter, never
+                                    // `annotations.len() + 1`. `len()` shrinks on
+                                    // delete, so the next annotation reused a live
+                                    // id; the sidebar delete button keys on that id
+                                    // and `retain(|a| a.id != id)` removed *every*
+                                    // match — one click deleted two highlights.
+                                    let ann_id = crate::models::next_annotation_id();
                                     let style = match this.ribbon.active_tool {
                                         super::ribbon::AnnotationTool::Highlight => {
                                             crate::models::AnnotationStyle::Highlight {
@@ -2014,6 +2446,7 @@ impl Render for PdfbullView {
                                         width: w,
                                         height: h,
                                     });
+                                    this.viewport.reindex_annotations();
                                     if let Some(tab) =
                                         this.tabs.tabs.get_mut(this.tabs.active_tab_index)
                                     {
@@ -2147,13 +2580,7 @@ impl Render for PdfbullView {
                     this.log_console.entries.clear();
                 }
                 LogAction::CopyAll => {
-                    let text = this
-                        .log_console
-                        .entries
-                        .iter()
-                        .map(|(msg, _)| msg.as_str())
-                        .collect::<Vec<_>>()
-                        .join("\n");
+                    let text = this.log_console.as_text();
                     cx.write_to_clipboard(ClipboardItem::new_string(text));
                     this.status_message = Some("Logs copied to clipboard.".into());
                 }
@@ -2176,15 +2603,29 @@ impl Render for PdfbullView {
                 cx.notify();
             },
             |this, action, _, cx| {
-                this.dialogs.active = None;
+                // Only actions that actually apply something close the dialog.
+                // The callback used to clear `active` unconditionally, so even
+                // a pure selection (a watermark preset chip) dismissed it.
+                if !matches!(action, DialogAction::SelectWatermark(_)) {
+                    this.dialogs.active = None;
+                }
                 match action {
+                    DialogAction::SelectWatermark(text) => {
+                        this.dialogs.selected_watermark = text;
+                    }
                     DialogAction::SetWatermark(text) => {
                         this.apply_watermark(&text, cx);
                     }
                     DialogAction::SetHeaderFooter(h, f) => {
                         this.apply_header_footer(&h, &f, cx);
                     }
-                    DialogAction::SetPassword(_pwd) => {}
+                    DialogAction::SetPassword(_pwd) => {
+                        // The engine has no decrypt path, so rather than close a
+                        // modal that silently did nothing, say so plainly.
+                        this.status_message = Some(
+                            "Decrypting password-protected PDFs is not implemented yet.".into(),
+                        );
+                    }
                     DialogAction::RotatePages(angle) => {
                         this.rotate_active_pages(angle, cx);
                     }
@@ -2214,12 +2655,16 @@ impl Render for PdfbullView {
             .bg(bg)
             .text_color(fg)
             .on_drop(cx.listener(|this, paths: &ExternalPaths, _, cx| {
+                // The old `|| path.is_file()` disjunct made the extension test
+                // redundant, so dropping a PNG opened a permanent blank tab.
                 let mut opened = false;
                 for path in paths.paths() {
-                    if path.to_string_lossy().to_lowercase().ends_with(".pdf") || path.is_file() {
-                        this.open_pdf_path(&path.to_string_lossy(), cx);
-                        opened = true;
+                    if !SidebarState::is_openable_pdf(path) {
+                        tracing::warn!("Ignoring dropped non-PDF file: {}", path.display());
+                        continue;
                     }
+                    this.open_pdf_path(&path.to_string_lossy(), cx);
+                    opened = true;
                 }
                 if opened {
                     cx.notify();

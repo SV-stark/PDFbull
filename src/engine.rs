@@ -18,15 +18,24 @@ fn reload_if_needed(
     paths: &SharedPathMap,
     doc_id: crate::models::DocumentId,
 ) {
-    if !store.has_document(doc_id)
-        && let Ok(guard) = paths.read()
-        && let Some((path, pass)) = guard.get(&doc_id)
-    {
-        let path = path.clone();
-        let pass_ref = pass.as_ref().map(|s| s.as_str());
-        if let Err(e) = store.open_document(&path, pass_ref, doc_id) {
-            tracing::error!("Failed to reload document {doc_id:?} from path '{path}': {e:?}");
-        }
+    if store.has_document(doc_id) {
+        return;
+    }
+    // Re-check `has_document` *while holding the read lock* and keep the lock
+    // held across the reopen. Without this, a concurrent `Close` can land
+    // between the initial check and `open_document`, leaving the document
+    // resident (with its render-cache entries) after it was supposed to close.
+    let Ok(guard) = paths.read() else {
+        return;
+    };
+    if store.has_document(doc_id) {
+        return;
+    }
+    let Some((path, pass)) = guard.get(&doc_id) else {
+        return;
+    };
+    if let Err(e) = store.open_document(path, pass.as_ref().map(|s| s.as_str()), doc_id) {
+        tracing::error!("Failed to reload document {doc_id:?} from path '{path}': {e:?}");
     }
 }
 
@@ -159,9 +168,18 @@ pub fn spawn_engine_thread(cache_size: u64, max_memory_mb: u64) -> EngineState {
                             tracing::info!("Engine worker: opening {:?}", path);
                             let mut store_ref = std::panic::AssertUnwindSafe(&mut store);
                             let path_clone = path.clone();
-                            let pass_clone = password.clone();
+                            // Keep the password in a `Zeroizing` buffer for its whole
+                            // lifetime here; a plain `Option<String>` clone would leave
+                            // the secret in freed heap memory.
+                            let pass_for_open = password
+                                .as_ref()
+                                .map(|p| zeroize::Zeroizing::new(p.clone()));
                             let res = catch_worker_panic("open", move || {
-                                store_ref.open_document(&path_clone, pass_clone.as_deref(), doc_id)
+                                store_ref.open_document(
+                                    &path_clone,
+                                    pass_for_open.as_ref().map(|z| z.as_str()),
+                                    doc_id,
+                                )
                             });
 
                             if res.is_ok() {
@@ -265,9 +283,17 @@ pub fn spawn_engine_thread(cache_size: u64, max_memory_mb: u64) -> EngineState {
                         }
                         PdfCommand::SaveAnnotations(doc_id, annotations, tx) => {
                             reload_if_needed(&mut store, &paths, doc_id);
+                            // Save in place. Passing `None` here used to make the
+                            // engine write a `<name>_annotated.pdf` sidecar while the
+                            // UI reported "Document saved successfully", so Ctrl+S
+                            // never touched the file the user opened.
+                            let out_path = paths
+                                .read()
+                                .ok()
+                                .and_then(|g| g.get(&doc_id).map(|(p, _)| p.clone()));
                             let mut store_ref = std::panic::AssertUnwindSafe(&mut store);
                             let res = catch_worker_panic("save_annotations", move || {
-                                store_ref.save_annotations(doc_id, &annotations, None)
+                                store_ref.save_annotations(doc_id, &annotations, out_path)
                             });
                             let _ = tx.send(res);
                         }

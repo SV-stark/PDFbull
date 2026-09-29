@@ -122,6 +122,26 @@ const WHITE_THRESHOLD: u8 = 245;
 const BBOX_MARGIN: u32 = 10;
 const NO_SHADOW_THRESHOLD: u8 = 230;
 
+/// `/NM` prefix stamped on every annotation this app writes. A re-save strips
+/// all annotations carrying this marker before appending the current set, so
+/// `Ctrl+S` is idempotent instead of appending a fresh copy on every press.
+const PDFBULL_ANNOT_MARKER: &str = "PDFBULL:";
+
+/// Returns true when `obj` is an annotation dictionary previously written by
+/// this application (identified by its `/NM` marker).
+fn is_pdfbull_annotation(obj: &zpdf::PdfObject) -> bool {
+    let Ok(dict) = obj.as_dict() else {
+        return false;
+    };
+    match dict.get("NM") {
+        Some(zpdf::PdfObject::String(s)) => {
+            String::from_utf8_lossy(&s.0).starts_with(PDFBULL_ANNOT_MARKER)
+        }
+        Some(zpdf::PdfObject::Name(n)) => n.as_str().starts_with(PDFBULL_ANNOT_MARKER),
+        _ => false,
+    }
+}
+
 #[derive(Hash, Eq, PartialEq, Clone, Debug)]
 pub struct RenderKey {
     pub doc_id: DocumentId,
@@ -244,8 +264,36 @@ pub struct DocumentStore {
     /// true = force ON, false = force OFF.
     oc_visibility: HashMap<DocumentId, HashMap<zpdf::ObjectId, bool>>,
     /// Persistent per-document image cache to avoid re-decoding streams on every render.
+    ///
+    /// Bounded by [`DocumentStore::image_cache_bytes`] — see
+    /// [`DEFAULT_IMAGE_CACHE_BYTES`] for why an unbounded cache is not usable
+    /// here.
     image_caches: HashMap<DocumentId, ImageCache>,
+    /// Aggregate decoded-image budget applied to every interpreter this store
+    /// runs, in bytes.
+    image_cache_bytes: u64,
 }
+
+/// Decoded-image budget per open document.
+///
+/// `zpdf`'s `ParseLimits::default()` sets `max_image_cache_bytes` to **1 GiB**,
+/// and `ContentInterpreter::new` always starts from those defaults unless
+/// `with_image_cache_limit` is called. Because this store hands the interpreter
+/// a *document-lifetime* `ImageCache` (so scrolling does not re-decode the same
+/// stream on every frame), the 1 GiB default is a hard ceiling on how much the
+/// process will retain per open tab.
+///
+/// That is wildly disproportionate to the input: a 2 MB scanned PDF holds a
+/// few hundred KB of JBIG2/JPEG, but each 300 DPI page decodes to roughly
+/// 2480x3508x4 = **35 MB** of RGBA. Scrolling through ~30 pages therefore
+/// filled a gigabyte of decoded pixels that was never released until the tab
+/// closed — and with the 512 MB page-render cache on top, a 2 MB file cost
+/// ~1.5 GB of live allocations.
+///
+/// 96 MB holds a few pages of high-DPI scans, which is all the re-render path
+/// actually benefits from; beyond that, re-decoding is far cheaper than the
+/// resident memory.
+const DEFAULT_IMAGE_CACHE_BYTES: u64 = 96 * 1024 * 1024;
 
 // DocumentState wrapper removed as it was a single-field struct.
 
@@ -310,7 +358,25 @@ impl DocumentStore {
             oc_configs: HashMap::new(),
             oc_visibility: HashMap::new(),
             image_caches: HashMap::new(),
+            image_cache_bytes: DEFAULT_IMAGE_CACHE_BYTES,
         }
+    }
+
+    /// The aggregate decoded-image budget applied to every interpreter this
+    /// store runs. Exposed for tests and diagnostics.
+    pub fn image_cache_bytes(&self) -> u64 {
+        self.image_cache_bytes
+    }
+
+    /// Decoded-image bytes currently retained for `doc_id`.
+    ///
+    /// The whole point of `image_cache_bytes` is that this stays bounded for
+    /// the life of the document rather than growing with every page scrolled
+    /// past, so it is worth being able to assert on directly.
+    pub fn image_cache_bytes_used(&self, doc_id: DocumentId) -> u64 {
+        self.image_caches
+            .get(&doc_id)
+            .map_or(0, ImageCache::bytes_used)
     }
 
     pub fn has_document(&self, doc_id: DocumentId) -> bool {
@@ -333,6 +399,11 @@ impl DocumentStore {
         // Harden against malformed/malicious PDFs by capping stream and object counts.
         let limits = ParseLimits {
             max_stream_bytes: 256 * 1024 * 1024, // 256 MB per stream
+            // `ParseLimits::default()` allows a 1 GiB decoded-image budget and
+            // 256 MB of fonts. This document is kept open for the whole session,
+            // so those defaults dominate resident memory for small inputs.
+            max_image_cache_bytes: DEFAULT_IMAGE_CACHE_BYTES,
+            max_font_cache_bytes: 32 * 1024 * 1024,
             ..ParseLimits::default()
         };
         let doc = match PdfDocument::open_with_password_and_limits(
@@ -1012,8 +1083,15 @@ impl DocumentStore {
             .page_content_bytes(&page)
             .map_err(|e| PdfError::RenderFailed(e.to_string()))?;
 
-        // Incorporate custom option rotation into the display list rotation
+        // Incorporate custom option rotation into the display list rotation.
+        //
+        // `with_image_cache_limit` is mandatory here: `ContentInterpreter::new`
+        // inherits `ParseLimits::default()`, whose `max_image_cache_bytes` is
+        // 1 GiB, and `images` below is the document-lifetime cache. Without
+        // this line the store silently retains up to a gigabyte of decoded
+        // pixels per open document.
         let mut interp = ContentInterpreter::new(page.effective_box())
+            .with_image_cache_limit(self.image_cache_bytes)
             .with_page_rotation(page.rotate + options.rotation)
             .with_fonts(&mut fonts)
             .with_document(doc.file(), &page.resources)
@@ -1143,6 +1221,7 @@ impl DocumentStore {
         let mut spans = Vec::new();
         {
             let interp = ContentInterpreter::new(page.effective_box())
+                .with_image_cache_limit(self.image_cache_bytes)
                 .with_fonts(&mut fonts)
                 .with_document(doc.file(), &page.resources)
                 .with_images(&mut images)
@@ -1182,6 +1261,7 @@ impl DocumentStore {
         let mut spans = Vec::new();
         {
             let interp = ContentInterpreter::new(page.effective_box())
+                .with_image_cache_limit(self.image_cache_bytes)
                 .with_fonts(&mut fonts)
                 .with_document(doc.file(), &page.resources)
                 .with_images(&mut images)
@@ -1228,6 +1308,7 @@ impl DocumentStore {
         let mut rules = Vec::new();
         {
             let interp = ContentInterpreter::new(page.effective_box())
+                .with_image_cache_limit(self.image_cache_bytes)
                 .with_fonts(&mut fonts)
                 .with_document(doc.file(), &page.resources)
                 .with_images(&mut images)
@@ -1280,6 +1361,30 @@ impl DocumentStore {
         let mut writer =
             IncrementalWriter::new(data).map_err(|e| PdfError::OpenFailed(e.to_string()))?;
 
+        // Idempotency: drop every annotation a *previous* save wrote before
+        // appending the current set. Without this, each Ctrl+S re-reads the
+        // already-annotated file and appends the same annotations again, so
+        // highlights silently multiply every time the user saves.
+        let page_count = writer.document().page_count();
+        let mut stale: Vec<(usize, zpdf::ObjectId)> = Vec::new();
+        for page_idx in 0..page_count {
+            let Ok(page) = writer.document().page(page_idx) else {
+                continue;
+            };
+            for annot_id in &page.annots {
+                if writer
+                    .resolve_current(*annot_id)
+                    .map(|obj| is_pdfbull_annotation(&obj))
+                    .unwrap_or(false)
+                {
+                    stale.push((page_idx, *annot_id));
+                }
+            }
+        }
+        for (page_idx, annot_id) in stale {
+            let _ = writer.delete_annotation(page_idx, annot_id);
+        }
+
         for ann in annotations {
             // Skip redact annotations — those are applied via apply_redactions().
             if matches!(&ann.style, AnnotationStyle::Redact { .. }) {
@@ -1306,6 +1411,8 @@ impl DocumentStore {
                 x1: pdf_x + pdf_w,
                 y1: pdf_y + pdf_h,
             };
+
+            let is_arrow = matches!(&ann.style, AnnotationStyle::Arrow { .. });
 
             let spec: AnnotationSpec = match &ann.style {
                 AnnotationStyle::Highlight { color } => {
@@ -1375,7 +1482,8 @@ impl DocumentStore {
                         icon: None,
                     }
                 }
-                AnnotationStyle::Line { color, thickness } => {
+                AnnotationStyle::Line { color, thickness }
+                | AnnotationStyle::Arrow { color, thickness } => {
                     let (r, g, b) = hex_to_rgb(color);
                     // Preserve true start and end endpoints in PDF space regardless of draw direction
                     let x1 = ann.x as f64;
@@ -1391,27 +1499,36 @@ impl DocumentStore {
                         width: *thickness as f64,
                     }
                 }
-                AnnotationStyle::Arrow { color, thickness } => {
-                    let (r, g, b) = hex_to_rgb(color);
-                    let x1 = ann.x as f64;
-                    let y1 = page_height - ann.y as f64;
-                    let x2 = (ann.x + ann.width) as f64;
-                    let y2 = page_height - (ann.y + ann.height) as f64;
-                    AnnotationSpec::Line {
-                        x1,
-                        y1,
-                        x2,
-                        y2,
-                        color: (r as f64, g as f64, b as f64),
-                        width: *thickness as f64,
-                    }
-                }
-                AnnotationStyle::Redact { .. } => continue, // unreachable, handled above
+                AnnotationStyle::Redact { .. } => continue, // filtered above
             };
 
-            writer
+            let annot_id = writer
                 .add_annotation(ann.page, &spec)
                 .map_err(|e| PdfError::IoError(e.to_string()))?;
+
+            // Stamp the marker so the next save can replace this annotation
+            // rather than duplicate it, and record the arrow head in /LE so
+            // load_annotations can restore Arrow annotations (not plain Lines).
+            if let Ok(obj) = writer.resolve_current(annot_id)
+                && let Ok(mut dict) = obj.as_dict().cloned()
+            {
+                dict.insert(
+                    zpdf::PdfName::new("NM"),
+                    zpdf::PdfObject::String(zpdf::PdfString::new(
+                        format!("{PDFBULL_ANNOT_MARKER}{}", ann.id).into_bytes(),
+                    )),
+                );
+                if is_arrow {
+                    dict.insert(
+                        zpdf::PdfName::new("LE"),
+                        zpdf::PdfObject::Array(vec![
+                            zpdf::PdfObject::Name(zpdf::PdfName::new("None")),
+                            zpdf::PdfObject::Name(zpdf::PdfName::new("Arrow")),
+                        ]),
+                    );
+                }
+                writer.overwrite_object(annot_id, zpdf::PdfObject::Dict(dict));
+            }
         }
 
         let out_bytes = {
@@ -1422,18 +1539,26 @@ impl DocumentStore {
             buf.into_inner()
         };
 
-        let pdf_path_buf = std::path::Path::new(&pdf_path);
-        let final_path = output_path.unwrap_or_else(|| {
-            let mut p = pdf_path_buf.to_path_buf();
-            let stem = p
-                .file_stem()
-                .map(|s| s.to_string_lossy())
-                .unwrap_or_default();
-            p.set_file_name(format!("{stem}_annotated.pdf"));
-            p.to_string_lossy().to_string()
-        });
+        // `None` means the caller could not resolve the document's own path
+        // (it has been closed mid-session). Fall back to a sidecar file rather
+        // than silently clobbering whatever `pdf_path` points at.
+        let final_path = match output_path {
+            Some(p) => p,
+            None => {
+                let mut p = std::path::Path::new(&pdf_path).to_path_buf();
+                let stem = p
+                    .file_stem()
+                    .map(|s| s.to_string_lossy())
+                    .unwrap_or_default();
+                p.set_file_name(format!("{stem}_annotated.pdf"));
+                p.to_string_lossy().to_string()
+            }
+        };
 
-        std::fs::write(&final_path, &out_bytes).map_err(|e| PdfError::IoError(e.to_string()))?;
+        // Write via a temp file + rename so a failure part-way through never
+        // leaves the user with a truncated (unopenable) PDF.
+        crate::storage::atomic_write_bytes(std::path::Path::new(&final_path), &out_bytes)
+            .map_err(|e| PdfError::IoError(e.to_string()))?;
 
         Ok(final_path)
     }
@@ -1444,28 +1569,6 @@ impl DocumentStore {
         page_num: usize,
         scale: f32,
     ) -> PdfResult<Vec<u8>> {
-        let cache_key = RenderKey {
-            doc_id,
-            page_num,
-            scale: (scale * 100.0).round() as u32,
-            rotation: 0,
-            auto_crop: false,
-            quality: RenderQuality::Medium,
-        };
-
-        if let Some(cached_res) = self.render_cache.get(&cache_key) {
-            let image = Image::from_u8(
-                &cached_res.data,
-                cached_res.width as usize,
-                cached_res.height as usize,
-                zune_core::colorspace::ColorSpace::RGBA,
-            );
-            let out_buf = image
-                .write_to_vec(ImageFormat::PNG)
-                .map_err(|e| PdfError::RenderFailed(format!("{e:?}")))?;
-            return Ok(out_buf);
-        }
-
         let doc = self
             .documents
             .get(&doc_id)
@@ -1481,6 +1584,7 @@ impl DocumentStore {
             .map_err(|e| PdfError::RenderFailed(e.to_string()))?;
 
         let display_list = ContentInterpreter::new(page.effective_box())
+            .with_image_cache_limit(self.image_cache_bytes)
             .with_page_rotation(page.rotate)
             .with_fonts(&mut fonts)
             .with_document(doc.file(), &page.resources)
@@ -1601,6 +1705,12 @@ impl DocumentStore {
     }
 
     pub fn search(&self, doc_id: DocumentId, query: &str) -> PdfResult<Vec<SearchResultItem>> {
+        // An empty needle matches at every position: `str::find("")` is always
+        // `Some(0)`, so the scan loop would return one hit per character of the
+        // page text. The UI filters empty queries, but this is a public API.
+        if query.is_empty() {
+            return Ok(Vec::new());
+        }
         let doc = self
             .documents
             .get(&doc_id)
@@ -1624,6 +1734,7 @@ impl DocumentStore {
             let eff_box = page.effective_box();
             {
                 let interp = ContentInterpreter::new(eff_box)
+                    .with_image_cache_limit(self.image_cache_bytes)
                     .with_page_rotation(page.rotate)
                     .with_fonts(&mut fonts)
                     .with_document(doc.file(), &page.resources)
