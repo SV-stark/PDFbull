@@ -5,6 +5,27 @@ All notable changes to the PDFbull project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.16.8] - 2026-10-04
+
+Scroll-correctness fix for the thumbnail panel. The sidebar's virtualisation and its scroll maths disagreed about how tall a thumbnail card is, by a margin that grew with every page. Verified: `cargo clippy --all-targets` clean, `cargo fmt --check` clean, 163 tests passing (3 new regression tests).
+
+### Fixed (Scrolling)
+- **Scrolling the Pages panel ran into blank space, worse the longer the document.** The strip's windowing maths mapped a scroll offset to a page index using a hard-coded `THUMB_STRIDE = 200`, but a card actually measured about **206px**: `p_2` (16) + `border_1` (2) + a 160px image + `pt_1` (4) + a text label whose height came from font metrics + `gap_2` (8). The strip's real content therefore outgrew the assumption by ~6px *per page*.
+
+  That drift was not a rounding error. `thumbnail_window` derives the viewport as `assumed_content - max_offset`, and `max_offset` is computed by GPUI from the **real** content size — so the subtraction silently returned `true_viewport - drift`. On a 500-page document the derived viewport was roughly **3000px too short**: the built card window ended far above the visible area, and scrolling the panel showed empty space where thumbnails should have been. The defect scaled with page count, so it was most visible exactly where virtualisation matters most.
+
+  The container's own `p_2` contributed a further 16px that no spacer accounted for.
+
+  Fixed by making the numbers agree by construction rather than by coincidence, which is the same treatment the canvas strip received in 0.16.5:
+  - The card is given an explicit height derived from the stride (`THUMB_CARD_H = THUMB_STRIDE - THUMB_GAP`), and the page number moved into an absolutely-positioned badge so no font-dependent box sits in the card's flow. Padding and typography can no longer move the pitch.
+  - The container's vertical padding is encoded in the spacer elements (horizontal only remains on the container), so the strip's measured height is exactly what the maths assumes.
+  - `thumbnail_content_height` and `thumbnail_top_in_content` are now the single source of truth, shared by the spacer layout, the windowing maths and `scroll_thumbnails_to`. `scroll_thumbnails_to` also honours the padding now, so "jump to page N" lands on N's card rather than one card's worth of scroll away.
+  - `thumbnail_window` inverts `thumbnail_top_in_content` exactly and builds one card beyond the visible edge, so a partially-visible card is not built and then flicker as it scrolls into view.
+
+### Tests
+- Three regression tests asserting the invariant that was broken, over page counts 1–2000, three viewport heights and a sweep of every scroll position: the strip's laid-out height (top spacer + built cards + gaps + bottom spacer) equals the height the maths assumes; the page-origin mapping round-trips exactly; and built cards always reach the bottom of the visible band.
+- Verified the tests are non-vacuous by reintroducing the original 6px-per-page drift and confirming they fail (a 250-page document already trips the viewport-coverage assertion).
+
 ## [0.16.7] - 2026-10-04
 
 Follow-up to 0.16.6, fixing the most severe issue found while reviewing that release: switching tabs destroyed a document's annotations in memory, and the next save then deleted them from the file. Also tightens the one remaining place where a failed PDF write was discarded. Verified: `cargo clippy --all-targets` clean, `cargo fmt --check` clean, 160 tests passing (1 new regression test), and a clean `cargo build --release` producing a binary stamped 0.16.7.

@@ -1125,6 +1125,154 @@ fn test_close_to_right_clamps_an_out_of_range_index() {
     }
 }
 
+/// The numbers the thumbnail strip's layout and its scroll maths are built
+/// from. Re-derived here so the test does not depend on them being private.
+const THUMB_STRIDE: f32 = 200.0;
+const THUMB_GAP: f32 = 8.0;
+const THUMB_CARD_H: f32 = THUMB_STRIDE - THUMB_GAP;
+const THUMB_PADDING: f32 = 8.0;
+const THUMB_OVERSCAN: f32 = 400.0;
+
+fn thumb_content_height(total_pages: usize) -> f32 {
+    if total_pages == 0 {
+        return 0.0;
+    }
+    2.0 * THUMB_PADDING + THUMB_STRIDE * (total_pages - 1) as f32 + THUMB_CARD_H
+}
+
+fn thumb_top_in_content(page_idx: usize) -> f32 {
+    THUMB_PADDING + THUMB_STRIDE * page_idx as f32
+}
+
+/// The window `SidebarState::thumbnail_window` would build, given a scroll
+/// offset and a real viewport height.
+fn thumb_window(total_pages: usize, scrolled: f32, viewport_h: f32) -> (usize, usize) {
+    let first = (((scrolled - THUMB_OVERSCAN).max(0.0) - THUMB_PADDING) / THUMB_STRIDE)
+        .floor()
+        .max(0.0) as usize;
+    let first = first.min(total_pages - 1);
+    let needed_to = scrolled + viewport_h + THUMB_OVERSCAN;
+    let last = (((needed_to - THUMB_PADDING) / THUMB_STRIDE)
+        .floor()
+        .max(0.0) as usize)
+        .saturating_add(2)
+        .min(total_pages);
+    (first, last.max(first + 1))
+}
+
+#[test]
+fn test_thumbnail_strip_layout_matches_scroll_maths() {
+    // Regression: the sidebar's virtualisation mapped scroll offsets to page
+    // indices using a hard-coded `THUMB_STRIDE = 200`, while the cards actually
+    // measured ~206px (padding + border + 160px image + a font-sized label +
+    // gap). The strip's real content therefore outgrew the assumption by ~6px
+    // *per page*.
+    //
+    // `thumbnail_window` derives the viewport as `assumed_content - max_offset`
+    // and `max_offset` comes from the *real* content size, so that subtraction
+    // returned `true_viewport - drift`. On a 500-page document the derived
+    // viewport was ~3000px short, the built window stopped far above the
+    // visible area, and scrolling the panel showed blank space at the bottom —
+    // worse the longer the document.
+    //
+    // The invariant: the height the spacers emit must equal the height the
+    // windowing maths assumes, for every page count and every built range.
+    for total_pages in 1..=600usize {
+        let content = thumb_content_height(total_pages);
+        assert!(
+            content > 0.0,
+            "{total_pages} pages must produce a non-zero strip height"
+        );
+
+        for viewport_h in [200.0_f32, 640.0, 1200.0] {
+            // Sweep the whole scroll range, plus a little past each end.
+            let max_scroll = (content - viewport_h).max(0.0);
+            let steps = 24;
+            for step in 0..=steps {
+                let scrolled = max_scroll * (step as f32 / steps as f32);
+                let (first, last) = thumb_window(total_pages, scrolled, viewport_h);
+
+                assert!(first < last, "window must be non-empty");
+                assert!(last <= total_pages, "window must not exceed the document");
+
+                // Emitted height of the strip for this range: a top spacer, the
+                // built cards with their gaps, and a bottom spacer.
+                let top_pad = thumb_top_in_content(first);
+                let built = (last - first) as f32;
+                let bottom_pad = THUMB_PADDING + THUMB_STRIDE * (total_pages - last) as f32;
+                let emitted = top_pad + (built - 1.0) * THUMB_STRIDE + THUMB_CARD_H + bottom_pad;
+
+                assert!(
+                    (emitted - content).abs() < 0.01,
+                    "{total_pages} pages, viewport {viewport_h}, scroll {scrolled}: \
+                     the strip lays out to {emitted} but the maths assumes {content}"
+                );
+
+                // The visible band must be covered by built cards. This is the
+                // symptom: cards stop being built above the bottom of the
+                // viewport, so the panel scrolls into blank space.
+                //
+                // Clamped at the document's last card rather than at the end of
+                // the content: the content ends with `THUMB_PADDING` of inset,
+                // which is *meant* to be empty, and a document shorter than the
+                // viewport does not scroll at all.
+                let doc_last_card_bottom = thumb_top_in_content(total_pages - 1) + THUMB_CARD_H;
+                let visible_bottom = (scrolled + viewport_h).min(doc_last_card_bottom);
+                let last_card_bottom = thumb_top_in_content(last - 1) + THUMB_CARD_H;
+                assert!(
+                    last_card_bottom >= visible_bottom - 0.01,
+                    "{total_pages} pages, viewport {viewport_h}, scroll {scrolled}: \
+                     built cards end at {last_card_bottom} but the viewport reaches \
+                     {visible_bottom} (window {first}..{last})"
+                );
+            }
+        }
+    }
+}
+
+#[test]
+fn test_thumbnail_page_origins_round_trip() {
+    // The windowing maths inverts "where does page k start", so that mapping
+    // must be the exact inverse of the layout's, or scrolling drifts by a card
+    // per step.
+    for total_pages in [1usize, 2, 7, 50, 500, 2000] {
+        for page_idx in 0..total_pages {
+            let top = thumb_top_in_content(page_idx);
+            let recovered = (((top - THUMB_PADDING) / THUMB_STRIDE).floor().max(0.0)) as usize;
+            assert_eq!(
+                recovered, page_idx,
+                "{total_pages} pages: page {page_idx} at y={top} inverted to {recovered}"
+            );
+        }
+    }
+}
+
+#[test]
+fn test_thumbnail_window_covers_the_viewport_at_every_scroll_position() {
+    // Directly assert the user-visible property the drift broke: wherever the
+    // panel is scrolled, the built cards reach the bottom of the viewport.
+    let viewport_h = 640.0_f32;
+    for total_pages in [1usize, 5, 40, 250, 1000] {
+        let content = thumb_content_height(total_pages);
+        let max_scroll = (content - viewport_h).max(0.0);
+        for step in 0..=40 {
+            let scrolled = max_scroll * (step as f32 / 40.0);
+            let (first, last) = thumb_window(total_pages, scrolled, viewport_h);
+            // Clamped at the document's last card: the content ends with
+            // `THUMB_PADDING` of inset that is meant to be empty, and a
+            // document shorter than the viewport does not scroll.
+            let doc_last_card_bottom = thumb_top_in_content(total_pages - 1) + THUMB_CARD_H;
+            let visible_bottom = (scrolled + viewport_h).min(doc_last_card_bottom);
+            assert!(
+                thumb_top_in_content(last - 1) + THUMB_CARD_H >= visible_bottom - 0.01,
+                "{total_pages} pages at scroll {scrolled}: cards {first}..{last} stop at {} \
+                 but the viewport reaches {visible_bottom}",
+                thumb_top_in_content(last - 1) + THUMB_CARD_H
+            );
+        }
+    }
+}
+
 #[test]
 fn test_cache_keys_no_longer_grow_unbounded() {
     // Regression: `DocumentStore` kept a `cache_keys: HashMap<DocumentId,

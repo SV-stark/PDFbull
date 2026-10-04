@@ -47,9 +47,43 @@ pub enum SidebarMode {
     Layers,
 }
 
-/// Approximate vertical stride of one thumbnail card (160px image + label +
-/// padding + gap). Used to map scroll offsets to page indices.
+// ── Thumbnail strip geometry ────────────────────────────────────────────────
+//
+// The windowing maths maps a scroll offset to a page index and back, so the
+// strip's *laid-out* pitch and the pitch the maths assumes must be the same
+// number. They were not: `THUMB_STRIDE` was a hand-guessed 200px while a card
+// actually measured `p_2 (16) + border (2) + image (160) + pt_1 (4) +
+// label line box + gap (8)` — about 206px, because the label's height came
+// from font metrics. The strip's real content therefore grew ~6px *per page*
+// faster than the maths allowed.
+//
+// `thumbnail_window` derives the viewport as `assumed_content - max_offset`,
+// and `max_offset` is computed from the *real* content size, so that
+// subtraction yielded `true_viewport - (real - assumed)`. On a 500-page
+// document the derived viewport was ~3000px too short, the built window ended
+// far above the visible area, and scrolling the thumbnail panel showed blank
+// space at the bottom — worse the more pages the document had.
+//
+// The fix is to make the numbers agree by construction rather than by
+// coincidence: the card is given an explicit height derived from the stride,
+// and the page number moves into an absolutely-positioned badge so no
+// font-dependent box sits in the card's flow. See
+// `thumbnail_content_height` and `thumbnail_top_in_content`, which are the
+// single source of truth for both the layout and the maths.
+
+/// Vertical pitch of one thumbnail card: the card plus the gap beneath it.
+/// Every other value here is derived from this one.
 const THUMB_STRIDE: f32 = 200.0;
+/// Gap between thumbnail cards (`.gap_2()` = 0.5rem).
+const THUMB_GAP: f32 = 8.0;
+/// Exact card height. Fixed, so padding and font metrics cannot move it.
+const THUMB_CARD_H: f32 = THUMB_STRIDE - THUMB_GAP;
+/// Vertical inset above the first and below the last card.
+///
+/// Encoded in the spacer elements rather than applied as padding on the scroll
+/// container: container padding is not part of any spacer's height, so leaving
+/// it on the container made the strip 16px taller than the maths assumed.
+const THUMB_PADDING: f32 = 8.0;
 /// Pixels of thumbnail content to keep built above and below the viewport.
 const THUMB_OVERSCAN: f32 = 400.0;
 /// Hard cap on thumbnail cards built per frame, independent of layout state.
@@ -89,6 +123,28 @@ pub struct SidebarState {
     pub bookmarks: Vec<crate::pdf_engine::Bookmark>,
     pub attachments: Vec<crate::models::AttachmentInfo>,
     pub layers: Vec<crate::models::LayerInfo>,
+}
+
+/// Total laid-out height of the thumbnail strip for `total_pages` pages.
+///
+/// Single source of truth, shared by the spacer elements that build the strip
+/// and by the scroll maths that decides which cards to build. The two drifting
+/// apart is what produced blank space at the bottom of the panel.
+///
+/// The `total_pages - 1` (not `total_pages`) is deliberate: the gap belongs
+/// *between* cards, so `n` cards with `n - 1` gaps measure
+/// `n * card + (n - 1) * gap`.
+fn thumbnail_content_height(total_pages: usize) -> f32 {
+    if total_pages == 0 {
+        return 0.0;
+    }
+    2.0 * THUMB_PADDING + THUMB_STRIDE * (total_pages - 1) as f32 + THUMB_CARD_H
+}
+
+/// Content-space Y of page `page_idx`'s top edge — the exact inverse of the
+/// arithmetic in `thumbnail_window`.
+fn thumbnail_top_in_content(page_idx: usize) -> f32 {
+    THUMB_PADDING + THUMB_STRIDE * page_idx as f32
 }
 
 impl SidebarState {
@@ -170,17 +226,28 @@ impl SidebarState {
         if total_pages == 0 {
             return (0, 0);
         }
-        let content_h = px(THUMB_STRIDE * total_pages as f32);
+        let content_h = px(thumbnail_content_height(total_pages));
         let viewport_h = (content_h - self.thumb_scroll.max_offset().y).max(px(0.0));
         let scrolled = (-self.thumb_scroll.offset().y).max(px(0.0));
 
-        let first_px = (scrolled - px(THUMB_OVERSCAN)).max(px(0.0));
-        let last_px = scrolled + viewport_h + px(THUMB_OVERSCAN);
+        // Invert `thumbnail_top_in_content`: page `k` starts at
+        // `THUMB_PADDING + STRIDE * k`, so the page covering `scrolled` is
+        // `floor((scrolled - THUMB_PADDING) / STRIDE)`.
+        let overscanned = (scrolled - px(THUMB_OVERSCAN)).max(px(0.0));
+        let first = (((overscanned - px(THUMB_PADDING)) / px(THUMB_STRIDE))
+            .floor()
+            .max(0.0) as usize)
+            .min(total_pages - 1);
 
-        let first = ((first_px / px(THUMB_STRIDE)).floor().max(0.0) as usize)
-            .min(total_pages.saturating_sub(1));
-        let last =
-            (((last_px + px(THUMB_STRIDE)) / px(THUMB_STRIDE)).ceil() as usize).min(total_pages);
+        // Cover everything down to the bottom of the viewport plus overscan,
+        // then one extra card so a partially-visible card at the edge is always
+        // built rather than flickering in as it scrolls into view.
+        let needed_to = scrolled + viewport_h + px(THUMB_OVERSCAN);
+        let last = (((needed_to - px(THUMB_PADDING)) / px(THUMB_STRIDE))
+            .floor()
+            .max(0.0) as usize)
+            .saturating_add(2)
+            .min(total_pages);
         let last = last.max(first + 1);
 
         if last - first <= MAX_THUMB_WINDOW {
@@ -210,8 +277,10 @@ impl SidebarState {
     /// which would pin the strip at the top and make "jump to page N" a no-op.
     /// GPUI re-clamps against the real bounds on the next prepaint regardless.
     pub fn scroll_thumbnails_to(&mut self, page_idx: usize, total_pages: usize) {
-        let target = px(-THUMB_STRIDE * page_idx as f32);
-        let min = px(-THUMB_STRIDE * total_pages as f32);
+        // Use the same `thumbnail_top_in_content` the layout uses, so "jump to
+        // page N" lands on N's card rather than N cards' worth of scroll off.
+        let target = px(-thumbnail_top_in_content(page_idx));
+        let min = px(-thumbnail_content_height(total_pages));
         self.thumb_scroll
             .set_offset(Point::new(px(0.0), target.clamp(min, px(0.0))));
     }
@@ -274,8 +343,12 @@ impl SidebarState {
                 // card per page meant a 1000-page document created 1000 element
                 // subtrees every frame, on top of the canvas's own cards.
                 let (first, last) = self.thumbnail_window(total_pages);
-                let top_pad = THUMB_STRIDE * first as f32;
-                let bottom_pad = THUMB_STRIDE * total_pages.saturating_sub(last) as f32;
+                // Derived from the same helpers the scroll maths uses, so the
+                // spacers and the window can never disagree about where a page
+                // sits.
+                let top_pad = thumbnail_top_in_content(first);
+                let bottom_pad =
+                    THUMB_PADDING + THUMB_STRIDE * total_pages.saturating_sub(last) as f32;
 
                 let mut thumb_cards: Vec<AnyElement> = Vec::new();
                 if top_pad > 0.0 {
@@ -290,8 +363,13 @@ impl SidebarState {
                         div()
                             .id(SharedString::from(format!("side-page-{}", page_idx)))
                             .flex()
-                            .flex_col()
-                            .items_center()
+                            .flex_none()
+                            .relative()
+                            // Explicit height: this is what makes the laid-out
+                            // pitch equal THUMB_STRIDE. Nothing in the card may
+                            // be sized by its content, or the strip grows past
+                            // what the scroll maths expects.
+                            .h(px(THUMB_CARD_H))
                             .p_2()
                             .rounded_md()
                             .border_1()
@@ -301,8 +379,8 @@ impl SidebarState {
                             .on_click(click_listener)
                             .child(if let Some(thumb_img) = self.thumbnails.get(&page_idx) {
                                 div()
-                                    .w_32()
-                                    .h(px(160.0))
+                                    .w_full()
+                                    .h_full()
                                     .bg(gpui_kit::white())
                                     .overflow_hidden()
                                     .rounded_sm()
@@ -311,8 +389,8 @@ impl SidebarState {
                                     .child(img(thumb_img.clone()).w_full().h_full())
                             } else {
                                 div()
-                                    .w_32()
-                                    .h(px(160.0))
+                                    .w_full()
+                                    .h_full()
                                     .bg(muted)
                                     .flex()
                                     .items_center()
@@ -322,10 +400,20 @@ impl SidebarState {
                                     .child(format!("Page {}", page_idx + 1))
                             })
                             .child(
+                                // Absolutely positioned, so the page number
+                                // cannot contribute to the card's height. It
+                                // used to be a sibling in the flex column, which
+                                // made the card ~6px taller than THUMB_STRIDE and
+                                // is what made the scroll maths drift.
                                 div()
-                                    .pt_1()
+                                    .absolute()
+                                    .bottom_1()
+                                    .right_1()
+                                    .px_1()
+                                    .rounded_sm()
+                                    .bg(gpui_kit::rgba(0x00000099))
+                                    .text_color(gpui_kit::white())
                                     .text_xs()
-                                    .text_color(muted_fg)
                                     .child(format!("{}", page_idx + 1)),
                             )
                             .into_any_element(),
@@ -346,8 +434,12 @@ impl SidebarState {
                     .flex_col()
                     .flex_1()
                     .min_h_0()
-                    .gap_2()
-                    .p_2()
+                    .gap(px(THUMB_GAP))
+                    // Horizontal padding only. The vertical inset lives in the
+                    // spacers above and below: padding on this container is not
+                    // part of any spacer's height, so it made the strip 16px
+                    // taller than `thumbnail_content_height` reports.
+                    .px_2()
                     .overflow_y_scroll()
                     .track_scroll(&self.thumb_scroll)
                     .vertical_scrollbar(&self.thumb_scroll)
