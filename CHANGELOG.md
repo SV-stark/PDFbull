@@ -7,7 +7,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [0.16.8] - 2026-10-04
 
-Scroll-correctness fix for the thumbnail panel. The sidebar's virtualisation and its scroll maths disagreed about how tall a thumbnail card is, by a margin that grew with every page. Verified: `cargo clippy --all-targets` clean, `cargo fmt --check` clean, 163 tests passing (3 new regression tests).
+Scroll-correctness fix for the thumbnail panel. The sidebar's virtualisation and its scroll maths disagreed about how tall a thumbnail card is, by a margin that grew with every page. Verified: `cargo clippy --all-targets` clean, `cargo fmt --check` clean, 163 tests passing (3 new regression tests), and a clean `cargo build --release` producing a binary stamped 0.16.8.
 
 ### Fixed (Scrolling)
 - **Scrolling the Pages panel ran into blank space, worse the longer the document.** The strip's windowing maths mapped a scroll offset to a page index using a hard-coded `THUMB_STRIDE = 200`, but a card actually measured about **206px**: `p_2` (16) + `border_1` (2) + a 160px image + `pt_1` (4) + a text label whose height came from font metrics + `gap_2` (8). The strip's real content therefore outgrew the assumption by ~6px *per page*.
