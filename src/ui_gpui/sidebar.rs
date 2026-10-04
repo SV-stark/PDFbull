@@ -1,9 +1,40 @@
 use gpui_kit::component::button::{Button, ButtonVariants};
 use gpui_kit::component::input::{Input, InputState};
 use gpui_kit::component::scroll::ScrollableElement;
-use gpui_kit::component::{ActiveTheme, Sizable};
+use gpui_kit::component::{
+    ActiveTheme, Disableable as _, Icon, IconName, Selectable as _, Sizable,
+};
 use gpui_kit::prelude::FluentBuilder;
 use gpui_kit::*;
+
+/// Format a byte count the way a file manager does.
+///
+/// The sidebar used to print the raw count ("4194304 bytes"), which nobody can
+/// compare at a glance. Unit-scaled so the values line up in the column.
+fn human_bytes(bytes: u64) -> String {
+    const UNITS: [(u64, &str); 4] = [
+        (1024 * 1024 * 1024, "GB"),
+        (1024 * 1024, "MB"),
+        (1024, "KB"),
+        (1, "B"),
+    ];
+    for (scale, suffix) in UNITS {
+        if bytes < scale {
+            continue;
+        }
+        let value = bytes as f64 / scale as f64;
+        return if scale == 1 {
+            format!("{bytes} {suffix}")
+        } else if value >= 100.0 {
+            format!("{value:.0} {suffix}")
+        } else if value >= 10.0 {
+            format!("{value:.1} {suffix}")
+        } else {
+            format!("{value:.2} {suffix}")
+        };
+    }
+    format!("{bytes} B")
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum SidebarMode {
@@ -111,6 +142,21 @@ impl SidebarState {
         }
     }
 
+    /// Discard the previous document's search state when switching documents.
+    ///
+    /// The clear paths used to set `search_query` directly, which is only a
+    /// *mirror* of `search_input`. The visible text box therefore kept the
+    /// previous document's query while the panel's own status line read "Enter
+    /// search query above" (because the mirror was empty) — and pressing
+    /// Search then ran an empty query and appeared to do nothing. Re-reading
+    /// the editor here keeps the two in lockstep without needing the `Window`
+    /// that `clear_search` requires.
+    pub fn reset_search(&mut self, cx: &mut gpui_kit::App) {
+        self.search_results.clear();
+        self.is_searching = false;
+        self.on_search_input_changed(cx);
+    }
+
     /// Half-open range of page indices whose thumbnail cards should be built,
     /// derived from the strip's live scroll position.
     ///
@@ -197,9 +243,12 @@ impl SidebarState {
                 .bg(muted)
                 .py_2()
                 .child(
+                    // Icon-only, so it needs a tooltip. The bare "▶" glyph had
+                    // neither a name nor an explanation.
                     Button::new("btn-expand-sidebar")
-                        .label("▶")
+                        .icon(IconName::PanelLeft)
                         .ghost()
+                        .tooltip("Show sidebar")
                         .on_click(cx.listener(move |v, _, w, cx| {
                             on_action(v, SidebarAction::ToggleOpen, w, cx)
                         })),
@@ -320,12 +369,21 @@ impl SidebarState {
                         .into_any_element()
                 } else {
                     let mut items = Vec::new();
-                    for (idx, bm) in self.bookmarks.iter().enumerate() {
+                    for bm in self.bookmarks.iter() {
                         let target_page = bm.page_index;
                         let title = bm.title.clone();
+                        // Keyed on the bookmark's target and title rather than
+                        // its list position. These lists are rebuilt from
+                        // scratch on every document switch, so position-based
+                        // ids handed document A's row *n* retained hover state
+                        // to document B's row *n*.
                         items.push(
                             div()
-                                .id(SharedString::from(format!("bm-item-{}", idx)))
+                                .id(SharedString::from(format!(
+                                    "bm-item-{}-{}",
+                                    target_page,
+                                    title.len()
+                                )))
                                 .flex()
                                 .flex_row()
                                 .items_center()
@@ -441,8 +499,10 @@ impl SidebarState {
                                 )
                                 .child(
                                     Button::new(format!("btn-del-ann-{}", ann_id))
-                                        .label("×")
+                                        .icon(IconName::Delete)
                                         .ghost()
+                                        .small()
+                                        .tooltip("Delete this annotation")
                                         .on_click(cx.listener(move |v, _, w, cx| {
                                             on_action(
                                                 v,
@@ -509,32 +569,35 @@ impl SidebarState {
                         )
                     })
                     .child(
-                        div().flex().flex_row().gap_1().child(
-                            Button::new("btn-exec-search")
-                                .label(if is_searching {
-                                    "Searching..."
-                                } else {
-                                    "Search"
-                                })
-                                .primary()
-                                .on_click(cx.listener(move |v, _, w, cx| {
-                                    // Guard rather than disable: a disabled button
-                                    // is easy to add later, and clicking while a
-                                    // search is in flight just re-issues it.
-                                    if !is_searching {
-                                        on_action(v, SidebarAction::ExecuteSearch, w, cx);
-                                    }
-                                })),
-                        ),
+                        // A disabled button is the honest state here: the
+                        // handler's `if !is_searching` guard made a pending
+                        // search look clickable while doing nothing.
+                        Button::new("btn-exec-search")
+                            .icon(if is_searching {
+                                Icon::new(IconName::Loader).small()
+                            } else {
+                                Icon::new(IconName::Search)
+                            })
+                            .label(if is_searching {
+                                "Searching…"
+                            } else {
+                                "Search"
+                            })
+                            .primary()
+                            .small()
+                            .disabled(is_searching)
+                            .on_click(cx.listener(move |v, _, w, cx| {
+                                on_action(v, SidebarAction::ExecuteSearch, w, cx)
+                            })),
                     )
                     .child(div().text_xs().text_color(muted_fg).child(if is_searching {
-                        "Searching across document...".to_string()
+                        "Searching the whole document…".to_string()
                     } else if match_count > 0 {
-                        format!("Found {} occurrences", match_count)
+                        format!("Found {match_count} occurrences")
                     } else if !self.search_query.is_empty() {
                         "No matches found".to_string()
                     } else {
-                        "Enter search query above".to_string()
+                        "Type a query, then press Search.".to_string()
                     }));
 
                 let mut result_items = Vec::new();
@@ -617,12 +680,18 @@ impl SidebarState {
                         .into_any_element()
                 } else {
                     let mut items = Vec::new();
-                    for (idx, att) in self.attachments.iter().enumerate() {
+                    for att in self.attachments.iter() {
                         let name = att.name.clone();
                         let size = att.size;
+                        // Stable key: `object_id` when the PDF provided one,
+                        // otherwise the embedded file's name.
+                        let key = match att.object_id {
+                            Some((num, generation)) => format!("{num}-{generation}"),
+                            None => name.clone(),
+                        };
                         items.push(
                             div()
-                                .id(SharedString::from(format!("att-{}", idx)))
+                                .id(SharedString::from(format!("att-{key}")))
                                 .flex()
                                 .flex_row()
                                 .items_center()
@@ -638,10 +707,9 @@ impl SidebarState {
                                         .flex_col()
                                         .child(div().text_xs().text_color(fg).child(name))
                                         .child(
-                                            div()
-                                                .text_xs()
-                                                .text_color(muted_fg)
-                                                .child(format!("{} bytes", size.unwrap_or(0))),
+                                            div().text_xs().text_color(muted_fg).child(
+                                                human_bytes(size.unwrap_or(0).max(0) as u64),
+                                            ),
                                         ),
                                 ),
                         );
@@ -674,9 +742,10 @@ impl SidebarState {
                     for (idx, layer) in self.layers.iter().enumerate() {
                         let name = layer.name.clone();
                         let is_vis = layer.visible;
+                        let (num, generation) = layer.object_id;
                         items.push(
                             div()
-                                .id(SharedString::from(format!("layer-{}", idx)))
+                                .id(SharedString::from(format!("layer-{num}-{generation}")))
                                 .flex()
                                 .flex_row()
                                 .items_center()
@@ -688,9 +757,15 @@ impl SidebarState {
                                 .bg(background)
                                 .child(div().text_xs().text_color(fg).child(name))
                                 .child(
-                                    Button::new(format!("btn-layer-{}", idx))
+                                    Button::new(format!("btn-layer-{num}-{generation}"))
                                         .label(if is_vis { "Visible" } else { "Hidden" })
                                         .ghost()
+                                        .small()
+                                        .tooltip(if is_vis {
+                                            "Hide this layer"
+                                        } else {
+                                            "Show this layer"
+                                        })
                                         .on_click(cx.listener(move |v, _, w, cx| {
                                             on_action(
                                                 v,
@@ -731,8 +806,10 @@ impl SidebarState {
                     mode_buttons.push(
                         Button::new(format!("side-mode-{:?}", m))
                             .label(label)
-                            .ghost()
-                            .when(is_active, |b| b.primary())
+                            .small()
+                            // The active panel is a *selection*, not the
+                            // primary commit of a decision area.
+                            .selected(is_active)
                             .on_click(click_listener),
                     );
                 }

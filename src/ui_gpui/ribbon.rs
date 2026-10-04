@@ -1,8 +1,9 @@
 use gpui_kit::base::StyledExt;
 use gpui_kit::component::ActiveTheme;
+use gpui_kit::component::IconName;
+use gpui_kit::component::Selectable as _;
 use gpui_kit::component::Sizable;
 use gpui_kit::component::button::{Button, ButtonVariants};
-use gpui_kit::prelude::FluentBuilder;
 use gpui_kit::*;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -38,6 +39,21 @@ pub enum PageLayoutMode {
     Continuous,
     SinglePage,
     TwoPageSpread,
+}
+
+impl PageLayoutMode {
+    /// User-facing name.
+    ///
+    /// The status bar used to print `{:?}` of this enum, so people read
+    /// "TwoPageSpread" and "Continuous" as if they were internal identifiers.
+    /// Sentence case, and no trailing period — it is a label, not a sentence.
+    pub fn label(self) -> &'static str {
+        match self {
+            PageLayoutMode::Continuous => "Continuous",
+            PageLayoutMode::SinglePage => "Single page",
+            PageLayoutMode::TwoPageSpread => "Two-page",
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -254,9 +270,11 @@ fn render_home_strip<V: 'static>(
         "File",
         vec![
             Button::new("btn-open")
+                .icon(IconName::FolderOpen)
                 .label("Open")
                 .outline()
                 .small()
+                .tooltip("Open a PDF (Ctrl+O)")
                 .on_click(
                     cx.listener(move |v, _, w, cx| on_action(v, RibbonAction::OpenFile, w, cx)),
                 )
@@ -265,6 +283,7 @@ fn render_home_strip<V: 'static>(
                 .label("Save")
                 .outline()
                 .small()
+                .tooltip("Save annotations (Ctrl+S)")
                 .on_click(
                     cx.listener(move |v, _, w, cx| on_action(v, RibbonAction::SaveFile, w, cx)),
                 )
@@ -273,6 +292,7 @@ fn render_home_strip<V: 'static>(
                 .label("Print")
                 .ghost()
                 .small()
+                .tooltip("Print (Ctrl+P)")
                 .on_click(cx.listener(move |v, _, w, cx| on_action(v, RibbonAction::Print, w, cx)))
                 .into_any_element(),
         ],
@@ -284,17 +304,21 @@ fn render_home_strip<V: 'static>(
         "Page",
         vec![
             Button::new("btn-page-prev")
-                .label("◀ Prev")
+                .icon(IconName::ChevronLeft)
+                .label("Prev")
                 .ghost()
                 .small()
+                .tooltip("Previous page")
                 .on_click(
                     cx.listener(move |v, _, w, cx| on_action(v, RibbonAction::PrevPage, w, cx)),
                 )
                 .into_any_element(),
             Button::new("btn-page-next")
-                .label("Next ▶")
+                .icon(IconName::ChevronRight)
+                .label("Next")
                 .ghost()
                 .small()
+                .tooltip("Next page")
                 .on_click(
                     cx.listener(move |v, _, w, cx| on_action(v, RibbonAction::NextPage, w, cx)),
                 )
@@ -308,9 +332,10 @@ fn render_home_strip<V: 'static>(
         "Zoom",
         vec![
             Button::new("btn-zoom-out")
-                .label("－")
+                .icon(IconName::Minus)
                 .ghost()
                 .small()
+                .tooltip("Zoom out (Ctrl+-)")
                 .on_click(
                     cx.listener(move |v, _, w, cx| on_action(v, RibbonAction::ZoomOut, w, cx)),
                 )
@@ -319,14 +344,16 @@ fn render_home_strip<V: 'static>(
                 .label("100%")
                 .outline()
                 .small()
+                .tooltip("Reset zoom to 100% (Ctrl+0)")
                 .on_click(
                     cx.listener(move |v, _, w, cx| on_action(v, RibbonAction::ZoomReset, w, cx)),
                 )
                 .into_any_element(),
             Button::new("btn-zoom-in")
-                .label("＋")
+                .icon(IconName::Plus)
                 .ghost()
                 .small()
+                .tooltip("Zoom in (Ctrl++)")
                 .on_click(cx.listener(move |v, _, w, cx| on_action(v, RibbonAction::ZoomIn, w, cx)))
                 .into_any_element(),
         ],
@@ -357,14 +384,19 @@ fn render_view_strip<V: 'static>(
 ) -> AnyElement {
     let muted_fg = cx.theme().muted_foreground;
 
+    // A mutually-exclusive choice set. This is a *selection* state, not a set of
+    // primary commits, so each option carries `selected(true)` when active
+    // instead of the `primary()` variant. Painting the active option as the
+    // strongest fill in the window spent the emphasis budget on which page
+    // layout happens to be chosen rather than on the one action a decision
+    // area would commit.
     let layout_group = ribbon_group(
         "Page Layout",
         vec![
             Button::new("btn-continuous")
                 .label("Continuous")
                 .small()
-                .when(layout == PageLayoutMode::Continuous, |b| b.primary())
-                .when(layout != PageLayoutMode::Continuous, |b| b.outline())
+                .selected(layout == PageLayoutMode::Continuous)
                 .on_click(cx.listener(move |v, _, w, cx| {
                     on_action(
                         v,
@@ -377,8 +409,7 @@ fn render_view_strip<V: 'static>(
             Button::new("btn-single")
                 .label("Single")
                 .small()
-                .when(layout == PageLayoutMode::SinglePage, |b| b.primary())
-                .when(layout != PageLayoutMode::SinglePage, |b| b.outline())
+                .selected(layout == PageLayoutMode::SinglePage)
                 .on_click(cx.listener(move |v, _, w, cx| {
                     on_action(
                         v,
@@ -389,10 +420,9 @@ fn render_view_strip<V: 'static>(
                 }))
                 .into_any_element(),
             Button::new("btn-spread")
-                .label("Two-Page")
+                .label("Two-page")
                 .small()
-                .when(layout == PageLayoutMode::TwoPageSpread, |b| b.primary())
-                .when(layout != PageLayoutMode::TwoPageSpread, |b| b.outline())
+                .selected(layout == PageLayoutMode::TwoPageSpread)
                 .on_click(cx.listener(move |v, _, w, cx| {
                     on_action(
                         v,
@@ -406,28 +436,31 @@ fn render_view_strip<V: 'static>(
         muted_fg,
     );
 
+    // Same treatment for the two independent on/off switches. The label states
+    // the current state in words as well, so the meaning does not depend on
+    // colour alone.
     let display_group =
         ribbon_group(
             "Display Mode",
             vec![
                 Button::new("btn-cover")
-                    .label(if cover { "Cover: On" } else { "Cover: Off" })
+                    .label(if cover { "Cover on" } else { "Cover off" })
                     .small()
-                    .when(cover, |b| b.primary())
-                    .when(!cover, |b| b.ghost())
+                    .selected(cover)
+                    .tooltip("Show the first page on its own in Two-page view")
                     .on_click(cx.listener(move |v, _, w, cx| {
                         on_action(v, RibbonAction::ToggleCover, w, cx)
                     }))
                     .into_any_element(),
                 Button::new("btn-midnight")
                     .label(if midnight {
-                        "Midnight: On"
+                        "Midnight on"
                     } else {
-                        "Midnight: Off"
+                        "Midnight off"
                     })
                     .small()
-                    .when(midnight, |b| b.primary())
-                    .when(!midnight, |b| b.ghost())
+                    .selected(midnight)
+                    .tooltip("Invert page colours for dark reading")
                     .on_click(cx.listener(move |v, _, w, cx| {
                         on_action(v, RibbonAction::ToggleMidnight, w, cx)
                     }))
@@ -468,15 +501,17 @@ fn render_annotate_strip<V: 'static>(
         let is_selected = tool == cur_tool;
         let click_listener =
             cx.listener(move |v, _, w, cx| on_action(v, RibbonAction::SelectTool(tool), w, cx));
-        let mut btn = Button::new(SharedString::from(format!("tool-{:?}", tool)))
-            .label(label)
-            .small();
-        if is_selected {
-            btn = btn.primary();
-        } else {
-            btn = btn.ghost();
-        }
-        text_btns.push(btn.on_click(click_listener).into_any_element());
+        text_btns.push(
+            Button::new(SharedString::from(format!("tool-{:?}", tool)))
+                .label(label)
+                .small()
+                // Selection, not a primary commit. Twelve tools each turning
+                // into the strongest fill in the window made the active tool
+                // indistinguishable from "the action to take".
+                .selected(is_selected)
+                .on_click(click_listener)
+                .into_any_element(),
+        );
     }
 
     let shape_tools = [
@@ -491,19 +526,20 @@ fn render_annotate_strip<V: 'static>(
         let is_selected = tool == cur_tool;
         let click_listener =
             cx.listener(move |v, _, w, cx| on_action(v, RibbonAction::SelectTool(tool), w, cx));
-        let mut btn = Button::new(SharedString::from(format!("tool-{:?}", tool)))
-            .label(label)
-            .small();
-        if is_selected {
-            btn = btn.primary();
-        } else {
-            btn = btn.ghost();
-        }
-        shape_btns.push(btn.on_click(click_listener).into_any_element());
+        shape_btns.push(
+            Button::new(SharedString::from(format!("tool-{:?}", tool)))
+                .label(label)
+                .small()
+                .selected(is_selected)
+                .on_click(click_listener)
+                .into_any_element(),
+        );
     }
 
+    // `AnnotationTool::Ink` is deliberately absent. Nothing in the engine draws
+    // freehand strokes, and selecting it made a drag produce a yellow
+    // highlight — offering a tool whose only effect is the wrong one.
     let draw_tools = [
-        (AnnotationTool::Ink, "Ink"),
         (AnnotationTool::StickyNote, "Note"),
         (AnnotationTool::Text, "Text"),
         (AnnotationTool::Redact, "Redact"),
@@ -514,15 +550,14 @@ fn render_annotate_strip<V: 'static>(
         let is_selected = tool == cur_tool;
         let click_listener =
             cx.listener(move |v, _, w, cx| on_action(v, RibbonAction::SelectTool(tool), w, cx));
-        let mut btn = Button::new(SharedString::from(format!("tool-{:?}", tool)))
-            .label(label)
-            .small();
-        if is_selected {
-            btn = btn.primary();
-        } else {
-            btn = btn.ghost();
-        }
-        draw_btns.push(btn.on_click(click_listener).into_any_element());
+        draw_btns.push(
+            Button::new(SharedString::from(format!("tool-{:?}", tool)))
+                .label(label)
+                .small()
+                .selected(is_selected)
+                .on_click(click_listener)
+                .into_any_element(),
+        );
     }
 
     div()
@@ -651,6 +686,7 @@ fn render_tools_strip<V: 'static>(
                 .label("Tables")
                 .outline()
                 .small()
+                .tooltip("Detect tables on this page and copy the CSV to the clipboard")
                 .on_click(
                     cx.listener(move |v, _, w, cx| {
                         on_action(v, RibbonAction::ExtractTables, w, cx)
@@ -710,9 +746,14 @@ fn render_convert_strip<V: 'static>(
                     }))
                     .into_any_element(),
                 Button::new("conv-tables")
-                    .label("Tables (.csv)")
+                    // This does not write a `.csv` file — it detects tables on
+                    // the current page and copies the CSV to the clipboard.
+                    // Labelling it with a file extension inside a group called
+                    // "Export Documents" promised a file the user never got.
+                    .label("Tables to clipboard")
                     .outline()
                     .small()
+                    .tooltip("Detect tables on this page and copy the CSV to the clipboard")
                     .on_click(cx.listener(move |v, _, w, cx| {
                         on_action(v, RibbonAction::ExtractTables, w, cx)
                     }))

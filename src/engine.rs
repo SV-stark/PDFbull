@@ -112,8 +112,38 @@ pub fn spawn_engine_thread(cache_size: u64, max_memory_mb: u64) -> EngineState {
                         }
                     }
                     _ => {
-                        if let Err(e) = worker_tx.send(cmd) {
-                            tracing::error!("Failed to dispatch command to engine worker: {e}");
+                        // `worker_tx` is a *bounded* crossbeam channel, and
+                        // `send` on a full bounded channel parks the calling
+                        // thread. This runs inside the tokio forwarder task, so
+                        // blocking here would stall a runtime worker thread and
+                        // — because the forwarder is the only dispatcher — stop
+                        // every command from reaching any engine worker while the
+                        // window still accepts input. Use `try_send`, and hand a
+                        // full queue to a short-lived blocking thread instead so
+                        // the command is still delivered.
+                        match worker_tx.try_send(cmd) {
+                            Ok(()) => {}
+                            Err(crossbeam_channel::TrySendError::Full(cmd)) => {
+                                let tx = worker_tx.clone();
+                                let spawned = std::thread::Builder::new()
+                                    .name("pdf-engine-overflow".into())
+                                    .spawn(move || {
+                                        if let Err(e) = tx.send(cmd) {
+                                            tracing::error!(
+                                                "Engine overflow queue dropped a command: {e}"
+                                            );
+                                        }
+                                    });
+                                if spawned.is_err() {
+                                    tracing::error!(
+                                        "Engine queue is full and the overflow hand-off \
+                                         could not be spawned; command dropped"
+                                    );
+                                }
+                            }
+                            Err(crossbeam_channel::TrySendError::Disconnected(_)) => {
+                                tracing::error!("Engine worker pool is gone; command dropped");
+                            }
                         }
                     }
                 }
@@ -287,13 +317,26 @@ pub fn spawn_engine_thread(cache_size: u64, max_memory_mb: u64) -> EngineState {
                             // engine write a `<name>_annotated.pdf` sidecar while the
                             // UI reported "Document saved successfully", so Ctrl+S
                             // never touched the file the user opened.
+                            //
+                            // If the path cannot be resolved the document was never
+                            // successfully opened, or this worker has already dropped
+                            // it. Falling back to a sidecar here would leave the
+                            // user's file byte-for-byte unchanged while `Ctrl+S`
+                            // cleared the tab's unsaved-changes marker — so fail
+                            // loudly instead.
                             let out_path = paths
                                 .read()
                                 .ok()
                                 .and_then(|g| g.get(&doc_id).map(|(p, _)| p.clone()));
+                            let Some(out_path) = out_path else {
+                                let _ = tx.send(Err(crate::models::PdfError::EngineError(
+                                    crate::models::EngineErrorKind::DocumentPathNotFound,
+                                )));
+                                continue;
+                            };
                             let mut store_ref = std::panic::AssertUnwindSafe(&mut store);
                             let res = catch_worker_panic("save_annotations", move || {
-                                store_ref.save_annotations(doc_id, &annotations, out_path)
+                                store_ref.save_annotations(doc_id, &annotations, Some(out_path))
                             });
                             let _ = tx.send(res);
                         }
@@ -317,22 +360,48 @@ pub fn spawn_engine_thread(cache_size: u64, max_memory_mb: u64) -> EngineState {
                             let store_ref = std::panic::AssertUnwindSafe(&store);
                             let res = catch_worker_panic("export_images", move || {
                                 let mut output_paths = Vec::new();
+                                // Every per-page failure used to be dropped, so the
+                                // command returned `Ok` — and a caller could not
+                                // tell "all pages exported" from "none were"
+                                // (an unwritable directory produced `Ok(vec![])`).
+                                let mut failures: Vec<String> = Vec::new();
                                 for page_num in pages {
                                     let safe_name = format!("page_{page_num}.png");
                                     let out_file = out_path.join(&safe_name);
-                                    if let Ok(buf) =
-                                        store_ref.export_page_as_image(doc_id, page_num, scale)
+                                    let buf = match store_ref
+                                        .export_page_as_image(doc_id, page_num, scale)
                                     {
-                                        let mut opts = oxipng::Options::from_preset(2);
-                                        opts.strip = oxipng::StripChunks::Safe;
-                                        let optimized = oxipng::optimize_from_memory(&buf, &opts)
-                                            .unwrap_or(buf);
-                                        if std::fs::write(&out_file, optimized).is_ok()
-                                            && let Some(path_str) = out_file.to_str()
-                                        {
-                                            output_paths.push(path_str.to_string());
+                                        Ok(buf) => buf,
+                                        Err(e) => {
+                                            failures.push(format!("page {page_num}: {e}"));
+                                            continue;
                                         }
+                                    };
+                                    let mut opts = oxipng::Options::from_preset(2);
+                                    opts.strip = oxipng::StripChunks::Safe;
+                                    let optimized =
+                                        oxipng::optimize_from_memory(&buf, &opts).unwrap_or(buf);
+                                    if let Err(e) = std::fs::write(&out_file, optimized) {
+                                        failures.push(format!("{}: {e}", safe_name));
+                                    } else if let Some(path_str) = out_file.to_str() {
+                                        output_paths.push(path_str.to_string());
                                     }
+                                }
+                                if output_paths.is_empty() && !failures.is_empty() {
+                                    // Nothing at all was written — that is a
+                                    // failure, not an empty success.
+                                    return Err(crate::models::PdfError::IoError(format!(
+                                        "exported no pages: {}",
+                                        failures.join("; ")
+                                    )));
+                                }
+                                if !failures.is_empty() {
+                                    tracing::warn!(
+                                        "export_images: {} of {} pages failed: {}",
+                                        failures.len(),
+                                        output_paths.len() + failures.len(),
+                                        failures.join("; ")
+                                    );
                                 }
                                 Ok(output_paths)
                             });

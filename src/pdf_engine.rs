@@ -27,13 +27,52 @@ use zune_image::image::Image;
 /// Converts a hex color string like "#FF5500" into normalized RGB floats (0.0..=1.0).
 pub fn hex_to_rgb(hex: &str) -> (f32, f32, f32) {
     let hex = hex.trim_start_matches('#');
-    if hex.len() == 6 {
-        let r = u8::from_str_radix(&hex[0..2], 16).unwrap_or(0) as f32 / 255.0;
-        let g = u8::from_str_radix(&hex[2..4], 16).unwrap_or(0) as f32 / 255.0;
-        let b = u8::from_str_radix(&hex[4..6], 16).unwrap_or(0) as f32 / 255.0;
-        (r, g, b)
+    // `len()` is a *byte* count, but the slices below assume ASCII. A 6-byte
+    // string such as "€€" passes a bare `len() == 6` test and then panics on
+    // `&hex[0..2]` ("byte index 2 is not a char boundary"). Parse from bytes
+    // with an explicit ASCII-hex-digit guard instead, which cannot panic and
+    // simply treats any non-hex input as black.
+    let bytes = hex.as_bytes();
+    if bytes.len() != 6 || !bytes.iter().all(u8::is_ascii_hexdigit) {
+        return (0.0, 0.0, 0.0);
+    }
+    let pair = |i: usize| -> f32 {
+        let hi = (bytes[i] as char).to_digit(16).unwrap_or(0);
+        let lo = (bytes[i + 1] as char).to_digit(16).unwrap_or(0);
+        ((hi * 16 + lo) as f32) / 255.0
+    };
+    (pair(0), pair(2), pair(4))
+}
+
+/// Width and height of a page's `/MediaBox`, falling back to A4 when the entry
+/// is missing or malformed.
+///
+/// Used to anchor generated content (headers, footers, watermarks) to the real
+/// page box. A fixed origin silently pushed that content off the page for any
+/// document that is not A4-sized.
+fn media_box_size(doc: &Document, page_id: ObjectId) -> (f32, f32) {
+    const A4: (f32, f32) = (595.0, 842.0);
+    let Some(dict) = doc.objects.get(&page_id).and_then(|o| o.as_dict().ok()) else {
+        return A4;
+    };
+    let arr = match dict.get(b"MediaBox") {
+        Ok(Object::Array(a)) if a.len() == 4 => a,
+        _ => return A4,
+    };
+    let num = |o: &Object| match o {
+        Object::Real(v) => *v,
+        Object::Integer(v) => *v as f32,
+        _ => f32::NAN,
+    };
+    let (w, h) = (
+        (num(&arr[2]) - num(&arr[0])).abs(),
+        (num(&arr[3]) - num(&arr[1])).abs(),
+    );
+    // A non-positive or non-finite box is unusable for placement; prefer A4.
+    if w.is_finite() && h.is_finite() && w > 1.0 && h > 1.0 {
+        (w, h)
     } else {
-        (0.0, 0.0, 0.0)
+        A4
     }
 }
 
@@ -150,6 +189,15 @@ pub struct RenderKey {
     pub rotation: i32,
     pub auto_crop: bool,
     pub quality: RenderQuality,
+    /// Colour transform applied after rasterising.
+    ///
+    /// This belongs in the key. Without it, toggling Midnight mode — which
+    /// switches the filter to `Inverted` — produced a key identical to the
+    /// already-cached unfiltered render, so the engine returned the cached
+    /// bitmap from memory and the pages stayed exactly as they were. The view
+    /// invalidated its own bitmaps, but the engine cache answered the
+    /// re-request.
+    pub filter: RenderFilter,
 }
 
 #[derive(Clone)]
@@ -203,11 +251,11 @@ impl RenderCache {
     }
 
     pub fn invalidate_document(&self, doc_id: DocumentId) {
-        if let Ok(guard) = self.doc_keys.lock()
-            && let Some(keys) = guard.get(&doc_id)
+        if let Ok(mut guard) = self.doc_keys.lock()
+            && let Some(keys) = guard.remove(&doc_id)
         {
             for key in keys {
-                self.cache.remove(key);
+                self.cache.remove(&key);
             }
         }
     }
@@ -220,6 +268,19 @@ impl RenderCache {
                 self.cache.remove(&key);
             }
         }
+    }
+
+    /// Number of render keys currently tracked for `doc_id`, or `None` when the
+    /// document is not tracked at all.
+    ///
+    /// Exposed so a test can observe that invalidation releases this
+    /// bookkeeping, not just the cached bitmaps.
+    pub fn tracked_key_count(&self, doc_id: DocumentId) -> Option<usize> {
+        self.doc_keys
+            .lock()
+            .ok()?
+            .get(&doc_id)
+            .map(std::collections::HashSet::len)
     }
 }
 
@@ -257,7 +318,6 @@ pub struct DocumentStore {
     documents: HashMap<DocumentId, PdfDocument>,
     paths: HashMap<DocumentId, String>,
     render_cache: SharedRenderCache,
-    cache_keys: HashMap<DocumentId, Vec<RenderKey>>,
     /// Base `OcConfig` as decoded from the document (read-only after load).
     oc_configs: HashMap<DocumentId, zpdf::OcConfig>,
     /// Per-document user visibility overrides applied on top of `oc_configs`.
@@ -354,7 +414,6 @@ impl DocumentStore {
             documents: HashMap::new(),
             paths: HashMap::new(),
             render_cache: cache,
-            cache_keys: HashMap::new(),
             oc_configs: HashMap::new(),
             oc_visibility: HashMap::new(),
             image_caches: HashMap::new(),
@@ -611,7 +670,6 @@ impl DocumentStore {
         self.oc_configs.remove(&doc_id);
         self.oc_visibility.remove(&doc_id);
         self.image_caches.remove(&doc_id);
-        self.cache_keys.remove(&doc_id);
         self.render_cache.remove_document(doc_id);
     }
 
@@ -620,7 +678,8 @@ impl DocumentStore {
         #[cfg(windows)]
         {
             use windows::Win32::Security::Cryptography::{
-                CertCloseStore, CertEnumCertificatesInStore, CertOpenSystemStoreW,
+                CertCloseStore, CertEnumCertificatesInStore, CertFreeCertificateContext,
+                CertOpenSystemStoreW,
             };
             use windows::core::w;
 
@@ -630,14 +689,31 @@ impl DocumentStore {
                     if let Ok(store) = CertOpenSystemStoreW(None, store_name) {
                         let mut p_ctx = CertEnumCertificatesInStore(store, None);
                         while !p_ctx.is_null() {
-                            let cert_slice = std::slice::from_raw_parts(
-                                (*p_ctx).pbCertEncoded,
-                                (*p_ctx).cbCertEncoded as usize,
-                            );
-                            let mut parsed = zpdf::trust::parse_trust_anchors(cert_slice);
-                            anchors.append(&mut parsed);
+                            // A truncated store entry can carry a null
+                            // `pbCertEncoded`; `slice::from_raw_parts` requires a
+                            // non-null, aligned pointer even for a zero-length
+                            // slice, so skip it rather than invoke UB.
+                            let ptr = (*p_ctx).pbCertEncoded;
+                            let len = (*p_ctx).cbCertEncoded as usize;
+                            if !ptr.is_null() && len > 0 {
+                                let cert_slice = std::slice::from_raw_parts(ptr, len);
+                                let mut parsed = zpdf::trust::parse_trust_anchors(cert_slice);
+                                anchors.append(&mut parsed);
+                            }
+                            // `CertEnumCertificatesInStore` frees the
+                            // `CERT_CONTEXT` handed to it as
+                            // `pPrevCertificateContext` and returns the next
+                            // one, so advancing the cursor *is* the release.
+                            // Freeing it as well is a double free: the
+                            // enumerator then hands back a dangling pointer
+                            // that the next iteration dereferences.
                             p_ctx = CertEnumCertificatesInStore(store, Some(p_ctx));
                         }
+                        // The cursor returned by the final call is not consumed
+                        // by any later call, so it is the one that must be
+                        // released here — one leaked context per store per call
+                        // before this.
+                        let _ = CertFreeCertificateContext(Some(p_ctx as *const _));
                         let _ = CertCloseStore(Some(store), 0);
                     }
                 }
@@ -813,12 +889,17 @@ impl DocumentStore {
     }
 
     /// Load annotations previously saved with `save_annotations` from the PDF file.
-    /// Returns an empty vec if there are no annotations or if the file cannot be read.
+    ///
+    /// Returns an empty vec only when the document genuinely has none. A file
+    /// that cannot be parsed is an error, not an empty list: the previous code
+    /// flattened every failure into `Ok(vec![])`, so a password-protected
+    /// document (which `lopdf` cannot open) always looked like "your highlights
+    /// are gone" — and the caller would then save that empty list back over the
+    /// file.
     #[allow(clippy::many_single_char_names, clippy::similar_names)]
     pub fn load_annotations(&self, path: &str) -> PdfResult<Vec<Annotation>> {
-        let Ok(lopdf_doc) = Document::load(path) else {
-            return Ok(Vec::new());
-        };
+        let lopdf_doc = Document::load(path)
+            .map_err(|e| PdfError::OpenFailed(format!("cannot read annotations: {e}")))?;
 
         let mut annotations = Vec::new();
         let pages = lopdf_doc.get_pages();
@@ -1054,6 +1135,13 @@ impl DocumentStore {
             } else {
                 options.quality
             },
+            // Thumbnails are always colour-true, so they must not share a cache
+            // entry with a filtered full-page render.
+            filter: if is_thumbnail {
+                RenderFilter::None
+            } else {
+                options.filter
+            },
         };
 
         if let Some(base) = self.render_cache.get(&cache_key) {
@@ -1167,10 +1255,12 @@ impl DocumentStore {
             data: final_data.into(),
         };
 
-        self.cache_keys
-            .entry(doc_id)
-            .or_default()
-            .push(cache_key.clone());
+        // Removed: a per-document `Vec<RenderKey>` that was appended to on every
+        // cache-miss render and never read by anything. Because the scale
+        // component of the key is quantised to 0.01 and the UI drives it from
+        // zoom, a single page can mint hundreds of distinct keys per session, so
+        // the vector grew without bound for the life of the document — dead
+        // weight that also defeated the render cache's own memory accounting.
         self.render_cache.put(cache_key, base.clone());
 
         if options.filter == RenderFilter::None {
@@ -2438,9 +2528,18 @@ impl DocumentStore {
         let pdf_file =
             zpdf::PdfFile::parse(base_data).map_err(|e| PdfError::OpenFailed(e.to_string()))?;
 
-        let total_pages = Document::load(path)
-            .map(|d| d.get_pages().len())
-            .unwrap_or(0);
+        // `zpdf::PdfFile` already parsed the document above; ask *it* for the
+        // page count. The previous code did a second, stricter `lopdf` parse and
+        // treated a failure as "0 pages", which silently skipped every requested
+        // index and returned `Ok(vec![])` — the UI then reported "Successfully
+        // split into 0 pages." Object-stream, xref-stream and encrypted files
+        // all fail that stricter parse.
+        let total_pages = pdf_file.find_objects_by_type("Page").len();
+        if total_pages == 0 {
+            return Err(PdfError::OpenFailed(
+                "document reports no pages".to_string(),
+            ));
+        }
 
         let filename = std::path::Path::new(path)
             .file_stem()
@@ -2450,7 +2549,14 @@ impl DocumentStore {
         let mut created_paths = Vec::new();
 
         for &page_idx in &page_indices {
+            // Out-of-range indices are skipped, but never silently: a caller
+            // that cannot tell "split" from "split nothing" reports success for
+            // a document it never touched.
             if page_idx >= total_pages {
+                tracing::warn!(
+                    "split_pdf: skipping page {} (document has {total_pages} pages)",
+                    page_idx + 1
+                );
                 continue;
             }
 
@@ -2592,17 +2698,37 @@ impl DocumentStore {
                         }
                     }
                     FieldKind::Choice => {
+                        // `/Opt` entries pair an export value with a label.
+                        // Keep both: the label is what a person picks, the
+                        // export value is what belongs in `/V`.
                         let opts: Vec<String> =
                             f.options.iter().map(|(_, label)| label.clone()).collect();
+                        let exports: Vec<String> = f
+                            .options
+                            .iter()
+                            .map(|(export, label)| {
+                                if export.is_empty() {
+                                    label.clone()
+                                } else {
+                                    export.clone()
+                                }
+                            })
+                            .collect();
                         let selected_val = match &f.value {
                             Some(FieldValue::Text(s)) => Some(s.clone()),
                             _ => None,
                         };
+                        // Match on the export value first, then fall back to the
+                        // label, since some producers write the label into `/V`.
                         let selected_index = selected_val.and_then(|val| {
-                            f.options.iter().position(|(export, _)| *export == val)
+                            f.options
+                                .iter()
+                                .position(|(export, _)| *export == val)
+                                .or_else(|| f.options.iter().position(|(_, label)| *label == val))
                         });
                         FormFieldVariant::ComboBox {
                             options: opts,
+                            export_values: exports,
                             selected_index,
                         }
                     }
@@ -2673,9 +2799,18 @@ impl DocumentStore {
                     FormFieldVariant::ComboBox {
                         selected_index,
                         options,
+                        export_values,
                     } => {
                         if let Some(idx) = selected_index {
-                            options.get(*idx).cloned().unwrap_or_default()
+                            // Write the *export value*, not the label. The old
+                            // code wrote `options[idx]`, which is the display
+                            // text, so any choice field whose value differed from
+                            // its label was saved with a `/V` no viewer matches.
+                            export_values
+                                .get(*idx)
+                                .cloned()
+                                .or_else(|| options.get(*idx).cloned())
+                                .unwrap_or_default()
                         } else {
                             String::new()
                         }
@@ -2773,18 +2908,31 @@ impl DocumentStore {
                 )])),
             )])));
 
-        let mut content = pdf_writer::Content::new();
-        content.begin_text();
-        content.set_font(pdf_writer::Name(b"F1"), 48.0);
-        content.set_fill_rgb(0.7, 0.7, 0.7);
-        content.set_text_matrix([1.0, 0.0, 0.0, 1.0, 200.0, 400.0]);
-        content.show(pdf_writer::Str(text.as_bytes()));
-        content.end_text();
-        let watermark_stream =
-            lopdf::Stream::new(lopdf::Dictionary::new(), content.finish().to_vec());
-        let watermark_id = doc.add_object(watermark_stream);
-
+        // The watermark content stream is built *per page* so its placement can
+        // follow that page's box. It used to be built once with a hard-coded
+        // origin of (200, 400), which put the stamp off the page — or absurdly
+        // off-centre — for any page whose MediaBox is not A4-sized.
         for &page_id in &pages {
+            let (page_w, page_h) = media_box_size(&doc, page_id);
+
+            let mut content = pdf_writer::Content::new();
+            content.begin_text();
+            // Helvetica averages ~0.6 em per character; cap the size so a long
+            // stamp still fits the page width, then centre the run at
+            // mid-height so it reads as a watermark on any page size.
+            let font_size = 48.0_f32.min((page_w / 12.0).max(12.0));
+            content.set_font(pdf_writer::Name(b"F1"), font_size);
+            content.set_fill_rgb(0.7, 0.7, 0.7);
+            let estimated_w = (text.chars().count() as f32) * font_size * 0.6;
+            let x = ((page_w - estimated_w) / 2.0).max(10.0);
+            let y = (page_h / 2.0).max(10.0);
+            content.set_text_matrix([1.0, 0.0, 0.0, 1.0, x, y]);
+            content.show(pdf_writer::Str(text.as_bytes()));
+            content.end_text();
+            let watermark_stream =
+                lopdf::Stream::new(lopdf::Dictionary::new(), content.finish().to_vec());
+            let watermark_id = doc.add_object(watermark_stream);
+
             let existing_contents = doc
                 .get_page_contents(page_id)
                 .into_iter()
@@ -2801,10 +2949,10 @@ impl DocumentStore {
                 .cloned();
 
             let mut merged_res = None;
-            if let Some(res) = existing_res {
+            if let Some(ref res) = existing_res {
                 let mut res_dict = match res {
                     Object::Reference(r) => {
-                        doc.objects.get(&r).and_then(|o| o.as_dict().ok()).cloned()
+                        doc.objects.get(r).and_then(|o| o.as_dict().ok()).cloned()
                     }
                     Object::Dictionary(d) => Some(d.clone()),
                     _ => None,
@@ -2835,15 +2983,27 @@ impl DocumentStore {
                 }
             }
 
-            let final_res_id = merged_res.unwrap_or(resources_id);
-
             let page_dict = doc
                 .objects
                 .get_mut(&page_id)
                 .and_then(|o| o.as_dict_mut().ok())
                 .ok_or_else(|| PdfError::EngineError("Invalid page object".into()))?;
             page_dict.set("Contents", Object::Array(all_contents));
-            page_dict.set("Resources", Object::Reference(final_res_id));
+            // Only fall back to the shared font-only dictionary when the page
+            // had no `/Resources` at all. `merged_res` stays `None` if the page
+            // *did* have one that could not be resolved to a dictionary, and
+            // assigning `resources_id` in that case replaced the page's real
+            // resources — the same content-destroying outcome as the
+            // header/footer path. Leave those pages untouched instead.
+            match merged_res {
+                Some(res_id) => page_dict.set("Resources", Object::Reference(res_id)),
+                None if existing_res.is_none() => {
+                    page_dict.set("Resources", Object::Reference(resources_id))
+                }
+                None => tracing::warn!(
+                    "Watermark: page {page_id:?} has unresolvable /Resources; leaving it unchanged"
+                ),
+            }
         }
 
         doc.save(output_path)
@@ -2883,6 +3043,11 @@ impl DocumentStore {
             let formatted_footer = footer_format
                 .replace("{page}", &page_num.to_string())
                 .replace("{pages}", &page_count.to_string());
+            // Anchor the header and footer to this page's own box instead of a
+            // hard-coded 760/30. On any page shorter than 760 pt tall the header
+            // landed outside the MediaBox and silently vanished.
+            let (page_w, page_h) = media_box_size(&doc, page_id);
+            let margin = 36.0_f32.min(page_w / 8.0);
 
             let mut content = pdf_writer::Content::new();
             content.begin_text();
@@ -2890,12 +3055,19 @@ impl DocumentStore {
             content.set_fill_rgb(0.2, 0.2, 0.2);
 
             if !header_text.is_empty() {
-                content.set_text_matrix([1.0, 0.0, 0.0, 1.0, 50.0, 760.0]);
+                content.set_text_matrix([
+                    1.0,
+                    0.0,
+                    0.0,
+                    1.0,
+                    margin,
+                    (page_h - margin - 10.0).max(10.0),
+                ]);
                 content.show(pdf_writer::Str(header_text.as_bytes()));
             }
 
             if !formatted_footer.is_empty() {
-                content.set_text_matrix([1.0, 0.0, 0.0, 1.0, 50.0, 30.0]);
+                content.set_text_matrix([1.0, 0.0, 0.0, 1.0, margin, margin.max(10.0)]);
                 content.show(pdf_writer::Str(formatted_footer.as_bytes()));
             }
 
@@ -2912,20 +3084,69 @@ impl DocumentStore {
             let mut all_contents = existing_contents;
             all_contents.push(Object::Reference(hf_id));
 
-            if let Some(page_obj) = doc.objects.get_mut(&page_id)
-                && let Ok(dict) = page_obj.as_dict_mut()
-            {
-                dict.set("Contents", Object::Array(all_contents));
-                dict.set(
-                    "Resources",
-                    Object::Dictionary(lopdf::Dictionary::from_iter(vec![(
+            // Register `F1` in the page's *existing* resource dictionary.
+            //
+            // This used to assign a brand-new `/Resources` containing only
+            // `{Font: {F1}}`, discarding whatever the page already had. Every
+            // `/XObject`, `/ExtGState`, `/ColorSpace`, `/Shading` and `/Pattern`
+            // entry was dropped, so all images, soft masks and shadings on every
+            // page became unresolvable and the saved file rendered blank apart
+            // from the header and footer — while the UI reported success. Merge
+            // instead, exactly as `add_watermark` does.
+            //
+            // Computed before the mutable borrow of `doc.objects` below.
+            let existing_res = doc
+                .objects
+                .get(&page_id)
+                .and_then(|o| o.as_dict().ok())
+                .and_then(|d| d.get(b"Resources").ok())
+                .cloned();
+
+            let merged_res = match existing_res {
+                Some(res) => {
+                    let res_dict = match res {
+                        Object::Reference(r) => {
+                            doc.objects.get(&r).and_then(|o| o.as_dict().ok()).cloned()
+                        }
+                        Object::Dictionary(d) => Some(d),
+                        _ => None,
+                    };
+                    // A page whose `/Resources` is present but unresolvable is
+                    // left alone rather than being handed the font-only
+                    // dictionary, which would destroy its real resources.
+                    res_dict.map(|mut d| {
+                        let fonts = match d.get(b"Font") {
+                            Ok(Object::Reference(r)) => {
+                                doc.objects.get(r).and_then(|o| o.as_dict().ok()).cloned()
+                            }
+                            Ok(Object::Dictionary(fd)) => Some(fd.clone()),
+                            _ => None,
+                        };
+                        let mut fd = fonts.unwrap_or_default();
+                        fd.set("F1", Object::Reference(font_ref_id));
+                        d.set("Font", Object::Dictionary(fd));
+                        doc.add_object(Object::Dictionary(d))
+                    })
+                }
+                // No `/Resources` at all: a fresh dictionary is correct here.
+                None => Some(
+                    doc.add_object(Object::Dictionary(lopdf::Dictionary::from_iter(vec![(
                         "Font",
                         Object::Dictionary(lopdf::Dictionary::from_iter(vec![(
                             "F1",
                             Object::Reference(font_ref_id),
                         )])),
-                    )])),
-                );
+                    )]))),
+                ),
+            };
+
+            if let Some(page_obj) = doc.objects.get_mut(&page_id)
+                && let Ok(dict) = page_obj.as_dict_mut()
+            {
+                dict.set("Contents", Object::Array(all_contents));
+                if let Some(res_id) = merged_res {
+                    dict.set("Resources", Object::Reference(res_id));
+                }
             }
         }
 
@@ -3328,6 +3549,7 @@ mod tests {
             rotation: 0,
             auto_crop: false,
             quality: RenderQuality::Medium,
+            filter: RenderFilter::None,
         };
         let key2 = RenderKey {
             doc_id,
@@ -3336,6 +3558,7 @@ mod tests {
             rotation: 0,
             auto_crop: false,
             quality: RenderQuality::Medium,
+            filter: RenderFilter::None,
         };
         assert_eq!(key1, key2);
     }
@@ -3350,6 +3573,7 @@ mod tests {
             rotation: 0,
             auto_crop: false,
             quality: RenderQuality::Medium,
+            filter: RenderFilter::None,
         };
         let key2 = RenderKey {
             doc_id,
@@ -3358,6 +3582,7 @@ mod tests {
             rotation: 0,
             auto_crop: false,
             quality: RenderQuality::Medium,
+            filter: RenderFilter::None,
         };
         assert_ne!(key1, key2);
     }
@@ -3372,6 +3597,7 @@ mod tests {
             rotation: 0,
             auto_crop: false,
             quality: RenderQuality::Medium,
+            filter: RenderFilter::None,
         };
         let key2 = RenderKey {
             doc_id,
@@ -3380,6 +3606,7 @@ mod tests {
             rotation: 0,
             auto_crop: false,
             quality: RenderQuality::Medium,
+            filter: RenderFilter::None,
         };
         assert_ne!(key1, key2);
     }
@@ -3393,6 +3620,7 @@ mod tests {
             rotation: 0,
             auto_crop: false,
             quality: RenderQuality::Medium,
+            filter: RenderFilter::None,
         };
         let key2 = RenderKey {
             doc_id: DocumentId(2),
@@ -3401,6 +3629,7 @@ mod tests {
             rotation: 0,
             auto_crop: false,
             quality: RenderQuality::Medium,
+            filter: RenderFilter::None,
         };
         assert_ne!(key1, key2);
     }
@@ -3415,6 +3644,7 @@ mod tests {
             rotation: 0,
             auto_crop: false,
             quality: RenderQuality::Medium,
+            filter: RenderFilter::None,
         };
         let key_high = RenderKey {
             doc_id,
@@ -3423,6 +3653,7 @@ mod tests {
             rotation: 0,
             auto_crop: false,
             quality: RenderQuality::Medium,
+            filter: RenderFilter::None,
         };
         assert_ne!(key_low, key_high);
     }
@@ -3438,6 +3669,7 @@ mod tests {
                 rotation: 0,
                 auto_crop: false,
                 quality: RenderQuality::Medium,
+                filter: RenderFilter::None,
             }),
             None
         );
@@ -3453,6 +3685,7 @@ mod tests {
             rotation: 0,
             auto_crop: false,
             quality: RenderQuality::Medium,
+            filter: RenderFilter::None,
         };
         let result = crate::models::RenderResult {
             width: 100,
@@ -3475,6 +3708,7 @@ mod tests {
             rotation: 0,
             auto_crop: false,
             quality: RenderQuality::Medium,
+            filter: RenderFilter::None,
         };
         let result1 = crate::models::RenderResult {
             width: 100,
@@ -3502,6 +3736,7 @@ mod tests {
             rotation: 0,
             auto_crop: false,
             quality: RenderQuality::Medium,
+            filter: RenderFilter::None,
         };
         let key2 = RenderKey {
             doc_id: DocumentId(1),
@@ -3510,6 +3745,7 @@ mod tests {
             rotation: 0,
             auto_crop: false,
             quality: RenderQuality::Medium,
+            filter: RenderFilter::None,
         };
         let result1 = crate::models::RenderResult {
             width: 100,
@@ -3687,6 +3923,7 @@ mod tests {
                     rotation: 0,
                     auto_crop: false,
                     quality: RenderQuality::Medium,
+                    filter: RenderFilter::None,
                 })
                 .is_none()
         );

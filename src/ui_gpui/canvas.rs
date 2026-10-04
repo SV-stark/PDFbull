@@ -2,6 +2,7 @@ use super::ribbon::PageLayoutMode;
 use gpui_kit::base::StyledExt;
 use gpui_kit::component::ActiveTheme;
 use gpui_kit::component::scroll::ScrollableElement;
+use gpui_kit::component::spinner::Spinner;
 use gpui_kit::gpui::{BorderStyle, fill, outline};
 use gpui_kit::prelude::FluentBuilder;
 use gpui_kit::*;
@@ -677,7 +678,18 @@ impl DocumentViewport {
                         .justify_center()
                         .gap_2()
                         .text_color(muted_fg)
-                        .child(div().text_sm().child("Rendering page..."))
+                        .child(
+                            div()
+                                .flex()
+                                .flex_row()
+                                .items_center()
+                                .gap_2()
+                                // An indeterminate progress indicator rather than
+                                // decorative dots: this placeholder exists
+                                // precisely to say that work is in flight.
+                                .child(Spinner::new())
+                                .child(div().text_sm().child("Rendering page…")),
+                        )
                         .child(
                             div()
                                 .text_xs()

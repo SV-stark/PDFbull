@@ -530,7 +530,17 @@ pub enum FormFieldVariant {
         on_value: Option<String>,
     },
     ComboBox {
+        /// Display labels from the field's `/Opt` array, in order.
         options: Vec<String>,
+        /// The value each option *exports*, written to the field's `/V`.
+        ///
+        /// A choice field pairs an export value with a label per option, and
+        /// the two routinely differ (`["A", "Apple"]`). Only the export value
+        /// is the field's actual value — putting the label there produces a
+        /// document no viewer considers filled. Parallel to `options`; entries
+        /// fall back to the label when the PDF supplied no separate value.
+        #[serde(default)]
+        export_values: Vec<String>,
         selected_index: Option<usize>,
     },
 }

@@ -1,8 +1,10 @@
 use gpui_kit::base::StyledExt;
 use gpui_kit::component::ActiveTheme;
+use gpui_kit::component::IconName;
 use gpui_kit::component::Sizable;
 use gpui_kit::component::button::{Button, ButtonVariants};
 use gpui_kit::component::input::InputEvent;
+use gpui_kit::prelude::FluentBuilder;
 use gpui_kit::*;
 
 use super::{
@@ -94,7 +96,7 @@ impl PdfbullView {
             tabs: TabsState::new(),
             sidebar,
             viewport: DocumentViewport::new(),
-            dialogs: DialogsState::new(),
+            dialogs: DialogsState::new_in(_window, _cx),
             welcome,
             log_console: LogConsoleState::new(),
             focus_handle,
@@ -170,9 +172,7 @@ impl PdfbullView {
         self.sidebar.bookmarks.clear();
         self.sidebar.attachments.clear();
         self.sidebar.layers.clear();
-        self.sidebar.search_results.clear();
-        self.sidebar.search_query.clear();
-        self.sidebar.is_searching = false;
+        self.sidebar.reset_search(cx);
         self.rendering_pages.clear();
         self.dialogs.signatures.clear();
 
@@ -339,9 +339,7 @@ impl PdfbullView {
             self.sidebar.bookmarks.clear();
             self.sidebar.attachments.clear();
             self.sidebar.layers.clear();
-            self.sidebar.search_results.clear();
-            self.sidebar.search_query.clear();
-            self.sidebar.is_searching = false;
+            self.sidebar.reset_search(cx);
             self.rendering_pages.clear();
             self.dialogs.signatures.clear();
         }
@@ -894,16 +892,50 @@ impl PdfbullView {
         }
     }
 
+    /// Record a command that never reached the engine.
+    ///
+    /// `cmd_tx` is a bounded 128-slot channel, and a `send` on a full channel
+    /// fails. Every affected site used `let _ = cmd_tx.send(..)` followed by
+    /// `if let Ok(Ok(..)) = rx.await`, so a dropped send fell straight through
+    /// with no status message, no log entry and no dialog — the user clicked
+    /// Apply, the modal closed, and the document was silently unchanged. A
+    /// failed send has to be as visible as a failed command.
+    fn report_engine_unavailable(&mut self, command: &str, cx: &mut Context<Self>) {
+        tracing::error!("Could not queue {command}: the engine channel is full or closed");
+        self.log_console.log(
+            format!("[ERROR] {command} could not reach the engine."),
+            "error",
+        );
+        self.status_message = Some(format!("{command} failed: the engine is unavailable."));
+        cx.notify();
+    }
+
+    /// Report an engine error that came back from a completed command.
+    fn report_engine_error(
+        &mut self,
+        command: &str,
+        error: &dyn std::fmt::Display,
+        cx: &mut Context<Self>,
+    ) {
+        tracing::error!("{command} failed: {error}");
+        self.log_console
+            .log(format!("[ERROR] {command} failed: {error}"), "error");
+        self.status_message = Some(format!("{command} failed: {error}"));
+        cx.notify();
+    }
+
     fn render_status_bar(&self, cx: &mut Context<Self>) -> AnyElement {
         let border = cx.theme().border;
         let muted = cx.theme().muted;
         let fg = cx.theme().foreground;
         let muted_fg = cx.theme().muted_foreground;
+        let primary = cx.theme().primary;
         let total = self.viewport.total_pages;
         let current = self.viewport.current_page;
         let zoom_pct = (self.viewport.zoom * 100.0).round() as u32;
         let page_w = self.viewport.page_width.round() as u32;
         let page_h = self.viewport.page_height.round() as u32;
+        let has_doc = self.active_doc_id.is_some();
 
         let prev_click = cx.listener(|this, _, _, cx| {
             if this.viewport.current_page > 0 {
@@ -939,12 +971,19 @@ impl PdfbullView {
             cx.notify();
         });
 
+        // Left group: document facts. Right group: page + zoom controls. The
+        // transient status message sits in the middle and is allowed to take
+        // the remaining space, so it never shifts the two anchored groups.
+        //
+        // `min_w_0()` on the status group is what lets it shrink instead of
+        // pushing the page controls off the edge of a narrow window.
         div()
             .flex()
             .flex_row()
             .items_center()
             .justify_between()
-            .h(px(28.0))
+            .gap_3()
+            .h_7()
             .px_3()
             .bg(muted)
             .border_t_1()
@@ -955,6 +994,7 @@ impl PdfbullView {
                     .flex_row()
                     .items_center()
                     .gap_3()
+                    .flex_none()
                     .child(
                         div()
                             .text_xs()
@@ -965,8 +1005,20 @@ impl PdfbullView {
                         div()
                             .text_xs()
                             .text_color(muted_fg)
-                            .child(format!("{:?}", self.viewport.layout_mode)),
+                            .child(self.ribbon.layout_mode.label()),
                     ),
+            )
+            .child(
+                div()
+                    .flex()
+                    .flex_1()
+                    .min_w_0()
+                    .overflow_hidden()
+                    .text_xs()
+                    .text_color(primary)
+                    .font_medium()
+                    .truncate()
+                    .when_some(self.status_message.clone(), |el, msg| el.child(msg)),
             )
             .child(
                 div()
@@ -974,51 +1026,60 @@ impl PdfbullView {
                     .flex_row()
                     .items_center()
                     .gap_2()
+                    .flex_none()
                     .child(
                         Button::new("btn-status-prev")
-                            .label("◀")
+                            .icon(IconName::ChevronLeft)
                             .ghost()
                             .small()
+                            .tooltip("Previous page")
                             .on_click(prev_click),
                     )
-                    .child(div().text_xs().font_medium().text_color(fg).child(format!(
-                        "Page {} of {}",
-                        current + 1,
-                        total
-                    )))
+                    // Reserve a fixed lane so the readout does not shift as the
+                    // page count grows from 9 to 10.
+                    .child(
+                        div()
+                            .min_w(px(112.0))
+                            .text_xs()
+                            .font_medium()
+                            .text_color(fg)
+                            .child(if has_doc {
+                                format!("Page {} of {}", current + 1, total)
+                            } else {
+                                "No document".to_string()
+                            }),
+                    )
                     .child(
                         Button::new("btn-status-next")
-                            .label("▶")
+                            .icon(IconName::ChevronRight)
                             .ghost()
                             .small()
+                            .tooltip("Next page")
                             .on_click(next_click),
-                    ),
-            )
-            .child(
-                div()
-                    .flex()
-                    .flex_row()
-                    .items_center()
-                    .gap_1()
+                    )
+                    .child(div().w_px().h(px(12.0)).bg(border))
                     .child(
                         Button::new("btn-status-zoom-out")
-                            .label("－")
+                            .icon(IconName::Minus)
                             .ghost()
                             .small()
+                            .tooltip("Zoom out")
                             .on_click(zoom_out_click),
                     )
                     .child(
                         Button::new("btn-status-zoom-pct")
-                            .label(SharedString::from(format!("{}%", zoom_pct)))
+                            .label(SharedString::from(format!("{zoom_pct}%")))
                             .ghost()
                             .small()
+                            .tooltip("Reset zoom to 100%")
                             .on_click(zoom_reset_click),
                     )
                     .child(
                         Button::new("btn-status-zoom-in")
-                            .label("＋")
+                            .icon(IconName::Plus)
                             .ghost()
                             .small()
+                            .tooltip("Zoom in")
                             .on_click(zoom_in_click),
                     ),
             )
@@ -1175,28 +1236,43 @@ impl PdfbullView {
         };
         let path_str = path.to_string_lossy().to_string();
         let cmd_tx = self.engine.cmd_tx.clone();
-        self.status_message = Some("Sending to printer spooler...".into());
+        self.status_message = Some("Sending to printer spooler…".into());
         cx.notify();
 
         cx.spawn(async move |this, cx| {
             let (tx, rx) = tokio::sync::oneshot::channel();
-            let _ = cmd_tx
+            // The "Sending to printer spooler..." message is written before the
+            // send. A dropped send used to leave it on screen forever, because
+            // the send error was discarded and the closed receiver then fell
+            // into an empty `Err(_)` arm.
+            if let Err(e) = cmd_tx
                 .send(crate::commands::PdfCommand::PrintPdf(path_str, None, tx))
-                .await;
+                .await
+            {
+                tracing::error!("Failed to send PrintPdf command: {e}");
+                let _ = this.update(cx, |view, cx| {
+                    view.report_engine_unavailable("Printing", cx);
+                });
+                return;
+            }
             match rx.await {
                 Ok(Ok(())) => {
                     let _ = this.update(cx, |view, cx| {
-                        view.status_message = Some("Printed successfully.".into());
+                        view.status_message = Some("Sent to the printer.".into());
                         cx.notify();
                     });
                 }
                 Ok(Err(e)) => {
                     let _ = this.update(cx, |view, cx| {
-                        view.status_message = Some(format!("Print failed: {e}"));
-                        cx.notify();
+                        view.report_engine_error("Printing", &e, cx);
                     });
                 }
-                Err(_) => {}
+                Err(e) => {
+                    tracing::error!("Print response dropped: {e}");
+                    let _ = this.update(cx, |view, cx| {
+                        view.report_engine_unavailable("Printing", cx);
+                    });
+                }
             }
         })
         .detach();
@@ -1301,21 +1377,41 @@ impl PdfbullView {
             let out_path = save_file.path().to_string_lossy().to_string();
 
             let (tx, rx) = tokio::sync::oneshot::channel();
-            let _ = cmd_tx
+            if let Err(e) = cmd_tx
                 .send(crate::commands::PdfCommand::AddWatermark(
                     path_str,
                     text_str,
                     out_path.clone(),
                     tx,
                 ))
-                .await;
-
-            if let Ok(Ok(_)) = rx.await {
+                .await
+            {
+                tracing::error!("Failed to send AddWatermark command: {e}");
                 let _ = this.update(cx, |view, cx| {
-                    view.open_pdf_path(&out_path, cx);
-                    view.status_message = Some("Watermark applied successfully.".into());
-                    cx.notify();
+                    view.report_engine_unavailable("Adding the watermark", cx);
                 });
+                return;
+            }
+
+            match rx.await {
+                Ok(Ok(_)) => {
+                    let _ = this.update(cx, |view, cx| {
+                        view.open_pdf_path(&out_path, cx);
+                        view.status_message = Some("Watermark applied.".into());
+                        cx.notify();
+                    });
+                }
+                Ok(Err(e)) => {
+                    let _ = this.update(cx, |view, cx| {
+                        view.report_engine_error("Adding the watermark", &e, cx);
+                    });
+                }
+                Err(e) => {
+                    tracing::error!("AddWatermark response dropped: {e}");
+                    let _ = this.update(cx, |view, cx| {
+                        view.report_engine_unavailable("Adding the watermark", cx);
+                    });
+                }
             }
         })
         .detach();
@@ -1344,7 +1440,7 @@ impl PdfbullView {
             let out_path = save_file.path().to_string_lossy().to_string();
 
             let (tx, rx) = tokio::sync::oneshot::channel();
-            let _ = cmd_tx
+            if let Err(e) = cmd_tx
                 .send(crate::commands::PdfCommand::AddHeaderFooter(
                     path_str,
                     h_str,
@@ -1352,14 +1448,34 @@ impl PdfbullView {
                     out_path.clone(),
                     tx,
                 ))
-                .await;
-
-            if let Ok(Ok(_)) = rx.await {
+                .await
+            {
+                tracing::error!("Failed to send AddHeaderFooter command: {e}");
                 let _ = this.update(cx, |view, cx| {
-                    view.open_pdf_path(&out_path, cx);
-                    view.status_message = Some("Headers and footers added successfully.".into());
-                    cx.notify();
+                    view.report_engine_unavailable("Adding the header and footer", cx);
                 });
+                return;
+            }
+
+            match rx.await {
+                Ok(Ok(_)) => {
+                    let _ = this.update(cx, |view, cx| {
+                        view.open_pdf_path(&out_path, cx);
+                        view.status_message = Some("Header and footer applied.".into());
+                        cx.notify();
+                    });
+                }
+                Ok(Err(e)) => {
+                    let _ = this.update(cx, |view, cx| {
+                        view.report_engine_error("Adding the header and footer", &e, cx);
+                    });
+                }
+                Err(e) => {
+                    tracing::error!("AddHeaderFooter response dropped: {e}");
+                    let _ = this.update(cx, |view, cx| {
+                        view.report_engine_unavailable("Adding the header and footer", cx);
+                    });
+                }
             }
         })
         .detach();
@@ -1388,7 +1504,7 @@ impl PdfbullView {
             let out_path = save_file.path().to_string_lossy().to_string();
 
             let (tx, rx) = tokio::sync::oneshot::channel();
-            let _ = cmd_tx
+            if let Err(e) = cmd_tx
                 .send(crate::commands::PdfCommand::EncryptPdf(
                     path_str,
                     out_path.clone(),
@@ -1397,14 +1513,34 @@ impl PdfbullView {
                     algo_str,
                     tx,
                 ))
-                .await;
-
-            if let Ok(Ok(_)) = rx.await {
+                .await
+            {
+                tracing::error!("Failed to send EncryptPdf command: {e}");
                 let _ = this.update(cx, |view, cx| {
-                    view.open_pdf_path(&out_path, cx);
-                    view.status_message = Some("Document encrypted successfully.".into());
-                    cx.notify();
+                    view.report_engine_unavailable("Encrypting", cx);
                 });
+                return;
+            }
+
+            match rx.await {
+                Ok(Ok(_)) => {
+                    let _ = this.update(cx, |view, cx| {
+                        view.open_pdf_path(&out_path, cx);
+                        view.status_message = Some("Document encrypted.".into());
+                        cx.notify();
+                    });
+                }
+                Ok(Err(e)) => {
+                    let _ = this.update(cx, |view, cx| {
+                        view.report_engine_error("Encrypting", &e, cx);
+                    });
+                }
+                Err(e) => {
+                    tracing::error!("EncryptPdf response dropped: {e}");
+                    let _ = this.update(cx, |view, cx| {
+                        view.report_engine_unavailable("Encrypting", cx);
+                    });
+                }
             }
         })
         .detach();
@@ -1456,21 +1592,41 @@ impl PdfbullView {
             let out_path = save_file.path().to_string_lossy().to_string();
 
             let (tx, rx) = tokio::sync::oneshot::channel();
-            let _ = cmd_tx
+            if let Err(e) = cmd_tx
                 .send(crate::commands::PdfCommand::ReorderPages(
                     path_str,
                     remaining_pages,
                     out_path.clone(),
                     tx,
                 ))
-                .await;
-
-            if let Ok(Ok(_)) = rx.await {
+                .await
+            {
+                tracing::error!("Failed to send ReorderPages command: {e}");
                 let _ = this.update(cx, |view, cx| {
-                    view.open_pdf_path(&out_path, cx);
-                    view.status_message = Some(format!("Page {} deleted.", cur + 1));
-                    cx.notify();
+                    view.report_engine_unavailable("Deleting the page", cx);
                 });
+                return;
+            }
+
+            match rx.await {
+                Ok(Ok(_)) => {
+                    let _ = this.update(cx, |view, cx| {
+                        view.open_pdf_path(&out_path, cx);
+                        view.status_message = Some(format!("Page {} deleted.", cur + 1));
+                        cx.notify();
+                    });
+                }
+                Ok(Err(e)) => {
+                    let _ = this.update(cx, |view, cx| {
+                        view.report_engine_error("Deleting the page", &e, cx);
+                    });
+                }
+                Err(e) => {
+                    tracing::error!("ReorderPages response dropped: {e}");
+                    let _ = this.update(cx, |view, cx| {
+                        view.report_engine_unavailable("Deleting the page", cx);
+                    });
+                }
             }
         })
         .detach();
@@ -1511,21 +1667,40 @@ impl PdfbullView {
                 .collect();
 
             let (tx, rx) = tokio::sync::oneshot::channel();
-            let _ = cmd_tx
+            if let Err(e) = cmd_tx
                 .send(crate::commands::PdfCommand::Merge(
                     input_paths,
                     out_path.clone(),
                     tx,
                 ))
-                .await;
-
-            if let Ok(Ok(_)) = rx.await {
+                .await
+            {
+                tracing::error!("Failed to send Merge command: {e}");
                 let _ = this.update(cx, |view, cx| {
-                    view.open_pdf_path(&out_path, cx);
-                    view.status_message =
-                        Some("Merged PDF created and opened successfully.".into());
-                    cx.notify();
+                    view.report_engine_unavailable("Merging", cx);
                 });
+                return;
+            }
+
+            match rx.await {
+                Ok(Ok(_)) => {
+                    let _ = this.update(cx, |view, cx| {
+                        view.open_pdf_path(&out_path, cx);
+                        view.status_message = Some("Merged PDF opened.".into());
+                        cx.notify();
+                    });
+                }
+                Ok(Err(e)) => {
+                    let _ = this.update(cx, |view, cx| {
+                        view.report_engine_error("Merging", &e, cx);
+                    });
+                }
+                Err(e) => {
+                    tracing::error!("Merge response dropped: {e}");
+                    let _ = this.update(cx, |view, cx| {
+                        view.report_engine_unavailable("Merging", cx);
+                    });
+                }
             }
         })
         .detach();
@@ -1554,20 +1729,44 @@ impl PdfbullView {
             let pages: Vec<usize> = (0..total_pages).collect();
 
             let (tx, rx) = tokio::sync::oneshot::channel();
-            let _ = cmd_tx
+            if let Err(e) = cmd_tx
                 .send(crate::commands::PdfCommand::Split(
                     path_str, pages, out_dir, tx,
                 ))
-                .await;
-
-            if let Ok(Ok(split_files)) = rx.await {
+                .await
+            {
+                tracing::error!("Failed to send Split command: {e}");
                 let _ = this.update(cx, |view, cx| {
-                    view.status_message = Some(format!(
-                        "Successfully split into {} pages.",
-                        split_files.len()
-                    ));
-                    cx.notify();
+                    view.report_engine_unavailable("Splitting", cx);
                 });
+                return;
+            }
+
+            match rx.await {
+                Ok(Ok(split_files)) => {
+                    let count = split_files.len();
+                    let _ = this.update(cx, |view, cx| {
+                        // A split that produced nothing is a failure, not a
+                        // success worth announcing.
+                        view.status_message = Some(if count == 0 {
+                            "Split wrote no files — check the output folder.".to_string()
+                        } else {
+                            format!("Split into {count} files.")
+                        });
+                        cx.notify();
+                    });
+                }
+                Ok(Err(e)) => {
+                    let _ = this.update(cx, |view, cx| {
+                        view.report_engine_error("Splitting", &e, cx);
+                    });
+                }
+                Err(e) => {
+                    tracing::error!("Split response dropped: {e}");
+                    let _ = this.update(cx, |view, cx| {
+                        view.report_engine_unavailable("Splitting", cx);
+                    });
+                }
             }
         })
         .detach();
@@ -1595,20 +1794,40 @@ impl PdfbullView {
             let out_path = save_file.path().to_string_lossy().to_string();
 
             let (tx, rx) = tokio::sync::oneshot::channel();
-            let _ = cmd_tx
+            if let Err(e) = cmd_tx
                 .send(crate::commands::PdfCommand::Optimize(
                     path_str,
                     out_path.clone(),
                     tx,
                 ))
-                .await;
-
-            if let Ok(Ok(_)) = rx.await {
+                .await
+            {
+                tracing::error!("Failed to send Optimize command: {e}");
                 let _ = this.update(cx, |view, cx| {
-                    view.open_pdf_path(&out_path, cx);
-                    view.status_message = Some("Document compressed and opened.".into());
-                    cx.notify();
+                    view.report_engine_unavailable("Compressing", cx);
                 });
+                return;
+            }
+
+            match rx.await {
+                Ok(Ok(_)) => {
+                    let _ = this.update(cx, |view, cx| {
+                        view.open_pdf_path(&out_path, cx);
+                        view.status_message = Some("Document compressed and opened.".into());
+                        cx.notify();
+                    });
+                }
+                Ok(Err(e)) => {
+                    let _ = this.update(cx, |view, cx| {
+                        view.report_engine_error("Compressing", &e, cx);
+                    });
+                }
+                Err(e) => {
+                    tracing::error!("Optimize response dropped: {e}");
+                    let _ = this.update(cx, |view, cx| {
+                        view.report_engine_unavailable("Compressing", cx);
+                    });
+                }
             }
         })
         .detach();
@@ -1620,7 +1839,7 @@ impl PdfbullView {
         };
         let cur_page = self.viewport.current_page;
         let cmd_tx = self.engine.cmd_tx.clone();
-        self.status_message = Some(format!("Running OCR on page {}...", cur_page + 1));
+        self.status_message = Some(format!("Running OCR on page {}…", cur_page + 1));
         cx.notify();
 
         cx.spawn(async move |this, cx| {
@@ -1847,11 +2066,22 @@ impl PdfbullView {
                         let idx = self.tabs.active_tab_index;
                         if idx < self.tabs.tabs.len() {
                             let removed = self.tabs.tabs.remove(idx);
-                            if let Some(doc_id) = removed.doc_id {
-                                let _ = self
+                            if let Some(doc_id) = removed.doc_id
+                                && let Err(e) = self
                                     .engine
                                     .cmd_tx
-                                    .try_send(crate::commands::PdfCommand::Close(doc_id));
+                                    .try_send(crate::commands::PdfCommand::Close(doc_id))
+                            {
+                                // The sibling `CloseTab` path logs and reports
+                                // this; Ctrl+W discarded it, so a full channel
+                                // left the parsed document and its render-cache
+                                // entries resident for the whole session with no
+                                // visible sign.
+                                tracing::error!(
+                                    "Failed to release document {doc_id:?} to the engine: {e}"
+                                );
+                                self.status_message =
+                                    Some("Document closed, but the engine kept its cache.".into());
                             }
                             if self.tabs.active_tab_index >= self.tabs.tabs.len()
                                 && !self.tabs.tabs.is_empty()
@@ -1921,8 +2151,6 @@ impl Render for PdfbullView {
         let bg = cx.theme().background;
         let fg = cx.theme().foreground;
         let border = cx.theme().border;
-        let muted = cx.theme().muted;
-        let muted_fg = cx.theme().muted_foreground;
         let primary = cx.theme().primary;
         let has_tabs = !self.tabs.tabs.is_empty();
 
@@ -2004,10 +2232,21 @@ impl Render for PdfbullView {
                 RibbonAction::SetLayout(mode) => {
                     this.ribbon.layout_mode = mode;
                     this.viewport.layout_mode = mode;
+                    // Neither arm used to request renders. `render` deliberately
+                    // no longer drives rendering (a frame can be speculative),
+                    // so switching Single -> Two-Page exposed a page that had
+                    // never been rasterized and left it on the "Rendering
+                    // page..." placeholder with no way to recover except
+                    // scrolling. Ask for the newly visible pages here, exactly
+                    // as the zoom, rotate and midnight arms already do.
+                    this.render_needed_pages(cx);
                 }
                 RibbonAction::ToggleCover => {
                     this.ribbon.standalone_cover = !this.ribbon.standalone_cover;
                     this.viewport.standalone_cover = this.ribbon.standalone_cover;
+                    // Turning the cover off on page 0 in Two-Page mode reveals
+                    // page 1, which was never requested.
+                    this.render_needed_pages(cx);
                 }
                 RibbonAction::ToggleMidnight => {
                     this.ribbon.midnight_mode = !this.ribbon.midnight_mode;
@@ -2158,7 +2397,12 @@ impl Render for PdfbullView {
                         }
                     }
                     TabAction::CloseToRight(idx) => {
-                        for tab in this.tabs.tabs.drain((idx + 1)..) {
+                        // `Vec::drain` panics when the start of the range is
+                        // past the end of the vector. Neither sibling arm
+                        // (`CloseTab`, `CloseOthers`) bounds-checks, so a
+                        // stale index here crashed the app; clamp instead.
+                        let keep = idx.saturating_add(1).min(this.tabs.tabs.len());
+                        for tab in this.tabs.tabs.drain(keep..) {
                             if let Some(doc_id) = tab.doc_id
                                 && let Err(e) = this
                                     .engine
@@ -2431,9 +2675,29 @@ impl Render for PdfbullView {
                                                 color: "#000000".to_string(),
                                             }
                                         }
-                                        _ => crate::models::AnnotationStyle::Highlight {
-                                            color: "#FFF000".to_string(),
-                                        },
+                                        // `Ink` and `Text` used to fall through to
+                                        // this arm, so choosing the pen produced a
+                                        // yellow highlight box labelled "Highlight"
+                                        // in the Notes panel. `Text` now gets its
+                                        // own style; `Ink` has no freehand
+                                        // implementation anywhere in the engine,
+                                        // so the ribbon no longer offers it
+                                        // (`AnnotationTool::Ink` is kept for the
+                                        // public enum, but is not rendered).
+                                        super::ribbon::AnnotationTool::Text => {
+                                            crate::models::AnnotationStyle::Text {
+                                                text: String::new(),
+                                                color: "#111827".to_string(),
+                                                font_size: 12,
+                                            }
+                                        }
+                                        super::ribbon::AnnotationTool::Ink
+                                        | super::ribbon::AnnotationTool::Pointer => {
+                                            this.status_message =
+                                                Some("Freehand ink is not available yet.".into());
+                                            cx.notify();
+                                            return;
+                                        }
                                     };
 
                                     // Annotation is stored against commit_page (the drag-start page).
@@ -2463,8 +2727,6 @@ impl Render for PdfbullView {
                 },
             );
 
-            let status_bar = self.render_status_bar(cx);
-
             div()
                 .flex()
                 .flex_row()
@@ -2479,6 +2741,7 @@ impl Render for PdfbullView {
                         .flex_col()
                         .flex_1()
                         .h_full()
+                        .min_w_0()
                         .min_h_0()
                         .overflow_hidden()
                         .child(
@@ -2490,8 +2753,7 @@ impl Render for PdfbullView {
                                 .min_h_0()
                                 .overflow_hidden()
                                 .child(canvas),
-                        )
-                        .child(status_bar),
+                        ),
                 )
                 .into_any_element()
         } else {
@@ -2535,40 +2797,16 @@ impl Render for PdfbullView {
         };
 
         // Bottom Status Bar
-        let status_message_str = self.status_message.clone();
-        let status_bar = div()
-            .flex()
-            .flex_row()
-            .items_center()
-            .justify_between()
-            .h_6()
-            .px_3()
-            .bg(muted)
-            .border_t_1()
-            .border_color(border)
-            .text_xs()
-            .text_color(muted_fg)
-            .child(
-                div()
-                    .flex()
-                    .flex_row()
-                    .gap_3()
-                    .child(format!(
-                        "Page {} of {}",
-                        self.viewport.current_page + 1,
-                        self.viewport.total_pages
-                    ))
-                    .child(format!(
-                        "Zoom: {}%",
-                        (self.viewport.zoom * 100.0).round() as u32
-                    ))
-                    .child(format!("Mode: {:?}", self.ribbon.layout_mode))
-                    .children(
-                        status_message_str
-                            .map(|msg| div().text_color(primary).font_medium().child(msg)),
-                    ),
-            )
-            .child(concat!("PDFbull GPUI Core ", env!("CARGO_PKG_VERSION")));
+        //
+        // There used to be *two* stacked bars: the document one built by
+        // `render_status_bar` (page navigation + zoom, pinned to the bottom of
+        // the right-hand column) and this one (page count + zoom + the status
+        // message), pinned to the bottom of the window. Both reported the page
+        // and the zoom, so the same facts appeared twice on screen at once, and
+        // `render_status_bar` only existed on the document workspace. There is
+        // now a single bar, rendered once at the window level so the welcome
+        // screen and the document workspace share it.
+        let status_bar = self.render_status_bar(cx);
 
         // Log Console Drawer (if open)
         let log_drawer = self.log_console.render(cx, |this, action, _, cx| {
@@ -2603,20 +2841,48 @@ impl Render for PdfbullView {
                 cx.notify();
             },
             |this, action, _, cx| {
-                // Only actions that actually apply something close the dialog.
-                // The callback used to clear `active` unconditionally, so even
-                // a pure selection (a watermark preset chip) dismissed it.
-                if !matches!(action, DialogAction::SelectWatermark(_)) {
+                // Only actions that commit the whole dialog close it. Pure selections
+                // (a watermark preset chip) and repeatable page operations
+                // (rotate, delete) must not: the Page Organizer is a
+                // multi-operation modal, and dismissing it after the first
+                // button press meant rotating page after page required
+                // reopening it each time.
+                if !matches!(
+                    action,
+                    DialogAction::SelectWatermark(_)
+                        | DialogAction::RotatePages(_)
+                        | DialogAction::SelectSecurityAlgorithm(_)
+                ) {
                     this.dialogs.active = None;
                 }
                 match action {
                     DialogAction::SelectWatermark(text) => {
                         this.dialogs.selected_watermark = text;
                     }
+                    DialogAction::SelectSecurityAlgorithm(algo) => {
+                        // Selection only — the dialog stays open until Apply.
+                        this.dialogs.security_algorithm = algo;
+                    }
                     DialogAction::SetWatermark(text) => {
                         this.apply_watermark(&text, cx);
                     }
                     DialogAction::SetHeaderFooter(h, f) => {
+                        // Read the editors when they exist; the fields are
+                        // editable now rather than being static text.
+                        let h = this
+                            .dialogs
+                            .header_input
+                            .as_ref()
+                            .map(|i| i.read(cx).value().to_string())
+                            .filter(|v| !v.is_empty() && v != &h)
+                            .unwrap_or(h);
+                        let f = this
+                            .dialogs
+                            .footer_input
+                            .as_ref()
+                            .map(|i| i.read(cx).value().to_string())
+                            .filter(|v| !v.is_empty() && v != &f)
+                            .unwrap_or(f);
                         this.apply_header_footer(&h, &f, cx);
                     }
                     DialogAction::SetPassword(_pwd) => {

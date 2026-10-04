@@ -1,6 +1,10 @@
 use gpui_kit::base::StyledExt;
 use gpui_kit::component::ActiveTheme;
+use gpui_kit::component::Icon;
+use gpui_kit::component::Selectable as _;
+use gpui_kit::component::Sizable as _;
 use gpui_kit::component::button::{Button, ButtonVariants};
+use gpui_kit::component::input::{Input, InputState};
 use gpui_kit::component::scroll::ScrollableElement;
 use gpui_kit::prelude::FluentBuilder;
 use gpui_kit::*;
@@ -25,6 +29,9 @@ pub enum DialogAction {
     SetWatermark(String),
     SetHeaderFooter(String, String),
     SetPassword(String),
+    /// Choose an encryption standard without leaving the dialog. Selection only,
+    /// like `SelectWatermark` — Apply commits whatever is selected.
+    SelectSecurityAlgorithm(String),
     RotatePages(i32),
     DeleteCurrentPage,
     ApplySecurity(String),
@@ -40,13 +47,30 @@ pub fn dialog_has_apply(active: &ActiveDialog) -> bool {
     )
 }
 
+/// Algorithms offered by the Security dialog, with the label shown for each.
+pub const SECURITY_ALGORITHMS: [(&str, &str); 2] = [
+    ("AES-256", "AES-256 (high security)"),
+    ("AES-128", "AES-128 (standard)"),
+];
+
 pub struct DialogsState {
     pub active: Option<ActiveDialog>,
     pub selected_watermark: String,
     pub header_text: String,
     pub footer_text: String,
+    /// Backing editors for the header and footer fields. `None` when the state
+    /// was built without a window (tests); the dialog then shows the current
+    /// values as static text.
+    pub header_input: Option<Entity<InputState>>,
+    pub footer_input: Option<Entity<InputState>>,
     pub password_input: String,
     pub signatures: Vec<crate::models::SignatureInfo>,
+    /// Chosen encryption standard in the Security dialog.
+    ///
+    /// The Apply button used to send a hard-coded `"AES-256"` regardless of
+    /// which option was on screen, so picking AES-128 and pressing Apply
+    /// encrypted with AES-256.
+    pub security_algorithm: String,
 }
 
 impl Default for DialogsState {
@@ -56,14 +80,35 @@ impl Default for DialogsState {
 }
 
 impl DialogsState {
+    /// Build the dialog state with live editors for the header and footer
+    /// fields.
+    ///
+    /// An `InputState` needs its own `Context`, so this takes the `Context` of
+    /// whichever entity owns the dialogs — the same arrangement
+    /// [`super::sidebar::SidebarState::new`] uses.
+    pub fn new_in<O: 'static>(window: &mut Window, owner: &mut Context<O>) -> Self {
+        let header_input =
+            owner.new(|cx| InputState::new(window, cx).placeholder("Running header text"));
+        let footer_input =
+            owner.new(|cx| InputState::new(window, cx).placeholder("Page {page} of {pages}"));
+        Self {
+            header_input: Some(header_input),
+            footer_input: Some(footer_input),
+            ..Self::new()
+        }
+    }
+
     pub fn new() -> Self {
         Self {
             active: None,
             selected_watermark: "CONFIDENTIAL".to_string(),
             header_text: "Confidential Document".to_string(),
-            footer_text: "Page %PAGE% of %TOTAL%".to_string(),
+            footer_text: "Page {page} of {pages}".to_string(),
+            header_input: None,
+            footer_input: None,
             password_input: String::new(),
             signatures: Vec::new(),
+            security_algorithm: "AES-256".to_string(),
         }
     }
 
@@ -79,7 +124,6 @@ impl DialogsState {
         let fg = cx.theme().foreground;
         let muted = cx.theme().muted;
         let muted_fg = cx.theme().muted_foreground;
-        let _primary = cx.theme().primary;
 
         let (title, description): (&str, &str) = match active {
             ActiveDialog::Watermark => (
@@ -114,6 +158,7 @@ impl DialogsState {
         let cur_watermark = self.selected_watermark.clone();
         let cur_header = self.header_text.clone();
         let cur_footer = self.footer_text.clone();
+        let security_algorithm = self.security_algorithm.clone();
 
         let panel_body: AnyElement = match active {
             ActiveDialog::Watermark => {
@@ -158,91 +203,109 @@ impl DialogsState {
                     .into_any_element()
             }
 
-            ActiveDialog::HeaderFooter => div()
-                .flex()
-                .flex_col()
-                .gap_3()
-                .child(
-                    div()
-                        .flex()
-                        .flex_col()
-                        .gap_1()
-                        .child(div().text_xs().text_color(muted_fg).child("Header Text:"))
-                        .child(
-                            div()
-                                .p_2()
-                                .bg(muted)
-                                .rounded_md()
-                                .border_1()
-                                .border_color(border)
-                                .text_xs()
-                                .text_color(fg)
-                                .child(cur_header.clone()),
-                        ),
-                )
-                .child(
-                    div()
-                        .flex()
-                        .flex_col()
-                        .gap_1()
-                        .child(div().text_xs().text_color(muted_fg).child("Footer Text:"))
-                        .child(
-                            div()
-                                .p_2()
-                                .bg(muted)
-                                .rounded_md()
-                                .border_1()
-                                .border_color(border)
-                                .text_xs()
-                                .text_color(fg)
-                                .child(cur_footer.clone()),
-                        ),
-                )
-                .into_any_element(),
+            ActiveDialog::HeaderFooter => {
+                // These two used to be rendered as static text in a bordered
+                // box, with no input widget anywhere in the dialog. Apply
+                // therefore always sent the constructor defaults, so a person
+                // could read "Header Text: Confidential Document", believe they
+                // were editing it, and stamp a header they never chose.
+                let has_header_editor = self.header_input.is_some();
+                let header_input = self
+                    .header_input
+                    .as_ref()
+                    .map(|i| Input::new(i).id("dlg-header-input").w_full());
+                let has_footer_editor = self.footer_input.is_some();
+                let footer_input = self
+                    .footer_input
+                    .as_ref()
+                    .map(|i| Input::new(i).id("dlg-footer-input").w_full());
 
-            ActiveDialog::Security => div()
-                .flex()
-                .flex_col()
-                .gap_3()
-                .child(
-                    div()
-                        .text_xs()
-                        .text_color(muted_fg)
-                        .child("Choose encryption standard:"),
-                )
-                .child(
-                    div()
-                        .flex()
-                        .flex_row()
-                        .gap_2()
-                        .child(
-                            Button::new("sec-aes-256")
-                                .label("AES-256 (High Security)")
-                                .primary()
-                                .on_click(cx.listener(move |v, _, w, cx| {
-                                    on_action(
-                                        v,
-                                        DialogAction::ApplySecurity("AES-256".to_string()),
-                                        w,
-                                        cx,
-                                    )
-                                })),
-                        )
-                        .child(
-                            Button::new("sec-aes-128")
-                                .label("AES-128 (Standard)")
-                                .outline()
-                                .on_click(cx.listener(move |v, _, w, cx| {
-                                    on_action(
-                                        v,
-                                        DialogAction::ApplySecurity("AES-128".to_string()),
-                                        w,
-                                        cx,
-                                    )
-                                })),
-                        ),
-                )
-                .into_any_element(),
+                div()
+                    .flex()
+                    .flex_col()
+                    .gap_3()
+                    .child(
+                        div()
+                            .flex()
+                            .flex_col()
+                            .gap_1()
+                            .child(div().text_xs().text_color(muted_fg).child("Header text"))
+                            .when_some(header_input, |el, i| el.child(i))
+                            .when(!has_header_editor, |el| {
+                                el.child(
+                                    div()
+                                        .text_xs()
+                                        .text_color(muted_fg)
+                                        .child(cur_header.clone()),
+                                )
+                            }),
+                    )
+                    .child(
+                        div()
+                            .flex()
+                            .flex_col()
+                            .gap_1()
+                            .child(div().text_xs().text_color(muted_fg).child("Footer text"))
+                            .when_some(footer_input, |el, i| el.child(i))
+                            .when(!has_footer_editor, |el| {
+                                el.child(
+                                    div()
+                                        .text_xs()
+                                        .text_color(muted_fg)
+                                        .child(cur_footer.clone()),
+                                )
+                            }),
+                    )
+                    .child(
+                        div()
+                            .text_xs()
+                            .text_color(muted_fg)
+                            .child("Use {page} and {pages} in the footer for page numbers."),
+                    )
+                    .into_any_element()
+            }
+
+            ActiveDialog::Security => {
+                // Selection only. The buttons used to dispatch `ApplySecurity`
+                // *and* close the dialog, so there was no way to change your
+                // mind — and the shared Apply button always committed AES-256
+                // whatever was on screen.
+                let mut buttons = Vec::new();
+                for (algo, label) in SECURITY_ALGORITHMS {
+                    let is_selected = self.security_algorithm == algo;
+                    let algo_owned = algo.to_string();
+                    buttons.push(
+                        Button::new(format!("sec-{algo}"))
+                            .label(label)
+                            .small()
+                            .selected(is_selected)
+                            .on_click(cx.listener(move |v, _, w, cx| {
+                                on_action(
+                                    v,
+                                    DialogAction::SelectSecurityAlgorithm(algo_owned.clone()),
+                                    w,
+                                    cx,
+                                )
+                            })),
+                    );
+                }
+                div()
+                    .flex()
+                    .flex_col()
+                    .gap_3()
+                    .child(
+                        div()
+                            .text_xs()
+                            .text_color(muted_fg)
+                            .child("Encryption standard"),
+                    )
+                    .child(div().flex().flex_row().gap_2().children(buttons))
+                    .child(div().text_xs().text_color(muted_fg).child(
+                        "The document opens with the password \"user\" and the owner \
+                                 password \"owner\".",
+                    ))
+                    .into_any_element()
+            }
 
             ActiveDialog::PageOrganizer => div()
                 .flex()
@@ -328,30 +391,41 @@ impl DialogsState {
                         .into_any_element()
                 } else {
                     let mut cards = Vec::new();
+                    // Signature trust is one of the few places a semantic
+                    // status colour is the right answer, but the values come
+                    // from the theme's `success` / `warning` / `danger` roles
+                    // rather than literal RGBA. The raw literals could not
+                    // respond to a custom theme and ignored light-mode
+                    // contrast.
+                    let success = cx.theme().success;
+                    let warning = cx.theme().warning;
+                    let danger = cx.theme().danger;
+                    let success_fg = cx.theme().success_foreground;
+                    let warning_fg = cx.theme().warning_foreground;
+                    let danger_fg = cx.theme().danger_foreground;
                     for sig in sigs {
-                        let badge_kind = sig.badge_kind();
-                        let (badge_text, badge_bg, badge_border, badge_text_color, icon_sym) =
-                            match badge_kind {
+                        let (badge_text, badge_bg, badge_border, badge_text_color, badge_icon) =
+                            match sig.badge_kind() {
                                 crate::models::SignatureBadgeKind::TrustedRoot => (
-                                    "Verified & Trusted Root CA",
-                                    gpui_kit::rgba(0x22c55e26),
-                                    gpui_kit::rgba(0x22c55e80),
-                                    gpui_kit::rgba(0x16a34aff),
-                                    "✓",
+                                    "Verified, trusted root CA",
+                                    success.opacity(0.15),
+                                    success.opacity(0.5),
+                                    success_fg,
+                                    gpui_kit::component::IconName::CircleCheck,
                                 ),
                                 crate::models::SignatureBadgeKind::UntrustedRoot => (
-                                    "Valid Signature (Untrusted Root / Self-Signed)",
-                                    gpui_kit::rgba(0xeab30826),
-                                    gpui_kit::rgba(0xeab30880),
-                                    gpui_kit::rgba(0xca8a04ff),
-                                    "⚠",
+                                    "Valid signature, untrusted root",
+                                    warning.opacity(0.15),
+                                    warning.opacity(0.5),
+                                    warning_fg,
+                                    gpui_kit::component::IconName::TriangleAlert,
                                 ),
                                 crate::models::SignatureBadgeKind::Invalid => (
-                                    "Invalid Signature / Digest Mismatch",
-                                    gpui_kit::rgba(0xef444426),
-                                    gpui_kit::rgba(0xef444480),
-                                    gpui_kit::rgba(0xdc2626ff),
-                                    "✕",
+                                    "Invalid signature",
+                                    danger.opacity(0.15),
+                                    danger.opacity(0.5),
+                                    danger_fg,
+                                    gpui_kit::component::IconName::CircleX,
                                 ),
                             };
 
@@ -410,7 +484,7 @@ impl DialogsState {
                                             .text_xs()
                                             .font_bold()
                                             .text_color(badge_text_color)
-                                            .child(icon_sym)
+                                            .child(Icon::new(badge_icon))
                                             .child(badge_text),
                                     ),
                             )
@@ -453,16 +527,60 @@ impl DialogsState {
                 }
             }
 
-            _ => div()
-                .h_24()
-                .bg(muted)
-                .rounded_md()
+            // The decrypt path does not exist in the engine. This dialog used to
+            // fall into a catch-all arm that rendered the literal placeholder
+            // text "Document Password Configuration" with no input and no way
+            // forward. Say what is actually true instead of showing a form that
+            // cannot be filled in.
+            ActiveDialog::Password => div()
                 .flex()
+                .flex_col()
                 .items_center()
                 .justify_center()
-                .text_sm()
-                .text_color(muted_fg)
-                .child(format!("{} Configuration", title))
+                .p_6()
+                .gap_2()
+                .bg(muted)
+                .rounded_md()
+                .border_1()
+                .border_color(border)
+                .child(
+                    div()
+                        .text_sm()
+                        .font_semibold()
+                        .text_color(fg)
+                        .child("Opening encrypted documents is not supported yet"),
+                )
+                .child(div().text_xs().text_color(muted_fg).text_center().child(
+                    "PDFbull cannot yet supply the password required to decrypt \
+                             a protected PDF.",
+                ))
+                .into_any_element(),
+
+            ActiveDialog::Settings => div()
+                .flex()
+                .flex_col()
+                .items_center()
+                .justify_center()
+                .p_6()
+                .gap_2()
+                .bg(muted)
+                .rounded_md()
+                .border_1()
+                .border_color(border)
+                .child(
+                    div()
+                        .text_sm()
+                        .font_semibold()
+                        .text_color(fg)
+                        .child("Settings are not configurable yet"),
+                )
+                .child(
+                    div()
+                        .text_xs()
+                        .text_color(muted_fg)
+                        .text_center()
+                        .child("Theme, default zoom and startup behaviour are not wired up."),
+                )
                 .into_any_element(),
         };
 
@@ -525,9 +643,13 @@ impl DialogsState {
                                         w,
                                         cx,
                                     ),
+                                    // Commit the algorithm that is actually
+                                    // selected. This was hard-coded to
+                                    // "AES-256", so choosing AES-128 and
+                                    // pressing Apply encrypted with AES-256.
                                     ActiveDialog::Security => on_action(
                                         v,
-                                        DialogAction::ApplySecurity("AES-256".to_string()),
+                                        DialogAction::ApplySecurity(security_algorithm.clone()),
                                         w,
                                         cx,
                                     ),

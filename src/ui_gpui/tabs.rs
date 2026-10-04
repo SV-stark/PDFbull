@@ -1,6 +1,7 @@
 use gpui_kit::base::StyledExt;
 use gpui_kit::component::ActiveTheme;
 use gpui_kit::component::button::{Button, ButtonVariants};
+use gpui_kit::component::{Icon, IconName};
 use gpui_kit::prelude::FluentBuilder;
 use gpui_kit::*;
 use std::path::PathBuf;
@@ -98,7 +99,11 @@ impl TabsState {
                 .on_click(cx.listener(move |v, _, w, cx| {
                     on_action(v, TabAction::SelectTab(idx), w, cx);
                 }))
-                .child(div().text_xs().child("📄"))
+                .child(Icon::new(IconName::FileText).text_color(if is_active {
+                    fg
+                } else {
+                    muted_fg
+                }))
                 .child(
                     div()
                         .text_xs()
@@ -111,8 +116,9 @@ impl TabsState {
                 })
                 .child(
                     Button::new(SharedString::from(format!("close-tab-{}", tab_id)))
-                        .label("×")
+                        .icon(IconName::Close)
                         .ghost()
+                        .tooltip(format!("Close {}", tab.title))
                         .on_click(cx.listener(move |v, _, w, cx| {
                             // The close button is nested inside the tab's own
                             // clickable div. gpui-kit's Button only stops click
@@ -130,8 +136,9 @@ impl TabsState {
         }
 
         let new_tab_btn = Button::new("btn-new-tab")
-            .label("+")
+            .icon(IconName::Plus)
             .ghost()
+            .tooltip("Open another document")
             .on_click(cx.listener(move |v, _, w, cx| on_action(v, TabAction::NewTab, w, cx)));
 
         div()

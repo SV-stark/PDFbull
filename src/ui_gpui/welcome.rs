@@ -1,9 +1,22 @@
 use super::sidebar::SidebarState;
 use gpui_kit::base::StyledExt;
 use gpui_kit::component::ActiveTheme;
+use gpui_kit::component::Sizable as _;
 use gpui_kit::component::button::{Button, ButtonVariants};
+use gpui_kit::component::{Icon, IconName};
 use gpui_kit::*;
 use std::path::PathBuf;
+
+/// Icons are Lucide vectors from the component bundle. This screen previously
+/// used emoji (📂 📑 ✍️ 🔒 📄 📥), which render differently on every platform,
+/// ignore the theme's foreground colour, and cannot dim with a row. One icon
+/// family, themeable, everywhere.
+const ICON_DROP: IconName = IconName::Inbox;
+const ICON_OPEN: IconName = IconName::FolderOpen;
+const ICON_ORGANIZE: IconName = IconName::FileText;
+const ICON_SIGN: IconName = IconName::Check;
+const ICON_PROTECT: IconName = IconName::Ban;
+const ICON_FILE: IconName = IconName::FileText;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum WelcomeAction {
@@ -171,8 +184,8 @@ impl WelcomeState {
                                 .text_base()
                                 .font_medium()
                                 .text_color(fg)
-                                .child("📥")
-                                .child("Drag & Drop PDF files here"),
+                                .child(Icon::new(ICON_DROP).text_color(fg))
+                                .child("Drag & drop PDF files here"),
                         )
                         .child(
                             div()
@@ -182,9 +195,15 @@ impl WelcomeState {
                                 .gap_2()
                                 .child(
                                     Button::new("btn-welcome-browse")
-                                        .label("Browse Files...")
+                                        .label("Browse files…")
                                         .primary()
+                                        // The Browse button is a *descendant* of the
+                                        // clickable dropzone, and GPUI dispatches
+                                        // bubble-phase listeners child-first. Without
+                                        // this, one click fired both handlers and
+                                        // opened two native file dialogs at once.
                                         .on_click(cx.listener(move |v, _, w, cx| {
+                                            cx.stop_propagation();
                                             on_action(v, WelcomeAction::OpenFile, w, cx)
                                         })),
                                 )
@@ -192,7 +211,7 @@ impl WelcomeState {
                                     div()
                                         .text_xs()
                                         .text_color(muted_fg)
-                                        .child("or drop anywhere on window"),
+                                        .child("or drop anywhere on this window"),
                                 ),
                         ),
                 )
@@ -210,7 +229,7 @@ impl WelcomeState {
                                 .child(render_action_card(
                                     cx,
                                     "card-open-browse",
-                                    "📂",
+                                    ICON_OPEN,
                                     "Open Document",
                                     "Browse and view PDF documents from disk",
                                     WelcomeAction::OpenFile,
@@ -219,7 +238,7 @@ impl WelcomeState {
                                 .child(render_action_card(
                                     cx,
                                     "card-page-organizer",
-                                    "📑",
+                                    ICON_ORGANIZE,
                                     "Page Organizer",
                                     "Reorder, rotate, extract, or delete pages",
                                     WelcomeAction::PageOrganizer,
@@ -234,18 +253,18 @@ impl WelcomeState {
                                 .child(render_action_card(
                                     cx,
                                     "card-digital-signatures",
-                                    "✍️",
+                                    ICON_SIGN,
                                     "Digital Signatures",
-                                    "Certify and sign PDFs with PKCS#12 keys",
+                                    "Review signature and certificate trust status",
                                     WelcomeAction::DigitalSignatures,
                                     on_action,
                                 ))
                                 .child(render_action_card(
                                     cx,
                                     "card-protect-encrypt",
-                                    "🔒",
+                                    ICON_PROTECT,
                                     "Protect & Encrypt",
-                                    "Manage passwords, permissions & AES security",
+                                    "Set passwords and restrict printing or copying",
                                     WelcomeAction::Security,
                                     on_action,
                                 )),
@@ -255,27 +274,37 @@ impl WelcomeState {
         // Recent Documents Shelf
         let recent_section = if !self.recent_files.is_empty() {
             let mut items = Vec::new();
-            for (idx, p) in self.recent_files.iter().take(4).enumerate() {
+            for p in self.recent_files.iter().take(4) {
                 let file_name = p
                     .file_name()
                     .and_then(|n| n.to_str())
                     .unwrap_or("Document.pdf")
                     .to_string();
                 let path_str = p.to_string_lossy().to_string();
+                // Keyed on the path, not the list position. The recent list is
+                // re-sorted most-recent-first on every open, so a positional id
+                // handed one file's hover state to a different file.
+                let key = format!("recent-item-{}", path_str);
+                let idx = self
+                    .recent_files
+                    .iter()
+                    .take(4)
+                    .position(|candidate| candidate == p)
+                    .unwrap_or(0);
 
+                // A real Button rather than a clickable div: the previous row was
+                // a bare `on_click` div, so it could not be reached with Tab and
+                // could not be activated with Enter or Space. The trailing "Open"
+                // text was decorative rather than an actual control.
                 items.push(
-                    div()
-                        .id(SharedString::from(format!("recent-item-{}", idx)))
-                        .flex()
-                        .flex_row()
-                        .items_center()
-                        .justify_between()
+                    Button::new(SharedString::from(key))
                         .w_full()
+                        .ghost()
+                        .h_auto()
                         .px_3()
                         .py_2()
                         .rounded_lg()
-                        .cursor_pointer()
-                        .hover(move |s| s.bg(accent))
+                        .justify_start()
                         .on_click(cx.listener(move |v, _, w, cx| {
                             on_action(v, WelcomeAction::OpenRecent(idx), w, cx);
                         }))
@@ -285,6 +314,7 @@ impl WelcomeState {
                                 .flex_row()
                                 .items_center()
                                 .gap_3()
+                                .w_full()
                                 .child(
                                     div()
                                         .flex()
@@ -293,14 +323,16 @@ impl WelcomeState {
                                         .size_7()
                                         .rounded_md()
                                         .bg(muted)
-                                        .text_sm()
-                                        .child("📄"),
+                                        .child(Icon::new(ICON_FILE).text_color(muted_fg)),
                                 )
                                 .child(
                                     div()
                                         .flex()
                                         .flex_col()
+                                        .items_start()
                                         .gap_0p5()
+                                        .min_w_0()
+                                        .flex_1()
                                         .child(
                                             div()
                                                 .text_sm()
@@ -309,16 +341,19 @@ impl WelcomeState {
                                                 .child(file_name),
                                         )
                                         .child(
-                                            div().text_xs().text_color(muted_fg).child(path_str),
+                                            div()
+                                                .text_xs()
+                                                .text_color(muted_fg)
+                                                .truncate()
+                                                .child(path_str),
                                         ),
+                                )
+                                .child(
+                                    Icon::new(IconName::ArrowRight)
+                                        .small()
+                                        .flex_none()
+                                        .text_color(muted_fg),
                                 ),
-                        )
-                        .child(
-                            div()
-                                .text_xs()
-                                .font_medium()
-                                .text_color(muted_fg)
-                                .child("Open →"),
                         ),
                 );
             }
@@ -340,7 +375,7 @@ impl WelcomeState {
                                     .text_xs()
                                     .font_semibold()
                                     .text_color(muted_fg)
-                                    .child("RECENT DOCUMENTS"),
+                                    .child("Recent documents"),
                             ),
                     )
                     .child(
@@ -367,7 +402,7 @@ impl WelcomeState {
 fn render_action_card<V: 'static>(
     cx: &mut Context<V>,
     id: &'static str,
-    icon: &'static str,
+    icon: IconName,
     title: &'static str,
     description: &'static str,
     action: WelcomeAction,
@@ -410,8 +445,7 @@ fn render_action_card<V: 'static>(
                         .size_8()
                         .rounded_lg()
                         .bg(accent)
-                        .text_base()
-                        .child(icon),
+                        .child(Icon::new(icon).text_color(primary)),
                 )
                 .child(div().text_sm().font_semibold().text_color(fg).child(title)),
         )
