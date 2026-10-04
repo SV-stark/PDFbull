@@ -7,7 +7,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [0.16.9] - 2026-10-04
 
-Regression release. Two independent defects combined to make the document area look dead: **scrollbars vanished and Continuous mode stopped scrolling entirely.** Verified: `cargo clippy --all-targets` clean, `cargo fmt --check` clean, 164 tests passing (1 new regression test).
+Regression release. Two independent defects combined to make the document area look dead: **scrollbars vanished and Continuous mode stopped scrolling entirely.** Verified: `cargo clippy --all-targets` clean, `cargo fmt --check` clean, 164 tests passing (1 new regression test), and a clean `cargo build --release` producing a binary stamped 0.16.9.
 
 ### Fixed (Scrolling — Regression)
 - **Scrollbars disappeared and Continuous mode stopped scrolling after switching tabs.** `reset_for_document` deliberately leaves `total_pages` alone, since page count is document data rather than per-document *view* state. But the guard that used to re-derive it could never fire again:
