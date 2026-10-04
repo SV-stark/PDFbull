@@ -44,6 +44,24 @@ pub struct PdfbullView {
     /// and a document activated without a cached set is re-read from disk.
     pub annotations_by_doc:
         std::collections::HashMap<crate::models::DocumentId, Vec<crate::models::Annotation>>,
+    /// Page count and page size for every open document.
+    ///
+    /// `reset_for_document` deliberately leaves `total_pages` alone (it is
+    /// document data, not per-document *view* state), but that left the viewport
+    /// reporting the geometry of whichever document was opened **last**. The
+    /// "do we need to re-derive?" guard could never fire again, because
+    /// `DocumentViewport::new` seeds `total_pages = 1` and `page_width = 595`.
+    ///
+    /// So switching from a 2-page tab to a 10-page tab left `total_pages = 2`:
+    /// the Continuous strip laid out only two pages, the content fit the
+    /// viewport, `max_offset` stayed 0 — and therefore no scrollbar was drawn
+    /// and the wheel handler clamped the offset to 0. Continuous mode stopped
+    /// scrolling entirely, and the thumbnail panel lost its scrollbar too.
+    ///
+    /// Geometry is expensive to derive (`inspect_pdf_geometry` parses the whole
+    /// file, which froze the UI for seconds per switch), so it is cached per
+    /// document rather than re-read on activation.
+    pub doc_geometry: std::collections::HashMap<crate::models::DocumentId, DocGeometry>,
     /// Keeps `sidebar.search_query` in sync with the sidebar's search editor.
     _search_sub: Option<Subscription>,
 }
@@ -53,6 +71,14 @@ pub struct PdfbullView {
 /// document is tens of thousands of entries feeding both the sidebar list and
 /// the highlight overlay.
 const MAX_SEARCH_RESULTS: usize = 5_000;
+
+/// Page count and page size of a document, cached per `DocumentId`.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct DocGeometry {
+    pub page_count: usize,
+    pub page_width: f32,
+    pub page_height: f32,
+}
 
 pub fn inspect_pdf_geometry(path: &std::path::Path) -> Option<(usize, f32, f32)> {
     let doc = lopdf::Document::load(path).ok()?;
@@ -116,6 +142,7 @@ impl PdfbullView {
             focus_handle,
             status_message: None,
             annotations_by_doc: std::collections::HashMap::new(),
+            doc_geometry: std::collections::HashMap::new(),
             _search_sub,
         }
     }
@@ -239,6 +266,14 @@ impl PdfbullView {
 
         let doc_id = crate::models::next_doc_id();
         self.active_doc_id = Some(doc_id);
+        self.doc_geometry.insert(
+            doc_id,
+            DocGeometry {
+                page_count,
+                page_width,
+                page_height,
+            },
+        );
 
         let new_id = self.tabs.tabs.len();
         self.tabs.push(DocumentTab {
@@ -294,6 +329,29 @@ impl PdfbullView {
             match rx.await {
                 Ok(Ok(open_res)) => {
                     let _ = this.update(cx, |view, cx| {
+                        // The engine's numbers are authoritative and refine the
+                        // `lopdf` estimate, so record them in the per-document
+                        // cache — otherwise switching away and back would restore
+                        // the rougher estimate instead.
+                        let page_height = open_res
+                            .page_heights
+                            .first()
+                            .copied()
+                            .filter(|h| *h > 0.0)
+                            .unwrap_or(view.viewport.page_height);
+                        let page_width = if open_res.max_width > 0.0 {
+                            open_res.max_width
+                        } else {
+                            view.viewport.page_width
+                        };
+                        view.doc_geometry.insert(
+                            doc_id,
+                            DocGeometry {
+                                page_count: open_res.page_count,
+                                page_width,
+                                page_height,
+                            },
+                        );
                         if view.active_doc_id == Some(doc_id) {
                             view.viewport.total_pages = open_res.page_count;
                             if open_res.max_width > 0.0 {
@@ -438,20 +496,36 @@ impl PdfbullView {
                 self.request_annotations(doc_id, path, cx);
             }
         }
-        if let Some(ref path) = path {
-            // Only re-derive geometry when we have no authoritative numbers
-            // yet. `inspect_pdf_geometry` parses the entire file, and this runs
-            // on every tab click / Ctrl+W / Ctrl+Tab, so re-parsing on each
-            // switch froze the UI for seconds on large documents.
-            let needs_geometry = self.viewport.total_pages == 0 || self.viewport.page_width <= 0.0;
-            if needs_geometry
-                && let Some((page_count, page_width, page_height)) = inspect_pdf_geometry(path)
-            {
-                self.viewport.total_pages = page_count;
-                self.viewport.page_width = page_width;
-                self.viewport.page_height = page_height;
+        // Restore *this* document's geometry. The previous guard
+        // (`total_pages == 0 || page_width <= 0.0`) could never be true once a
+        // document had been opened, so the viewport kept whichever document was
+        // opened last — leaving the strip too short to scroll. Cached geometry
+        // makes activation cheap; a document with no cached entry is derived
+        // once and then remembered, so the expensive whole-file parse still
+        // happens at most once per document rather than on every switch.
+        if let Some(doc_id) = doc_id {
+            let geometry = match self.doc_geometry.get(&doc_id).copied() {
+                Some(g) => Some(g),
+                None => path.as_deref().and_then(inspect_pdf_geometry).map(
+                    |(page_count, page_width, page_height)| {
+                        let g = DocGeometry {
+                            page_count,
+                            page_width,
+                            page_height,
+                        };
+                        self.doc_geometry.insert(doc_id, g);
+                        g
+                    },
+                ),
+            };
+            if let Some(g) = geometry {
+                self.viewport.total_pages = g.page_count;
+                self.viewport.page_width = g.page_width;
+                self.viewport.page_height = g.page_height;
+                // A document with fewer pages than the one we came from would
+                // otherwise leave `current_page` past the end.
                 if self.viewport.current_page >= self.viewport.total_pages {
-                    self.viewport.current_page = 0;
+                    self.viewport.current_page = self.viewport.total_pages.saturating_sub(1);
                 }
             }
         }
@@ -2450,6 +2524,7 @@ impl Render for PdfbullView {
                                 // Release the cached annotations too, or the map
                                 // grows for the life of the session.
                                 this.annotations_by_doc.remove(&doc_id);
+                                this.doc_geometry.remove(&doc_id);
                                 // Dropping this send left the parsed document and
                                 // its render-cache entries resident forever, with
                                 // no user-visible sign.
@@ -2485,6 +2560,7 @@ impl Render for PdfbullView {
                                     && let Some(doc_id) = tab.doc_id
                                 {
                                     this.annotations_by_doc.remove(&doc_id);
+                                    this.doc_geometry.remove(&doc_id);
                                     if let Err(e) = this
                                         .engine
                                         .cmd_tx
@@ -2510,6 +2586,7 @@ impl Render for PdfbullView {
                         for tab in this.tabs.tabs.drain(keep..) {
                             if let Some(doc_id) = tab.doc_id {
                                 this.annotations_by_doc.remove(&doc_id);
+                                this.doc_geometry.remove(&doc_id);
                                 if let Err(e) = this
                                     .engine
                                     .cmd_tx

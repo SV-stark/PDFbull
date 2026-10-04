@@ -5,6 +5,28 @@ All notable changes to the PDFbull project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.16.9] - 2026-10-04
+
+Regression release. Two independent defects combined to make the document area look dead: **scrollbars vanished and Continuous mode stopped scrolling entirely.** Verified: `cargo clippy --all-targets` clean, `cargo fmt --check` clean, 164 tests passing (1 new regression test).
+
+### Fixed (Scrolling — Regression)
+- **Scrollbars disappeared and Continuous mode stopped scrolling after switching tabs.** `reset_for_document` deliberately leaves `total_pages` alone, since page count is document data rather than per-document *view* state. But the guard that used to re-derive it could never fire again:
+
+  ```rust
+  let needs_geometry = self.viewport.total_pages == 0 || self.viewport.page_width <= 0.0;
+  ```
+
+  `DocumentViewport::new` seeds `total_pages = 1` and `page_width = 595`, so both terms are false for the entire life of the process once any document has been opened. The viewport therefore reported whichever document was opened **last**. Open a 10-page document, then a 2-page one, then click back to the first tab: `total_pages` is still 2, so the Continuous strip lays out only two pages, that content fits inside the viewport, `max_offset` stays 0 — and a zero `max_offset` means **no scrollbar is drawn** *and* the wheel handler clamps the offset to `0`. Continuous mode could not scroll and the thumbnail panel lost its scrollbar for the same reason.
+
+  Geometry is now cached per `DocumentId` and restored on activation, seeded from `inspect_pdf_geometry` at open and refined by the engine's authoritative numbers when the document finishes loading. A document with no cached entry is inspected once and then remembered, so the expensive whole-file parse still happens at most once per document rather than on every tab switch — the original reason the guard was written. Entries are released on every close path. `current_page` is also clamped when the incoming document has fewer pages than the one being left.
+
+- **The page placeholder carried a never-ending animation.** In 0.16.6 the "Rendering page…" placeholder was given a `Spinner` on the grounds that an indeterminate indicator beats decorative dots. `Spinner` is `Animation::new(speed).repeat()` — an animation that does not stop and therefore requests a frame forever. Continuous mode builds up to 48 page cards (`MAX_CARD_WINDOW`) while only the pages around the cursor are rasterized, so roughly 40 of them showed this placeholder: **~40 perpetual animations in the hot path**. The window never idled, every frame rebuilt all 48 cards, and the app became unresponsive to input — including the wheel, which is why scrolling looked dead rather than merely jittery. The placeholder is static text again.
+
+  This also violates the "keep animation work bounded" performance rule, and it should never have been introduced as a cosmetic touch inside a virtualized list.
+
+### Tests
+- A regression test locking in the geometry contract: two documents of different lengths must never share page counts across a switch, and the resulting strip must actually overflow a typical viewport so there is something to scroll. 164 tests passing, up from 163.
+
 ## [0.16.8] - 2026-10-04
 
 Scroll-correctness fix for the thumbnail panel. The sidebar's virtualisation and its scroll maths disagreed about how tall a thumbnail card is, by a margin that grew with every page. Verified: `cargo clippy --all-targets` clean, `cargo fmt --check` clean, 163 tests passing (3 new regression tests), and a clean `cargo build --release` producing a binary stamped 0.16.8.

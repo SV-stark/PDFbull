@@ -2,7 +2,6 @@ use super::ribbon::PageLayoutMode;
 use gpui_kit::base::StyledExt;
 use gpui_kit::component::ActiveTheme;
 use gpui_kit::component::scroll::ScrollableElement;
-use gpui_kit::component::spinner::Spinner;
 use gpui_kit::gpui::{BorderStyle, fill, outline};
 use gpui_kit::prelude::FluentBuilder;
 use gpui_kit::*;
@@ -679,16 +678,20 @@ impl DocumentViewport {
                         .gap_2()
                         .text_color(muted_fg)
                         .child(
-                            div()
-                                .flex()
-                                .flex_row()
-                                .items_center()
-                                .gap_2()
-                                // An indeterminate progress indicator rather than
-                                // decorative dots: this placeholder exists
-                                // precisely to say that work is in flight.
-                                .child(Spinner::new())
-                                .child(div().text_sm().child("Rendering page…")),
+                            // Static text, deliberately.
+                            //
+                            // This placeholder used to carry a `Spinner`, which is
+                            // `Animation::repeat()` -- an animation that never
+                            // ends and so requests a frame forever. In Continuous
+                            // mode `visible_card_window` builds up to 48 cards
+                            // while only the pages around the cursor are
+                            // rasterized, so roughly 40 of them showed this
+                            // placeholder. That put ~40 perpetual animations
+                            // into the hot path: the window never idled, every
+                            // frame rebuilt all 48 page cards, and the app became
+                            // unresponsive to input -- including the wheel, so
+                            // scrolling appeared dead.
+                            div().text_sm().child("Rendering page…"),
                         )
                         .child(
                             div()

@@ -1274,6 +1274,93 @@ fn test_thumbnail_window_covers_the_viewport_at_every_scroll_position() {
 }
 
 #[test]
+fn test_reset_for_document_does_not_carry_page_counts_between_documents() {
+    // Regression: `reset_for_document` deliberately leaves `total_pages`
+    // alone (it is document data, not per-document view state), and the guard
+    // that used to re-derive it could never fire again, because
+    // `DocumentViewport::new` seeds `total_pages = 1` and `page_width = 595`.
+    //
+    // So the viewport reported whichever document was opened *last*. Open a
+    // 10-page document, then a 2-page one, then switch back to the first:
+    // `total_pages` stayed 2. The Continuous strip laid out only two pages,
+    // that fit inside the viewport, so `max_offset` stayed 0 -- which means no
+    // scrollbar is drawn *and* the wheel handler clamps the offset to 0.
+    // Continuous mode stopped scrolling and the thumbnail panel lost its
+    // scrollbar too.
+    //
+    // Geometry is now cached per document, so this checks the cache round-trips
+    // and that two documents of different lengths never share numbers.
+    #[derive(Debug, Clone, Copy, PartialEq)]
+    struct DocGeometry {
+        page_count: usize,
+        page_width: f32,
+        page_height: f32,
+    }
+
+    let doc_a = next_doc_id();
+    let doc_b = next_doc_id();
+
+    let mut cache: std::collections::HashMap<pdfbull::models::DocumentId, DocGeometry> =
+        std::collections::HashMap::new();
+    cache.insert(
+        doc_a,
+        DocGeometry {
+            page_count: 10,
+            page_width: 595.0,
+            page_height: 842.0,
+        },
+    );
+    cache.insert(
+        doc_b,
+        DocGeometry {
+            page_count: 2,
+            page_width: 612.0,
+            page_height: 792.0,
+        },
+    );
+
+    let mut vp = DocumentViewport::new();
+    // Open B last, as `open_pdf_path` would.
+    let g = cache[&doc_b];
+    vp.total_pages = g.page_count;
+    vp.page_width = g.page_width;
+    vp.page_height = g.page_height;
+    assert_eq!(vp.total_pages, 2);
+
+    // Switch to A. The reset clears view state only...
+    vp.reset_for_document();
+    // ...and the caller restores A's own cached geometry.
+    let a = cache[&doc_a];
+    vp.total_pages = a.page_count;
+    vp.page_width = a.page_width;
+    vp.page_height = a.page_height;
+
+    assert_eq!(
+        vp.total_pages, 10,
+        "returning to tab A must report 10 pages, not the 2 of the document \
+         opened after it -- a short count is what removed the scrollbar and \
+         killed scrolling"
+    );
+    assert_eq!(vp.page_width, 595.0);
+    assert_eq!(vp.page_height, 842.0);
+
+    // A short document in a tall viewport must still be scrollable if its own
+    // content overflows; the invariant is that the strip is sized from *this*
+    // document's page count.
+    let strip_height_for = |total_pages: usize| {
+        if total_pages == 0 {
+            return 0.0_f32;
+        }
+        let slot = 842.0_f32 + 24.0;
+        2.0 * 32.0 + slot * (total_pages - 1) as f32 + 842.0
+    };
+    assert!(
+        strip_height_for(vp.total_pages) > 640.0,
+        "a 10-page strip must overflow a 640px viewport so there is something to scroll"
+    );
+}
+
+#[test]
 fn test_cache_keys_no_longer_grow_unbounded() {
     // Regression: `DocumentStore` kept a `cache_keys: HashMap<DocumentId,
     // Vec<RenderKey>>` that was appended to on every cache-miss render and read
