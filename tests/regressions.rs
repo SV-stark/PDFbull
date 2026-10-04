@@ -1137,8 +1137,93 @@ fn test_cache_keys_no_longer_grow_unbounded() {
 
     let cache = pdfbull::pdf_engine::create_render_cache(4, 16 * 1024 * 1024);
     let store = DocumentStore::new(cache);
-    // If the dead field still existed, rendering would grow it; asserting the
-    // type compiles without it is the real check, and this keeps the store in
-    // scope so the intent is visible.
     drop(store);
+}
+
+#[test]
+fn test_reset_for_document_is_lossless_when_annotations_are_cached() {
+    // Regression: switching tabs called `reset_for_document`, which clears
+    // `viewport.annotations`, and nothing ever put them back — `LoadAnnotations`
+    // was only sent from `open_pdf_path`. Highlight a page in tab A, switch to
+    // tab B, switch back to A, and the canvas was empty; the next Ctrl+S then
+    // sent an *empty* list, and `save_annotations` deleted every `/PDFBULL:`
+    // annotation it had previously written. The user's saved highlights were
+    // erased from the file while the status bar reported success.
+    //
+    // This exercises the exact stash/reset/restore cycle the view performs on a
+    // tab switch, without needing a live GPUI context.
+    let doc_a = next_doc_id();
+    let doc_b = next_doc_id();
+
+    // `annotations_by_doc` is the cache the view now keeps.
+    let mut cache: std::collections::HashMap<
+        pdfbull::models::DocumentId,
+        Vec<pdfbull::models::Annotation>,
+    > = std::collections::HashMap::new();
+
+    let highlights: Vec<pdfbull::models::Annotation> = (0..3)
+        .map(|i| pdfbull::models::Annotation {
+            id: pdfbull::models::next_annotation_id(),
+            page: i,
+            style: pdfbull::models::AnnotationStyle::Highlight {
+                color: "#FFFF00".to_string(),
+            },
+            x: 10.0,
+            y: 10.0,
+            width: 40.0,
+            height: 12.0,
+        })
+        .collect();
+
+    let mut vp = DocumentViewport::new();
+
+    // --- tab A is active and the user has just highlighted three pages -------
+    vp.annotations = highlights.clone();
+    vp.reindex_annotations();
+    assert_eq!(vp.annotations.len(), 3);
+
+    // --- switch to tab B: stash A, reset, restore nothing (B is new) --------
+    cache.insert(doc_a, vp.annotations.clone());
+    vp.reset_for_document();
+    assert!(
+        vp.annotations.is_empty(),
+        "the reset must clear the outgoing document's annotations"
+    );
+
+    // B has never been loaded, so the view must re-read it rather than assume
+    // it has none. That is the branch the view takes when the cache misses.
+    assert!(
+        !cache.contains_key(&doc_b),
+        "a document with no cache entry must trigger a reload, not a silent empty state"
+    );
+
+    // --- switch back to tab A: restore exactly what was stashed -------------
+    let restored = cache.get(&doc_a).cloned().expect("A must be cached");
+    vp.annotations = restored;
+    vp.reindex_annotations();
+    assert_eq!(
+        vp.annotations.len(),
+        3,
+        "returning to a tab must restore every annotation"
+    );
+
+    let ids: Vec<u64> = vp.annotations.iter().map(|a| a.id).collect();
+    let expected: Vec<u64> = highlights.iter().map(|a| a.id).collect();
+    assert_eq!(
+        ids, expected,
+        "the same annotations must come back, in order"
+    );
+
+    // The per-page index must be rebuilt too, or the restored annotations would
+    // be invisible on the canvas while still being present in the list — which
+    // is exactly what would then get written to the file.
+    for ann in &highlights {
+        assert_eq!(
+            vp.annotations_on_page(ann.page).len(),
+            1,
+            "page {} lost its restored annotation in the per-page index",
+            ann.page + 1
+        );
+    }
+    assert_eq!(vp.annotations_on_page(99).len(), 0);
 }

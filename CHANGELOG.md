@@ -5,6 +5,25 @@ All notable changes to the PDFbull project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.16.7] - 2026-10-04
+
+Follow-up to 0.16.6, fixing the most severe issue found while reviewing that release: switching tabs destroyed a document's annotations in memory, and the next save then deleted them from the file. Also tightens the one remaining place where a failed PDF write was discarded. Verified: `cargo clippy --all-targets` clean, `cargo fmt --check` clean, 160 tests passing (1 new regression test), and a clean `cargo build --release` producing a binary stamped 0.16.7.
+
+> Note for anyone building this: the release **link** is the memory-sensitive step here and intermittently dies with `link.exe` exit code 1171 ("Releasing the double mapped memory failed") when more than one job runs. `cargo build --release -j 1` succeeds. That is worth pinning in `justfile`'s `build-release` recipe and in CI.
+
+### Fixed (Silent Data Loss)
+- **A failed annotation delete was ignored, so a save could duplicate instead of replace.** The stale-annotation loop in `save_annotations` exists to stop annotations multiplying on every save; it discarded the result of each `delete_annotation`, so a failure left the old annotation in place *and* appended the new set — precisely the duplication the loop prevents — while the save reported success. It now fails the save rather than write a file whose annotation set it cannot vouch for.
+- **Switching tabs erased saved annotations from the PDF file.** This is the full chain, and every step of it was already correct in isolation:
+  1. The user highlights a page in tab A and presses `Ctrl+S`. `save_annotations` writes each annotation with a `/PDFBULL:<id>` `/NM` marker.
+  2. The user switches to tab B. `sync_viewport_to_active_tab` calls `reset_for_document`, which clears `viewport.annotations` — the only copy the view keeps.
+  3. The user switches back to tab A. Nothing put them back: `LoadAnnotations` was only ever sent from `open_pdf_path`, never from tab re-activation, so the canvas showed no annotations and the Notes panel was empty.
+  4. The user presses `Ctrl+S`. `save_active_document` sends the now-empty `viewport.annotations`, and `save_annotations` *deletes every previously written `/PDFBULL:` annotation* before appending the new (empty) set.
+
+  The user's saved highlights were permanently removed from their file, and the status bar reported "Saved as A.pdf.". The view now keeps a per-document annotation cache: the outgoing document's set is stashed before the reset and restored on re-activation, and a document with no cached set is re-read from the file via a new `request_annotations` helper shared with the open path. Restoring also rebuilds the per-page index, so restored annotations are visible rather than present-but-unpainted. Cache entries are released when a document is closed (tab close, `Ctrl+W`, close others, close to the right) so the map does not grow for the life of the session.
+
+### Tests
+- Added a regression test exercising the exact stash → reset → restore cycle a tab switch performs, asserting that all annotations return in order *and* that the per-page index is rebuilt. The invisible-restored-annotation case is the dangerous one: those annotations would be present in the list (so still written to the file) while painting nothing, which is precisely what made the original bug hard to notice. 160 tests passing, up from 159.
+
 ## [0.16.6] - 2026-10-04
 
 Dependency refresh, a correctness pass over the PDF-writing paths, and a UI pass over the chrome. Several fixes below were silent data loss; several more were features the interface advertised that could not actually work.

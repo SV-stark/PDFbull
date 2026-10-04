@@ -1471,8 +1471,18 @@ impl DocumentStore {
                 }
             }
         }
+        // This loop exists precisely to stop annotations multiplying on every save. If
+        // a delete fails, the old annotation survives *and* the new set is
+        // appended — which is exactly the duplication this loop prevents — and
+        // the save is then reported as successful. Refuse rather than write a
+        // file whose annotation set we cannot vouch for.
         for (page_idx, annot_id) in stale {
-            let _ = writer.delete_annotation(page_idx, annot_id);
+            writer.delete_annotation(page_idx, annot_id).map_err(|e| {
+                PdfError::EngineError(EngineErrorKind::Generic(format!(
+                    "could not remove the previous annotation on page {} while saving: {e}",
+                    page_idx + 1
+                )))
+            })?;
         }
 
         for ann in annotations {

@@ -52,5 +52,10 @@ doc:
     cargo doc --no-deps --open
 
 # Optimized release build
+#
+# `-j 1` is deliberate, not a leftover. The final link is by far the
+# most memory-hungry step in this build, and on a machine without headroom
+# it dies with `link.exe` exit code 1171 ("Releasing the double mapped memory
+# failed") as soon as a second job is allowed to link at the same time.
 build-release:
-    cargo build --release
+    cargo build --release -j 1

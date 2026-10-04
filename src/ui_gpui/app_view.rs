@@ -30,6 +30,20 @@ pub struct PdfbullView {
     pub log_console: LogConsoleState,
     pub focus_handle: FocusHandle,
     pub status_message: Option<String>,
+    /// Annotations for every open document, keyed by `DocumentId`.
+    ///
+    /// The viewport holds only the *active* document's annotations, and
+    /// switching tabs calls `reset_for_document`, which clears them. Nothing
+    /// re-loaded them: `LoadAnnotations` was only ever sent from
+    /// `open_pdf_path`. So highlight a page, switch to another tab, switch
+    /// back, and the annotations were gone from the canvas — and pressing
+    /// Ctrl+S then sent an *empty* list, which made the engine delete every
+    /// `/PDFBULL:` annotation it had previously written and save nothing back.
+    /// The user's saved highlights were erased from their file while the status
+    /// bar reported success. Caching per document makes a tab switch lossless,
+    /// and a document activated without a cached set is re-read from disk.
+    pub annotations_by_doc:
+        std::collections::HashMap<crate::models::DocumentId, Vec<crate::models::Annotation>>,
     /// Keeps `sidebar.search_query` in sync with the sidebar's search editor.
     _search_sub: Option<Subscription>,
 }
@@ -101,8 +115,85 @@ impl PdfbullView {
             log_console: LogConsoleState::new(),
             focus_handle,
             status_message: None,
+            annotations_by_doc: std::collections::HashMap::new(),
             _search_sub,
         }
+    }
+
+    /// Record the active document's current annotations so a tab switch can put
+    /// them back. Call *before* `reset_for_document` clears the viewport.
+    fn stash_active_annotations(&mut self) {
+        if let Some(doc_id) = self.active_doc_id {
+            self.annotations_by_doc
+                .insert(doc_id, self.viewport.annotations.clone());
+        }
+    }
+
+    /// Restore a previously stashed annotation set for `doc_id`.
+    ///
+    /// Returns `false` when nothing is cached, which is the caller's signal to
+    /// re-read the annotations from the file.
+    fn restore_annotations_for(&mut self, doc_id: crate::models::DocumentId) -> bool {
+        match self.annotations_by_doc.get(&doc_id).cloned() {
+            Some(annotations) => {
+                self.viewport.annotations = annotations;
+                self.viewport.reindex_annotations();
+                true
+            }
+            None => false,
+        }
+    }
+
+    /// Ask the engine for a document's saved annotations and adopt the result.
+    ///
+    /// Used both on open and on tab re-activation, so a document that has no
+    /// cached set is never left silently annotation-free.
+    fn request_annotations(
+        &mut self,
+        doc_id: crate::models::DocumentId,
+        path: std::path::PathBuf,
+        cx: &mut Context<Self>,
+    ) {
+        let engine_tx = self.engine.cmd_tx.clone();
+        let path_str = path.to_string_lossy().to_string();
+        cx.spawn(async move |this, cx| {
+            let (tx, rx) = tokio::sync::oneshot::channel();
+            if engine_tx
+                .send(crate::commands::PdfCommand::LoadAnnotations(
+                    doc_id, path_str, tx,
+                ))
+                .await
+                .is_err()
+            {
+                let _ = this.update(cx, |view, cx| {
+                    view.report_engine_unavailable("Loading annotations", cx);
+                });
+                return;
+            }
+            let Ok(Ok(loaded)) = rx.await else {
+                return;
+            };
+            let _ = this.update(cx, |view, cx| {
+                // Guard on doc: a response for a document the user has since
+                // switched away from must not land in the viewport.
+                if view.active_doc_id != Some(doc_id) {
+                    // Still cache it, keyed by its own document.
+                    view.annotations_by_doc.insert(doc_id, loaded);
+                    return;
+                }
+                // Only replace when the document has nothing yet. An
+                // unconditional assignment threw away a highlight drawn while
+                // this request was in flight.
+                if !view.viewport.annotations.is_empty() {
+                    return;
+                }
+                view.annotations_by_doc.insert(doc_id, loaded.clone());
+                view.viewport.annotations = loaded;
+                view.viewport.reindex_annotations();
+                cx.notify();
+            });
+        })
+        .detach();
     }
 
     pub fn open_pdf_path(&mut self, path_str: &str, cx: &mut Context<Self>) {
@@ -243,32 +334,14 @@ impl PdfbullView {
                         });
                     }
 
-                    // Load previously saved annotations
-                    let (ann_tx, ann_rx) = tokio::sync::oneshot::channel();
-                    if let Ok(()) = engine_tx
-                        .send(crate::commands::PdfCommand::LoadAnnotations(
-                            doc_id,
-                            path_str_cloned.clone(),
-                            ann_tx,
-                        ))
-                        .await
-                        && let Ok(Ok(loaded_anns)) = ann_rx.await
-                    {
-                        let _ = this.update(cx, |view, cx| {
-                            // Guard on doc *and* only replace when the document
-                            // still has no annotations. An unconditional
-                            // assignment silently threw away a highlight the user
-                            // drew while this request was in flight.
-                            if view.active_doc_id != Some(doc_id)
-                                || !view.viewport.annotations.is_empty()
-                            {
-                                return;
-                            }
-                            view.viewport.annotations = loaded_anns;
-                            view.viewport.reindex_annotations();
-                            cx.notify();
-                        });
-                    }
+                    // Load previously saved annotations. This used to be inline
+                    // here and nowhere else, which is why a *tab switch* never
+                    // restored them; `request_annotations` is shared with the
+                    // tab-activation path.
+                    let ann_path = std::path::PathBuf::from(&path_str_cloned);
+                    let _ = this.update(cx, |view, cx| {
+                        view.request_annotations(doc_id, ann_path.clone(), cx);
+                    });
                 }
                 Ok(Err(e)) => {
                     tracing::error!("Failed to open PDF in engine worker: {e:?}");
@@ -323,11 +396,23 @@ impl PdfbullView {
     }
 
     pub fn sync_viewport_to_active_tab(&mut self, cx: &mut Context<Self>) {
-        let Some(tab) = self.tabs.tabs.get(self.tabs.active_tab_index) else {
+        // Detach from `self.tabs` up front: the work below mutates `self`, and
+        // holding a borrow into the tab list across those calls will not
+        // borrow-check.
+        let Some((doc_id, path)) = self
+            .tabs
+            .tabs
+            .get(self.tabs.active_tab_index)
+            .map(|t| (t.doc_id, t.path.clone()))
+        else {
             return;
         };
-        let doc_id = tab.doc_id;
         if self.active_doc_id != doc_id {
+            // Keep the outgoing document's annotations before the reset wipes
+            // them. Without this, returning to a tab showed an empty canvas and
+            // the next Ctrl+S sent an empty list, which deleted every
+            // previously saved annotation from the file.
+            self.stash_active_annotations();
             self.active_doc_id = doc_id;
             // Full per-document reset. The old code cleared only the render
             // caches, so switching tabs leaked the previous document's text
@@ -342,8 +427,18 @@ impl PdfbullView {
             self.sidebar.reset_search(cx);
             self.rendering_pages.clear();
             self.dialogs.signatures.clear();
+
+            // Put this document's annotations back, or re-read them if it has
+            // no cached set — a document must never be left silently
+            // annotation-free.
+            if let Some(doc_id) = doc_id
+                && !self.restore_annotations_for(doc_id)
+                && let Some(path) = path.clone()
+            {
+                self.request_annotations(doc_id, path, cx);
+            }
         }
-        if let Some(ref path) = tab.path {
+        if let Some(ref path) = path {
             // Only re-derive geometry when we have no authoritative numbers
             // yet. `inspect_pdf_geometry` parses the entire file, and this runs
             // on every tab click / Ctrl+W / Ctrl+Tab, so re-parsing on each
@@ -2066,22 +2161,25 @@ impl PdfbullView {
                         let idx = self.tabs.active_tab_index;
                         if idx < self.tabs.tabs.len() {
                             let removed = self.tabs.tabs.remove(idx);
-                            if let Some(doc_id) = removed.doc_id
-                                && let Err(e) = self
-                                    .engine
-                                    .cmd_tx
-                                    .try_send(crate::commands::PdfCommand::Close(doc_id))
-                            {
+                            if let Some(doc_id) = removed.doc_id {
+                                self.annotations_by_doc.remove(&doc_id);
                                 // The sibling `CloseTab` path logs and reports
                                 // this; Ctrl+W discarded it, so a full channel
                                 // left the parsed document and its render-cache
                                 // entries resident for the whole session with no
                                 // visible sign.
-                                tracing::error!(
-                                    "Failed to release document {doc_id:?} to the engine: {e}"
-                                );
-                                self.status_message =
-                                    Some("Document closed, but the engine kept its cache.".into());
+                                if let Err(e) = self
+                                    .engine
+                                    .cmd_tx
+                                    .try_send(crate::commands::PdfCommand::Close(doc_id))
+                                {
+                                    tracing::error!(
+                                        "Failed to release document {doc_id:?} to the engine: {e}"
+                                    );
+                                    self.status_message = Some(
+                                        "Document closed, but the engine kept its cache.".into(),
+                                    );
+                                }
                             }
                             if self.tabs.active_tab_index >= self.tabs.tabs.len()
                                 && !self.tabs.tabs.is_empty()
@@ -2348,20 +2446,24 @@ impl Render for PdfbullView {
                     TabAction::CloseTab(idx) => {
                         if idx < this.tabs.tabs.len() {
                             let removed = this.tabs.tabs.remove(idx);
-                            if let Some(doc_id) = removed.doc_id
-                                && let Err(e) = this
+                            if let Some(doc_id) = removed.doc_id {
+                                // Release the cached annotations too, or the map
+                                // grows for the life of the session.
+                                this.annotations_by_doc.remove(&doc_id);
+                                // Dropping this send left the parsed document and
+                                // its render-cache entries resident forever, with
+                                // no user-visible sign.
+                                if let Err(e) = this
                                     .engine
                                     .cmd_tx
                                     .try_send(crate::commands::PdfCommand::Close(doc_id))
-                            {
-                                // Dropping this left the parsed document and its
-                                // render-cache entries resident forever, with no
-                                // user-visible sign.
-                                tracing::error!(
-                                    "Failed to release document {doc_id:?} to the engine: {e}"
-                                );
-                                this.status_message =
-                                    Some("Document closed, but the engine kept its cache.".into());
+                                {
+                                    tracing::error!(
+                                        "Failed to release document {doc_id:?} to the engine: {e}"
+                                    );
+                                    this.status_message =
+                                        Some("Document closed, but the engine kept its cache.".into());
+                                }
                             }
                             if !this.tabs.tabs.is_empty() {
                                 this.tabs.active_tab_index =
@@ -2381,14 +2483,17 @@ impl Render for PdfbullView {
                             for (i, tab) in this.tabs.tabs.iter().enumerate() {
                                 if i != keep_idx
                                     && let Some(doc_id) = tab.doc_id
-                                    && let Err(e) = this
+                                {
+                                    this.annotations_by_doc.remove(&doc_id);
+                                    if let Err(e) = this
                                         .engine
                                         .cmd_tx
                                         .try_send(crate::commands::PdfCommand::Close(doc_id))
-                                {
-                                    tracing::error!(
-                                        "Failed to release document {doc_id:?} to the engine: {e}"
-                                    );
+                                    {
+                                        tracing::error!(
+                                            "Failed to release document {doc_id:?} to the engine: {e}"
+                                        );
+                                    }
                                 }
                             }
                             this.tabs.tabs = vec![kept];
@@ -2403,15 +2508,17 @@ impl Render for PdfbullView {
                         // stale index here crashed the app; clamp instead.
                         let keep = idx.saturating_add(1).min(this.tabs.tabs.len());
                         for tab in this.tabs.tabs.drain(keep..) {
-                            if let Some(doc_id) = tab.doc_id
-                                && let Err(e) = this
+                            if let Some(doc_id) = tab.doc_id {
+                                this.annotations_by_doc.remove(&doc_id);
+                                if let Err(e) = this
                                     .engine
                                     .cmd_tx
                                     .try_send(crate::commands::PdfCommand::Close(doc_id))
-                            {
-                                tracing::error!(
-                                    "Failed to release document {doc_id:?} to the engine: {e}"
-                                );
+                                {
+                                    tracing::error!(
+                                        "Failed to release document {doc_id:?} to the engine: {e}"
+                                    );
+                                }
                             }
                         }
                         if this.tabs.tabs.is_empty() {
