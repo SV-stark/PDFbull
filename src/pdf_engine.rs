@@ -2064,20 +2064,88 @@ impl DocumentStore {
 
     // apply_filter_parallel removed as it was just a misleading wrapper.
 
+    /// Optimize a PDF: stream compression plus image re-encoding.
+    ///
+    /// Two passes, because neither alone is sufficient:
+    ///
+    /// 1. `rewrite_pdf` garbage-collects unreferenced objects and deflates
+    ///    unfiltered streams. Its `max_image_dimension` downsampler is narrow —
+    ///    it only accepts 8-bit `DeviceRGB`/`DeviceGray` Flate images with no
+    ///    `/Mask`, `/Decode` or `/DecodeParms` — so it skips the `DCTDecode`
+    ///    and `CCITTFaxDecode`/`JBIG2Decode` streams that dominate scanned and
+    ///    photo-heavy documents.
+    /// 2. [`crate::image_optimizer`] re-encodes exactly those images, halving
+    ///    their effective DPI (floored at 150 dpi) and re-emitting them as
+    ///    baseline JPEG or JBIG2.
+    ///
+    /// The order matters: pass 1 renumbers every object, so the object ids the
+    /// image pass works with are only valid against the *original* parse. The
+    /// image pass therefore runs first, its replacements are applied to the
+    /// original document via `IncrementalWriter`, and the rewritten result is
+    /// then garbage-collected and compressed as usual.
     pub fn optimize_pdf(&self, input_path: &str, output_path: &str) -> PdfResult<String> {
-        // Run full PDF optimization pass:
-        // 1. Enable Flate/Deflate stream compression for uncompressed content & object streams.
-        // 2. Downsample high-DPI image streams (max 1600px dimension) for significant file size reduction.
         let data = std::fs::read(input_path).map_err(|e| PdfError::OpenFailed(e.to_string()))?;
-        let pdf = zpdf::PdfFile::parse(data).map_err(|e| PdfError::OpenFailed(e.to_string()))?;
+        let pdf =
+            zpdf::PdfFile::parse(data.clone()).map_err(|e| PdfError::OpenFailed(e.to_string()))?;
+
+        let dpi = crate::image_optimizer::collect_placed_dpi(&pdf);
+        let (replacements, stats) = crate::image_optimizer::plan_replacements(&pdf, &dpi);
+        tracing::info!(
+            images_rewritten = stats.images_rewritten,
+            images_skipped = stats.images_skipped,
+            image_bytes_saved = stats.image_bytes_saved,
+            "image re-encoding pass"
+        );
+
+        // Apply the re-encoded images, then let pass 1 collect and compress.
+        let staged = if replacements.is_empty() {
+            data
+        } else {
+            self.apply_image_replacements(data, &replacements)?
+        };
+        let staged_pdf =
+            zpdf::PdfFile::parse(staged).map_err(|e| PdfError::OpenFailed(e.to_string()))?;
+
         let opts = RewriteOptions {
             compress_uncompressed: true,
-            max_image_dimension: Some(1600),
+            // The image pass above handles downsampling at a DPI the document
+            // actually implies, which is strictly better than a fixed pixel cap
+            // on images of unknown placement.
+            max_image_dimension: None,
             ..Default::default()
         };
-        let out_bytes = rewrite_pdf(&pdf, &opts).map_err(|e| PdfError::IoError(e.to_string()))?;
+        let out_bytes =
+            rewrite_pdf(&staged_pdf, &opts).map_err(|e| PdfError::IoError(e.to_string()))?;
         std::fs::write(output_path, &out_bytes).map_err(|e| PdfError::IoError(e.to_string()))?;
         Ok(output_path.to_string())
+    }
+
+    /// Overwrite each replaced image stream in an incremental update.
+    ///
+    /// `IncrementalWriter` appends a new revision shadowing the original
+    /// objects, so untouched parts of the document — including the original
+    /// image bytes for every image left alone — are preserved verbatim. A
+    /// failure part-way through writes nothing: the caller keeps the original
+    /// bytes and the optimization degrades to a no-op.
+    fn apply_image_replacements(
+        &self,
+        data: Vec<u8>,
+        replacements: &[(zpdf::ObjectId, crate::image_optimizer::Replacement)],
+    ) -> PdfResult<Vec<u8>> {
+        let mut writer =
+            IncrementalWriter::new(data).map_err(|e| PdfError::OpenFailed(e.to_string()))?;
+        for (id, replacement) in replacements {
+            let stream = zpdf::PdfObject::Stream(zpdf::PdfStream {
+                dict: replacement.dict.clone(),
+                data: replacement.data.clone().into(),
+            });
+            writer.overwrite_object(*id, stream);
+        }
+        let mut buf = std::io::Cursor::new(Vec::new());
+        writer
+            .write(&mut buf)
+            .map_err(|e| PdfError::IoError(e.to_string()))?;
+        Ok(buf.into_inner())
     }
 
     pub fn encrypt_pdf(

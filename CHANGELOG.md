@@ -5,6 +5,47 @@ All notable changes to the PDFbull project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+## [0.17.0] - 2026-10-07
+
+### Changed
+- **Compress now actually compresses scanned and photo-heavy PDFs (`src/image_optimizer.rs`)**: Compressing a multi-megabyte scan used to shave 100–200 KB and leave the file effectively the same size. The cause was not the deflate settings but *which streams were eligible at all*: `rewrite_pdf`'s `max_image_dimension` downsampler only accepts images that are all of `FlateDecode`-or-unfiltered, 8 bits per component, `DeviceRGB`/`DeviceGray`, and free of `/Mask`, `/Decode` and `/DecodeParms`. Every other image was returned untouched — which is precisely the `DCTDecode` (JPEG) and `CCITTFaxDecode`/`JBIG2Decode` output that dominates real scans and photos, so the pass had almost no eligible work to do.
+
+  A new image pass runs before the existing garbage-collection/compression pass, dispatching on the image's existing `/Filter`:
+  - **`DCTDecode` and `FlateDecode`** → decode, downscale, re-encode as baseline JPEG at quality 75.
+  - **`CCITTFaxDecode` and `JBIG2Decode`** → decode to bilevel, downscale, re-encode as JBIG2 via the new `jbig2enc-rust` dependency. Bilevel text compresses far better under JBIG2's arithmetic coder than any JPEG quality setting, and re-encoding these as grayscale JPEG visibly softens the page.
+
+  Downsampling is driven by *effective DPI* rather than a fixed pixel cap, because a PDF stores no DPI: pixel dimensions come from the image dictionary and the size an image is drawn at comes from the page content stream's `cm` matrix. `image_optimizer` walks each page's operators (`q`/`Q`/`cm`/`Do`, recursing into Form XObjects) to derive `pixel_width / (placed_width_pt / 72)`, then halves it — floored at 150 dpi and never upscaling, so a 1200 dpi scan becomes 600 while a 200 dpi scan becomes 150 rather than 100. An image present in resources but never drawn has no derivable DPI and is left alone rather than resampled on a guess.
+
+  Every step is guarded: a failed decode, an ineligible image, or a re-encode that did not shrink the stream keeps the original bytes, so a failure costs file size and never correctness. Images carrying `/SMask` or `/Mask` are skipped outright, since a replacement stream would silently drop their alpha or stencil. Inline (`BI…ID…EI`) images and `JPXDecode` streams are left untouched.
+
+  Note the structural fix: `rewrite_pdf` renumbers every object, so the image pass must run *against the original parse* and its replacements be applied via `IncrementalWriter` before that pass runs.
+
+### Added
+- **`jbig2enc-rust` (JBIG2 encoding)**: MIT / Apache-2.0, pinned to `=0.5.4`, added for the bilevel tier above. Only the `encode` feature is enabled — `zpdf` already decodes JBIG2 on the read path, so the encoder's `decode` half is dead weight in the binary. The lossless (no symbol dictionary) configuration is used deliberately: the encoder documents that symbol dictionaries built by independently-encoded images desync their symbol indices and produce undecodable pages, and sharing one dictionary across a whole document would need all images planned in a single pass.
+- **`zpdf-content` (content-stream tokenizer)**: pinned to `=0.14.0`, matching `zpdf` 0.14.0 so both resolve to one copy of the types. `zpdf` re-exports the crate's high-level helpers but not its tokenizer, and the interpreter reports a display-list-local image id rather than the document object id needed to rewrite a stream — so the DPI pass re-walks the placement operators directly.
+- **Acrobat-compatible JavaScript Form Scripting Engine (`src/form_scripting.rs`)**:
+  - Implemented `PdfFormScriptEngine` to evaluate AcroForm calculations and validations in pure Rust without external C++ or runtime dependencies.
+  - Emulates the Acrobat Document Object Model (`this.getField("fieldName").value`, `this.getField("fieldName").name`).
+  - Emulates the Acrobat `event` lifecycle object (`event.value`, `event.rc`, `event.target`).
+  - Built-in support for standard Adobe Acrobat calculation routines: `AFSimple_Calculate(cFunction, cFields)` covering `"SUM"`, `"PRD"`, `"AVG"`, `"MIN"`, and `"MAX"`.
+  - Supports dynamic formula evaluations and multi-field arithmetic (e.g., invoice subtotals, tax calculations, item quantities) with safe division and recursive arithmetic parsing.
+  - Supports field validation scripts (`event.rc`) for range boundaries and value constraints.
+  - Provides a cascading calculation runner (`recalculate_all`) to automatically evaluate field dependencies across document forms.
+- **Interactive "Organize Pages" Card Grid (`src/organize.rs`)**:
+  - Implemented `PageOrganizerState` light-table controller with multi-selection support (single click, `Ctrl`/`Cmd` click, `Shift` range click, `Ctrl+A` select all).
+  - Drag-and-drop page card reordering (`reorder_card`), multi-page batch rotation (`rotate_selected`), batch deletion (`delete_selected`), and blank page insertion (`insert_blank_page`).
+  - Full Undo/Redo history stack (`undo`, `redo`) with `OrganizeCommand` snapshots (`Reorder`, `Rotate`, `Delete`, `InsertBlank`).
+- **Two-Up Facing Pages & Distraction-Free "Read Mode" (`src/read_mode.rs`)**:
+  - Implemented `ReadModeConfig` with distraction-free toggle (`F10`) to hide chrome (ribbon, tabs, sidebars, status bars) for focused reading.
+  - Two-up facing pages layout with support for `BookCoverOffset` (Page 0 standalone cover followed by facing paired spreads) and continuous two-up spreads.
+  - Specialized eye-care reading themes: `Default`, `Sepia`, `DarkNight`, `EyeCareGreen`, and `PurePaper`.
+- **Deep Tiled Zoom Rendering (`src/tiled_render.rs`)**:
+  - Implemented `TiledPageGeometry` partitioning large high-zoom pages (400%–1600%) into 512x512 pixel tiles.
+  - Viewport intersection math (`intersecting_tiles`) to compute and rasterize only visible tiles, eliminating OOM crashes and high memory consumption on massive architectural drawings and blueprints.
+  - Integrated `TileCache` with bounded capacity eviction to maintain a flat memory footprint at any magnification.
+
 ## [0.16.9] - 2026-10-04
 
 Regression release. Two independent defects combined to make the document area look dead: **scrollbars vanished and Continuous mode stopped scrolling entirely.** Verified: `cargo clippy --all-targets` clean, `cargo fmt --check` clean, 164 tests passing (1 new regression test), and a clean `cargo build --release` producing a binary stamped 0.16.9.

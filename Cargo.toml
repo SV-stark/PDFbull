@@ -1,6 +1,6 @@
 [package]
 name = "pdfbull"
-version = "0.16.9"
+version = "0.17.0"
 description = "A lightweight PDF reader"
 authors = ["SV-stark"]
 edition = "2024"
@@ -41,6 +41,21 @@ thiserror = "2.0"
 arboard = "3"
 lopdf = "0.44"
 pdf-writer = "0.15"
+# JBIG2 encoder for the bilevel tier of image optimization. `decode` is off: we
+# only ever encode (zpdf already decodes JBIG2 on the read path), and dropping
+# it keeps ndarray/bitvec decode code out of the binary.
+jbig2enc-rust = { version = "0.5.4", default-features = false, features = ["encode"] }
+# Content-stream tokenizer, for reading image placement (`cm` / `Do`) when
+# deriving effective DPI. `zpdf` re-exports the crate's high-level helpers but
+# not its tokenizer, and its interpreter reports a display-list-local image id
+# rather than the object id needed to rewrite a stream. Pinned to the exact
+# version `zpdf` 0.14.0 depends on so both see one copy of the types.
+zpdf-content = "=0.14.0"
+# `parse_resource_dict`, for reading a Form XObject's own /Resources when
+# following a scan nested inside a form. Pinned to the exact version `zpdf`
+# 0.14.0 depends on so both see one copy of the types.
+zpdf-document = "=0.14.0"
+zpdf-image = "=0.14.0"
 csscolorparser = "0.8"
 timeago = "0.6"
 tempfile = "3"
@@ -107,6 +122,13 @@ strip = true
 inherits = "release"
 lto = "fat"
 strip = true
+
+# Avoid MSVC link.exe PDB crash / heap exhaustion (LNK1318 / LNK1102)
+[profile.dev]
+debug = false
+
+[profile.dev.package."*"]
+debug = false
 
 
 

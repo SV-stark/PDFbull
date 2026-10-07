@@ -17,6 +17,8 @@ Copyright (c) 2019-present Hector Ramon, iced contributors.
 - **`zpdf`**: MIT / Apache-2.0. High-performance pure-Rust PDF parsing and rendering engine.
 - **`lopdf`**: MIT / Apache-2.0. Low-level PDF file modification and object manipulation.
 - **`pdf-writer`**: MIT / Apache-2.0. Step-by-step PDF file generation.
+- **`jbig2enc-rust`**: MIT / Apache-2.0. JBIG2 encoder, used to re-encode bilevel
+  scanned page images during compression.
 
 ---
 
