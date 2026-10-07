@@ -375,7 +375,6 @@ impl SidebarState {
                             .border_1()
                             .border_color(if is_selected { primary } else { border })
                             .bg(if is_selected { accent } else { background })
-                            .cursor_pointer()
                             .on_click(click_listener)
                             .child(if let Some(thumb_img) = self.thumbnails.get(&page_idx) {
                                 div()
@@ -434,6 +433,7 @@ impl SidebarState {
                     .flex_col()
                     .flex_1()
                     .min_h_0()
+                    .size_full()
                     .gap(px(THUMB_GAP))
                     // Horizontal padding only. The vertical inset lives in the
                     // spacers above and below: padding on this container is not
@@ -484,7 +484,6 @@ impl SidebarState {
                                 .py_2()
                                 .rounded_md()
                                 .hover(|s| s.bg(accent))
-                                .cursor_pointer()
                                 .on_click(cx.listener(move |v, _, w, cx| {
                                     on_action(v, SidebarAction::SelectBookmark(target_page), w, cx)
                                 }))
@@ -509,8 +508,10 @@ impl SidebarState {
                         );
                     }
                     div()
+                        .id("sidebar-bookmarks-scroll")
                         .flex()
                         .flex_col()
+                        .size_full()
                         .gap_1()
                         .p_2()
                         .overflow_y_scrollbar()
@@ -572,7 +573,6 @@ impl SidebarState {
                                         .flex()
                                         .flex_col()
                                         .gap_0p5()
-                                        .cursor_pointer()
                                         .on_click(cx.listener(move |v, _, w, cx| {
                                             on_action(v, SidebarAction::SelectPage(page_idx), w, cx)
                                         }))
@@ -607,8 +607,10 @@ impl SidebarState {
                         );
                     }
                     div()
+                        .id("sidebar-annotations-scroll")
                         .flex()
                         .flex_col()
+                        .size_full()
                         .gap_1p5()
                         .p_2()
                         .overflow_y_scrollbar()
@@ -713,7 +715,6 @@ impl SidebarState {
                             .border_color(border)
                             .bg(background)
                             .hover(|s| s.bg(accent))
-                            .cursor_pointer()
                             .on_click(cx.listener(move |v, _, win, cx| {
                                 on_action(
                                     v,
@@ -747,7 +748,9 @@ impl SidebarState {
                     .child(search_box)
                     .child(
                         div()
+                            .id("sidebar-search-results-scroll")
                             .flex_1()
+                            .min_h_0()
                             .flex()
                             .flex_col()
                             .gap_1p5()
@@ -807,8 +810,10 @@ impl SidebarState {
                         );
                     }
                     div()
+                        .id("sidebar-attachments-scroll")
                         .flex()
                         .flex_col()
+                        .size_full()
                         .gap_1p5()
                         .p_2()
                         .overflow_y_scrollbar()
@@ -870,8 +875,10 @@ impl SidebarState {
                         );
                     }
                     div()
+                        .id("sidebar-layers-scroll")
                         .flex()
                         .flex_col()
+                        .size_full()
                         .gap_1p5()
                         .p_2()
                         .overflow_y_scrollbar()
@@ -916,7 +923,15 @@ impl SidebarState {
                     .bg(muted)
                     .children(mode_buttons)
             })
-            .child(div().flex_1().overflow_hidden().child(content))
+            .child(
+                div()
+                    .flex_1()
+                    .min_h_0()
+                    .flex()
+                    .flex_col()
+                    .overflow_hidden()
+                    .child(content),
+            )
             .into_any_element()
     }
 }

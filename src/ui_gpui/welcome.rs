@@ -3,6 +3,7 @@ use gpui_kit::base::StyledExt;
 use gpui_kit::component::ActiveTheme;
 use gpui_kit::component::Sizable as _;
 use gpui_kit::component::button::{Button, ButtonVariants};
+use gpui_kit::component::scroll::ScrollableElement;
 use gpui_kit::component::{Icon, IconName};
 use gpui_kit::*;
 use std::path::PathBuf;
@@ -75,11 +76,9 @@ impl WelcomeState {
             div()
                 .flex()
                 .flex_col()
-                .flex_1()
-                .w_full()
-                .bg(bg)
                 .items_center()
-                .justify_center()
+                .min_h_full()
+                .w_full()
                 .p_8()
                 .gap_6()
                 .child(
@@ -98,7 +97,7 @@ impl WelcomeState {
                                     .size_12()
                                     .rounded_xl()
                                     .bg(primary)
-                                    .text_color(gpui_kit::white())
+                                    .text_color(cx.theme().primary_foreground)
                                     .text_xl()
                                     .font_bold()
                                     .child("PB"),
@@ -124,10 +123,12 @@ impl WelcomeState {
                                                 div()
                                                     .px_2()
                                                     .py_0p5()
-                                                    .rounded_full()
+                                                    .rounded_md()
+                                                    .border_1()
+                                                    .border_color(border)
                                                     .bg(muted)
                                                     .text_xs()
-                                                    .font_semibold()
+                                                    .font_medium()
                                                     .text_color(muted_fg)
                                                     .child(concat!("v", env!("CARGO_PKG_VERSION"))),
                                             ),
@@ -158,7 +159,6 @@ impl WelcomeState {
                         .items_center()
                         .justify_center()
                         .gap_3()
-                        .cursor_pointer()
                         .on_click(cx.listener(move |v, _, w, cx| {
                             on_action(v, WelcomeAction::OpenFile, w, cx)
                         }))
@@ -395,7 +395,17 @@ impl WelcomeState {
             None
         };
 
-        container.children(recent_section).into_any_element()
+        div()
+            .id("welcome-scroll-container")
+            .flex()
+            .flex_col()
+            .flex_1()
+            .min_h_0()
+            .size_full()
+            .bg(bg)
+            .overflow_y_scrollbar()
+            .child(container.children(recent_section))
+            .into_any_element()
     }
 }
 
@@ -426,7 +436,6 @@ fn render_action_card<V: 'static>(
         .border_color(border)
         .bg(group_box)
         .gap_1p5()
-        .cursor_pointer()
         .hover(move |s| s.bg(accent).border_color(primary))
         .on_click(cx.listener(move |v, _, w, cx| {
             on_action(v, action.clone(), w, cx);

@@ -163,7 +163,6 @@ impl RibbonState {
                     gpui_kit::transparent_black()
                 })
                 .hover(move |s| if !is_active { s.bg(accent) } else { s })
-                .cursor_pointer()
                 .on_click(click_listener)
                 .child(
                     div()

@@ -206,7 +206,10 @@ impl LogConsoleState {
                 )
                 .child(
                     div()
+                        .id("log-console-scroll")
                         .flex_1()
+                        .min_h_0()
+                        .size_full()
                         .p_3()
                         .overflow_y_scrollbar()
                         .flex()

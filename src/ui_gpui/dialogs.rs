@@ -517,6 +517,7 @@ impl DialogsState {
                     }
 
                     div()
+                        .id("dialog-signatures-scroll")
                         .flex()
                         .flex_col()
                         .gap_3()
@@ -591,6 +592,7 @@ impl DialogsState {
         };
 
         let dialog_el = div()
+            .id("dialog-card")
             .flex()
             .flex_col()
             .w(dialog_width)
@@ -657,16 +659,23 @@ impl DialogsState {
                                 })),
                         )
                     }),
-            );
+            )
+            .on_click(cx.listener(|_, _, _, cx| {
+                cx.stop_propagation();
+            }));
+
         // Render full screen backdrop with centered modal
         Some(
             div()
+                .id("dialog-backdrop")
                 .absolute()
+                .inset_0()
                 .size_full()
                 .bg(gpui_kit::rgba(0x00000080))
                 .flex()
                 .items_center()
                 .justify_center()
+                .on_click(cx.listener(move |v, _, w, cx| on_close(v, w, cx)))
                 .child(dialog_el)
                 .into_any_element(),
         )

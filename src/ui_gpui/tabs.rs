@@ -94,11 +94,17 @@ impl TabsState {
                     gpui_kit::transparent_black()
                 })
                 .hover(move |s| if !is_active { s.bg(muted) } else { s })
-                .cursor_pointer()
                 .gap_2()
                 .on_click(cx.listener(move |v, _, w, cx| {
                     on_action(v, TabAction::SelectTab(idx), w, cx);
                 }))
+                .on_mouse_down(
+                    MouseButton::Middle,
+                    cx.listener(move |v, _, w, cx| {
+                        cx.stop_propagation();
+                        on_action(v, TabAction::CloseTab(idx), w, cx);
+                    }),
+                )
                 .child(Icon::new(IconName::FileText).text_color(if is_active {
                     fg
                 } else {
@@ -106,8 +112,10 @@ impl TabsState {
                 }))
                 .child(
                     div()
+                        .max_w(px(160.0))
                         .text_xs()
                         .font_medium()
+                        .truncate()
                         .text_color(if is_active { fg } else { muted_fg })
                         .child(tab.title.clone()),
                 )
@@ -152,6 +160,7 @@ impl TabsState {
             .border_b_1()
             .border_color(border)
             .gap_1()
+            .overflow_x_hidden()
             .children(tab_items)
             .child(div().pb_0p5().child(new_tab_btn))
             .into_any_element()

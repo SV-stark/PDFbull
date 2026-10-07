@@ -7,6 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.17.1] - 2026-10-07
+
+### Changed
+- **Switched `gpui-kit` to crates.io (`0.7.1`)**: Transitioned from git submodule / repository dependency to official crates.io release with refreshed design guidelines and skill definitions.
+
+### Fixed
+- **Welcome screen clipping on constrained displays (`src/ui_gpui/welcome.rs`)**: Wrapped centered hero and feature cards in `#welcome-scroll-container` with vertical scrollbars and min-height containment, eliminating element clipping on smaller or tiled desktop windows.
+- **Document tab bar overflow & ergonomics (`src/ui_gpui/tabs.rs`)**: Truncated overly long document filenames with a maximum width (`max_w(px(160.0)).truncate()`) to prevent tab strip blowout, enforced container overflow containment, and added middle-click (`MouseButton::Middle`) tab closing.
+- **Modal dialog backdrop positioning (`src/ui_gpui/dialogs.rs`)**: Enforced `.inset_0()` on `#dialog-backdrop` to guarantee 100% full-window overlay coverage over chrome headers, sidebars, and canvas.
+- **Status bar empty state & boundary controls (`src/ui_gpui/app_view.rs`)**: Replaced ghost page metrics with "Ready" state when no document is active, and added boundary-aware disabling (`Disableable`) for page navigation and zoom controls.
+- **Escape key hierarchy (`src/ui_gpui/app_view.rs`)**: Pressing `Esc` now hierarchically dismisses active modal dialogs &rarr; developer log console &rarr; active text selections.
+- **Scrollbar and panel styling (`src/ui_gpui/canvas.rs`, `src/ui_gpui/sidebar.rs`)**: Refined scroll container bindings and unified scrollbar styling to strictly adhere to `gpui-kit-design-guides`.
+
 ## [0.17.0] - 2026-10-07
 
 ### Changed

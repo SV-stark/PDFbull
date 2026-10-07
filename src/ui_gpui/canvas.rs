@@ -793,15 +793,23 @@ impl DocumentViewport {
                     .min_h_0()
                     .size_full()
                     .bg(muted)
-                    .overflow_y_hidden()
+                    .overflow_hidden()
                     .track_scroll(&self.scroll_handle)
                     .vertical_scrollbar(&self.scroll_handle)
+                    .horizontal_scrollbar(&self.scroll_handle)
                     .on_scroll_wheel(scroll_listener)
                     .on_mouse_move(container_move_listener)
                     .on_mouse_up(MouseButton::Left, container_up_listener)
-                    .items_center()
-                    .py_8()
-                    .child(card)
+                    .child(
+                        div()
+                            .flex()
+                            .flex_col()
+                            .items_center()
+                            .min_w_full()
+                            .min_h_full()
+                            .py_8()
+                            .child(card),
+                    )
                     .into_any_element()
             }
             PageLayoutMode::TwoPageSpread => {
@@ -844,22 +852,30 @@ impl DocumentViewport {
                     .min_h_0()
                     .size_full()
                     .bg(muted)
-                    .overflow_y_hidden()
+                    .overflow_hidden()
                     .track_scroll(&self.scroll_handle)
                     .vertical_scrollbar(&self.scroll_handle)
+                    .horizontal_scrollbar(&self.scroll_handle)
                     .on_scroll_wheel(scroll_listener)
                     .on_mouse_move(container_move_listener)
                     .on_mouse_up(MouseButton::Left, container_up_listener)
-                    .items_center()
-                    .py_8()
                     .child(
                         div()
                             .flex()
-                            .flex_row()
-                            .justify_center()
-                            .gap_6()
-                            .child(left_card)
-                            .children(right_card),
+                            .flex_col()
+                            .items_center()
+                            .min_w_full()
+                            .min_h_full()
+                            .py_8()
+                            .child(
+                                div()
+                                    .flex()
+                                    .flex_row()
+                                    .justify_center()
+                                    .gap_6()
+                                    .child(left_card)
+                                    .children(right_card),
+                            ),
                     )
                     .into_any_element()
             }
@@ -894,19 +910,12 @@ impl DocumentViewport {
                     .min_h_0()
                     .size_full()
                     .bg(muted)
-                    // `overflow_y_hidden` (not `overflow_y_scroll`) is
-                    // deliberate: `track_scroll` alone already applies the
-                    // offset, clamps it and feeds the scrollbar, while
-                    // `overflow: Scroll` additionally installs GPUI's own
-                    // wheel handler. That handler runs on the same
-                    // ScrollHandle, so it applied the wheel delta a second time
-                    // on top of the one handled in `handle_canvas_scroll_wheel`
-                    // (2x scroll speed), and it also panned the view during
-                    // Ctrl+wheel zoom. The app is now the single owner of the
-                    // scroll offset.
-                    .overflow_y_hidden()
+                    // `overflow_hidden` allows both vertical and horizontal scroll tracking.
+                    // The app is the single owner of the scroll offset.
+                    .overflow_hidden()
                     .track_scroll(&self.scroll_handle)
                     .vertical_scrollbar(&self.scroll_handle)
+                    .horizontal_scrollbar(&self.scroll_handle)
                     .on_scroll_wheel(scroll_listener)
                     .on_mouse_move(container_move_listener)
                     .on_mouse_up(MouseButton::Left, container_up_listener)

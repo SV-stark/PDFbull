@@ -1,9 +1,7 @@
 use gpui_kit::base::StyledExt;
-use gpui_kit::component::ActiveTheme;
-use gpui_kit::component::IconName;
-use gpui_kit::component::Sizable;
 use gpui_kit::component::button::{Button, ButtonVariants};
 use gpui_kit::component::input::InputEvent;
+use gpui_kit::component::{ActiveTheme, Disableable as _, IconName, Sizable};
 use gpui_kit::prelude::FluentBuilder;
 use gpui_kit::*;
 
@@ -994,42 +992,85 @@ impl PdfbullView {
                 cx.notify();
             }
         } else {
+            let (mut delta_x, delta_y) = match event.delta {
+                ScrollDelta::Pixels(p) => (p.x, p.y),
+                ScrollDelta::Lines(l) => (px(l.x * 60.0), px(l.y * 60.0)),
+            };
+
+            // Support Shift + wheel for horizontal scroll on platforms/mice where Shift does not map directly to delta_x
+            if event.modifiers.shift && delta_x.abs() < px(0.01) && delta_y.abs() > px(0.01) {
+                delta_x = delta_y;
+            }
+
+            // Handle horizontal scroll if content overflows horizontally
+            let max_offset_x = self.viewport.scroll_handle.max_offset().x;
+            if delta_x.abs() > px(0.1) && max_offset_x > px(0.0) {
+                let mut offset = self.viewport.scroll_handle.offset();
+                offset.x = (offset.x + delta_x).clamp(-max_offset_x, px(0.0));
+                self.viewport.scroll_handle.set_offset(offset);
+                cx.notify();
+            }
+
+            // If Shift was held for horizontal scrolling, do not also scroll vertically
+            if event.modifiers.shift && delta_x.abs() > px(0.01) {
+                return;
+            }
+
             match self.viewport.layout_mode {
                 super::ribbon::PageLayoutMode::SinglePage => {
-                    let delta_y = match event.delta {
-                        ScrollDelta::Pixels(p) => p.y / px(1.0),
-                        ScrollDelta::Lines(l) => l.y * 20.0,
-                    };
-                    if delta_y < -5.0 && self.viewport.current_page + 1 < self.viewport.total_pages
+                    let max_offset_y = self.viewport.scroll_handle.max_offset().y;
+                    let mut offset = self.viewport.scroll_handle.offset();
+                    let dy_f = delta_y / px(1.0);
+
+                    // When page overflows vertically (e.g. zoomed in), scroll smoothly within the page first
+                    if dy_f < 0.0 && offset.y > -max_offset_y + px(1.0) {
+                        offset.y = (offset.y + delta_y).clamp(-max_offset_y, px(0.0));
+                        self.viewport.scroll_handle.set_offset(offset);
+                        cx.notify();
+                    } else if dy_f < -5.0
+                        && self.viewport.current_page + 1 < self.viewport.total_pages
                     {
                         self.viewport.scroll_to_page(self.viewport.current_page + 1);
                         self.render_needed_pages(cx);
                         cx.notify();
-                    } else if delta_y > 5.0 && self.viewport.current_page > 0 {
+                    } else if dy_f > 0.0 && offset.y < px(-1.0) {
+                        offset.y = (offset.y + delta_y).clamp(-max_offset_y, px(0.0));
+                        self.viewport.scroll_handle.set_offset(offset);
+                        cx.notify();
+                    } else if dy_f > 5.0 && self.viewport.current_page > 0 {
                         self.viewport.scroll_to_page(self.viewport.current_page - 1);
                         self.render_needed_pages(cx);
                         cx.notify();
                     }
                 }
                 super::ribbon::PageLayoutMode::TwoPageSpread => {
-                    let delta_y = match event.delta {
-                        ScrollDelta::Pixels(p) => p.y / px(1.0),
-                        ScrollDelta::Lines(l) => l.y * 20.0,
-                    };
                     let step = if self.viewport.standalone_cover && self.viewport.current_page == 0
                     {
                         1
                     } else {
                         2
                     };
-                    if delta_y < -5.0 && self.viewport.current_page + 1 < self.viewport.total_pages
+                    let max_offset_y = self.viewport.scroll_handle.max_offset().y;
+                    let mut offset = self.viewport.scroll_handle.offset();
+                    let dy_f = delta_y / px(1.0);
+
+                    if dy_f < 0.0 && offset.y > -max_offset_y + px(1.0) {
+                        offset.y = (offset.y + delta_y).clamp(-max_offset_y, px(0.0));
+                        self.viewport.scroll_handle.set_offset(offset);
+                        cx.notify();
+                    } else if dy_f < -5.0
+                        && self.viewport.current_page + 1 < self.viewport.total_pages
                     {
                         let target =
                             (self.viewport.current_page + step).min(self.viewport.total_pages - 1);
                         self.viewport.scroll_to_page(target);
                         self.render_needed_pages(cx);
                         cx.notify();
-                    } else if delta_y > 5.0 && self.viewport.current_page > 0 {
+                    } else if dy_f > 0.0 && offset.y < px(-1.0) {
+                        offset.y = (offset.y + delta_y).clamp(-max_offset_y, px(0.0));
+                        self.viewport.scroll_handle.set_offset(offset);
+                        cx.notify();
+                    } else if dy_f > 5.0 && self.viewport.current_page > 0 {
                         let target = self.viewport.current_page.saturating_sub(step);
                         self.viewport.scroll_to_page(target);
                         self.render_needed_pages(cx);
@@ -1037,10 +1078,6 @@ impl PdfbullView {
                     }
                 }
                 super::ribbon::PageLayoutMode::Continuous => {
-                    let delta_y = match event.delta {
-                        ScrollDelta::Pixels(p) => p.y,
-                        ScrollDelta::Lines(l) => px(l.y * 60.0),
-                    };
                     let total = self.viewport.total_pages;
                     if total > 0 {
                         // Clamp against the handle's real `max_offset`, which GPUI
@@ -1164,18 +1201,23 @@ impl PdfbullView {
                     .items_center()
                     .gap_3()
                     .flex_none()
-                    .child(
-                        div()
-                            .text_xs()
-                            .text_color(muted_fg)
-                            .child(format!("{} × {} pt", page_w, page_h)),
-                    )
-                    .child(
-                        div()
-                            .text_xs()
-                            .text_color(muted_fg)
-                            .child(self.ribbon.layout_mode.label()),
-                    ),
+                    .when(has_doc, |el| {
+                        el.child(
+                            div()
+                                .text_xs()
+                                .text_color(muted_fg)
+                                .child(format!("{} × {} pt", page_w, page_h)),
+                        )
+                        .child(
+                            div()
+                                .text_xs()
+                                .text_color(muted_fg)
+                                .child(self.ribbon.layout_mode.label()),
+                        )
+                    })
+                    .when(!has_doc, |el| {
+                        el.child(div().text_xs().text_color(muted_fg).child("Ready"))
+                    }),
             )
             .child(
                 div()
@@ -1201,6 +1243,7 @@ impl PdfbullView {
                             .icon(IconName::ChevronLeft)
                             .ghost()
                             .small()
+                            .disabled(!has_doc || current == 0)
                             .tooltip("Previous page")
                             .on_click(prev_click),
                     )
@@ -1223,6 +1266,7 @@ impl PdfbullView {
                             .icon(IconName::ChevronRight)
                             .ghost()
                             .small()
+                            .disabled(!has_doc || current + 1 >= total)
                             .tooltip("Next page")
                             .on_click(next_click),
                     )
@@ -1232,6 +1276,7 @@ impl PdfbullView {
                             .icon(IconName::Minus)
                             .ghost()
                             .small()
+                            .disabled(!has_doc)
                             .tooltip("Zoom out")
                             .on_click(zoom_out_click),
                     )
@@ -1240,6 +1285,7 @@ impl PdfbullView {
                             .label(SharedString::from(format!("{zoom_pct}%")))
                             .ghost()
                             .small()
+                            .disabled(!has_doc)
                             .tooltip("Reset zoom to 100%")
                             .on_click(zoom_reset_click),
                     )
@@ -1248,6 +1294,7 @@ impl PdfbullView {
                             .icon(IconName::Plus)
                             .ghost()
                             .small()
+                            .disabled(!has_doc)
                             .tooltip("Zoom in")
                             .on_click(zoom_in_click),
                     ),
@@ -2293,6 +2340,9 @@ impl PdfbullView {
                     if self.dialogs.active.is_some() {
                         self.dialogs.active = None;
                         cx.notify();
+                    } else if self.log_console.is_open {
+                        self.log_console.is_open = false;
+                        cx.notify();
                     } else if self.viewport.selection_page.is_some() {
                         self.viewport.selection_page = None;
                         self.viewport.selection_start = None;
@@ -3123,7 +3173,16 @@ impl Render for PdfbullView {
             .child(header_bar)
             .child(action_strip)
             .children(tabs_bar)
-            .child(div().flex_1().w_full().overflow_hidden().child(center_area))
+            .child(
+                div()
+                    .flex_1()
+                    .w_full()
+                    .min_h_0()
+                    .flex()
+                    .flex_col()
+                    .overflow_hidden()
+                    .child(center_area),
+            )
             .children(log_drawer)
             .child(status_bar)
             .children(dialog_overlay)
