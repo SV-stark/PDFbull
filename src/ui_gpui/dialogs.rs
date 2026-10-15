@@ -720,7 +720,7 @@ impl DialogsState {
                     .gap_2()
                     .child(
                         Button::new("btn-dialog-cancel")
-                            .label("Close")
+                            .label("Cancel")
                             .outline()
                             .on_click(cx.listener(move |v, _, w, cx| on_close(v, w, cx))),
                     )

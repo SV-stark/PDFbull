@@ -29,7 +29,11 @@ pub fn run_gpui_app() {
                 // Do not `expect` here: this runs inside a detached task, and a
                 // panic in a detached task is swallowed rather than surfaced.
                 // Report the failure and exit cleanly instead.
-                match cx.open_window(WindowOptions::default(), |window, cx| {
+                let window_options = WindowOptions {
+                    window_min_size: Some(gpui_kit::size(px(800.0), px(600.0))),
+                    ..WindowOptions::default()
+                };
+                match cx.open_window(window_options, |window, cx| {
                     let view = cx.new(|cx| {
                         let mut v = app_view::PdfbullView::new(window, cx);
                         if let Some(ref path) = initial_file_clone {

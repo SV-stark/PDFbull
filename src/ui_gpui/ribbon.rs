@@ -403,6 +403,7 @@ fn render_view_strip<V: 'static>(
             Button::new("btn-continuous")
                 .label("Continuous")
                 .small()
+                .tooltip("Scroll through all pages in one continuous view")
                 .selected(layout == PageLayoutMode::Continuous)
                 .on_click(cx.listener(move |v, _, w, cx| {
                     on_action(
@@ -416,6 +417,7 @@ fn render_view_strip<V: 'static>(
             Button::new("btn-single")
                 .label("Single")
                 .small()
+                .tooltip("Show one page at a time")
                 .selected(layout == PageLayoutMode::SinglePage)
                 .on_click(cx.listener(move |v, _, w, cx| {
                     on_action(
@@ -429,6 +431,7 @@ fn render_view_strip<V: 'static>(
             Button::new("btn-spread")
                 .label("Two-page")
                 .small()
+                .tooltip("Show two pages side by side")
                 .selected(layout == PageLayoutMode::TwoPageSpread)
                 .on_click(cx.listener(move |v, _, w, cx| {
                     on_action(
@@ -508,10 +511,18 @@ fn render_annotate_strip<V: 'static>(
         let is_selected = tool == cur_tool;
         let click_listener =
             cx.listener(move |v, _, w, cx| on_action(v, RibbonAction::SelectTool(tool), w, cx));
+        let tooltip = match tool {
+            AnnotationTool::Pointer => "Select and move annotations",
+            AnnotationTool::Highlight => "Highlight text",
+            AnnotationTool::Underline => "Underline text",
+            AnnotationTool::Strikeout => "Strike through text",
+            _ => "Annotation tool",
+        };
         text_btns.push(
             Button::new(SharedString::from(format!("tool-{:?}", tool)))
                 .label(label)
                 .small()
+                .tooltip(tooltip)
                 // Selection, not a primary commit. Twelve tools each turning
                 // into the strongest fill in the window made the active tool
                 // indistinguishable from "the action to take".
@@ -533,10 +544,18 @@ fn render_annotate_strip<V: 'static>(
         let is_selected = tool == cur_tool;
         let click_listener =
             cx.listener(move |v, _, w, cx| on_action(v, RibbonAction::SelectTool(tool), w, cx));
+        let tooltip = match tool {
+            AnnotationTool::Rectangle => "Draw a rectangle annotation",
+            AnnotationTool::Circle => "Draw a circle or ellipse annotation",
+            AnnotationTool::Line => "Draw a straight line annotation",
+            AnnotationTool::Arrow => "Draw an arrow annotation",
+            _ => "Shape tool",
+        };
         shape_btns.push(
             Button::new(SharedString::from(format!("tool-{:?}", tool)))
                 .label(label)
                 .small()
+                .tooltip(tooltip)
                 .selected(is_selected)
                 .on_click(click_listener)
                 .into_any_element(),
@@ -557,10 +576,17 @@ fn render_annotate_strip<V: 'static>(
         let is_selected = tool == cur_tool;
         let click_listener =
             cx.listener(move |v, _, w, cx| on_action(v, RibbonAction::SelectTool(tool), w, cx));
+        let tooltip = match tool {
+            AnnotationTool::StickyNote => "Add a sticky note",
+            AnnotationTool::Text => "Add a text annotation",
+            AnnotationTool::Redact => "Permanently black out content",
+            _ => "Draw tool",
+        };
         draw_btns.push(
             Button::new(SharedString::from(format!("tool-{:?}", tool)))
                 .label(label)
                 .small()
+                .tooltip(tooltip)
                 .selected(is_selected)
                 .on_click(click_listener)
                 .into_any_element(),
@@ -595,6 +621,7 @@ fn render_tools_strip<V: 'static>(
                 .label("Organizer")
                 .primary()
                 .small()
+                .tooltip("Open the visual page organizer")
                 .on_click(
                     cx.listener(move |v, _, w, cx| {
                         on_action(v, RibbonAction::PageOrganizer, w, cx)
@@ -605,12 +632,14 @@ fn render_tools_strip<V: 'static>(
                 .label("Merge")
                 .outline()
                 .small()
+                .tooltip("Merge PDFs into a single document")
                 .on_click(cx.listener(move |v, _, w, cx| on_action(v, RibbonAction::Merge, w, cx)))
                 .into_any_element(),
             Button::new("tool-split")
                 .label("Split")
                 .outline()
                 .small()
+                .tooltip("Extract page ranges into separate files")
                 .on_click(cx.listener(move |v, _, w, cx| on_action(v, RibbonAction::Split, w, cx)))
                 .into_any_element(),
             Button::new("tool-extract-pages")
@@ -633,6 +662,7 @@ fn render_tools_strip<V: 'static>(
                 .label("Signatures")
                 .outline()
                 .small()
+                .tooltip("View digital signatures and their trust status")
                 .on_click(cx.listener(move |v, _, w, cx| {
                     on_action(v, RibbonAction::DigitalSignatures, w, cx)
                 }))
@@ -641,6 +671,7 @@ fn render_tools_strip<V: 'static>(
                 .label("Encrypt")
                 .ghost()
                 .small()
+                .tooltip("Encrypt the document with a password")
                 .on_click(
                     cx.listener(move |v, _, w, cx| on_action(v, RibbonAction::Encrypt, w, cx)),
                 )
@@ -649,6 +680,7 @@ fn render_tools_strip<V: 'static>(
                 .label("Decrypt")
                 .ghost()
                 .small()
+                .tooltip("Remove password protection")
                 .on_click(
                     cx.listener(move |v, _, w, cx| on_action(v, RibbonAction::Decrypt, w, cx)),
                 )
@@ -664,6 +696,7 @@ fn render_tools_strip<V: 'static>(
                 .label("Watermark")
                 .ghost()
                 .small()
+                .tooltip("Add a diagonal watermark to every page")
                 .on_click(
                     cx.listener(move |v, _, w, cx| on_action(v, RibbonAction::Watermark, w, cx)),
                 )
@@ -672,6 +705,7 @@ fn render_tools_strip<V: 'static>(
                 .label("Header/Footer")
                 .ghost()
                 .small()
+                .tooltip("Add running headers and page numbers")
                 .on_click(
                     cx.listener(move |v, _, w, cx| on_action(v, RibbonAction::HeaderFooter, w, cx)),
                 )
@@ -680,6 +714,7 @@ fn render_tools_strip<V: 'static>(
                 .label("Form Fields")
                 .ghost()
                 .small()
+                .tooltip("Fill and manage PDF form fields")
                 .on_click(
                     cx.listener(move |v, _, w, cx| on_action(v, RibbonAction::FormFields, w, cx)),
                 )
@@ -688,12 +723,14 @@ fn render_tools_strip<V: 'static>(
                 .label("OCR")
                 .ghost()
                 .small()
+                .tooltip("Run optical character recognition on the document")
                 .on_click(cx.listener(move |v, _, w, cx| on_action(v, RibbonAction::Ocr, w, cx)))
                 .into_any_element(),
             Button::new("tool-compress")
                 .label("Compress")
                 .ghost()
                 .small()
+                .tooltip("Reduce file size by compressing images")
                 .on_click(
                     cx.listener(move |v, _, w, cx| on_action(v, RibbonAction::Compress, w, cx)),
                 )
@@ -759,6 +796,7 @@ fn render_convert_strip<V: 'static>(
                     .label("Markdown (.md)")
                     .outline()
                     .small()
+                    .tooltip("Convert the document to Markdown")
                     .on_click(cx.listener(move |v, _, w, cx| {
                         on_action(v, RibbonAction::ConvertMarkdown, w, cx)
                     }))
@@ -767,6 +805,7 @@ fn render_convert_strip<V: 'static>(
                     .label("HTML5 (.html)")
                     .outline()
                     .small()
+                    .tooltip("Convert the document to HTML")
                     .on_click(cx.listener(move |v, _, w, cx| {
                         on_action(v, RibbonAction::ConvertHtml, w, cx)
                     }))
@@ -775,6 +814,7 @@ fn render_convert_strip<V: 'static>(
                     .label("Plain Text (.txt)")
                     .outline()
                     .small()
+                    .tooltip("Convert the document to plain text")
                     .on_click(cx.listener(move |v, _, w, cx| {
                         on_action(v, RibbonAction::ConvertText, w, cx)
                     }))

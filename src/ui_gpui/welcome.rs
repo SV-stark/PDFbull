@@ -146,7 +146,8 @@ impl WelcomeState {
                     // Interactive Dropzone
                     div()
                         .id("welcome-dropzone")
-                        .w(px(540.0))
+                        .w_full()
+                        .max_w(px(540.0))
                         .h(px(140.0))
                         .rounded_xl()
                         .border_2()
@@ -225,6 +226,7 @@ impl WelcomeState {
                             div()
                                 .flex()
                                 .flex_row()
+                                .flex_wrap()
                                 .gap_3()
                                 .child(render_action_card(
                                     cx,
@@ -360,7 +362,8 @@ impl WelcomeState {
 
             Some(
                 div()
-                    .w(px(540.0))
+                    .w_full()
+                    .max_w(px(540.0))
                     .flex()
                     .flex_col()
                     .gap_2()
@@ -429,7 +432,9 @@ fn render_action_card<V: 'static>(
         .id(id)
         .flex()
         .flex_col()
-        .w(px(264.0))
+        .flex_1()
+        .min_w(px(220.0))
+        .max_w(px(320.0))
         .p_3p5()
         .rounded_xl()
         .border_1()

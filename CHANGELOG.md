@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Improved
+- **Log console accessibility (`src/ui_gpui/log_console.rs`)**: Log levels now carry text prefixes (`[ERROR]`, `[WARN]`, `[INFO]`) so the distinction is not colour-only. The close button gained a tooltip.
+- **Dialog button label (`src/ui_gpui/dialogs.rs`)**: The cancel button now reads "Cancel" instead of the ambiguous "Close".
+- **Ribbon button tooltips (`src/ui_gpui/ribbon.rs`)**: Added tooltips to ~30 buttons across layout, display, annotation, organise, security, content and convert groups — every button now explains its action.
+- **Minimum window size (`src/ui_gpui/mod.rs`)**: The window can no longer be resized below 800x600, preventing the ribbon, tabs and canvas from overflowing with no fallback.
+- **Welcome screen responsive widths (`src/ui_gpui/welcome.rs`)**: The dropzone, action cards and recent-documents panel now use `w_full()` + `max_w()` instead of fixed pixel widths, and the card rows wrap on narrow windows.
+
 ## [0.17.2] - 2026-10-14
 
 ### Added

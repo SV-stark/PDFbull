@@ -100,16 +100,16 @@ impl LogConsoleState {
                 }
             })
             .map(|(seq, msg, lvl)| {
-                let color = match *lvl {
-                    "error" => gpui_kit::red(),
-                    "warn" => gpui_kit::yellow(),
-                    _ => muted_fg,
+                let (prefix, color) = match *lvl {
+                    "error" => ("[ERROR]", gpui_kit::red()),
+                    "warn" => ("[WARN]", gpui_kit::yellow()),
+                    _ => ("[INFO]", muted_fg),
                 };
                 div()
                     .id(SharedString::from(format!("log-entry-{}", seq)))
                     .text_xs()
                     .text_color(color)
-                    .child(msg.clone())
+                    .child(format!("{} {}", prefix, msg))
                     .into_any_element()
             })
             .collect();
