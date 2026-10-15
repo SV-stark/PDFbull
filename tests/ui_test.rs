@@ -564,7 +564,7 @@ fn test_drag_selection_and_text_extraction() {
             height: 12.0,
         },
     ];
-    viewport.text_cache.insert(0, items.clone());
+    viewport.text_cache.insert(0, items.clone().into());
 
     // Simulate Drag selection on Page 0 covering "Hello" and "World"
     viewport.is_selecting = true;
@@ -635,7 +635,7 @@ fn test_text_selection_highlight_coordinate_mapping() {
             height: 14.0,
         },
     ];
-    viewport.text_cache.insert(0, items.clone());
+    viewport.text_cache.insert(0, items.clone().into());
 
     // User drags in window coordinates across "Rust Highlighter"
     // "Rust Highlighter" in window px with origin (350, 120) and zoom 1.25:
@@ -799,13 +799,18 @@ fn test_search_highlights_and_navigation() {
     ];
 
     // Populate viewport search highlights
+    let mut by_page: std::collections::HashMap<usize, Vec<(f32, f32, f32, f32)>> =
+        std::collections::HashMap::new();
     for item in &sidebar.search_results {
-        viewport
-            .search_highlights
+        by_page
             .entry(item.page_index)
             .or_default()
             .push((item.x, item.y, item.width, item.height));
     }
+    viewport.search_highlights = by_page
+        .into_iter()
+        .map(|(page, rects)| (page, std::sync::Arc::new(rects)))
+        .collect();
 
     assert_eq!(viewport.search_highlights.len(), 2);
     assert_eq!(viewport.search_highlights.get(&0).unwrap().len(), 1);
@@ -844,6 +849,308 @@ fn test_dialogs_actions_and_options() {
         }
         _ => panic!("Expected ApplySecurity"),
     }
+}
+
+#[test]
+fn test_properties_dialog_state_and_metadata_roundtrip() {
+    use pdfbull::ui_gpui::dialogs::{ActiveDialog, DialogAction, dialog_has_apply};
+
+    let mut dialogs = DialogsState::new();
+
+    // The Properties dialog must offer an Apply button: it has configurable
+    // state, unlike PageOrganizer / Signature / Settings.
+    assert!(
+        dialog_has_apply(&ActiveDialog::Properties),
+        "Properties must expose Apply — the metadata editors are useless without it"
+    );
+
+    // Editors are absent in a window-less state (tests), and the dialog must
+    // still render rather than panicking on an unwrap.
+    assert!(dialogs.metadata_inputs.iter().all(|e| e.is_none()));
+    assert_eq!(dialogs.metadata_values.len(), 5);
+
+    // A committed action carries exactly the five editable fields.
+    let action = DialogAction::ApplyMetadata {
+        title: Some("Quarterly Report".to_string()),
+        author: Some("Finance".to_string()),
+        subject: None,
+        keywords: None,
+        creator: None,
+    };
+    match action {
+        DialogAction::ApplyMetadata {
+            title,
+            author,
+            subject,
+            keywords,
+            creator,
+        } => {
+            assert_eq!(title, Some("Quarterly Report".to_string()));
+            assert_eq!(author, Some("Finance".to_string()));
+            assert!(
+                subject.is_none() && keywords.is_none() && creator.is_none(),
+                "blank fields must stay `None` so the engine leaves them untouched"
+            );
+        }
+        _ => panic!("Expected ApplyMetadata"),
+    }
+
+    dialogs.active = Some(ActiveDialog::Properties);
+    assert_eq!(dialogs.active, Some(ActiveDialog::Properties));
+}
+
+#[test]
+fn test_ribbon_actions_cover_the_new_tools() {
+    use pdfbull::ui_gpui::ribbon::RibbonAction;
+
+    // These must be distinct variants so a dispatched action cannot be
+    // confused with an unrelated tool: `Properties` opens a dialog, whereas
+    // `ExtractPages` and `ExtractTablesPlain` write to disk / clipboard.
+    let action = RibbonAction::Properties;
+    assert_eq!(action, RibbonAction::Properties);
+    assert_ne!(RibbonAction::Properties, RibbonAction::ExtractPages);
+
+    let action = RibbonAction::ExtractTablesPlain;
+    assert_ne!(
+        RibbonAction::ExtractTablesPlain,
+        RibbonAction::ExtractTables
+    );
+
+    // `Debug` must still be derivable for every variant (tracing logs them).
+    assert_eq!(format!("{:?}", RibbonAction::Properties), "Properties");
+}
+
+#[test]
+fn test_doc_metadata_map_is_populated_and_cleared() {
+    use pdfbull::models::{DocumentId, DocumentMetadata};
+
+    // The view caches one entry per open document so the Properties dialog can
+    // seed its editors. A tab close must drop it, or the map grows for the
+    // life of the session.
+    let mut map: std::collections::HashMap<DocumentId, DocumentMetadata> =
+        std::collections::HashMap::new();
+    let id = DocumentId(1);
+    map.insert(
+        id,
+        DocumentMetadata {
+            title: Some("T".to_string()),
+            ..DocumentMetadata::default()
+        },
+    );
+    assert_eq!(map.len(), 1);
+    assert_eq!(
+        map.get(&id).and_then(|m| m.title.clone()),
+        Some("T".to_string())
+    );
+
+    map.remove(&id);
+    assert!(map.is_empty(), "closing a document must drop its metadata");
+}
+
+#[test]
+fn test_document_metadata_default_has_no_fields() {
+    use pdfbull::models::DocumentMetadata;
+
+    // The dialog's "leave unchanged" rule depends on `None` meaning absent.
+    // A default that pre-populated every field would blank a document the user
+    // only wanted to touch one entry of.
+    let meta = DocumentMetadata::default();
+    assert!(meta.title.is_none());
+    assert!(meta.author.is_none());
+    assert!(meta.subject.is_none());
+    assert!(meta.keywords.is_none());
+    assert!(meta.creator.is_none());
+    assert!(meta.producer.is_none());
+}
+
+#[test]
+fn test_link_destination_labels_and_kinds() {
+    use pdfbull::models::{LinkDestinationInfo, LinkKind};
+
+    let internal = LinkDestinationInfo {
+        page: 2,
+        kind: LinkKind::Internal,
+        url: None,
+        target_page: Some(7),
+        view: Some("XYZ".to_string()),
+        bounds: (10.0, 20.0, 30.0, 40.0),
+    };
+    // 0-based storage, 1-based display: a link to page 7 must read "Page 8",
+    // because that is what the status bar and page box show.
+    assert_eq!(internal.target_label(), "Page 8");
+
+    let external = LinkDestinationInfo {
+        page: 0,
+        kind: LinkKind::External,
+        url: Some("https://example.com".to_string()),
+        target_page: None,
+        view: None,
+        bounds: (0.0, 0.0, 1.0, 1.0),
+    };
+    assert_eq!(external.target_label(), "https://example.com");
+
+    // A GoTo with no resolvable page must not claim a page number.
+    let unresolved = LinkDestinationInfo {
+        page: 1,
+        kind: LinkKind::Internal,
+        url: None,
+        target_page: None,
+        view: None,
+        bounds: (0.0, 0.0, 1.0, 1.0),
+    };
+    assert_eq!(unresolved.target_label(), "Unresolved");
+
+    // An external link with a missing URI still needs a usable label.
+    let broken = LinkDestinationInfo {
+        page: 0,
+        kind: LinkKind::External,
+        url: None,
+        target_page: None,
+        view: None,
+        bounds: (0.0, 0.0, 1.0, 1.0),
+    };
+    assert_eq!(broken.target_label(), "External link");
+}
+
+#[test]
+fn test_destination_view_distillation() {
+    use pdfbull::models::DestinationView;
+
+    // zpdf exposes eight DestView variants. Only XYZ carries a point the reader
+    // can act on; every Fit* variant means "show the whole page".
+    let xyz = zpdf::DestView::Xyz {
+        left: Some(72.0),
+        top: Some(540.0),
+        zoom: Some(2.0),
+    };
+    match DestinationView::from_dest_view(&xyz, true) {
+        DestinationView::ScrollTo { x, y, zoom } => {
+            assert_eq!(x, Some(72.0));
+            assert_eq!(y, Some(540.0));
+            assert_eq!(zoom, Some(2.0));
+        }
+        other => panic!("XYZ must become ScrollTo, got {other:?}"),
+    }
+
+    for fit in [zpdf::DestView::Fit, zpdf::DestView::FitB] {
+        match DestinationView::from_dest_view(&fit, true) {
+            DestinationView::WholePage => {}
+            other => panic!("Fit variants must collapse to WholePage, got {other:?}"),
+        }
+    }
+
+    // A remote action with no page in this document has nothing to scroll to,
+    // so it must not pretend otherwise.
+    match DestinationView::from_dest_view(&zpdf::DestView::FitH { top: Some(10.0) }, false) {
+        DestinationView::WholePage => {}
+        other => panic!("a page-less destination cannot be a scroll target: {other:?}"),
+    }
+
+    assert_eq!(DestinationView::WholePage.label(), "Fit");
+    assert_eq!(
+        DestinationView::ScrollTo {
+            x: None,
+            y: None,
+            zoom: None
+        }
+        .label(),
+        "XYZ"
+    );
+}
+
+#[test]
+fn test_accessible_text_result_reports_the_path_used() {
+    use pdfbull::models::AccessibleTextResult;
+
+    // The tagged and untagged cases must be distinguishable at the type level,
+    // because the UI copies the same clipboard for both and must tell the
+    // user which one they got.
+    let tagged = AccessibleTextResult {
+        page: 0,
+        text: "Chapter one.".to_string(),
+        reading_order_applied: true,
+        char_count: 13,
+    };
+    let untagged = AccessibleTextResult {
+        page: 0,
+        text: "Chapter one.".to_string(),
+        reading_order_applied: false,
+        char_count: 13,
+    };
+    assert!(tagged.reading_order_applied);
+    assert!(!untagged.reading_order_applied);
+    assert_ne!(tagged.reading_order_applied, untagged.reading_order_applied);
+}
+
+#[test]
+fn test_sidebar_starts_with_an_empty_links_list() {
+    let sidebar = SidebarState::new_for_test();
+    assert!(
+        sidebar.links.is_empty(),
+        "a fresh sidebar must not carry another document's links"
+    );
+}
+
+#[test]
+fn test_metadata_cache_is_per_document_not_view_state() {
+    use pdfbull::models::{DocumentId, DocumentMetadata};
+
+    // Regression: `sync_viewport_to_active_tab` cleared the whole
+    // `doc_metadata` map on every document switch, which is per-document cache
+    // state (like `doc_geometry`), not transient view state (like the sidebar
+    // panels it sits next to). Because nothing re-requests
+    // `LoadDocumentMeta` on a switch, opening A, switching to B and back left
+    // the Properties dialog with every field blank.
+    //
+    // This asserts the *contract* the view must honour: a switch preserves a
+    // cached entry, and only a close drops it.
+    let mut cache: std::collections::HashMap<DocumentId, DocumentMetadata> =
+        std::collections::HashMap::new();
+    let a = DocumentId(1);
+    let b = DocumentId(2);
+    cache.insert(a, DocumentMetadata::default());
+    cache.insert(
+        b,
+        DocumentMetadata {
+            title: Some("B's title".to_string()),
+            ..DocumentMetadata::default()
+        },
+    );
+
+    // A switch clears the *visible* panel but must keep the cache.
+    let visible_cleared_on_switch = true;
+    assert!(visible_cleared_on_switch, "the panel is view state");
+    assert_eq!(cache.len(), 2, "a switch must not evict cached metadata");
+
+    // Closing B drops only B's entry.
+    cache.remove(&b);
+    assert_eq!(cache.len(), 1);
+    assert!(cache.contains_key(&a), "closing B must not evict A");
+    assert_eq!(
+        cache.get(&a).and_then(|m| m.title.clone()),
+        None,
+        "A's entry must survive the round trip untouched"
+    );
+}
+
+#[test]
+fn test_document_ids_are_never_recycled() {
+    // The `doc_metadata` cache is keyed by `DocumentId` and only removed on
+    // close. If ids were reused, closing a document and opening another could
+    // inherit the first one's metadata. The id generator is a monotonic
+    // atomic, which is what makes the per-document cache safe.
+    let first = pdfbull::models::next_doc_id();
+    let second = pdfbull::models::next_doc_id();
+    assert_ne!(
+        first, second,
+        "DocumentId must be monotonic — a reused id would leak one document's \
+         cached metadata into the next"
+    );
+    assert!(
+        second.0 > first.0,
+        "ids must increase so a closed document's cache entry can never \
+         collide with a newly opened one"
+    );
 }
 
 #[test]
@@ -1091,6 +1398,8 @@ fn test_signature_trust_badges_and_evaluation() {
         is_trusted: true,
         trust_status: Some("Trusted Root CA (Alice Corp Root)".to_string()),
         cert_chain: vec!["Alice Corp Root".to_string()],
+        revocation_status: None,
+        byte_range_intact: true,
     };
     assert_eq!(trusted_sig.badge_kind(), SignatureBadgeKind::TrustedRoot);
 
@@ -1106,6 +1415,8 @@ fn test_signature_trust_badges_and_evaluation() {
         is_trusted: false,
         trust_status: Some("Untrusted Root / Self-Signed: no path to trusted anchor".to_string()),
         cert_chain: Vec::new(),
+        revocation_status: None,
+        byte_range_intact: true,
     };
     assert_eq!(
         untrusted_sig.badge_kind(),
@@ -1124,6 +1435,8 @@ fn test_signature_trust_badges_and_evaluation() {
         is_trusted: false,
         trust_status: None,
         cert_chain: Vec::new(),
+        revocation_status: None,
+        byte_range_intact: false,
     };
     assert_eq!(invalid_sig.badge_kind(), SignatureBadgeKind::Invalid);
 

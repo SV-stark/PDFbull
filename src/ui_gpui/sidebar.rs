@@ -45,6 +45,7 @@ pub enum SidebarMode {
     Search,
     Attachments,
     Layers,
+    Links,
 }
 
 // ── Thumbnail strip geometry ────────────────────────────────────────────────
@@ -100,6 +101,9 @@ pub enum SidebarAction {
     SelectSearchResult(usize, f32, f32, f32, f32),
     DeleteAnnotation(u64),
     SelectBookmark(usize),
+    /// Follow a link. For internal links this carries the target page and the
+    /// declared view; for external ones it carries the URI to open.
+    FollowLink(crate::models::LinkDestinationInfo),
     ToggleLayer(usize, bool),
 }
 
@@ -123,6 +127,9 @@ pub struct SidebarState {
     pub bookmarks: Vec<crate::pdf_engine::Bookmark>,
     pub attachments: Vec<crate::models::AttachmentInfo>,
     pub layers: Vec<crate::models::LayerInfo>,
+    /// Every link annotation in the document, with resolved destinations.
+    /// Populated by `PdfCommand::GetLinkDestinations` when a document opens.
+    pub links: Vec<crate::models::LinkDestinationInfo>,
 }
 
 /// Total laid-out height of the thumbnail strip for `total_pages` pages.
@@ -176,6 +183,7 @@ impl SidebarState {
             bookmarks: Vec::new(),
             attachments: Vec::new(),
             layers: Vec::new(),
+            links: Vec::new(),
         }
     }
 
@@ -332,6 +340,7 @@ impl SidebarState {
             (SidebarMode::Search, "Search"),
             (SidebarMode::Attachments, "Files"),
             (SidebarMode::Layers, "Layers"),
+            (SidebarMode::Links, "Links"),
         ];
 
         let cur_mode = self.mode;
@@ -876,6 +885,97 @@ impl SidebarState {
                     }
                     div()
                         .id("sidebar-layers-scroll")
+                        .flex()
+                        .flex_col()
+                        .size_full()
+                        .gap_1p5()
+                        .p_2()
+                        .overflow_y_scrollbar()
+                        .children(items)
+                        .into_any_element()
+                }
+            }
+
+            SidebarMode::Links => {
+                if self.links.is_empty() {
+                    div()
+                        .flex()
+                        .flex_col()
+                        .items_center()
+                        .justify_center()
+                        .p_6()
+                        .gap_1()
+                        .child(
+                            div()
+                                .text_xs()
+                                .text_color(muted_fg)
+                                .text_center()
+                                .child("No link annotations in this document."),
+                        )
+                        .child(div().text_xs().text_color(muted_fg).text_center().child(
+                            "Internal jumps and external URLs found on any page are listed here.",
+                        ))
+                        .into_any_element()
+                } else {
+                    let mut items = Vec::new();
+                    for link in self.links.iter() {
+                        let info = link.clone();
+                        // Keyed on page + target rather than list position: the
+                        // list is rebuilt on every document switch, so a
+                        // position-based id would hand document A's row *n*
+                        // hover state to document B's row *n*.
+                        let key = format!(
+                            "link-{}-{}",
+                            link.page,
+                            link.target_page
+                                .or_else(|| link.url.as_ref().map(|_| usize::MAX))
+                                .unwrap_or(usize::MAX),
+                        );
+                        let is_external = link.kind == crate::models::LinkKind::External;
+                        let (badge, badge_fg) = if is_external {
+                            ("URL", muted_fg)
+                        } else {
+                            ("Page", fg)
+                        };
+                        items.push(
+                            div()
+                                .id(SharedString::from(key))
+                                .flex()
+                                .flex_row()
+                                .items_center()
+                                .justify_between()
+                                .px_3()
+                                .py_2()
+                                .rounded_md()
+                                .hover(|s| s.bg(accent))
+                                // Internal links are followed in-place; a URL
+                                // is delegated to the OS browser by the owner's
+                                // handler.
+                                .on_click(cx.listener(move |v, _, w, cx| {
+                                    on_action(v, SidebarAction::FollowLink(info.clone()), w, cx)
+                                }))
+                                .child(
+                                    div()
+                                        .flex_1()
+                                        .text_xs()
+                                        .text_color(fg)
+                                        .overflow_hidden()
+                                        .child(link.target_label()),
+                                )
+                                .child(
+                                    div()
+                                        .px_1p5()
+                                        .py_0p5()
+                                        .bg(muted)
+                                        .rounded_sm()
+                                        .text_xs()
+                                        .text_color(badge_fg)
+                                        .child(format!("{} {}", badge, link.page + 1)),
+                                ),
+                        );
+                    }
+                    div()
+                        .id("sidebar-links-scroll")
                         .flex()
                         .flex_col()
                         .size_full()

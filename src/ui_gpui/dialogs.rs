@@ -18,6 +18,9 @@ pub enum ActiveDialog {
     Signature,
     PageOrganizer,
     Settings,
+    /// Edit the document information dictionary (title, author, subject,
+    /// keywords, creator, producer).
+    Properties,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -36,6 +39,16 @@ pub enum DialogAction {
     DeleteCurrentPage,
     ApplySecurity(String),
     Close,
+    /// Field-by-field metadata edit. Each `Option<String>` is `Some` when the
+    /// user supplied a value and `None` when the field was left blank — the
+    /// engine then leaves that entry untouched rather than blanking it.
+    ApplyMetadata {
+        title: Option<String>,
+        author: Option<String>,
+        subject: Option<String>,
+        keywords: Option<String>,
+        creator: Option<String>,
+    },
 }
 
 /// Dialogs that present no configurable state must not offer an Apply button
@@ -43,8 +56,16 @@ pub enum DialogAction {
 pub fn dialog_has_apply(active: &ActiveDialog) -> bool {
     matches!(
         active,
-        ActiveDialog::Watermark | ActiveDialog::HeaderFooter | ActiveDialog::Security
+        ActiveDialog::Watermark
+            | ActiveDialog::HeaderFooter
+            | ActiveDialog::Security
+            | ActiveDialog::Properties
     )
+}
+
+/// Dialogs whose Apply reads through to live editor entities.
+pub fn dialog_applies_metadata(active: &ActiveDialog) -> bool {
+    matches!(active, ActiveDialog::Properties)
 }
 
 /// Algorithms offered by the Security dialog, with the label shown for each.
@@ -71,6 +92,14 @@ pub struct DialogsState {
     /// which option was on screen, so picking AES-128 and pressing Apply
     /// encrypted with AES-256.
     pub security_algorithm: String,
+    /// Editors for the Properties dialog's metadata fields, in the order
+    /// `[title, author, subject, keywords, creator]`. `None` (or a `None`
+    /// element) when built without a window — the dialog then shows the
+    /// document's existing values as read-only text.
+    pub metadata_inputs: [Option<Entity<InputState>>; 5],
+    /// Last-applied metadata, shown as the placeholder when the dialog is
+    /// (re)opened. Written by the Apply handler.
+    pub metadata_values: [String; 5],
 }
 
 impl Default for DialogsState {
@@ -91,9 +120,22 @@ impl DialogsState {
             owner.new(|cx| InputState::new(window, cx).placeholder("Running header text"));
         let footer_input =
             owner.new(|cx| InputState::new(window, cx).placeholder("Page {page} of {pages}"));
+        // Placeholders double as the field's own value when the editor is empty.
+        const PLACEHOLDERS: [&str; 5] = [
+            "Document title",
+            "Author name",
+            "Subject line",
+            "Comma-separated keywords",
+            "Creating application",
+        ];
+        let mut metadata_inputs: [Option<Entity<InputState>>; 5] = [None, None, None, None, None];
+        for (slot, ph) in metadata_inputs.iter_mut().zip(PLACEHOLDERS) {
+            *slot = Some(owner.new(|cx| InputState::new(window, cx).placeholder(ph)));
+        }
         Self {
             header_input: Some(header_input),
             footer_input: Some(footer_input),
+            metadata_inputs,
             ..Self::new()
         }
     }
@@ -109,6 +151,14 @@ impl DialogsState {
             password_input: String::new(),
             signatures: Vec::new(),
             security_algorithm: "AES-256".to_string(),
+            metadata_inputs: [None, None, None, None, None],
+            metadata_values: [
+                String::new(),
+                String::new(),
+                String::new(),
+                String::new(),
+                String::new(),
+            ],
         }
     }
 
@@ -153,12 +203,20 @@ impl DialogsState {
                 "Settings & Preferences",
                 "Configure theme, default zoom, and startup behavior.",
             ),
+            ActiveDialog::Properties => (
+                "Document Properties",
+                "Edit the document information dictionary. Blank fields are left unchanged.",
+            ),
         };
 
         let cur_watermark = self.selected_watermark.clone();
         let cur_header = self.header_text.clone();
         let cur_footer = self.footer_text.clone();
         let security_algorithm = self.security_algorithm.clone();
+        // Captured up front so the Properties Apply handler can read the
+        // editors without reaching into the owning view (this overlay is
+        // generic over `V`).
+        let meta_inputs = self.metadata_inputs.clone();
 
         let panel_body: AnyElement = match active {
             ActiveDialog::Watermark => {
@@ -357,6 +415,48 @@ impl DialogsState {
                         ),
                 )
                 .into_any_element(),
+
+            ActiveDialog::Properties => {
+                // Each row is label + editor. With no editor (tests) the row
+                // falls back to showing the last-applied value, so the dialog
+                // still renders instead of panicking on an unwrap.
+                let labels = ["Title", "Author", "Subject", "Keywords", "Creator"];
+                let mut rows = Vec::new();
+                for (i, label) in labels.iter().enumerate() {
+                    let input = self
+                        .metadata_inputs
+                        .get(i)
+                        .and_then(|slot| slot.clone())
+                        .map(|e| Input::new(&e).id(format!("dlg-meta-{i}")).w_full());
+                    let current = self.metadata_values.get(i).cloned().unwrap_or_default();
+                    let mut row = div().flex().flex_col().gap_1().child(
+                        div()
+                            .text_xs()
+                            .text_color(muted_fg)
+                            .child(format!("{label}:")),
+                    );
+                    row = match input {
+                        Some(inp) => row.child(inp),
+                        None => row.child(
+                            div()
+                                .text_sm()
+                                .text_color(if current.is_empty() { muted_fg } else { fg })
+                                .child(if current.is_empty() {
+                                    "(not set)".to_string()
+                                } else {
+                                    current
+                                }),
+                        ),
+                    };
+                    rows.push(row);
+                }
+                div()
+                    .flex()
+                    .flex_col()
+                    .gap_3()
+                    .children(rows)
+                    .into_any_element()
+            }
 
             ActiveDialog::Signature => {
                 let sigs = self.signatures.clone();
@@ -655,6 +755,37 @@ impl DialogsState {
                                         w,
                                         cx,
                                     ),
+                                    ActiveDialog::Properties => {
+                                        // Read the editors, mapping an empty
+                                        // field to `None` so the engine leaves
+                                        // that entry untouched instead of
+                                        // blanking it.
+                                        let field = |i: usize| -> Option<String> {
+                                            let value = meta_inputs
+                                                .get(i)?
+                                                .clone()?
+                                                .read(cx)
+                                                .value()
+                                                .to_string();
+                                            if value.trim().is_empty() {
+                                                None
+                                            } else {
+                                                Some(value)
+                                            }
+                                        };
+                                        on_action(
+                                            v,
+                                            DialogAction::ApplyMetadata {
+                                                title: field(0),
+                                                author: field(1),
+                                                subject: field(2),
+                                                keywords: field(3),
+                                                creator: field(4),
+                                            },
+                                            w,
+                                            cx,
+                                        );
+                                    }
                                     _ => {}
                                 })),
                         )

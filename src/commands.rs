@@ -30,6 +30,18 @@ pub enum PdfCommand {
     ),
     Close(DocumentId),
     ExtractText(DocumentId, usize, oneshot::Sender<PdfResult<String>>),
+    /// Reading-order text for a page, with a flag saying whether the
+    /// document's structure tree actually drove the ordering.
+    ExtractAccessibleText(
+        DocumentId,
+        usize,
+        oneshot::Sender<PdfResult<crate::models::AccessibleTextResult>>,
+    ),
+    /// Every link annotation with its resolved destination and declared view.
+    GetLinkDestinations(
+        DocumentId,
+        oneshot::Sender<PdfResult<Vec<crate::models::LinkDestinationInfo>>>,
+    ),
     GetTextItems(DocumentId, usize, oneshot::Sender<PdfResult<Vec<TextItem>>>),
     LoadDocumentMeta(DocumentId, oneshot::Sender<PdfResult<DocumentMeta>>),
     Search(
@@ -62,6 +74,17 @@ pub enum PdfCommand {
         oneshot::Sender<PdfResult<String>>,
     ),
     // New features
+    UpdateMetadata(
+        DocumentId,
+        Option<String>,
+        Option<String>,
+        Option<String>,
+        Option<String>,
+        Option<String>,
+        Option<String>,
+        oneshot::Sender<PdfResult<Vec<u8>>>,
+    ),
+    ExtractPages(DocumentId, Vec<usize>, oneshot::Sender<PdfResult<Vec<u8>>>),
     Merge(Vec<String>, String, oneshot::Sender<PdfResult<String>>),
     Split(
         String,
@@ -96,6 +119,11 @@ pub enum PdfCommand {
     ToggleLayer(DocumentId, (u32, u16), bool),
     GetAttachmentBytes(DocumentId, (u32, u16), oneshot::Sender<PdfResult<Vec<u8>>>),
     DetectTables(
+        DocumentId,
+        usize,
+        oneshot::Sender<PdfResult<Vec<DetectedTable>>>,
+    ),
+    DetectTablesPlain(
         DocumentId,
         usize,
         oneshot::Sender<PdfResult<Vec<DetectedTable>>>,
@@ -164,6 +192,8 @@ impl std::fmt::Debug for PdfCommand {
             Self::RenderThumbnail(..) => "RenderThumbnail",
             Self::Close(_) => "Close",
             Self::ExtractText(..) => "ExtractText",
+            Self::ExtractAccessibleText(..) => "ExtractAccessibleText",
+            Self::GetLinkDestinations(..) => "GetLinkDestinations",
             Self::GetTextItems(..) => "GetTextItems",
             Self::LoadDocumentMeta(..) => "LoadDocumentMeta",
             Self::Search(..) => "Search",
@@ -185,6 +215,7 @@ impl std::fmt::Debug for PdfCommand {
             Self::ToggleLayer(..) => "ToggleLayer",
             Self::GetAttachmentBytes(..) => "GetAttachmentBytes",
             Self::DetectTables(..) => "DetectTables",
+            Self::DetectTablesPlain(..) => "DetectTablesPlain",
             Self::EncryptPdf(..) => "EncryptPdf",
             Self::LinearizePdf(..) => "LinearizePdf",
             Self::ValidateConformance(..) => "ValidateConformance",
@@ -194,6 +225,8 @@ impl std::fmt::Debug for PdfCommand {
             Self::SignDocumentWithCert(..) => "SignDocumentWithCert",
             Self::ApplyStamp(..) => "ApplyStamp",
             Self::OcrPage(..) => "OcrPage",
+            Self::UpdateMetadata(..) => "UpdateMetadata",
+            Self::ExtractPages(..) => "ExtractPages",
         };
         f.write_str(name)
     }

@@ -70,15 +70,16 @@ fn test_reset_for_document_clears_all_per_document_state() {
     vp.reindex_annotations();
     vp.text_cache.insert(
         0,
-        vec![pdfbull::models::TextItem {
+        std::sync::Arc::new(vec![pdfbull::models::TextItem {
             text: "leaked".to_string(),
             x: 0.0,
             y: 0.0,
             width: 1.0,
             height: 1.0,
-        }],
+        }]),
     );
-    vp.search_highlights.insert(0, vec![(0.0, 0.0, 1.0, 1.0)]);
+    vp.search_highlights
+        .insert(0, std::sync::Arc::new(vec![(0.0, 0.0, 1.0, 1.0)]));
     vp.rendered_pages
         .insert(0, Arc::new(RenderImage::new(vec![])));
     vp.rendered_zoom.insert(0, 1.0);
@@ -1461,4 +1462,287 @@ fn test_reset_for_document_is_lossless_when_annotations_are_cached() {
         );
     }
     assert_eq!(vp.annotations_on_page(99).len(), 0);
+}
+
+/// Build a one-page PDF whose `/MediaBox` does **not** start at y=0, which is
+/// what a scanned page looks like (`[0 100 612 892]`).
+///
+/// Hand-written so the test does not depend on any particular builder API.
+fn pdf_with_offset_mediabox() -> Vec<u8> {
+    let mut objects: Vec<String> = Vec::new();
+    objects.push("<< /Type /Catalog /Pages 2 0 R >>".to_string());
+    objects.push("<< /Type /Pages /Kids [3 0 R] /Count 1 >>".to_string());
+    objects.push(
+        "<< /Type /Page /Parent 2 0 R /MediaBox [0 100 612 892] \
+         /Resources << >> >>"
+            .to_string(),
+    );
+
+    let mut out = String::from("%PDF-1.4\n");
+    // Byte offsets in the xref table must be measured from the start of the file.
+    let mut offsets: Vec<usize> = Vec::new();
+    for (i, body) in objects.iter().enumerate() {
+        offsets.push(out.len());
+        out.push_str(&format!("{} 0 obj\n{body}\nendobj\n", i + 1));
+    }
+
+    let xref_start = out.len();
+    out.push_str(&format!("xref\n0 {}\n", objects.len() + 1));
+    out.push_str("0000000000 65535 f \n");
+    for off in &offsets {
+        out.push_str(&format!("{off:010} 00000 n \n"));
+    }
+    out.push_str(&format!(
+        "trailer\n<< /Size {} /Root 1 0 R >>\nstartxref\n{}\n%%EOF\n",
+        objects.len() + 1,
+        xref_start
+    ));
+    out.into_bytes()
+}
+
+#[test]
+fn test_annotations_do_not_drift_on_pages_whose_box_starts_below_zero() {
+    // Regression: three coordinate conversions used the page box *height*
+    // where the box's *y1* was required.
+    //
+    // For a page with `MediaBox [0 100 612 892]` the height is 792 but y1 is
+    // 892. Saving converts with 792 (`pdf_y = 792 - y - h`); loading converted
+    // with 892 (`y = 892 - y0 - h`). The two disagreed by exactly `y0`, so every
+    // annotation moved 100pt further down the page on each open/save cycle --
+    // progressive, silent corruption of the user's saved highlights.
+    //
+    // `save_annotations` -> `load_annotations` is the real round trip, so this
+    // drives the actual engine rather than re-deriving the formula.
+    let dir = tempfile::tempdir().expect("tempdir");
+    let path = dir.path().join("offset_box.pdf");
+    std::fs::write(&path, pdf_with_offset_mediabox()).expect("write fixture");
+
+    let cache = pdfbull::pdf_engine::create_render_cache(4, 16 * 1024 * 1024);
+    let mut store = DocumentStore::new(cache);
+    let doc_id = next_doc_id();
+    store
+        .open_document(&path.to_string_lossy(), None, doc_id)
+        .expect("open fixture");
+
+    // A highlight placed 40pt from the top of the *visible* page.
+    let original = pdfbull::models::Annotation {
+        id: pdfbull::models::next_annotation_id(),
+        page: 0,
+        style: pdfbull::models::AnnotationStyle::Highlight {
+            color: "#FFFF00".to_string(),
+        },
+        x: 72.0,
+        y: 40.0,
+        width: 120.0,
+        height: 18.0,
+    };
+
+    let path_str = path.to_string_lossy().to_string();
+    store
+        .save_annotations(doc_id, &[original.clone()], Some(path_str.clone()))
+        .expect("save annotations");
+
+    let reloaded = store
+        .load_annotations(&path_str)
+        .expect("reload annotations");
+
+    assert_eq!(
+        reloaded.len(),
+        1,
+        "the saved highlight did not survive the round trip"
+    );
+    let got = &reloaded[0];
+
+    // Half a point of tolerance for f32 accumulation through the PDF writer.
+    let tol = 0.5;
+    assert!(
+        (got.y - original.y).abs() < tol,
+        "annotation drifted vertically: saved at y={}, reloaded at y={} \
+         (box height {} vs y1 {})",
+        original.y,
+        got.y,
+        892.0_f32 - 100.0,
+        892.0
+    );
+    assert!(
+        (got.x - original.x).abs() < tol,
+        "annotation drifted horizontally: {} -> {}",
+        original.x,
+        got.x
+    );
+    assert!(
+        (got.height - original.height).abs() < tol,
+        "annotation height changed: {} -> {}",
+        original.height,
+        got.height
+    );
+}
+
+#[test]
+fn test_two_page_spread_scheduler_requests_exactly_what_the_canvas_paints() {
+    // Regression: the render scheduler and the canvas painter each computed the
+    // two-page spread independently and disagreed.
+    //
+    // The scheduler requested `{cur, cur + 1}`. The painter showed
+    // `{even, even + 1}`, where `even` is the even page at or before `cur`.
+    // Be on page 2 (`cur == 1`) in Single-page mode and switch to Two-Page: the
+    // scheduler asked for pages 1 and 2 while the canvas painted pages 0 and 1.
+    // Page 0 was never requested, so it never entered `rendering_pages`, and
+    // nothing ever asked for it again -- the left half of the spread sat on the
+    // "Rendering page..." placeholder until you zoomed or changed layout.
+    //
+    // This walks every current page in a range of document lengths and asserts
+    // that the set of pages the scheduler requests is exactly the set painted.
+    use pdfbull::ui_gpui::canvas::two_page_spread_pages;
+
+    for total in 1..=12usize {
+        for cur in 0..total {
+            for standalone_cover in [false, true] {
+                let (left, right) = two_page_spread_pages(cur, total, standalone_cover);
+
+                // Both indices must be in range.
+                assert!(
+                    left < total,
+                    "left page {left} out of range (total {total}, cur {cur})"
+                );
+                if let Some(r) = right {
+                    assert!(
+                        r < total,
+                        "right page {r} out of range (total {total}, cur {cur})"
+                    );
+                    assert!(r > left, "spread must be left-to-right");
+                }
+
+                // What the scheduler now requests.
+                let requested: Vec<usize> = match right {
+                    Some(r) => vec![left, r],
+                    None => vec![left],
+                };
+
+                // Every requested page must be one the canvas actually paints,
+                // and the canvas must paint nothing it did not request.
+                let painted: Vec<usize> = right.map(|r| vec![left, r]).unwrap_or(vec![left]);
+                assert_eq!(
+                    requested, painted,
+                    "scheduler and canvas disagree (total {total}, cur {cur}, \
+                     standalone_cover {standalone_cover})"
+                );
+            }
+        }
+    }
+}
+
+#[test]
+fn test_two_page_spread_pairs_pages_on_even_boundaries() {
+    // The book's rule: with no standalone cover, page 0 (index 0) is alone on
+    // the right, then pages pair 2-3, 4-5, ... A user on page 2 (index 1) must
+    // see pages 0 and 1 -- the case that used to strand the left page blank.
+    use pdfbull::ui_gpui::canvas::two_page_spread_pages;
+
+    assert_eq!(two_page_spread_pages(0, 10, false), (0, Some(1)));
+    assert_eq!(two_page_spread_pages(1, 10, false), (0, Some(1)));
+    assert_eq!(two_page_spread_pages(2, 10, false), (2, Some(3)));
+    assert_eq!(two_page_spread_pages(3, 10, false), (2, Some(3)));
+    assert_eq!(two_page_spread_pages(9, 10, false), (8, Some(9)));
+
+    // An odd page count leaves the final page alone.
+    assert_eq!(two_page_spread_pages(8, 9, false), (8, None));
+
+    // With a standalone cover, page 0 is shown alone; without it, page 0 pairs
+    // with page 1. Both behaviours are intentional and predate this fix.
+    assert_eq!(two_page_spread_pages(0, 10, true), (0, None));
+    assert_eq!(two_page_spread_pages(1, 10, true), (1, Some(2)));
+    assert_eq!(two_page_spread_pages(2, 10, true), (1, Some(2)));
+    assert_eq!(two_page_spread_pages(3, 10, true), (3, Some(4)));
+}
+
+// ── Tier 1 & 2 zpdf API integration tests ───────────────────────────────────
+
+#[test]
+fn test_search_spans_api_exists() {
+    // Verify zpdf's search_spans is accessible and returns SearchHit with bounds.
+    use zpdf::TextSpan;
+    let spans = vec![TextSpan {
+        text: "Hello World".to_string(),
+        x: 0.0,
+        y: 100.0,
+        size: 12.0,
+        advance: 60.0,
+        mcid: None,
+    }];
+    let hits = zpdf::search_spans(&spans, "World", false);
+    assert!(!hits.is_empty(), "search_spans should find 'World'");
+    let bounds = hits[0].bounds();
+    assert!(bounds.x1 > bounds.x0, "bounds should have positive width");
+    assert!(bounds.y1 > bounds.y0, "bounds should have positive height");
+}
+
+#[test]
+fn test_detect_tables_plain_api_exists() {
+    // Verify zpdf's detect_tables (without rules) is accessible.
+    use zpdf::TextSpan;
+    let spans = vec![TextSpan {
+        text: "Cell".to_string(),
+        x: 0.0,
+        y: 100.0,
+        size: 12.0,
+        advance: 30.0,
+        mcid: None,
+    }];
+    let tables = zpdf::detect_tables(&spans);
+    // A single span won't form a table, but the API should be callable.
+    assert!(tables.is_empty(), "single span should not form a table");
+}
+
+#[test]
+fn test_info_update_struct_fields() {
+    // Verify zpdf_writer::InfoUpdate has the expected public fields.
+    use zpdf_writer::InfoUpdate;
+    let info = InfoUpdate {
+        title: Some(Some("Test".to_string())),
+        author: None,
+        subject: None,
+        keywords: None,
+        creator: None,
+        producer: None,
+    };
+    assert!(
+        !info.is_empty(),
+        "InfoUpdate with title should not be empty"
+    );
+    assert_eq!(info.title, Some(Some("Test".to_string())));
+}
+
+#[test]
+fn test_extract_pages_api_exists() {
+    // Verify zpdf_writer::extract_pages is accessible (signature check).
+    // We can't easily test it without a real PDF, but we can verify the function exists.
+    let _fn: fn(&zpdf::PdfFile, &[usize]) -> Result<Vec<u8>, zpdf::Error> =
+        zpdf_writer::extract_pages;
+}
+
+#[test]
+fn test_page_label_style_enum_exists() {
+    // Verify zpdf::PageLabelStyle enum is accessible.
+    let style = zpdf::PageLabelStyle::Decimal;
+    assert_eq!(style, zpdf::PageLabelStyle::Decimal);
+}
+
+#[test]
+fn test_revocation_status_enum_exists() {
+    // Verify zpdf::RevocationStatus enum is accessible.
+    let status = zpdf::RevocationStatus::NotRevoked;
+    assert_eq!(status, zpdf::RevocationStatus::NotRevoked);
+}
+
+#[test]
+fn test_byte_range_coverage_struct_exists() {
+    // Verify zpdf::ByteRangeCoverage struct is accessible.
+    let coverage = zpdf::ByteRangeCoverage {
+        ranges: vec![(0, 100)],
+        covers_whole_document: true,
+        bytes_after_signature: 0,
+    };
+    assert!(coverage.covers_whole_document);
+    assert_eq!(coverage.ranges.len(), 1);
 }

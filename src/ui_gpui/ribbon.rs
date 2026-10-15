@@ -84,11 +84,19 @@ pub enum RibbonAction {
     Compress,
     Ocr,
     PageOrganizer,
+    /// Edit the document information dictionary.
+    Properties,
+    /// Extract a page range into a new document.
+    ExtractPages,
     // Convert & Tables
     ConvertMarkdown,
     ConvertHtml,
     ConvertText,
     ExtractTables,
+    /// Text-only table detection (no ruled lines).
+    ExtractTablesPlain,
+    /// Copy the current page's text in tagged-PDF reading order.
+    CopyAccessibleText,
 }
 
 pub struct RibbonState {
@@ -605,6 +613,15 @@ fn render_tools_strip<V: 'static>(
                 .small()
                 .on_click(cx.listener(move |v, _, w, cx| on_action(v, RibbonAction::Split, w, cx)))
                 .into_any_element(),
+            Button::new("tool-extract-pages")
+                .label("Extract")
+                .outline()
+                .small()
+                .tooltip("Save the current page(s) to a new PDF")
+                .on_click(
+                    cx.listener(move |v, _, w, cx| on_action(v, RibbonAction::ExtractPages, w, cx)),
+                )
+                .into_any_element(),
         ],
         muted_fg,
     );
@@ -692,6 +709,24 @@ fn render_tools_strip<V: 'static>(
                     }),
                 )
                 .into_any_element(),
+            Button::new("tool-tables-plain")
+                .label("Quick Tables")
+                .ghost()
+                .small()
+                .tooltip("Text-only table detection, for documents with no ruled lines")
+                .on_click(cx.listener(move |v, _, w, cx| {
+                    on_action(v, RibbonAction::ExtractTablesPlain, w, cx)
+                }))
+                .into_any_element(),
+            Button::new("tool-properties")
+                .label("Properties")
+                .ghost()
+                .small()
+                .tooltip("Edit the document title, author and other information")
+                .on_click(
+                    cx.listener(move |v, _, w, cx| on_action(v, RibbonAction::Properties, w, cx)),
+                )
+                .into_any_element(),
         ],
         muted_fg,
     );
@@ -755,6 +790,23 @@ fn render_convert_strip<V: 'static>(
                     .tooltip("Detect tables on this page and copy the CSV to the clipboard")
                     .on_click(cx.listener(move |v, _, w, cx| {
                         on_action(v, RibbonAction::ExtractTables, w, cx)
+                    }))
+                    .into_any_element(),
+                Button::new("conv-reading-order")
+                    // Deliberately not in "Export Documents": this writes no
+                    // file, and the result is not a guarantee on an untagged
+                    // document — which the tooltip has to say, because the
+                    // button's own name implies otherwise.
+                    .label("Reading-order text")
+                    .outline()
+                    .small()
+                    .tooltip(
+                        "Copy this page's text in the document's tagged reading order. \
+                         Untagged documents fall back to visual order, which the status \
+                         bar will say.",
+                    )
+                    .on_click(cx.listener(move |v, _, w, cx| {
+                        on_action(v, RibbonAction::CopyAccessibleText, w, cx)
                     }))
                     .into_any_element(),
             ],

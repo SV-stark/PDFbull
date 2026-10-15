@@ -12,10 +12,44 @@ use std::sync::Arc;
 use zpdf::{
     AnnotationSpec, ContentInterpreter, FieldKind, FieldValue, FormFiller, IccCache, ImageCache,
     IncrementalWriter, MarkupKind, ParseLimits, PdfDocument, Rect as ZpdfRect, RenderBackend,
-    cpu::CpuRenderer, detect_tables_with_rules, output_intent_cmyk_profile, spans_to_text,
-    struct_ordered_text,
+    cpu::CpuRenderer, detect_tables, detect_tables_with_rules, output_intent_cmyk_profile,
+    search_spans, spans_to_text, struct_ordered_text,
 };
 use zpdf::{RewriteOptions, rewrite_pdf};
+
+/// Distil zpdf's [`DestView`] into the view the app can actually act on.
+///
+/// zpdf exposes eight variants; a reader at this zoom range can honour two
+/// shapes — "jump to a point" (`XYZ`) and "show the whole page" (every `Fit*`
+/// and bounding-box variant). Collapsing the rest is deliberate: pretending to
+/// support `FitR`'s exact quad would require a zoom-to-fit-rect path the
+/// canvas does not have, and a `ScrollTo` with the rect's top-left is a better
+/// lie than nothing.
+impl crate::models::DestinationView {
+    pub fn from_dest_view(view: &zpdf::DestView, has_page: bool) -> Self {
+        if !has_page {
+            // A `GoToR`/remote action has no page in this document; there is
+            // nothing to scroll to.
+            return Self::WholePage;
+        }
+        match view {
+            zpdf::DestView::Xyz { left, top, zoom } => Self::ScrollTo {
+                x: *left,
+                y: *top,
+                zoom: *zoom,
+            },
+            _ => Self::WholePage,
+        }
+    }
+
+    /// Short label for the sidebar row.
+    pub fn label(&self) -> &'static str {
+        match self {
+            Self::ScrollTo { .. } => "XYZ",
+            Self::WholePage => "Fit",
+        }
+    }
+}
 use zpdf_writer::{
     builder::DocumentBuilder,
     sign::{SignatureOptions, SigningKey},
@@ -44,30 +78,97 @@ pub fn hex_to_rgb(hex: &str) -> (f32, f32, f32) {
     (pair(0), pair(2), pair(4))
 }
 
-/// Width and height of a page's `/MediaBox`, falling back to A4 when the entry
-/// is missing or malformed.
+/// Largest file any of the whole-file processing entry points will load.
+///
+/// `open_document` and `convert_pdf_doc` already enforced this; every other
+/// path read the file with no bound at all, so a 4 GB pick in the Optimize (or
+/// Encrypt, or Merge, or Split) dialog bypassed the guard entirely and the
+/// process was OOM-killed. `optimize_pdf` was the worst case: it held the input,
+/// a clone of the input, and the staged rewrite simultaneously.
+pub const MAX_INPUT_BYTES: u64 = 512 * 1024 * 1024;
+
+/// Read a whole input file, refusing anything over `MAX_INPUT_BYTES`.
+///
+/// The size is checked via metadata *before* the read, so an oversized file is
+/// rejected without first allocating room for it.
+fn read_input_capped(path: &str) -> PdfResult<Vec<u8>> {
+    let meta = std::fs::metadata(path)
+        .map_err(|e| PdfError::OpenFailed(format!("cannot stat {path}: {e}")))?;
+    if meta.len() > MAX_INPUT_BYTES {
+        return Err(PdfError::OpenFailed(format!(
+            "{path} is {:.1} MB, above the {} MB limit for this operation",
+            meta.len() as f64 / (1024.0 * 1024.0),
+            MAX_INPUT_BYTES / (1024 * 1024)
+        )));
+    }
+    std::fs::read(path).map_err(|e| PdfError::OpenFailed(e.to_string()))
+}
+
+/// The box a page's content is actually drawn into, as `(x0, y0, x1, y1)`.
+///
+/// `/MediaBox` and `/CropBox` are inheritable page attributes: either may be
+/// declared once on the `/Pages` node and be absent from every individual page
+/// dict. Reading the page dict alone therefore fell back to A4 for exactly the
+/// documents that declare their size the standard way.
+///
+/// `/CropBox` takes precedence, because that — not `/MediaBox` — is what the
+/// viewer shows and therefore what generated content must be positioned against.
+fn effective_page_box(doc: &Document, page_id: ObjectId) -> Option<(f32, f32, f32, f32)> {
+    // Walk /Parent for an inherited key. Bounded so a /Parent cycle (which
+    // malformed files do contain) cannot spin forever.
+    let inherited = |key: &[u8]| -> Option<Object> {
+        let mut current = page_id;
+        for _ in 0..64 {
+            let dict = doc.objects.get(&current).and_then(|o| o.as_dict().ok())?;
+            if let Ok(v) = dict.get(key) {
+                return Some(v.clone());
+            }
+            current = match dict.get(b"Parent").ok()? {
+                Object::Reference(r) => *r,
+                _ => return None,
+            };
+        }
+        None
+    };
+
+    let as_box = |obj: &Option<Object>| -> Option<(f32, f32, f32, f32)> {
+        let arr = match obj {
+            Some(Object::Array(a)) if a.len() == 4 => a,
+            Some(Object::Reference(r)) => match doc.objects.get(r) {
+                Some(Object::Array(a)) if a.len() == 4 => a,
+                _ => return None,
+            },
+            _ => return None,
+        };
+        let num = |o: &Object| -> Option<f32> {
+            match o {
+                Object::Real(v) => Some(*v),
+                Object::Integer(v) => Some(*v as f32),
+                _ => None,
+            }
+        };
+        let (x0, y0) = (num(&arr[0])?, num(&arr[1])?);
+        let (x1, y1) = (num(&arr[2])?, num(&arr[3])?);
+        // Normalize so a box given as [top-right, bottom-left] still yields a
+        // positive extent.
+        Some((x0.min(x1), y0.min(y1), x0.max(x1), y0.max(y1)))
+    };
+
+    as_box(&inherited(b"CropBox")).or_else(|| as_box(&inherited(b"MediaBox")))
+}
+
+/// Width and height of the box a page's content is drawn into, falling back to
+/// A4 when no usable box can be found.
 ///
 /// Used to anchor generated content (headers, footers, watermarks) to the real
 /// page box. A fixed origin silently pushed that content off the page for any
 /// document that is not A4-sized.
 fn media_box_size(doc: &Document, page_id: ObjectId) -> (f32, f32) {
     const A4: (f32, f32) = (595.0, 842.0);
-    let Some(dict) = doc.objects.get(&page_id).and_then(|o| o.as_dict().ok()) else {
+    let Some((x0, y0, x1, y1)) = effective_page_box(doc, page_id) else {
         return A4;
     };
-    let arr = match dict.get(b"MediaBox") {
-        Ok(Object::Array(a)) if a.len() == 4 => a,
-        _ => return A4,
-    };
-    let num = |o: &Object| match o {
-        Object::Real(v) => *v,
-        Object::Integer(v) => *v as f32,
-        _ => f32::NAN,
-    };
-    let (w, h) = (
-        (num(&arr[2]) - num(&arr[0])).abs(),
-        (num(&arr[3]) - num(&arr[1])).abs(),
-    );
+    let (w, h) = (x1 - x0, y1 - y0);
     // A non-positive or non-finite box is unusable for placement; prefer A4.
     if w.is_finite() && h.is_finite() && w > 1.0 && h > 1.0 {
         (w, h)
@@ -76,32 +177,177 @@ fn media_box_size(doc: &Document, page_id: ObjectId) -> (f32, f32) {
     }
 }
 
-/// Safely construct a `zpdf::OcConfig` with user visibility overrides applied.
-/// Synthesizes a valid PDF Catalog containing the desired `/OCProperties /D` dictionary
-/// via `lopdf::Document` and parses it through `zpdf::PdfDocument::open`, eliminating unsafe memory transmutation.
+/// Write generated PDF bytes to `path` without ever truncating the destination
+/// before the new content exists.
+///
+/// Every PDF-producing path goes through here rather than `fs::write`. The
+/// reason is concrete: several of these commands default to overwriting their
+/// own input (the save dialog can hand back the path that was opened), and
+/// `fs::write` truncates before it writes — so a failure part-way through left
+/// the user with a zero-length file and no copy of the original.
+fn write_pdf_output(path: &str, bytes: &[u8]) -> PdfResult<()> {
+    crate::storage::atomic_write_bytes(std::path::Path::new(path), bytes)
+        .map_err(|e| PdfError::IoError(e.to_string()))
+}
+
+/// Encode `text` for a PDF literal string shown with a standard Type1 font.
+///
+/// `pdf_writer::Str` writes its bytes verbatim as a PDFDocEncoding literal
+/// string. Handing it `str::as_bytes()` therefore put raw UTF-8 into a field
+/// readers interpret as single-byte codes, so `机密` became three unrelated
+/// glyphs per character.
+///
+/// WinAnsiEncoding is the encoding every standard-14 font defaults to, and it
+/// covers Latin-1, so accented Latin text maps almost one-to-one. Anything
+/// outside it cannot be drawn with a non-embedded Helvetica; it is replaced with
+/// `?` and reported, rather than silently rendering as mojibake.
+fn encode_pdf_text(text: &str) -> (Vec<u8>, usize) {
+    let mut out = Vec::with_capacity(text.len());
+    let mut unmappable = 0usize;
+    for ch in text.chars() {
+        match ch {
+            // Printable ASCII passes through unchanged.
+            c if (0x20..0x7F).contains(&(c as u32)) => out.push(c as u8),
+            // WinAnsiEncoding agrees with Latin-1 across 0xA0..=0xFF, except
+            // for the handful of code points Windows remapped.
+            '€' => out.push(0x80),
+            '‚' => out.push(0x82),
+            'ƒ' => out.push(0x83),
+            '„' => out.push(0x84),
+            '…' => out.push(0x85),
+            '†' => out.push(0x86),
+            '‡' => out.push(0x87),
+            'ˆ' => out.push(0x88),
+            '‰' => out.push(0x89),
+            'Š' => out.push(0x8A),
+            '‹' => out.push(0x8B),
+            'Œ' => out.push(0x8C),
+            c if (0xA0..=0xFF).contains(&(c as u32)) => out.push(c as u8),
+            // A literal string needs these escaped or they break the syntax.
+            _ => {
+                unmappable += 1;
+                out.push(b'?');
+            }
+        }
+    }
+    (out, unmappable)
+}
+
+/// Map every byte offset in `text.to_lowercase()` back to the corresponding byte
+/// offset in `original`.
+///
+/// `str::to_lowercase` is not length-preserving. It applies full Unicode
+/// special-casing, so some characters expand: `İ` (U+0130) becomes `i̇`
+/// (U+0069 U+0307), one char into two, and the Greek final-sigma rule folds a
+/// trailing `Σ` into `ς`. Any code that indexes the original string using an
+/// offset computed against the lowercase string is wrong after such a
+/// character — which is why a search for `x` in `"İx"` silently returned no
+/// hit.
+///
+/// Both strings are produced by the *same* `to_lowercase` call per input char,
+/// so walking the original char by char and lowercasing each one reproduces the
+/// lowercase string exactly and yields an exact offset mapping.
+///
+/// The returned map always contains an entry for `original.len()` (the end
+/// sentinel). Where a lowercase char boundary does not correspond to an original
+/// char boundary, the mapping records the *start* of the original character that
+/// the boundary falls inside, so a range lookup can never produce a reversed or
+/// out-of-bounds slice.
+///
+/// Reduce an arbitrary angle to one of 0/90/180/270, the only values a PDF
+/// `/Rotate` can meaningfully take.
+///
+/// A negative or out-of-range `/Rotate` (or a sum with the user's view rotation)
+/// still has to select one of the four axis-aligned quadrants, otherwise the
+/// overlay transform would fall through to the identity and misplace everything.
+pub fn normalize_rotation(degrees: i32) -> i32 {
+    degrees.rem_euclid(360) / 90 * 90
+}
+
+/// Build a `zpdf::OcConfig` with the user's visibility overrides applied **on
+/// top of** the document's own optional-content configuration.
+///
+/// The overrides must be layered over `base_oc`, not substituted for it. The
+/// previous version rebuilt `/OCProperties /D` from `overrides` alone, with a
+/// hard-coded `/BaseState /ON` — so `base_oc` (the config actually decoded from
+/// the document at open time) was consulted only as an error fallback. A
+/// document whose `/D` hid three layers by default opened correctly, and the
+/// first toggle of any *other* layer produced a config that no longer listed
+/// those three in `/OFF`; with `BaseState ON` they all became visible. One
+/// toggle silently revealed every layer the author had hidden.
+///
+/// `zpdf::OcConfig` keeps its `/ON`, `/OFF` and `/BaseState` private, so the
+/// base state cannot be read back field-by-field. Instead the *resolved*
+/// visibility of every known group is probed through the one public accessor,
+/// `group_visible`, and re-expressed as explicit `/ON` + `/OFF` entries — which
+/// is what the synthesized config means anyway. `known_groups` must be the
+/// document's full optional-content group set; a group missing from it cannot
+/// be carried over.
+///
+/// A config is synthesized through a real `lopdf` catalog rather than
+/// transmuting memory, and parsed back by `zpdf`, so no `unsafe` is involved.
 pub fn apply_oc_overrides(
     base_oc: &zpdf::OcConfig,
     overrides: &std::collections::HashMap<zpdf::ObjectId, bool>,
+    known_groups: &[zpdf::ObjectId],
 ) -> zpdf::OcConfig {
+    // With nothing to override, hand back the document's own config untouched.
+    // This is also the only path that can preserve the base `/BaseState` value
+    // exactly, so it must stay a true pass-through.
+    if overrides.is_empty() {
+        return base_oc.clone();
+    }
+
     let mut doc = lopdf::Document::with_version("1.4");
     let pages_id = doc.new_object_id();
     let catalog_id = doc.new_object_id();
 
     let mut d_dict = lopdf::Dictionary::new();
+    // BaseState ON is correct for a config that enumerates every group
+    // explicitly: nothing is left to the default.
     d_dict.set("BaseState", lopdf::Object::Name(b"ON".to_vec()));
 
-    let mut on_objs = Vec::new();
-    let mut off_objs = Vec::new();
-    for (&id, &visible) in overrides {
-        let r = lopdf::Object::Reference((id.0, id.1));
+    // Carry the document's own resolved visibility forward, then apply the
+    // user's toggles on top. Both lists are sorted, so the emitted arrays are
+    // deterministic -- `overrides` is a `HashMap`, and iterating it raw made
+    // the /ON//OFF order vary between runs of the same document.
+    let mut on_ids: Vec<zpdf::ObjectId> = Vec::new();
+    let mut off_ids: Vec<zpdf::ObjectId> = Vec::new();
+
+    for &id in known_groups {
+        let visible = match overrides.get(&id) {
+            Some(&user_choice) => user_choice,
+            // No user override: keep whatever the document itself declared.
+            None => base_oc.group_visible(id),
+        };
         if visible {
-            on_objs.push(r);
+            on_ids.push(id);
         } else {
-            off_objs.push(r);
+            off_ids.push(id);
         }
     }
-    d_dict.set("ON", lopdf::Object::Array(on_objs));
-    d_dict.set("OFF", lopdf::Object::Array(off_objs));
+
+    on_ids.sort();
+    off_ids.sort();
+
+    d_dict.set(
+        "ON",
+        lopdf::Object::Array(
+            on_ids
+                .into_iter()
+                .map(|id| lopdf::Object::Reference((id.0, id.1)))
+                .collect(),
+        ),
+    );
+    d_dict.set(
+        "OFF",
+        lopdf::Object::Array(
+            off_ids
+                .into_iter()
+                .map(|id| lopdf::Object::Reference((id.0, id.1)))
+                .collect(),
+        ),
+    );
 
     let mut ocp_dict = lopdf::Dictionary::new();
     ocp_dict.set("D", lopdf::Object::Dictionary(d_dict));
@@ -212,6 +458,13 @@ impl Weighter<RenderKey, crate::models::RenderResult> for RenderWeighter {
 pub struct RenderCache {
     cache: Cache<RenderKey, crate::models::RenderResult, RenderWeighter>,
     doc_keys: std::sync::Mutex<HashMap<DocumentId, std::collections::HashSet<RenderKey>>>,
+    /// Monotonic invalidation counter per document.
+    ///
+    /// Renders capture the value before they start and re-check it before
+    /// caching, so a render that was already in flight when the document changed
+    /// cannot re-insert a stale bitmap after the invalidation. Needed because
+    /// all workers share one cache while holding independent document state.
+    generations: std::sync::Mutex<HashMap<DocumentId, u64>>,
 }
 
 impl RenderCache {
@@ -227,6 +480,7 @@ impl RenderCache {
                 RenderWeighter,
             ),
             doc_keys: std::sync::Mutex::new(HashMap::new()),
+            generations: std::sync::Mutex::new(HashMap::new()),
         }
     }
 
@@ -234,40 +488,149 @@ impl RenderCache {
         self.cache.get(key)
     }
 
-    pub fn put(&self, key: RenderKey, result: crate::models::RenderResult) {
-        if let Ok(mut guard) = self.doc_keys.lock() {
-            guard.entry(key.doc_id).or_default().insert(key.clone());
+    /// Record `key` against its document, then cache `result`.
+    ///
+    /// The key set is **bounded** per document. `doc_keys` used to retain every
+    /// key ever rendered for the life of the document, which is the exact
+    /// unbounded-growth problem its own comment said had been fixed by dropping
+    /// an earlier per-document `Vec<RenderKey>`. Continuous wheel zooming mints
+    /// a distinct `RenderKey` per quantised scale crossed with rotation, filter
+    /// and quality -- tens of thousands on a long read -- and `quick_cache`
+    /// evicts by weight without ever notifying `doc_keys`, so the accounting
+    /// defeat the comment described was still in force.
+    ///
+    /// When the cap is hit the oldest tracked key is dropped from the set. That
+    /// only costs the ability to eagerly invalidate that one entry on a
+    /// document mutation; it is not a correctness problem, because the cache's
+    /// own eviction handles the bitmap and a stale entry is bounded in count
+    /// rather than in age.
+    fn track_key(&self, key: &RenderKey) {
+        let mut guard = match self.doc_keys.lock() {
+            Ok(g) => g,
+            Err(poisoned) => poisoned.into_inner(),
+        };
+        let set = guard.entry(key.doc_id).or_default();
+        set.insert(key.clone());
+        while set.len() > MAX_TRACKED_KEYS_PER_DOC {
+            // `HashSet` has no order, so pick any survivor to evict. Cheap, and
+            // avoids making this a `Vec`/`BTreeSet` with its own bookkeeping.
+            if let Some(victim) = set.iter().next().cloned() {
+                set.remove(&victim);
+            } else {
+                break;
+            }
         }
+    }
+
+    pub fn put(&self, key: RenderKey, result: crate::models::RenderResult) {
+        self.track_key(&key);
         self.cache.insert(key, result);
     }
 
     pub fn remove(&self, key: &RenderKey) {
-        if let Ok(mut guard) = self.doc_keys.lock()
-            && let Some(set) = guard.get_mut(&key.doc_id)
-        {
+        let mut guard = match self.doc_keys.lock() {
+            Ok(g) => g,
+            Err(poisoned) => poisoned.into_inner(),
+        };
+        if let Some(set) = guard.get_mut(&key.doc_id) {
             set.remove(key);
         }
         self.cache.remove(key);
     }
 
-    pub fn invalidate_document(&self, doc_id: DocumentId) {
-        if let Ok(mut guard) = self.doc_keys.lock()
-            && let Some(keys) = guard.remove(&doc_id)
-        {
+    /// Drop every cached bitmap for `doc_id`, whether or not its keys are still
+    /// tracked.
+    ///
+    /// `remove_document`/`invalidate_document` both depend on the tracked-key
+    /// set being intact. Every lock acquisition here used to be
+    /// `if let Ok(..)`, so a single poisoned mutex turned both into silent
+    /// no-ops: `close_document` stopped releasing a closed tab's bitmaps (they
+    /// stayed resident in the shared budget for the process's lifetime) and
+    /// `toggle_layer` stopped taking effect -- with no error anywhere. The
+    /// poisoning is now recovered from explicitly and logged, so a poisoned
+    /// lock degrades to "no eager invalidation" rather than "silently wrong".
+    fn drop_document_keys(&self, doc_id: DocumentId) {
+        let keys = match self.doc_keys.lock() {
+            Ok(mut guard) => guard.remove(&doc_id),
+            Err(poisoned) => {
+                tracing::warn!(
+                    "render-cache key index was poisoned; recovering it. Cached bitmaps \
+                     for closed documents may not be released eagerly until it is rebuilt."
+                );
+                let mut guard = poisoned.into_inner();
+                guard.remove(&doc_id)
+            }
+        };
+        if let Some(keys) = keys {
             for key in keys {
                 self.cache.remove(&key);
             }
         }
     }
 
+    pub fn invalidate_document(&self, doc_id: DocumentId) {
+        // Bump the generation *first*. A render already in flight on another
+        // worker captured the old value before it started and will compare
+        // against it after finishing, so it can tell that its result predates
+        // this invalidation and decline to cache it.
+        //
+        // Without this, `ToggleLayer` is broadcast to every worker, each of which
+        // invalidates; a worker that had not yet dequeued the broadcast still
+        // held the pre-toggle layer state, rendered, and re-inserted a stale
+        // bitmap *after* the invalidation ran. `invalidate_document` can only
+        // remove keys present at the instant it runs, so the stale entry survived
+        // and toggling a layer off appeared to do nothing.
+        self.bump_generation(doc_id);
+        self.drop_document_keys(doc_id);
+    }
+
     pub fn remove_document(&self, doc_id: DocumentId) {
-        if let Ok(mut guard) = self.doc_keys.lock()
-            && let Some(keys) = guard.remove(&doc_id)
-        {
-            for key in keys {
-                self.cache.remove(&key);
+        self.bump_generation(doc_id);
+        self.drop_document_keys(doc_id);
+    }
+
+    /// Current invalidation generation for `doc_id`.
+    ///
+    /// A render captures this before it starts and passes it back to `put`; a
+    /// mismatch means the document changed mid-render and the result is stale.
+    pub fn generation(&self, doc_id: DocumentId) -> u64 {
+        match self.generations.lock() {
+            Ok(guard) => guard.get(&doc_id).copied().unwrap_or(0),
+            Err(poisoned) => poisoned.into_inner().get(&doc_id).copied().unwrap_or(0),
+        }
+    }
+
+    fn bump_generation(&self, doc_id: DocumentId) {
+        match self.generations.lock() {
+            Ok(mut guard) => {
+                *guard.entry(doc_id).or_insert(0) += 1;
+            }
+            Err(poisoned) => {
+                *poisoned.into_inner().entry(doc_id).or_insert(0) += 1;
             }
         }
+    }
+
+    /// Cache `result` only if the document has not been invalidated since
+    /// `expected_generation` was read.
+    ///
+    /// Returns `true` when the entry was stored.
+    pub fn put_if_current(
+        &self,
+        key: RenderKey,
+        result: crate::models::RenderResult,
+        expected_generation: u64,
+    ) -> bool {
+        if self.generation(key.doc_id) != expected_generation {
+            tracing::debug!(
+                "discarding a render for {:?} that finished after the document changed",
+                key.doc_id
+            );
+            return false;
+        }
+        self.track_key(&key);
+        self.cache.insert(key, result);
+        true
     }
 
     /// Number of render keys currently tracked for `doc_id`, or `None` when the
@@ -276,13 +639,36 @@ impl RenderCache {
     /// Exposed so a test can observe that invalidation releases this
     /// bookkeeping, not just the cached bitmaps.
     pub fn tracked_key_count(&self, doc_id: DocumentId) -> Option<usize> {
-        self.doc_keys
-            .lock()
-            .ok()?
-            .get(&doc_id)
-            .map(std::collections::HashSet::len)
+        match self.doc_keys.lock() {
+            Ok(guard) => guard.get(&doc_id).map(std::collections::HashSet::len),
+            Err(poisoned) => poisoned
+                .into_inner()
+                .get(&doc_id)
+                .map(std::collections::HashSet::len),
+        }
+    }
+
+    /// Total number of documents with a non-empty tracked-key set.
+    ///
+    /// Exposed for tests and diagnostics: it should never exceed the number of
+    /// open documents, since `close_document` removes the entry.
+    pub fn tracked_document_count(&self) -> usize {
+        match self.doc_keys.lock() {
+            Ok(guard) => guard.values().filter(|s| !s.is_empty()).count(),
+            Err(poisoned) => poisoned
+                .into_inner()
+                .values()
+                .filter(|s| !s.is_empty())
+                .count(),
+        }
     }
 }
+
+/// Upper bound on render keys tracked per document.
+///
+/// Sized well above what a normal browsing session mints for one document, while
+/// still capping the bookkeeping at a few hundred KB per open tab.
+const MAX_TRACKED_KEYS_PER_DOC: usize = 512;
 
 pub type SharedRenderCache = Arc<RenderCache>;
 
@@ -323,6 +709,15 @@ pub struct DocumentStore {
     /// Per-document user visibility overrides applied on top of `oc_configs`.
     /// true = force ON, false = force OFF.
     oc_visibility: HashMap<DocumentId, HashMap<zpdf::ObjectId, bool>>,
+    /// Every optional-content group id declared by each document, in the order
+    /// `/OCProperties /OCGs` lists them.
+    ///
+    /// `zpdf::OcConfig` keeps its `/ON`, `/OFF` and `/BaseState` private, so the
+    /// only way to rebuild a config that preserves the document's own layer
+    /// states is to enumerate the groups and probe each one's resolved
+    /// visibility. Without this list a toggle would silently reset every layer
+    /// the user had not explicitly touched — see [`apply_oc_overrides`].
+    oc_groups: HashMap<DocumentId, Vec<zpdf::ObjectId>>,
     /// Persistent per-document image cache to avoid re-decoding streams on every render.
     ///
     /// Bounded by [`DocumentStore::image_cache_bytes`] — see
@@ -415,6 +810,7 @@ impl DocumentStore {
             paths: HashMap::new(),
             render_cache: cache,
             oc_configs: HashMap::new(),
+            oc_groups: HashMap::new(),
             oc_visibility: HashMap::new(),
             image_caches: HashMap::new(),
             image_cache_bytes: DEFAULT_IMAGE_CACHE_BYTES,
@@ -454,7 +850,7 @@ impl DocumentStore {
                 "PDF file exceeds 512 MB size limit".into(),
             ));
         }
-        let data = std::fs::read(path).map_err(|e| PdfError::OpenFailed(e.to_string()))?;
+        let data = read_input_capped(path)?;
         // Harden against malformed/malicious PDFs by capping stream and object counts.
         let limits = ParseLimits {
             max_stream_bytes: 256 * 1024 * 1024, // 256 MB per stream
@@ -481,6 +877,7 @@ impl DocumentStore {
 
         let page_count = doc.page_count();
         let mut heights = Vec::with_capacity(page_count);
+        let mut rotations = Vec::with_capacity(page_count);
         let mut max_width = 0.0;
 
         for i in 0..page_count {
@@ -488,12 +885,23 @@ impl DocumentStore {
                 let rect = page.effective_box();
                 let w = rect.width() as f32;
                 let h = rect.height() as f32;
-                heights.push(h);
-                if w > max_width {
-                    max_width = w;
+                // `/Rotate` swaps the rendered bitmap's dimensions for 90/270,
+                // so the "maximum width" the canvas needs to lay cards out is
+                // the *rotated* width.
+                let rotated = normalize_rotation(page.rotate);
+                rotations.push(rotated);
+                let (laid_out_w, _) = if matches!(rotated, 90 | 270) {
+                    (h, w)
+                } else {
+                    (w, h)
+                };
+                heights.push(if matches!(rotated, 90 | 270) { w } else { h });
+                if laid_out_w > max_width {
+                    max_width = laid_out_w;
                 }
             } else {
                 heights.push(0.0);
+                rotations.push(0);
             }
         }
 
@@ -512,6 +920,8 @@ impl DocumentStore {
                     .unwrap_or_else(|| (i + 1).to_string())
             })
             .collect();
+        // Page label styles are not publicly exposed by zpdf's PageLabels API.
+        // The label() method already returns the formatted string for each page.
         let is_encrypted = doc.is_encrypted();
         let system_anchors = Self::load_system_trust_anchors();
         let signatures = Self::extract_signatures_internal(&doc, &system_anchors);
@@ -534,6 +944,16 @@ impl DocumentStore {
 
         if let Some(oc) = &oc_config {
             self.oc_configs.insert(doc_id, oc.clone());
+            // Record the full group set so a later visibility toggle can be
+            // layered over this document's real states instead of replacing
+            // them. Derived from `layers`, which already walks `/OCGs`.
+            self.oc_groups.insert(
+                doc_id,
+                layers
+                    .iter()
+                    .map(|l| zpdf::ObjectId(l.object_id.0, l.object_id.1))
+                    .collect(),
+            );
         }
 
         // Feature 4: Extract geospatial annotation metadata
@@ -550,6 +970,7 @@ impl DocumentStore {
             page_count,
             page_heights: heights,
             max_width,
+            page_rotations: rotations,
             outline,
             links,
             metadata,
@@ -594,6 +1015,121 @@ impl DocumentStore {
             }
         }
         all_links
+    }
+
+    /// Extract reading-order text using zpdf's `struct_ordered_text`, which
+    /// follows the PDF tagged-structure tree. Falls back to plain
+    /// `spans_to_text` for untagged documents.
+    ///
+    /// The returned flag says which path produced the text — a caller must not
+    /// present the fallback as if the document were tagged.
+    pub fn extract_accessible_text(
+        &self,
+        doc_id: DocumentId,
+        page_num: usize,
+    ) -> PdfResult<crate::models::AccessibleTextResult> {
+        let doc = self
+            .documents
+            .get(&doc_id)
+            .ok_or(PdfError::EngineError(EngineErrorKind::DocumentNotFound))?;
+        let page = doc
+            .page(page_num)
+            .map_err(|_| PdfError::PageNotFound(page_num))?;
+        let mut fonts = doc.load_page_fonts(&page);
+        let mut images = ImageCache::new();
+        let content = doc
+            .page_content_bytes(&page)
+            .map_err(|e| PdfError::SearchError(e.to_string()))?;
+
+        let mut spans = Vec::new();
+        {
+            let interp = ContentInterpreter::new(page.effective_box())
+                .with_image_cache_limit(self.image_cache_bytes)
+                .with_fonts(&mut fonts)
+                .with_document(doc.file(), &page.resources)
+                .with_images(&mut images)
+                .with_text_sink(&mut spans);
+            let _ = interp.interpret(&content);
+        }
+
+        // Try struct_ordered_text first (uses /MCID for tagged-PDF reading order).
+        // Fall back to plain spans_to_text for untagged documents.
+        let reading_order_applied = doc.struct_tree().is_some();
+        let text = if let Some(ref tree) = doc.struct_tree() {
+            struct_ordered_text(&spans, page_num, tree)
+        } else {
+            spans_to_text(spans, 2.0)
+        };
+        Ok(crate::models::AccessibleTextResult {
+            page: page_num,
+            char_count: text.chars().count(),
+            text,
+            reading_order_applied,
+        })
+    }
+
+    /// Resolve every link annotation through zpdf's destination parser.
+    ///
+    /// Unlike [`Self::extract_links_internal`] — which drops everything except
+    /// a bare page number — this keeps the declared view so a click can honour
+    /// `XYZ left top zoom` instead of just landing at the top of the page.
+    pub fn extract_link_destinations(
+        &self,
+        doc_id: DocumentId,
+    ) -> PdfResult<Vec<crate::models::LinkDestinationInfo>> {
+        let Some(doc) = self.documents.get(&doc_id) else {
+            return Err(PdfError::EngineError(EngineErrorKind::DocumentNotFound));
+        };
+        let mut results = Vec::new();
+        for page_idx in 0..doc.page_count() {
+            let Ok(page) = doc.page(page_idx) else {
+                continue;
+            };
+            // The page box is only needed to normalise the annotation rect.
+            let eff_box = page.effective_box();
+            let annots = doc.page_annotations(&page);
+            for annot in annots {
+                if annot.subtype != "Link" {
+                    continue;
+                }
+                let bounds = (
+                    annot.rect.x0 as f32 - eff_box.x0 as f32,
+                    (eff_box.y1 - annot.rect.y1) as f32,
+                    (annot.rect.x1 - annot.rect.x0) as f32,
+                    (annot.rect.y1 - annot.rect.y0) as f32,
+                );
+                match annot.uri.clone() {
+                    Some(url) => results.push(crate::models::LinkDestinationInfo {
+                        page: page_idx,
+                        kind: crate::models::LinkKind::External,
+                        url: Some(url),
+                        target_page: None,
+                        view: None,
+                        bounds,
+                    }),
+                    None => {
+                        let (target_page, view) = annot.dest.as_ref().map_or((None, None), |d| {
+                            (
+                                d.page,
+                                Some(crate::models::DestinationView::from_dest_view(
+                                    &d.view,
+                                    d.page.is_some(),
+                                )),
+                            )
+                        });
+                        results.push(crate::models::LinkDestinationInfo {
+                            page: page_idx,
+                            kind: crate::models::LinkKind::Internal,
+                            url: None,
+                            target_page,
+                            view: view.map(|v| v.label().to_string()),
+                            bounds,
+                        });
+                    }
+                }
+            }
+        }
+        Ok(results)
     }
 
     pub fn load_document_meta(
@@ -644,6 +1180,13 @@ impl DocumentStore {
 
         if let Some(oc) = &oc_config {
             self.oc_configs.insert(doc_id, oc.clone());
+            self.oc_groups.insert(
+                doc_id,
+                layers
+                    .iter()
+                    .map(|l| zpdf::ObjectId(l.object_id.0, l.object_id.1))
+                    .collect(),
+            );
         }
 
         let geo_annotations = Self::extract_geo_annotations(doc);
@@ -668,6 +1211,7 @@ impl DocumentStore {
         self.documents.remove(&doc_id);
         self.paths.remove(&doc_id);
         self.oc_configs.remove(&doc_id);
+        self.oc_groups.remove(&doc_id);
         self.oc_visibility.remove(&doc_id);
         self.image_caches.remove(&doc_id);
         self.render_cache.remove_document(doc_id);
@@ -764,6 +1308,8 @@ impl DocumentStore {
             .map(|sig| {
                 let (is_trusted, trust_status, cert_chain) =
                     Self::evaluate_signature_trust(sig.cms_blob.as_deref(), anchors);
+                let revocation_status = Some(format!("{:?}", sig.revocation));
+                let byte_range_intact = sig.coverage.covers_whole_document;
                 crate::models::SignatureInfo {
                     field_name: sig.field_name,
                     signer_name: sig.signer_common_name.or(sig.name),
@@ -775,6 +1321,8 @@ impl DocumentStore {
                     is_trusted,
                     trust_status,
                     cert_chain,
+                    revocation_status,
+                    byte_range_intact,
                 }
             })
             .collect()
@@ -907,20 +1455,19 @@ impl DocumentStore {
         for (&page_num, &page_id) in &pages {
             let page_idx = (page_num as usize).saturating_sub(1);
 
-            // Get page height for coordinate conversion (PDF coords: bottom-left origin)
-            let page_height = lopdf_doc
-                .objects
-                .get(&page_id)
-                .and_then(|o| o.as_dict().ok())
-                .and_then(|d| d.get(b"MediaBox").ok())
-                .and_then(|o| o.as_array().ok())
-                .and_then(|a| a.get(3))
-                .and_then(|o| match o {
-                    Object::Real(v) => Some(*v),
-                    Object::Integer(v) => Some(*v as f32),
-                    _ => None,
-                })
-                .unwrap_or(792.0_f32);
+            // Convert PDF bottom-left-origin coordinates into the viewport's
+            // top-left-origin space. The correct divisor is the page box's
+            // **y1**, not its height: `y_top = y1 - y_pdf - h`.
+            //
+            // These are different whenever the box does not start at y=0, which
+            // is the norm for scanned pages (`MediaBox [0 100 612 892]`) and for
+            // anything with a `CropBox` (`[50 50 562 742]`, height 692 vs
+            // MediaBox[3] 792). Using height here meant every annotation drifted
+            // further down the page on each open/save cycle, because the write
+            // path in `save_annotations` uses the true height — the two
+            // disagreed, so each round trip added `y0`.
+            let (page_x0, _, _, page_y1) =
+                effective_page_box(&lopdf_doc, page_id).unwrap_or((0.0, 0.0, 612.0, 792.0));
 
             let annots_array = lopdf_doc
                 .objects
@@ -976,11 +1523,13 @@ impl DocumentStore {
                     _ => continue,
                 };
 
-                // Convert from PDF bottom-left origin to screen top-left origin
-                let x = pdf_x0;
+                // Convert from PDF bottom-left origin to screen top-left origin.
+                // `x` is taken relative to the box's x0 so a `CropBox` with a
+                // non-zero left edge does not shift every annotation sideways.
+                let x = pdf_x0 - page_x0;
                 let w = (pdf_x1 - pdf_x0).abs();
                 let h = (pdf_y1 - pdf_y0).abs();
-                let y = page_height - pdf_y0 - h;
+                let y = page_y1 - pdf_y1;
 
                 // Parse color
                 let color_str = dict
@@ -1144,6 +1693,12 @@ impl DocumentStore {
             },
         };
 
+        // Capture the cache generation *before* rendering. If the document is
+        // invalidated while this render is in flight (another worker processing a
+        // layer toggle, or this document being closed), `put_if_current` below
+        // will decline to store the now-stale bitmap.
+        let render_generation = self.render_cache.generation(doc_id);
+
         if let Some(base) = self.render_cache.get(&cache_key) {
             if options.filter == RenderFilter::None {
                 return Ok(base);
@@ -1190,7 +1745,13 @@ impl DocumentStore {
             if let Some(overrides) = self.oc_visibility.get(&doc_id)
                 && !overrides.is_empty()
             {
-                apply_oc_overrides(base_oc, overrides)
+                apply_oc_overrides(
+                    base_oc,
+                    overrides,
+                    self.oc_groups
+                        .get(&doc_id)
+                        .map_or(&[][..], |v| v.as_slice()),
+                )
             } else {
                 base_oc.clone()
             }
@@ -1255,13 +1816,12 @@ impl DocumentStore {
             data: final_data.into(),
         };
 
-        // Removed: a per-document `Vec<RenderKey>` that was appended to on every
-        // cache-miss render and never read by anything. Because the scale
-        // component of the key is quantised to 0.01 and the UI drives it from
-        // zoom, a single page can mint hundreds of distinct keys per session, so
-        // the vector grew without bound for the life of the document — dead
-        // weight that also defeated the render cache's own memory accounting.
-        self.render_cache.put(cache_key, base.clone());
+        // Store only if the document has not changed since this render started.
+        // The caller still gets its bitmap either way -- it is correct for the
+        // state it rendered -- it just must not become the cached answer for
+        // subsequent requests.
+        self.render_cache
+            .put_if_current(cache_key, base.clone(), render_generation);
 
         if options.filter == RenderFilter::None {
             Ok(base)
@@ -1359,7 +1919,11 @@ impl DocumentStore {
             let _ = interp.interpret(&content);
         }
 
-        let page_height = page.effective_box().height() as f32;
+        // `search` already used the box's y1 here; the text layer used the box
+        // *height*, which disagreed whenever the box does not start at y=0. The
+        // `.max(0.0)` then clamped every span in the lower half of the page to
+        // y=0, collapsing text selection onto the top edge.
+        let eff_box = page.effective_box();
         let mut text_items = Vec::new();
         for span in spans {
             if span.text.trim().is_empty() {
@@ -1367,8 +1931,8 @@ impl DocumentStore {
             }
             text_items.push(crate::models::TextItem {
                 text: span.text,
-                x: span.x as f32,
-                y: (page_height - span.y as f32 - span.size).max(0.0),
+                x: (span.x - eff_box.x0) as f32,
+                y: (eff_box.y1 - span.y - span.size as f64) as f32,
                 width: span.advance.abs() as f32,
                 height: span.size,
             });
@@ -1408,17 +1972,17 @@ impl DocumentStore {
         }
 
         let tables = detect_tables_with_rules(&spans, &rules);
-        let page_height = page.effective_box().height() as f32;
+        let eff_box = page.effective_box();
 
         let detected = tables
             .into_iter()
             .map(|t| {
                 let (x0, y0, x1, y1) = t.bbox();
-                // Coordinate conversion to y-down layout space:
-                // x = x0, y = page_height - y1, w = x1 - x0, h = y1 - y0
+                // Coordinate conversion to y-down layout space, relative to the
+                // page box origin: x = x0 - box.x0, y = box.y1 - y1.
                 let bbox = (
-                    x0 as f32,
-                    page_height - y1 as f32,
+                    (x0 - eff_box.x0) as f32,
+                    (eff_box.y1 - y1) as f32,
                     (x1 - x0) as f32,
                     (y1 - y0) as f32,
                 );
@@ -1462,12 +2026,31 @@ impl DocumentStore {
                 continue;
             };
             for annot_id in &page.annots {
-                if writer
-                    .resolve_current(*annot_id)
-                    .map(|obj| is_pdfbull_annotation(&obj))
-                    .unwrap_or(false)
-                {
-                    stale.push((page_idx, *annot_id));
+                match writer.resolve_current(*annot_id) {
+                    Ok(obj) => {
+                        if is_pdfbull_annotation(&obj) {
+                            stale.push((page_idx, *annot_id));
+                        }
+                    }
+                    // A `/Annots` entry that cannot be resolved is not evidence
+                    // that the annotation is someone else's. Treating it as
+                    // "not ours" classified it as foreign, so it was never
+                    // deleted -- and the new set was appended on top. That is
+                    // precisely the duplication the delete loop below exists to
+                    // prevent, and it would be reported as a successful save.
+                    //
+                    // The delete path already refuses on failure; make the
+                    // *detection* path equally strict rather than silently
+                    // guessing.
+                    Err(e) => {
+                        return Err(PdfError::EngineError(EngineErrorKind::Generic(format!(
+                            "page {} references an annotation ({}) that could not be \
+                                 read, so the existing annotations cannot be replaced safely. \
+                                 The file was not modified. ({e})",
+                            page_idx + 1,
+                            annot_id.0
+                        ))));
+                    }
                 }
             }
         }
@@ -1491,19 +2074,29 @@ impl DocumentStore {
                 continue;
             }
 
-            // Get page height for coordinate conversion.
-            let page_height = self
+            // The viewport stores annotations in top-left-origin space
+            // relative to the page box's own origin, so converting back means
+            // using the box's `y1` and adding its `x0` — mirroring
+            // `load_annotations` exactly. Using the box *height* here (rather
+            // than y1) is what made positions drift by `y0` on every
+            // open/save cycle for any page whose box does not start at y=0.
+            let page_box = self
                 .documents
                 .get(&doc_id)
                 .and_then(|d| d.page(ann.page).ok())
-                .map(|p| p.effective_box().height())
-                .unwrap_or(792.0);
+                .map(|p| p.effective_box())
+                .unwrap_or(ZpdfRect {
+                    x0: 0.0,
+                    y0: 0.0,
+                    x1: 612.0,
+                    y1: 792.0,
+                });
 
-            let pdf_x = ann.x as f64;
+            let pdf_x = ann.x as f64 + page_box.x0;
             let pdf_w = ann.width as f64;
             let pdf_h = ann.height as f64;
             // Convert from screen top-left to PDF bottom-left origin.
-            let pdf_y = page_height - ann.y as f64 - pdf_h;
+            let pdf_y = page_box.y1 - ann.y as f64 - pdf_h;
 
             let rect = ZpdfRect {
                 x0: pdf_x,
@@ -1586,10 +2179,10 @@ impl DocumentStore {
                 | AnnotationStyle::Arrow { color, thickness } => {
                     let (r, g, b) = hex_to_rgb(color);
                     // Preserve true start and end endpoints in PDF space regardless of draw direction
-                    let x1 = ann.x as f64;
-                    let y1 = page_height - ann.y as f64;
-                    let x2 = (ann.x + ann.width) as f64;
-                    let y2 = page_height - (ann.y + ann.height) as f64;
+                    let x1 = ann.x as f64 + page_box.x0;
+                    let y1 = page_box.y1 - ann.y as f64;
+                    let x2 = (ann.x + ann.width) as f64 + page_box.x0;
+                    let y2 = page_box.y1 - (ann.y + ann.height) as f64;
                     AnnotationSpec::Line {
                         x1,
                         y1,
@@ -1804,7 +2397,7 @@ impl DocumentStore {
         }
     }
 
-    pub fn search(&self, doc_id: DocumentId, query: &str) -> PdfResult<Vec<SearchResultItem>> {
+    pub fn search(&mut self, doc_id: DocumentId, query: &str) -> PdfResult<Vec<SearchResultItem>> {
         // An empty needle matches at every position: `str::find("")` is always
         // `Some(0)`, so the scan loop would return one hit per character of the
         // page text. The UI filters empty queries, but this is a public API.
@@ -1816,16 +2409,29 @@ impl DocumentStore {
             .get(&doc_id)
             .ok_or(PdfError::EngineError(EngineErrorKind::DocumentNotFound))?;
         let total_pages = doc.page_count();
-        let query_lower = query.to_lowercase();
 
         let mut results = Vec::new();
 
-        for page_idx in 0..total_pages {
+        // Cap the result set. The UI truncates to `MAX_SEARCH_RESULTS` after the
+        // engine has already built and shipped the whole vector, so an unbounded
+        // search for a common substring in a long document materialised millions
+        // of `SearchResultItem`s -- each owning a `String` -- inside a worker
+        // before the cap could apply. Searching `"e"` in a 10,000-page document
+        // was the realistic trigger. Stop early and say so.
+        const MAX_RESULTS: usize = 5_000;
+        let mut truncated = false;
+
+        'pages: for page_idx in 0..total_pages {
             let Ok(page) = doc.page(page_idx) else {
                 continue;
             };
             let mut fonts = doc.load_page_fonts(&page);
-            let mut images = ImageCache::new();
+            // Share the document-lifetime image cache instead of building a fresh
+            // one per page, per query. A local `ImageCache::new()` inside this
+            // loop meant every keystroke re-ran `ContentInterpreter` over every
+            // page and re-decoded every embedded image from scratch, while the
+            // caches `render_page_internal` maintains went unused.
+            let images = self.image_caches.entry(doc_id).or_default();
             let Ok(content) = doc.page_content_bytes(&page) else {
                 continue;
             };
@@ -1838,86 +2444,165 @@ impl DocumentStore {
                     .with_page_rotation(page.rotate)
                     .with_fonts(&mut fonts)
                     .with_document(doc.file(), &page.resources)
-                    .with_images(&mut images)
+                    .with_images(images)
                     .with_text_sink(&mut spans);
                 let _ = interp.interpret(&content);
             }
 
-            let mut full_text = String::new();
-            let mut span_offsets = Vec::new();
+            // Use zpdf's built-in search_spans for accurate per-character
+            // highlighting rects instead of the previous span-level approximation.
+            let hits = search_spans(&spans, query, false);
 
-            for (idx, span) in spans.iter().enumerate() {
-                let start = full_text.len();
-                full_text.push_str(&span.text);
-                let end = full_text.len();
-                span_offsets.push((start, end, idx));
-            }
-
-            let full_text_lower = full_text.to_lowercase();
-            let char_boundaries: Vec<usize> = full_text
-                .char_indices()
-                .map(|(idx, _)| idx)
-                .chain(std::iter::once(full_text.len()))
-                .collect();
-            let char_boundaries_lower: Vec<usize> = full_text_lower
-                .char_indices()
-                .map(|(idx, _)| idx)
-                .chain(std::iter::once(full_text_lower.len()))
-                .collect();
-
-            let mut search_idx = 0;
-            while let Some(pos) = full_text_lower[search_idx..].find(&query_lower) {
-                let match_start = search_idx + pos;
-                let match_end = match_start + query_lower.len();
-
-                // Get char index in full_text_lower:
-                let char_start = char_boundaries_lower
-                    .binary_search(&match_start)
-                    .unwrap_or_else(|x| x);
-                let char_end = char_boundaries_lower
-                    .binary_search(&match_end)
-                    .unwrap_or_else(|x| x);
-
-                // Map to byte index in original full_text:
-                let orig_start = char_boundaries
-                    .get(char_start)
-                    .copied()
-                    .unwrap_or(full_text.len());
-                let orig_end = char_boundaries
-                    .get(char_end)
-                    .copied()
-                    .unwrap_or(full_text.len());
-                let matched_text = full_text[orig_start..orig_end].to_string();
-
-                if let Some(&(_, _, span_idx)) = span_offsets
-                    .iter()
-                    .find(|(s, e, _)| orig_start >= *s && orig_start < *e)
-                {
-                    let first_span = &spans[span_idx];
-                    let y_top_down = (eff_box.y1 - first_span.y - first_span.size as f64) as f32;
-                    let x_left = (first_span.x - eff_box.x0) as f32;
-                    let span_w = (first_span.advance.abs() as f32).max(12.0);
-                    let span_h = (first_span.size).max(12.0);
-
-                    results.push(SearchResultItem {
-                        page_index: page_idx,
-                        text: matched_text,
-                        y: y_top_down,
-                        x: x_left,
-                        width: span_w,
-                        height: span_h,
-                    });
+            for hit in hits {
+                if results.len() >= MAX_RESULTS {
+                    truncated = true;
+                    break 'pages;
                 }
 
-                // Advance search_idx safely to the next character boundary in full_text_lower
-                search_idx = char_boundaries_lower
-                    .get(char_start + 1)
-                    .copied()
-                    .unwrap_or(full_text_lower.len());
+                // Transform the first rect from PDF user space (y-up) to the
+                // app's top-down page coordinate system.
+                let bounds = hit.bounds();
+                let x_left = (bounds.x0 - eff_box.x0) as f32;
+                let y_top_down = (eff_box.y1 - bounds.y1) as f32;
+                let width = (bounds.x1 - bounds.x0) as f32;
+                let height = (bounds.y1 - bounds.y0) as f32;
+
+                results.push(SearchResultItem {
+                    page_index: page_idx,
+                    text: hit.line,
+                    x: x_left,
+                    y: y_top_down,
+                    width,
+                    height,
+                });
             }
         }
 
+        if truncated {
+            tracing::info!(
+                "search results capped at {MAX_RESULTS}; more matches exist in this document"
+            );
+        }
+
         Ok(results)
+    }
+
+    /// Update document metadata using zpdf_writer's `InfoUpdate`.
+    #[allow(clippy::too_many_arguments)]
+    pub fn update_metadata(
+        &mut self,
+        doc_id: DocumentId,
+        title: Option<&str>,
+        author: Option<&str>,
+        subject: Option<&str>,
+        keywords: Option<&str>,
+        creator: Option<&str>,
+        producer: Option<&str>,
+    ) -> PdfResult<Vec<u8>> {
+        use zpdf_writer::InfoUpdate;
+
+        let doc = self
+            .documents
+            .get(&doc_id)
+            .ok_or(PdfError::EngineError(EngineErrorKind::DocumentNotFound))?;
+
+        let info = InfoUpdate {
+            title: title.map(|t| Some(t.to_string())),
+            author: author.map(|a| Some(a.to_string())),
+            subject: subject.map(|s| Some(s.to_string())),
+            keywords: keywords.map(|k| Some(k.to_string())),
+            creator: creator.map(|c| Some(c.to_string())),
+            producer: producer.map(|p| Some(p.to_string())),
+        };
+        if info.is_empty() {
+            return Ok(Vec::new());
+        }
+
+        let file = doc.file();
+        let mut buffer = std::io::Cursor::new(Vec::new());
+        {
+            let mut writer = IncrementalWriter::new(file.data().to_vec())
+                .map_err(|e| PdfError::IoError(format!("metadata update failed: {e}")))?;
+            writer
+                .set_info(&info)
+                .map_err(|e| PdfError::IoError(format!("metadata update failed: {e}")))?;
+            writer
+                .write(&mut buffer)
+                .map_err(|e| PdfError::IoError(format!("metadata update failed: {e}")))?;
+        }
+
+        Ok(buffer.into_inner())
+    }
+
+    /// Extract a subset of pages into a new PDF using zpdf_writer's `extract_pages`.
+    pub fn extract_pages_to_new(
+        &mut self,
+        doc_id: DocumentId,
+        page_indices: &[usize],
+    ) -> PdfResult<Vec<u8>> {
+        let doc = self
+            .documents
+            .get(&doc_id)
+            .ok_or(PdfError::EngineError(EngineErrorKind::DocumentNotFound))?;
+
+        let file = doc.file();
+        zpdf_writer::extract_pages(file, page_indices)
+            .map_err(|e| PdfError::IoError(format!("page extraction failed: {e}")))
+    }
+
+    /// Detect tables on a page using zpdf's plain `detect_tables` (without rules).
+    pub fn detect_tables_plain_on_page(
+        &self,
+        doc_id: DocumentId,
+        page_num: usize,
+    ) -> PdfResult<Vec<crate::models::DetectedTable>> {
+        let doc = self
+            .documents
+            .get(&doc_id)
+            .ok_or(PdfError::EngineError(EngineErrorKind::DocumentNotFound))?;
+        let page = doc
+            .page(page_num)
+            .map_err(|_| PdfError::PageNotFound(page_num))?;
+        let mut fonts = doc.load_page_fonts(&page);
+        let mut images = ImageCache::new();
+        let content = doc
+            .page_content_bytes(&page)
+            .map_err(|e| PdfError::SearchError(e.to_string()))?;
+
+        let mut spans = Vec::new();
+        {
+            let interp = ContentInterpreter::new(page.effective_box())
+                .with_image_cache_limit(self.image_cache_bytes)
+                .with_fonts(&mut fonts)
+                .with_document(doc.file(), &page.resources)
+                .with_images(&mut images)
+                .with_text_sink(&mut spans);
+            let _ = interp.interpret(&content);
+        }
+
+        let tables = detect_tables(&spans);
+        let eff_box = page.effective_box();
+        Ok(tables
+            .into_iter()
+            .map(|t| {
+                // Compute bounding box from col_x/row_y arrays
+                let min_x = t.col_x.first().copied().unwrap_or(0.0);
+                let max_x = t.col_x.last().copied().unwrap_or(0.0);
+                let max_y = t.row_y.first().copied().unwrap_or(0.0);
+                let min_y = t.row_y.last().copied().unwrap_or(0.0);
+                crate::models::DetectedTable {
+                    bbox: (
+                        (min_x - eff_box.x0) as f32,
+                        (eff_box.y1 - max_y) as f32,
+                        (max_x - min_x) as f32,
+                        (max_y - min_y) as f32,
+                    ),
+                    csv: t.to_csv(),
+                    tsv: t.to_tsv(),
+                    cells: t.cells,
+                }
+            })
+            .collect())
     }
 
     fn detect_content_bbox_parallel(
@@ -2084,27 +2769,42 @@ impl DocumentStore {
     /// original document via `IncrementalWriter`, and the rewritten result is
     /// then garbage-collected and compressed as usual.
     pub fn optimize_pdf(&self, input_path: &str, output_path: &str) -> PdfResult<String> {
-        let data = std::fs::read(input_path).map_err(|e| PdfError::OpenFailed(e.to_string()))?;
-        let pdf =
-            zpdf::PdfFile::parse(data.clone()).map_err(|e| PdfError::OpenFailed(e.to_string()))?;
+        let data = read_input_capped(input_path)?;
 
-        let dpi = crate::image_optimizer::collect_placed_dpi(&pdf);
-        let (replacements, stats) = crate::image_optimizer::plan_replacements(&pdf, &dpi);
-        tracing::info!(
-            images_rewritten = stats.images_rewritten,
-            images_skipped = stats.images_skipped,
-            image_bytes_saved = stats.image_bytes_saved,
-            "image re-encoding pass"
-        );
+        // `PdfFile::parse` takes ownership of the bytes, so the buffer it parses
+        // *is* the document — there is no separate copy to free. The only place
+        // a second full-size buffer was needed was the image analysis pass,
+        // which must borrow the original while `apply_image_replacements`
+        // consumes it. That pass is skipped outright for a document with no
+        // image XObjects, and its result buffer is released as soon as the
+        // replacements have been planned.
+        let staged_pdf = if self.has_placed_images(&data) {
+            let pdf = zpdf::PdfFile::parse(data.clone())
+                .map_err(|e| PdfError::OpenFailed(e.to_string()))?;
 
-        // Apply the re-encoded images, then let pass 1 collect and compress.
-        let staged = if replacements.is_empty() {
-            data
+            let dpi = crate::image_optimizer::collect_placed_dpi(&pdf);
+            let (replacements, stats) = crate::image_optimizer::plan_replacements(&pdf, &dpi);
+            tracing::info!(
+                images_rewritten = stats.images_rewritten,
+                images_skipped = stats.images_skipped,
+                image_bytes_saved = stats.image_bytes_saved,
+                "image re-encoding pass"
+            );
+            // Release the analysis parse (and its copy of the bytes) before
+            // allocating the staged revision.
+            drop(pdf);
+
+            if replacements.is_empty() {
+                // Nothing to stage: hand the original buffer straight to the
+                // final parse rather than building a second full-size copy.
+                zpdf::PdfFile::parse(data).map_err(|e| PdfError::OpenFailed(e.to_string()))?
+            } else {
+                let staged = self.apply_image_replacements(data, &replacements)?;
+                zpdf::PdfFile::parse(staged).map_err(|e| PdfError::OpenFailed(e.to_string()))?
+            }
         } else {
-            self.apply_image_replacements(data, &replacements)?
+            zpdf::PdfFile::parse(data).map_err(|e| PdfError::OpenFailed(e.to_string()))?
         };
-        let staged_pdf =
-            zpdf::PdfFile::parse(staged).map_err(|e| PdfError::OpenFailed(e.to_string()))?;
 
         let opts = RewriteOptions {
             compress_uncompressed: true,
@@ -2116,8 +2816,22 @@ impl DocumentStore {
         };
         let out_bytes =
             rewrite_pdf(&staged_pdf, &opts).map_err(|e| PdfError::IoError(e.to_string()))?;
-        std::fs::write(output_path, &out_bytes).map_err(|e| PdfError::IoError(e.to_string()))?;
+        drop(staged_pdf);
+        write_pdf_output(output_path, &out_bytes)?;
         Ok(output_path.to_string())
+    }
+
+    /// Whether `data` contains any placed image at all.
+    ///
+    /// Used purely to decide whether `optimize_pdf` needs to clone the input
+    /// buffer for the image pass. A cheap early-out on the raw bytes: if the
+    /// substring `b"/Image"` does not occur, no object can be an image XObject.
+    fn has_placed_images(&self, data: &[u8]) -> bool {
+        // Not a security boundary, just a cheap way to skip a full-size clone
+        // for the image pass: if no object names an image subtype, none exists.
+        data.windows(5)
+            .any(|w| w == b"/Image" || w == b"/DCTDec" || w == b"/JPXDec")
+            || data.windows(6).any(|w| w == b"/JBIG2Dec")
     }
 
     /// Overwrite each replaced image stream in an incremental update.
@@ -2156,7 +2870,7 @@ impl DocumentStore {
         owner_pass: &str,
         algorithm: &str,
     ) -> PdfResult<String> {
-        let data = std::fs::read(input_path).map_err(|e| PdfError::OpenFailed(e.to_string()))?;
+        let data = read_input_capped(input_path)?;
         let pdf = zpdf::PdfFile::parse(data).map_err(|e| PdfError::OpenFailed(e.to_string()))?;
         let enc_config = if algorithm.eq_ignore_ascii_case("rc4") {
             zpdf_writer::EncryptionConfig::rc4_128(user_pass, owner_pass)
@@ -2168,21 +2882,21 @@ impl DocumentStore {
             ..Default::default()
         };
         let out_bytes = rewrite_pdf(&pdf, &opts).map_err(|e| PdfError::IoError(e.to_string()))?;
-        std::fs::write(output_path, &out_bytes).map_err(|e| PdfError::IoError(e.to_string()))?;
+        write_pdf_output(output_path, &out_bytes)?;
         Ok(output_path.to_string())
     }
 
     pub fn linearize_pdf(&self, input_path: &str, output_path: &str) -> PdfResult<String> {
-        let data = std::fs::read(input_path).map_err(|e| PdfError::OpenFailed(e.to_string()))?;
+        let data = read_input_capped(input_path)?;
         let pdf = zpdf::PdfFile::parse(data).map_err(|e| PdfError::OpenFailed(e.to_string()))?;
         let out_bytes =
             zpdf_writer::linearize_pdf(&pdf).map_err(|e| PdfError::IoError(e.to_string()))?;
-        std::fs::write(output_path, &out_bytes).map_err(|e| PdfError::IoError(e.to_string()))?;
+        write_pdf_output(output_path, &out_bytes)?;
         Ok(output_path.to_string())
     }
 
     pub fn tag_pdf(&self, input_path: &str, output_path: &str) -> PdfResult<String> {
-        let data = std::fs::read(input_path).map_err(|e| PdfError::OpenFailed(e.to_string()))?;
+        let data = read_input_capped(input_path)?;
         let mut writer =
             IncrementalWriter::new(data).map_err(|e| PdfError::OpenFailed(e.to_string()))?;
         writer
@@ -2195,7 +2909,7 @@ impl DocumentStore {
                 .map_err(|e| PdfError::IoError(e.to_string()))?;
             buf.into_inner()
         };
-        std::fs::write(output_path, &out_bytes).map_err(|e| PdfError::IoError(e.to_string()))?;
+        write_pdf_output(output_path, &out_bytes)?;
         Ok(output_path.to_string())
     }
 
@@ -2204,7 +2918,7 @@ impl DocumentStore {
         path: &str,
         profile_str: &str,
     ) -> PdfResult<crate::models::ConformanceReport> {
-        let data = std::fs::read(path).map_err(|e| PdfError::OpenFailed(e.to_string()))?;
+        let data = read_input_capped(path)?;
         let pdf = zpdf::PdfFile::parse(data).map_err(|e| PdfError::OpenFailed(e.to_string()))?;
         let normalized = profile_str.to_lowercase().replace(['-', '/', '_', ' '], "");
         match normalized.as_str() {
@@ -2532,7 +3246,7 @@ impl DocumentStore {
                 "PDF file exceeds 512 MB size limit".into(),
             ));
         }
-        let data = std::fs::read(path).map_err(|e| PdfError::OpenFailed(e.to_string()))?;
+        let data = read_input_capped(path)?;
         let doc = zpdf::PdfDocument::open(data).map_err(|e| PdfError::OpenFailed(e.to_string()))?;
         Self::convert_inner(&doc, mode, format)
     }
@@ -2550,7 +3264,7 @@ impl DocumentStore {
 
         // Append remaining documents — this preserves outlines, forms, and OCGs.
         for path in paths.iter().skip(1) {
-            let data = std::fs::read(path).map_err(|e| PdfError::OpenFailed(e.to_string()))?;
+            let data = read_input_capped(path)?;
             let doc =
                 zpdf::PdfFile::parse(data).map_err(|e| PdfError::OpenFailed(e.to_string()))?;
             writer
@@ -2565,7 +3279,7 @@ impl DocumentStore {
                 .map_err(|e| PdfError::IoError(e.to_string()))?;
             buf.into_inner()
         };
-        std::fs::write(&output_path, &out_bytes).map_err(|e| PdfError::IoError(e.to_string()))?;
+        write_pdf_output(&output_path, &out_bytes)?;
 
         Ok(output_path)
     }
@@ -2576,7 +3290,7 @@ impl DocumentStore {
         page_order: &[usize],
         output_path: &str,
     ) -> PdfResult<String> {
-        let data = std::fs::read(input_path).map_err(|e| PdfError::OpenFailed(e.to_string()))?;
+        let data = read_input_capped(input_path)?;
         let mut writer =
             IncrementalWriter::new(data).map_err(|e| PdfError::OpenFailed(e.to_string()))?;
 
@@ -2591,7 +3305,7 @@ impl DocumentStore {
                 .map_err(|e| PdfError::IoError(e.to_string()))?;
             buf.into_inner()
         };
-        std::fs::write(output_path, &out_bytes).map_err(|e| PdfError::IoError(e.to_string()))?;
+        write_pdf_output(output_path, &out_bytes)?;
 
         Ok(output_path.to_string())
     }
@@ -2602,17 +3316,33 @@ impl DocumentStore {
         page_indices: Vec<usize>,
         output_dir: String,
     ) -> PdfResult<Vec<String>> {
-        let base_data = std::fs::read(path).map_err(|e| PdfError::OpenFailed(e.to_string()))?;
-        let pdf_file =
-            zpdf::PdfFile::parse(base_data).map_err(|e| PdfError::OpenFailed(e.to_string()))?;
+        let base_data = read_input_capped(path)?;
 
-        // `zpdf::PdfFile` already parsed the document above; ask *it* for the
-        // page count. The previous code did a second, stricter `lopdf` parse and
-        // treated a failure as "0 pages", which silently skipped every requested
-        // index and returned `Ok(vec![])` — the UI then reported "Successfully
-        // split into 0 pages." Object-stream, xref-stream and encrypted files
-        // all fail that stricter parse.
-        let total_pages = pdf_file.find_objects_by_type("Page").len();
+        // The authoritative page count is the length of the *page tree*, not the
+        // number of objects carrying `/Type /Page`. Those differ whenever a
+        // document has accumulated orphaned page objects (left behind by
+        // incremental updates) or omits `/Type` on a leaf and inherits it from
+        // `/Pages`.
+        //
+        // An inflated count let the UI's own `(0..total_pages)` range send an
+        // out-of-tree index that passed the bounds check and reached
+        // `extract_pages`. A deflated count silently skipped valid indices with
+        // only a `warn!`, so pages the user asked for were never produced.
+        //
+        // `PdfDocument` resolves the tree exactly as `open_document` does and
+        // exposes the same underlying `PdfFile` via `file()`, so this does not
+        // re-read or re-serialize the document. An encrypted document cannot be
+        // opened here (this path is not given a password), so it falls back to
+        // the object scan.
+        let doc =
+            zpdf::PdfDocument::open(base_data).map_err(|e| PdfError::OpenFailed(e.to_string()))?;
+        let pdf_file = doc.file();
+        let total_pages = doc.page_count();
+        if total_pages == 0 {
+            return Err(PdfError::OpenFailed(
+                "document reports no pages".to_string(),
+            ));
+        }
         if total_pages == 0 {
             return Err(PdfError::OpenFailed(
                 "document reports no pages".to_string(),
@@ -2624,29 +3354,52 @@ impl DocumentStore {
             .and_then(|s| s.to_str())
             .unwrap_or("document");
 
+        // An empty selection is a caller mistake, not an empty success. The UI
+        // would otherwise report "split into 0 pages" for a request that was
+        // never going to produce anything.
+        if page_indices.is_empty() {
+            return Err(PdfError::OpenFailed(
+                "no pages were selected to split".to_string(),
+            ));
+        }
+
         let mut created_paths = Vec::new();
 
+        // Out-of-range indices are collected rather than silently dropped: a
+        // caller that cannot tell "split" from "split nothing" reports success
+        // for a document it never touched.
+        let mut skipped: Vec<String> = Vec::new();
+
         for &page_idx in &page_indices {
-            // Out-of-range indices are skipped, but never silently: a caller
-            // that cannot tell "split" from "split nothing" reports success for
-            // a document it never touched.
             if page_idx >= total_pages {
                 tracing::warn!(
                     "split_pdf: skipping page {} (document has {total_pages} pages)",
                     page_idx + 1
                 );
+                skipped.push(format!("page {} (max {total_pages})", page_idx + 1));
                 continue;
             }
 
-            let out_bytes = zpdf::extract_pages(&pdf_file, &[page_idx])
+            let out_bytes = zpdf::extract_pages(pdf_file, &[page_idx])
                 .map_err(|e| PdfError::IoError(e.to_string()))?;
 
             let out_path = std::path::Path::new(&output_dir)
                 .join(format!("{filename}_page_{}.pdf", page_idx + 1))
                 .to_string_lossy()
                 .into_owned();
-            std::fs::write(&out_path, &out_bytes).map_err(|e| PdfError::IoError(e.to_string()))?;
+            write_pdf_output(&out_path, &out_bytes)?;
             created_paths.push(out_path);
+        }
+
+        if created_paths.is_empty() {
+            return Err(PdfError::IoError(format!(
+                "no pages could be extracted from {path}: {}",
+                if skipped.is_empty() {
+                    "none were selected".to_string()
+                } else {
+                    skipped.join("; ")
+                }
+            )));
         }
 
         Ok(created_paths)
@@ -2721,9 +3474,29 @@ impl DocumentStore {
             format!("{}/{}_redacted.pdf", dir, stem)
         });
 
-        std::fs::write(&final_path, &out_bytes).map_err(|e| PdfError::IoError(e.to_string()))?;
+        write_pdf_output(&final_path, &out_bytes)?;
 
         Ok(final_path)
+    }
+
+    /// Map every widget annotation object id to the page index it appears on.
+    ///
+    /// One pass over the page tree, so `extract_form_fields_from_doc` can look
+    /// up a field's page in constant time instead of re-scanning every page for
+    /// every field.
+    fn index_widget_pages(doc: &PdfDocument) -> std::collections::HashMap<zpdf::ObjectId, usize> {
+        let mut map = std::collections::HashMap::new();
+        for i in 0..doc.page_count() {
+            let Ok(page) = doc.page(i) else {
+                continue;
+            };
+            for widget in &page.annots {
+                // First page wins, matching the old "break at the first match"
+                // behaviour for a widget placed on more than one page.
+                map.entry(*widget).or_insert(i);
+            }
+        }
+        map
     }
 
     pub fn get_form_fields(&mut self, path: &str) -> PdfResult<Vec<FormField>> {
@@ -2739,7 +3512,7 @@ impl DocumentStore {
             return Ok(self.extract_form_fields_from_doc(doc));
         }
 
-        let data = std::fs::read(path).map_err(|e| PdfError::OpenFailed(e.to_string()))?;
+        let data = read_input_capped(path)?;
         let doc = PdfDocument::open(data).map_err(|e| PdfError::OpenFailed(e.to_string()))?;
         Ok(self.extract_form_fields_from_doc(&doc))
     }
@@ -2747,6 +3520,23 @@ impl DocumentStore {
     fn extract_form_fields_from_doc(&self, doc: &PdfDocument) -> Vec<FormField> {
         let mut fields = Vec::new();
         if let Some(acro) = doc.acro_form() {
+            // Build a widget-id -> page-index map in a single pass over the
+            // document.
+            //
+            // The previous code called `doc.page(i)` for every field, re-parsing
+            // every page from 0 until it found the field's widget. That is
+            // O(fields x pages) full page parses: a 200-field form on a
+            // 5,000-page document meant up to a million page parses on the
+            // engine thread, stalling every other command in the queue.
+            //
+            // It also misreported the page: a widget that appears on no page --
+            // common when a field's widget lives in an inheritance chain, or is
+            // a parent field with `/Kids` -- left `page_idx` at its `0`
+            // initializer, so the field was reported on page 1 with no warning
+            // and the UI scrolled somewhere the user could not see the field.
+            // Such fields now carry `None`.
+            let widget_pages = Self::index_widget_pages(doc);
+
             for f in &acro.fields {
                 let name = f.name.clone();
                 let variant = match f.kind {
@@ -2815,22 +3605,21 @@ impl DocumentStore {
                     },
                 };
 
-                let mut page_idx = 0;
-                if let Some(&widget_id) = f.widgets.first() {
-                    for i in 0..doc.page_count() {
-                        if let Ok(page) = doc.page(i)
-                            && page.annots.contains(&widget_id)
-                        {
-                            page_idx = i;
-                            break;
-                        }
-                    }
+                // Resolve the field's page from the prebuilt index. A widget
+                // that appears on no page falls back to 0, which is logged so
+                // the misreport is at least visible rather than silent.
+                let page = f.widgets.iter().find_map(|w| widget_pages.get(w).copied());
+                if page.is_none() {
+                    tracing::debug!(
+                        "form field '{name}' has a widget that appears on no page; \
+                         reporting page 0"
+                    );
                 }
 
                 fields.push(FormField {
                     name,
                     variant,
-                    page: page_idx,
+                    page: page.unwrap_or(0),
                 });
             }
         }
@@ -2843,9 +3632,15 @@ impl DocumentStore {
         updates: Vec<FormField>,
         output_path: String,
     ) -> PdfResult<String> {
-        let data = std::fs::read(path).map_err(|e| PdfError::IoError(e.to_string()))?;
+        let data = read_input_capped(path).map_err(|e| match e {
+            PdfError::OpenFailed(msg) => PdfError::IoError(msg),
+            other => other,
+        })?;
         let mut writer =
             IncrementalWriter::new(data).map_err(|e| PdfError::IoError(e.to_string()))?;
+
+        let total_fields = updates.len();
+        let mut failures: Vec<String> = Vec::new();
 
         {
             let mut filler =
@@ -2895,7 +3690,11 @@ impl DocumentStore {
                     }
                 };
                 if let Err(e) = filler.set(&update.name, &val_str) {
-                    tracing::warn!("Failed to set field {}: {}", update.name, e);
+                    // A rejected field means the user's input was silently
+                    // dropped. Reporting success here produced a PDF with
+                    // nothing filled in and no indication anything went wrong,
+                    // so collect the failures and surface them.
+                    failures.push(format!("{}: {e}", update.name));
                 }
             }
             filler
@@ -2903,11 +3702,27 @@ impl DocumentStore {
                 .map_err(|e| PdfError::IoError(e.to_string()))?;
         }
 
-        let mut file =
-            std::fs::File::create(&output_path).map_err(|e| PdfError::IoError(e.to_string()))?;
+        // Render into memory first. `File::create` truncates the destination
+        // before a single new byte exists, so writing a form back over the path
+        // it was opened from (which the save dialog allows) destroyed the
+        // original if anything below failed.
+        let mut buf = std::io::Cursor::new(Vec::new());
         writer
-            .write(&mut file)
+            .write(&mut buf)
             .map_err(|e| PdfError::IoError(e.to_string()))?;
+
+        // Write the file only after the content is known-good, and only report
+        // success if every requested field actually landed.
+        write_pdf_output(&output_path, &buf.into_inner())?;
+
+        if !failures.is_empty() {
+            return Err(PdfError::EngineError(EngineErrorKind::Generic(format!(
+                "filled {} of {} fields; these were rejected: {}",
+                total_fields.saturating_sub(failures.len()),
+                total_fields,
+                failures.join("; ")
+            ))));
+        }
 
         Ok(output_path)
     }
@@ -2986,6 +3801,17 @@ impl DocumentStore {
                 )])),
             )])));
 
+        // Encode once, outside the per-page loop: the bytes go into every page's
+        // content stream, so re-encoding per page only repeated the work.
+        let (text_bytes, unmappable) = encode_pdf_text(text);
+        if unmappable > 0 {
+            tracing::warn!(
+                "Watermark text has {unmappable} character(s) outside WinAnsiEncoding \
+                 (e.g. CJK or emoji); substituted '?' because the non-embedded \
+                 Helvetica font cannot draw them"
+            );
+        }
+
         // The watermark content stream is built *per page* so its placement can
         // follow that page's box. It used to be built once with a hard-coded
         // origin of (200, 400), which put the stamp off the page — or absurdly
@@ -3001,11 +3827,11 @@ impl DocumentStore {
             let font_size = 48.0_f32.min((page_w / 12.0).max(12.0));
             content.set_font(pdf_writer::Name(b"F1"), font_size);
             content.set_fill_rgb(0.7, 0.7, 0.7);
-            let estimated_w = (text.chars().count() as f32) * font_size * 0.6;
+            let estimated_w = (text_bytes.len() as f32) * font_size * 0.6;
             let x = ((page_w - estimated_w) / 2.0).max(10.0);
             let y = (page_h / 2.0).max(10.0);
             content.set_text_matrix([1.0, 0.0, 0.0, 1.0, x, y]);
-            content.show(pdf_writer::Str(text.as_bytes()));
+            content.show(pdf_writer::Str(&text_bytes));
             content.end_text();
             let watermark_stream =
                 lopdf::Stream::new(lopdf::Dictionary::new(), content.finish().to_vec());
@@ -3084,8 +3910,12 @@ impl DocumentStore {
             }
         }
 
-        doc.save(output_path)
+        // Serialize to memory, then write atomically. `doc.save` streams
+        // straight into the destination, truncating it first.
+        let mut bytes = Vec::new();
+        doc.save_to(&mut bytes)
             .map_err(|e| PdfError::IoError(e.to_string()))?;
+        write_pdf_output(output_path, &bytes)?;
 
         tracing::info!(
             "Watermark '{}' applied to {} pages -> {}",
@@ -3141,12 +3971,26 @@ impl DocumentStore {
                     margin,
                     (page_h - margin - 10.0).max(10.0),
                 ]);
-                content.show(pdf_writer::Str(header_text.as_bytes()));
+                let (bytes, unmappable) = encode_pdf_text(header_text);
+                if unmappable > 0 {
+                    tracing::warn!(
+                        "Header has {unmappable} character(s) outside WinAnsiEncoding; \
+                         substituted '?'"
+                    );
+                }
+                content.show(pdf_writer::Str(&bytes));
             }
 
             if !formatted_footer.is_empty() {
                 content.set_text_matrix([1.0, 0.0, 0.0, 1.0, margin, margin.max(10.0)]);
-                content.show(pdf_writer::Str(formatted_footer.as_bytes()));
+                let (bytes, unmappable) = encode_pdf_text(&formatted_footer);
+                if unmappable > 0 {
+                    tracing::warn!(
+                        "Footer has {unmappable} character(s) outside WinAnsiEncoding; \
+                         substituted '?'"
+                    );
+                }
+                content.show(pdf_writer::Str(&bytes));
             }
 
             content.end_text();
@@ -3228,8 +4072,12 @@ impl DocumentStore {
             }
         }
 
-        doc.save(output_path)
+        // Serialize to memory, then write atomically. `doc.save` streams
+        // straight into the destination, truncating it first.
+        let mut bytes = Vec::new();
+        doc.save_to(&mut bytes)
             .map_err(|e| PdfError::IoError(e.to_string()))?;
+        write_pdf_output(output_path, &bytes)?;
 
         tracing::info!(
             "Header/Footer applied to {} pages -> {}",
@@ -3260,7 +4108,7 @@ impl DocumentStore {
         let pdf_bytes = builder
             .build()
             .map_err(|e| PdfError::IoError(e.to_string()))?;
-        std::fs::write(output_path, &pdf_bytes).map_err(|e| PdfError::IoError(e.to_string()))?;
+        write_pdf_output(output_path, &pdf_bytes)?;
         tracing::info!("Created blank document -> {}", output_path);
         Ok(output_path.to_string())
     }
@@ -3281,18 +4129,30 @@ impl DocumentStore {
             .paths
             .get(&doc_id)
             .ok_or(PdfError::EngineError(EngineErrorKind::DocumentPathNotFound))?;
-        let doc_bytes = std::fs::read(path).map_err(|e| PdfError::IoError(e.to_string()))?;
+        let doc_bytes = read_input_capped(path)?;
         // Expect cert_path to be the PKCS#8 private key DER, and
         // cert_path with ".x509" extension to be the DER-encoded X.509 cert.
         let key_bytes = std::fs::read(cert_path).map_err(|e| PdfError::IoError(e.to_string()))?;
-        // Derive the certificate path: replace extension with .x509 or try as-is
+
+        // The certificate must be a real X.509 DER blob. The previous code fell
+        // back to `key_bytes` when no `.x509` sidecar was found, on the premise
+        // that a self-signed key doubles as its own certificate. It does not: a
+        // PKCS#8 private key and an X.509 certificate are distinct DER
+        // structures, and even a self-signed certificate ships as its own file.
+        //
+        // Handing `sign()` the private key as the certificate either errors or,
+        // worse, produces a signature carrying a certificate no verifier can
+        // ever validate -- while `sign_with_certificate` returned `Ok` and the UI
+        // reported a successful signature. A missing sidecar is a user error
+        // that must be named, not papered over.
         let cert_der_path = std::path::Path::new(cert_path).with_extension("x509");
-        let cert_der_bytes = if cert_der_path.exists() {
-            std::fs::read(&cert_der_path).map_err(|e| PdfError::IoError(e.to_string()))?
-        } else {
-            // Fall back: treat key file itself as both key and cert (self-signed scenario)
-            key_bytes.clone()
-        };
+        let cert_der_bytes = std::fs::read(&cert_der_path).map_err(|e| {
+            PdfError::IoError(format!(
+                "the signing certificate is missing. Expected the X.509 DER certificate \
+                 beside the private key at {}. ({e})",
+                cert_der_path.display()
+            ))
+        })?;
 
         let key =
             SigningKey::from_pkcs8_der(&key_bytes).map_err(|e| PdfError::IoError(e.to_string()))?;
@@ -3307,7 +4167,7 @@ impl DocumentStore {
         let signed_bytes = writer
             .sign(&cert_der_bytes, &key, &opts)
             .map_err(|e| PdfError::IoError(e.to_string()))?;
-        std::fs::write(output_path, &signed_bytes).map_err(|e| PdfError::IoError(e.to_string()))?;
+        write_pdf_output(output_path, &signed_bytes)?;
         tracing::info!("Signed document {} -> {}", path, output_path);
         Ok(output_path.to_string())
     }
@@ -3327,7 +4187,7 @@ impl DocumentStore {
             .paths
             .get(&doc_id)
             .ok_or(PdfError::EngineError(EngineErrorKind::DocumentPathNotFound))?;
-        let doc_bytes = std::fs::read(path).map_err(|e| PdfError::IoError(e.to_string()))?;
+        let doc_bytes = read_input_capped(path)?;
 
         // Determine stamp colour by label (DeviceRGB, each in 0..1)
         let (r, g, b) = match label {
@@ -3356,8 +4216,7 @@ impl DocumentStore {
         writer
             .write(&mut buf)
             .map_err(|e| PdfError::IoError(e.to_string()))?;
-        std::fs::write(output_path, buf.into_inner())
-            .map_err(|e| PdfError::IoError(e.to_string()))?;
+        write_pdf_output(output_path, &buf.into_inner())?;
         tracing::info!(
             "Applied stamp '{}' on page {} -> {}",
             label,
@@ -3572,6 +4431,17 @@ impl DocumentStore {
     }
 
     /// Perform multi-page OCR text recognition across all pages of a document.
+    ///
+    /// Despite the name this is sequential: the OCR engine is a single shared
+    /// instance, so pages cannot be recognised concurrently. The name is kept
+    /// for API compatibility.
+    ///
+    /// Fails loudly. This used to swallow every per-page error and return
+    /// `Ok(vec![])` when *all* of them failed -- which is exactly what happens
+    /// when the OCR models are not installed, since `get_or_load_ocr_engine`
+    /// returns `Err` for every page. A caller could not distinguish "this
+    /// document has no text" from "nothing ran", and a missing document yielded
+    /// `Ok(vec![])` rather than `DocumentNotFound`.
     pub fn ocr_document_parallel(
         &mut self,
         doc_id: DocumentId,
@@ -3581,19 +4451,46 @@ impl DocumentStore {
             .documents
             .get(&doc_id)
             .map(zpdf::PdfDocument::page_count)
-            .unwrap_or(0);
+            .ok_or(PdfError::EngineError(EngineErrorKind::DocumentNotFound))?;
 
         let mut results = Vec::with_capacity(page_count);
+        let mut failures: Vec<String> = Vec::new();
         for page_num in 0..page_count {
-            if let Ok(res) = self.ocr_page(doc_id, page_num, script) {
-                results.push(res);
+            match self.ocr_page(doc_id, page_num, script) {
+                Ok(res) => results.push(res),
+                Err(e) => failures.push(format!("page {}: {e}", page_num + 1)),
             }
         }
 
+        if results.is_empty() {
+            // Every page failed. The first error is almost always the real
+            // cause (a missing model directory, a missing engine), and repeating
+            // it once per page buries it.
+            let detail = failures
+                .first()
+                .map(|f| f.split_once(": ").map_or(f.as_str(), |(_, rest)| rest))
+                .unwrap_or("no reason reported")
+                .to_string();
+            return Err(PdfError::EngineError(EngineErrorKind::Generic(format!(
+                "OCR failed on all {page_count} pages: {detail}"
+            ))));
+        }
+
+        if !failures.is_empty() {
+            // Partial success: report the pages that worked *and* say which did
+            // not, rather than quietly returning a short list.
+            tracing::warn!(
+                "Document OCR for {doc_id:?}: {} of {page_count} pages failed: {}",
+                failures.len(),
+                failures.join("; ")
+            );
+        }
+
         tracing::info!(
-            "Document OCR finished for doc_id {:?} across {} pages",
+            "Document OCR finished for doc_id {:?} across {} pages ({} failed)",
             doc_id,
-            page_count
+            results.len(),
+            failures.len()
         );
         Ok(results)
     }
@@ -3737,6 +4634,58 @@ mod tests {
     }
 
     #[test]
+    fn test_search_spans_handles_case_insensitive_matching() {
+        // `search_spans` with case_sensitive=false should find matches regardless
+        // of case, and return accurate per-character bounds.
+        let spans = vec![zpdf::TextSpan {
+            text: "Hello World".to_string(),
+            x: 10.0,
+            y: 100.0,
+            size: 12.0,
+            advance: 60.0,
+            mcid: None,
+        }];
+        let hits = zpdf::search_spans(&spans, "world", false);
+        assert_eq!(hits.len(), 1, "case-insensitive search should find 'world'");
+        assert_eq!(hits[0].line, "Hello World");
+        assert_eq!(hits[0].start, 6);
+        assert_eq!(hits[0].len, 5);
+    }
+
+    #[test]
+    fn test_search_spans_returns_empty_for_empty_query() {
+        let spans = vec![zpdf::TextSpan {
+            text: "Hello".to_string(),
+            x: 0.0,
+            y: 100.0,
+            size: 12.0,
+            advance: 50.0,
+            mcid: None,
+        }];
+        let hits = zpdf::search_spans(&spans, "", false);
+        assert!(hits.is_empty(), "empty query should return no hits");
+    }
+
+    #[test]
+    fn test_search_spans_case_sensitive_distinction() {
+        let spans = vec![zpdf::TextSpan {
+            text: "Hello World".to_string(),
+            x: 0.0,
+            y: 100.0,
+            size: 12.0,
+            advance: 60.0,
+            mcid: None,
+        }];
+        let hits = zpdf::search_spans(&spans, "world", true);
+        assert!(
+            hits.is_empty(),
+            "case-sensitive search should not find 'world' in 'Hello World'"
+        );
+        let hits = zpdf::search_spans(&spans, "World", true);
+        assert_eq!(hits.len(), 1, "case-sensitive search should find 'World'");
+    }
+
+    #[test]
     fn test_render_cache_creation() {
         let cache = RenderCache::new(10, 100);
         assert_eq!(
@@ -3774,6 +4723,146 @@ mod tests {
         let cached = cache.get(&key);
         assert!(cached.is_some());
         assert_eq!(cached.unwrap().width, 100);
+    }
+
+    #[test]
+    fn test_render_started_before_an_invalidation_is_not_cached() {
+        // Regression: every worker shares one `RenderCache` but holds its own
+        // document state. `ToggleLayer` is broadcast to all of them, so a worker
+        // that had not yet dequeued the broadcast still held the pre-toggle
+        // layer state: it rendered, then called `put` *after* another worker had
+        // already invalidated. `invalidate_document` can only remove keys present
+        // at the instant it runs, so the stale bitmap survived and toggling a
+        // layer off appeared to do nothing.
+        //
+        // A generation captured at render start closes that window: the late
+        // `put_if_current` notices the document changed and declines to store.
+        let cache = RenderCache::new(10, 1024);
+        let doc = DocumentId(7);
+        let key = RenderKey {
+            doc_id: doc,
+            page_num: 0,
+            scale: 100,
+            rotation: 0,
+            auto_crop: false,
+            quality: RenderQuality::Medium,
+            filter: RenderFilter::None,
+        };
+        let result = crate::models::RenderResult {
+            width: 10,
+            height: 10,
+            data: vec![0u8; 10].into(),
+        };
+
+        // A render starts, capturing the current generation.
+        let started_at = cache.generation(doc);
+
+        // Meanwhile another worker processes the toggle.
+        cache.invalidate_document(doc);
+
+        // The in-flight render now finishes. It must not repopulate the cache.
+        let stored = cache.put_if_current(key.clone(), result, started_at);
+        assert!(!stored, "a stale render was cached after invalidation");
+        assert!(
+            cache.get(&key).is_none(),
+            "the stale bitmap is reachable by a later request"
+        );
+    }
+
+    #[test]
+    fn test_render_after_an_invalidation_is_still_cached() {
+        // The generation guard must not disable caching outright: a render that
+        // starts *after* the invalidation is current and should be stored.
+        let cache = RenderCache::new(10, 1024);
+        let doc = DocumentId(8);
+        let key = RenderKey {
+            doc_id: doc,
+            page_num: 0,
+            scale: 100,
+            rotation: 0,
+            auto_crop: false,
+            quality: RenderQuality::Medium,
+            filter: RenderFilter::None,
+        };
+        let result = crate::models::RenderResult {
+            width: 10,
+            height: 10,
+            data: vec![0u8; 10].into(),
+        };
+
+        cache.invalidate_document(doc);
+        let started_at = cache.generation(doc);
+        assert!(cache.put_if_current(key.clone(), result, started_at));
+        assert!(cache.get(&key).is_some());
+    }
+
+    #[test]
+    fn test_tracked_render_keys_stay_bounded_per_document() {
+        // Regression: `doc_keys` retained every key ever rendered for the life
+        // of the document -- the same unbounded growth its own removed-`Vec`
+        // comment claimed to have fixed. Continuous wheel zoom mints a distinct
+        // key per quantised scale crossed with rotation/filter/quality, and
+        // `quick_cache` evicts without notifying `doc_keys`.
+        let cache = RenderCache::new(4096, 64 * 1024 * 1024);
+        let doc = DocumentId(9);
+
+        for i in 0..(MAX_TRACKED_KEYS_PER_DOC * 4) {
+            let key = RenderKey {
+                doc_id: doc,
+                page_num: (i % 40) as usize,
+                scale: 50 + (i % 400) as u32,
+                rotation: (i % 4) as i32,
+                auto_crop: false,
+                quality: RenderQuality::Medium,
+                filter: RenderFilter::None,
+            };
+            cache.put(
+                key,
+                crate::models::RenderResult {
+                    width: 2,
+                    height: 2,
+                    data: vec![0u8; 4].into(),
+                },
+            );
+        }
+
+        let tracked = cache.tracked_key_count(doc).unwrap_or(0);
+        assert!(
+            tracked <= MAX_TRACKED_KEYS_PER_DOC,
+            "tracked {tracked} keys for one document, cap is {MAX_TRACKED_KEYS_PER_DOC}"
+        );
+    }
+
+    #[test]
+    fn test_closing_a_document_releases_its_key_index() {
+        // `tracked_document_count` must return to zero after a close, otherwise
+        // the per-document index grows for the life of the process.
+        let cache = RenderCache::new(64, 8 * 1024 * 1024);
+        let docs: Vec<DocumentId> = (0..8).map(DocumentId).collect();
+        for &doc in &docs {
+            cache.put(
+                RenderKey {
+                    doc_id: doc,
+                    page_num: 0,
+                    scale: 100,
+                    rotation: 0,
+                    auto_crop: false,
+                    quality: RenderQuality::Low,
+                    filter: RenderFilter::None,
+                },
+                crate::models::RenderResult {
+                    width: 2,
+                    height: 2,
+                    data: vec![0u8; 4].into(),
+                },
+            );
+        }
+        assert_eq!(cache.tracked_document_count(), docs.len());
+
+        for &doc in &docs {
+            cache.remove_document(doc);
+        }
+        assert_eq!(cache.tracked_document_count(), 0);
     }
 
     #[test]
@@ -4093,15 +5182,80 @@ mod tests {
         let target_id = zpdf::ObjectId(42, 0);
         assert!(oc.group_visible(target_id));
 
+        let groups = [target_id];
         let mut overrides = std::collections::HashMap::new();
         overrides.insert(target_id, false);
-        let oc = apply_oc_overrides(&oc, &overrides);
+        let oc = apply_oc_overrides(&oc, &overrides, &groups);
         assert!(!oc.group_visible(target_id));
 
         let mut overrides2 = std::collections::HashMap::new();
         overrides2.insert(target_id, true);
-        let oc = apply_oc_overrides(&oc, &overrides2);
+        let oc = apply_oc_overrides(&oc, &overrides2, &groups);
         assert!(oc.group_visible(target_id));
+    }
+
+    #[test]
+    fn test_oc_override_preserves_untouched_document_layer_states() {
+        // Regression: `apply_oc_overrides` rebuilt `/OCProperties /D` from the
+        // overrides map alone, with a hard-coded `/BaseState /ON`, using the
+        // document's real config only as an error fallback. A document that hid
+        // layers by default therefore opened correctly, but the first toggle of
+        // any *other* layer produced a config that no longer listed those in
+        // `/OFF` -- so they all became visible. One toggle revealed every layer
+        // the author had hidden.
+        //
+        // Built by round-tripping through a synthetic catalog, since
+        // `OcConfig`'s fields are private.
+        let hidden_a = zpdf::ObjectId(3, 0);
+        let hidden_b = zpdf::ObjectId(4, 0);
+        let toggled = zpdf::ObjectId(5, 0);
+        let all = [hidden_a, hidden_b, toggled];
+
+        // A base config that hides two of the three groups.
+        let base = apply_oc_overrides(
+            &zpdf::OcConfig::default(),
+            &{
+                let mut m = std::collections::HashMap::new();
+                m.insert(hidden_a, false);
+                m.insert(hidden_b, false);
+                m
+            },
+            &all,
+        );
+        assert!(!base.group_visible(hidden_a));
+        assert!(!base.group_visible(hidden_b));
+        assert!(base.group_visible(toggled));
+
+        // Now toggle the *third* layer, leaving the other two alone.
+        let after = apply_oc_overrides(
+            &base,
+            &{
+                let mut m = std::collections::HashMap::new();
+                m.insert(toggled, false);
+                m
+            },
+            &all,
+        );
+
+        assert!(
+            !after.group_visible(hidden_a),
+            "toggling one layer revealed a layer the document had hidden"
+        );
+        assert!(
+            !after.group_visible(hidden_b),
+            "toggling one layer revealed a layer the document had hidden"
+        );
+        assert!(!after.group_visible(toggled));
+    }
+
+    #[test]
+    fn test_empty_overrides_return_the_document_config_unchanged() {
+        // The pass-through path is the only one that can preserve a document's
+        // exact `/BaseState`, so it must not be routed through the synthesizer.
+        let base = zpdf::OcConfig::default();
+        let out = apply_oc_overrides(&base, &std::collections::HashMap::new(), &[]);
+        assert!(out.all_visible());
+        assert!(out.group_visible(zpdf::ObjectId(1, 0)));
     }
 
     #[test]

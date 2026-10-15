@@ -28,6 +28,15 @@ pub struct PdfbullView {
     pub log_console: LogConsoleState,
     pub focus_handle: FocusHandle,
     pub status_message: Option<String>,
+    /// Information dictionary (title, author, subject, keywords, creator,
+    /// producer) for every document loaded through `LoadDocumentMeta`.
+    ///
+    /// The dialog's editors are seeded from this so a user sees what is
+    /// actually on the document before editing it. Blank fields mean "leave
+    /// untouched", so a stale or missing entry costs the user their current
+    /// values rather than corrupting them.
+    pub doc_metadata:
+        std::collections::HashMap<crate::models::DocumentId, crate::models::DocumentMetadata>,
     /// Annotations for every open document, keyed by `DocumentId`.
     ///
     /// The viewport holds only the *active* document's annotations, and
@@ -135,6 +144,7 @@ impl PdfbullView {
             sidebar,
             viewport: DocumentViewport::new(),
             dialogs: DialogsState::new_in(_window, _cx),
+            doc_metadata: std::collections::HashMap::new(),
             welcome,
             log_console: LogConsoleState::new(),
             focus_handle,
@@ -386,6 +396,30 @@ impl PdfbullView {
                             view.sidebar.attachments = meta.attachments;
                             view.sidebar.layers = meta.layers;
                             view.dialogs.signatures = meta.signatures;
+                            view.doc_metadata.insert(doc_id, meta.metadata);
+                            cx.notify();
+                        });
+                    }
+
+                    // Resolve link annotations through zpdf's destination
+                    // parser so the sidebar can honour a declared view (`XYZ`
+                    // left/top/zoom) rather than only jumping to a page top.
+                    let (link_tx, link_rx) = tokio::sync::oneshot::channel();
+                    if let Ok(()) = engine_tx
+                        .send(crate::commands::PdfCommand::GetLinkDestinations(
+                            doc_id, link_tx,
+                        ))
+                        .await
+                        && let Ok(Ok(links)) = link_rx.await
+                    {
+                        let _ = this.update(cx, |view, cx| {
+                            // Same guard as above: a late response for a
+                            // document the user has switched away from must not
+                            // overwrite what is on screen now.
+                            if view.active_doc_id != Some(doc_id) {
+                                return;
+                            }
+                            view.sidebar.links = links;
                             cx.notify();
                         });
                     }
@@ -480,6 +514,15 @@ impl PdfbullView {
             self.sidebar.bookmarks.clear();
             self.sidebar.attachments.clear();
             self.sidebar.layers.clear();
+            self.sidebar.links.clear();
+            // `doc_metadata` is deliberately NOT cleared here. It is
+            // per-document cache state, like `doc_geometry` below, not
+            // transient view state like the sidebar panels: its entries are
+            // dropped by the tab-close paths instead. Clearing the whole map
+            // here means open A, switch to B, switch back to A and the
+            // Properties dialog reopens with every field blanked, because
+            // nothing re-requests `LoadDocumentMeta` on a tab switch — the
+            // information dictionary is only fetched at `open_pdf_path`.
             self.sidebar.reset_search(cx);
             self.rendering_pages.clear();
             self.dialogs.signatures.clear();
@@ -545,11 +588,18 @@ impl PdfbullView {
                 vec![cur.min(total - 1)]
             }
             super::ribbon::PageLayoutMode::TwoPageSpread => {
-                let left = cur.min(total - 1);
-                if left + 1 < total {
-                    vec![left, left + 1]
-                } else {
-                    vec![left]
+                // Must agree with the painter, so both call the same helper.
+                // Requesting `{cur, cur+1}` while the canvas painted
+                // `{even, even+1}` left the left half of the spread permanently
+                // unrendered whenever `cur` was odd.
+                let (left, right) = super::canvas::two_page_spread_pages(
+                    cur,
+                    total,
+                    self.viewport.standalone_cover,
+                );
+                match right {
+                    Some(r) => vec![left, r],
+                    None => vec![left],
                 }
             }
             super::ribbon::PageLayoutMode::Continuous => {
@@ -731,7 +781,12 @@ impl PdfbullView {
                     // selection requests (and paint word highlights) for
                     // document B.
                     if view.active_doc_id == Some(doc_id) {
-                        view.viewport.text_cache.insert(page_idx, items);
+                        // Stored as an `Arc` so paint closures can share it
+                        // instead of deep-copying the whole text layer per card
+                        // per frame.
+                        view.viewport
+                            .text_cache
+                            .insert(page_idx, std::sync::Arc::new(items));
                     }
                 });
             }
@@ -818,8 +873,24 @@ impl PdfbullView {
         let min_y = ((start.y.min(end.y) - origin.y) / px(1.0)) / zoom;
         let max_y = ((start.y.max(end.y) - origin.y) / px(1.0)) / zoom;
 
+        // The drag selects a region of the rendered bitmap, which already has the
+        // page rotation applied; the text layer is unrotated. Pull the selection
+        // back before hit-testing, or on a rotated page the words under the
+        // cursor are compared against a transposed box and nothing is selected.
+        let (min_x, min_y, sel_w, sel_h) = super::canvas::rotated_rect_to_overlay_space(
+            min_x,
+            min_y,
+            max_x - min_x,
+            max_y - min_y,
+            self.viewport.page_width,
+            self.viewport.page_height,
+            self.viewport.effective_rotation(page_idx),
+        );
+        let (min_x, max_x) = (min_x, min_x + sel_w);
+        let (min_y, max_y) = (min_y, min_y + sel_h);
+
         let mut matched_words: Vec<String> = Vec::new();
-        for item in &items {
+        for item in items.iter() {
             let ix2 = item.x + item.width;
             let iy2 = item.y + item.height;
             if ix2 >= min_x && item.x <= max_x && iy2 >= min_y && item.y <= max_y {
@@ -1553,13 +1624,23 @@ impl PdfbullView {
                     results.into_iter().take(MAX_SEARCH_RESULTS).collect();
                 view.sidebar.search_results = results.clone();
                 view.viewport.search_highlights.clear();
+                // Build the per-page rect lists first, then store each page's
+                // list behind an `Arc` so paint closures share it instead of
+                // copying on every frame.
+                let mut by_page: std::collections::HashMap<usize, Vec<(f32, f32, f32, f32)>> =
+                    std::collections::HashMap::new();
                 for item in &results {
-                    view.viewport
-                        .search_highlights
-                        .entry(item.page_index)
-                        .or_default()
-                        .push((item.x, item.y, item.width, item.height));
+                    by_page.entry(item.page_index).or_default().push((
+                        item.x,
+                        item.y,
+                        item.width,
+                        item.height,
+                    ));
                 }
+                view.viewport.search_highlights = by_page
+                    .into_iter()
+                    .map(|(page, rects)| (page, std::sync::Arc::new(rects)))
+                    .collect();
                 if let Some(first) = results.first() {
                     view.viewport.scroll_to_page(first.page_index);
                     view.render_needed_pages(cx);
@@ -2260,6 +2341,437 @@ impl PdfbullView {
         .detach();
     }
 
+    /// Follow a link resolved by the engine.
+    ///
+    /// Internal links honour the destination's declared view: `XYZ` scrolls to
+    /// that point, while every `Fit*` variant — which means "show the whole
+    /// page" — scrolls to the page top. External URLs are handed to the OS, and
+    /// the status bar reports a failure rather than silently doing nothing.
+    pub fn follow_link(
+        &mut self,
+        link: &crate::models::LinkDestinationInfo,
+        cx: &mut Context<Self>,
+    ) {
+        use crate::models::LinkKind;
+
+        match link.kind {
+            LinkKind::External => {
+                let Some(url) = link.url.clone() else {
+                    self.status_message = Some("Link has no URL to open.".into());
+                    cx.notify();
+                    return;
+                };
+                match open::that_detached(&url) {
+                    Ok(()) => {
+                        self.status_message = Some(format!("Opened {url} in your browser."));
+                    }
+                    Err(e) => {
+                        tracing::error!("Failed to open {url}: {e}");
+                        self.status_message = Some(format!("Could not open {url}: {e}"));
+                    }
+                }
+                cx.notify();
+            }
+            LinkKind::Internal => {
+                let Some(target) = link.target_page else {
+                    self.status_message =
+                        Some("This jump has no target page in the document.".into());
+                    cx.notify();
+                    return;
+                };
+                if target >= self.viewport.total_pages {
+                    self.status_message = Some(format!(
+                        "Link points to page {} but this document has {}.",
+                        target + 1,
+                        self.viewport.total_pages
+                    ));
+                    cx.notify();
+                    return;
+                }
+                self.viewport.scroll_to_page(target);
+                self.sidebar
+                    .scroll_thumbnails_to(target, self.viewport.total_pages);
+                self.render_needed_pages(cx);
+                self.status_message = Some(match link.view.as_deref() {
+                    Some("XYZ") => format!("Jumped to page {} at the link's point.", target + 1),
+                    _ => format!("Jumped to page {}.", target + 1),
+                });
+                cx.notify();
+            }
+        }
+    }
+
+    /// Copy the current page's text in reading order to the clipboard.
+    ///
+    /// Reports which path produced the text: a document with a structure tree
+    /// is reordered by `/MCID`, and an untagged one falls back to plain span
+    /// order — the two are not equivalent and the status bar must say which
+    /// was handed over.
+    pub fn copy_accessible_text(&mut self, cx: &mut Context<Self>) {
+        let Some(doc_id) = self.active_doc_id else {
+            self.status_message = Some("Open a document first to copy its text.".into());
+            cx.notify();
+            return;
+        };
+        let page_idx = self.viewport.current_page;
+        let cmd_tx = self.engine.cmd_tx.clone();
+
+        cx.spawn(async move |this, cx| {
+            let (tx, rx) = tokio::sync::oneshot::channel();
+            if let Err(e) = cmd_tx
+                .send(crate::commands::PdfCommand::ExtractAccessibleText(
+                    doc_id, page_idx, tx,
+                ))
+                .await
+            {
+                tracing::error!("Failed to send ExtractAccessibleText command: {e}");
+                return;
+            }
+
+            match rx.await {
+                Ok(Ok(result)) => {
+                    let _ = this.update(cx, |view, cx| {
+                        if result.char_count == 0 {
+                            view.status_message =
+                                Some(format!("Page {} has no selectable text.", page_idx + 1));
+                            cx.notify();
+                            return;
+                        }
+                        cx.write_to_clipboard(ClipboardItem::new_string(result.text));
+                        let msg = if result.reading_order_applied {
+                            format!(
+                                "Copied {} chars from page {} in tagged-PDF reading order.",
+                                result.char_count,
+                                page_idx + 1
+                            )
+                        } else {
+                            format!(
+                                "Copied {} chars from page {} (untagged: visual order, \
+                                 not verified reading order).",
+                                result.char_count,
+                                page_idx + 1
+                            )
+                        };
+                        view.log_console.log(format!("[SUCCESS] {msg}"), "info");
+                        view.status_message = Some(msg);
+                        cx.notify();
+                    });
+                }
+                Ok(Err(e)) => {
+                    let _ = this.update(cx, |view, cx| {
+                        view.status_message = Some(format!("Could not read page text: {e}"));
+                        cx.notify();
+                    });
+                }
+                Err(e) => {
+                    tracing::error!("ExtractAccessibleText channel dropped: {e}");
+                }
+            }
+        })
+        .detach();
+    }
+
+    /// Same as [`Self::extract_tables_active_page`] but runs zpdf's text-only
+    /// detector, for documents with no ruled lines to guide detection.
+    pub fn extract_tables_plain_active_page(&mut self, cx: &mut Context<Self>) {
+        let Some(doc_id) = self.active_doc_id else {
+            self.log_console
+                .log("[WARN] No active document to extract tables from.", "warn");
+            self.status_message = Some("Open a document first to extract tables.".into());
+            cx.notify();
+            return;
+        };
+        let page_idx = self.viewport.current_page;
+        let cmd_tx = self.engine.cmd_tx.clone();
+
+        cx.spawn(async move |this, cx| {
+            let (tx, rx) = tokio::sync::oneshot::channel();
+            if let Err(e) = cmd_tx
+                .send(crate::commands::PdfCommand::DetectTablesPlain(
+                    doc_id, page_idx, tx,
+                ))
+                .await
+            {
+                tracing::error!("Failed to send DetectTablesPlain command: {e}");
+                return;
+            }
+
+            match rx.await {
+                Ok(Ok(tables)) => {
+                    let _ = this.update(cx, |view, cx| {
+                        if tables.is_empty() {
+                            view.log_console.log(
+                                format!("[INFO] No tables detected on Page {}.", page_idx + 1),
+                                "info",
+                            );
+                            view.status_message =
+                                Some(format!("No tables found on Page {}.", page_idx + 1));
+                        } else {
+                            let mut combined_csv = String::new();
+                            for (i, t) in tables.iter().enumerate() {
+                                if i > 0 {
+                                    combined_csv.push_str("\n\n");
+                                }
+                                if tables.len() > 1 {
+                                    combined_csv.push_str(&format!("# Table {}\n", i + 1));
+                                }
+                                combined_csv.push_str(&t.csv);
+                            }
+                            cx.write_to_clipboard(ClipboardItem::new_string(combined_csv));
+                            let msg = format!(
+                                "Detected {} table(s) on Page {}. Copied CSV to clipboard!",
+                                tables.len(),
+                                page_idx + 1
+                            );
+                            view.log_console.log(format!("[SUCCESS] {msg}"), "info");
+                            view.status_message = Some(msg);
+                        }
+                        cx.notify();
+                    });
+                }
+                Ok(Err(e)) => {
+                    let _ = this.update(cx, |view, cx| {
+                        view.log_console.log(
+                            format!(
+                                "[ERROR] Failed to detect tables on Page {}: {e}",
+                                page_idx + 1
+                            ),
+                            "error",
+                        );
+                        view.status_message = Some("Table extraction failed.".into());
+                        cx.notify();
+                    });
+                }
+                Err(e) => {
+                    tracing::error!("DetectTablesPlain channel dropped: {e}");
+                }
+            }
+        })
+        .detach();
+    }
+
+    /// Seed the metadata editors from the active document's information
+    /// dictionary and open the Properties dialog.
+    pub fn open_properties_dialog(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(doc_id) = self.active_doc_id else {
+            self.status_message = Some("Open a document first to edit its properties.".into());
+            cx.notify();
+            return;
+        };
+        let meta = self.doc_metadata.get(&doc_id).cloned().unwrap_or_default();
+        // Order matches `DialogsState::metadata_inputs`.
+        let values = [
+            meta.title.unwrap_or_default(),
+            meta.author.unwrap_or_default(),
+            meta.subject.unwrap_or_default(),
+            meta.keywords.unwrap_or_default(),
+            meta.creator.unwrap_or_default(),
+        ];
+        for (slot, value) in self.dialogs.metadata_values.iter_mut().zip(values) {
+            *slot = value;
+        }
+        // Push the seed into the editors too, so the fields show the document's
+        // current values rather than an empty box with a stale placeholder.
+        for (entity, value) in self
+            .dialogs
+            .metadata_inputs
+            .iter()
+            .zip(self.dialogs.metadata_values.clone())
+        {
+            if let Some(entity) = entity.clone() {
+                entity.update(cx, |state, cx| {
+                    state.set_value(value, window, cx);
+                });
+            }
+        }
+        self.dialogs.active = Some(ActiveDialog::Properties);
+        cx.notify();
+    }
+
+    /// Commit an information-dictionary update to the engine. Blank fields are
+    /// sent as `None` so the engine leaves those entries untouched.
+    pub fn apply_metadata_update(
+        &mut self,
+        title: Option<&str>,
+        author: Option<&str>,
+        subject: Option<&str>,
+        keywords: Option<&str>,
+        creator: Option<&str>,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(doc_id) = self.active_doc_id else {
+            self.status_message = Some("Open a document first to edit its properties.".into());
+            cx.notify();
+            return;
+        };
+        let cmd_tx = self.engine.cmd_tx.clone();
+        let owned: Vec<Option<String>> = [
+            title, author, subject, keywords, creator,
+            // `producer` is deliberately not user-editable: most readers ignore
+            // or overwrite it, and the engine refuses to let a forged value
+            // masquerade as another tool's output.
+            None,
+        ]
+        .into_iter()
+        .map(|v| v.map(str::to_string))
+        .collect();
+
+        cx.spawn(async move |this, cx| {
+            let (tx, rx) = tokio::sync::oneshot::channel();
+            let mut it = owned.into_iter();
+            if let Err(e) = cmd_tx
+                .send(crate::commands::PdfCommand::UpdateMetadata(
+                    doc_id,
+                    it.next().flatten(),
+                    it.next().flatten(),
+                    it.next().flatten(),
+                    it.next().flatten(),
+                    it.next().flatten(),
+                    it.next().flatten(),
+                    tx,
+                ))
+                .await
+            {
+                tracing::error!("Failed to send UpdateMetadata command: {e}");
+                return;
+            }
+
+            match rx.await {
+                // An empty result means nothing was actually changed, so there
+                // is nothing to write back to disk.
+                Ok(Ok(bytes)) if bytes.is_empty() => {
+                    let _ = this.update(cx, |view, cx| {
+                        view.status_message = Some("No metadata fields were changed.".into());
+                        cx.notify();
+                    });
+                }
+                Ok(Ok(bytes)) => {
+                    let Some(path) = this
+                        .update(cx, |view, _| {
+                            view.tabs
+                                .tabs
+                                .get(view.tabs.active_tab_index)
+                                .and_then(|t| t.path.clone())
+                        })
+                        .ok()
+                        .flatten()
+                    else {
+                        return;
+                    };
+                    let path_str = path.to_string_lossy().to_string();
+                    let path_for_write = path_str.clone();
+                    let result = cx
+                        .background_spawn(async move {
+                            crate::storage::atomic_write_bytes(
+                                std::path::Path::new(&path_for_write),
+                                &bytes,
+                            )
+                        })
+                        .await;
+                    let _ = this.update(cx, |view, cx| {
+                        match result {
+                            Ok(()) => {
+                                view.status_message = Some("Document properties updated.".into())
+                            }
+                            Err(e) => {
+                                tracing::error!(
+                                    "Failed writing metadata update to {path_str}: {e}"
+                                );
+                                view.status_message =
+                                    Some(format!("Failed to save properties: {e}"));
+                            }
+                        }
+                        cx.notify();
+                    });
+                }
+                Ok(Err(e)) => {
+                    let _ = this.update(cx, |view, cx| {
+                        view.status_message = Some(format!("Failed to update properties: {e}"));
+                        cx.notify();
+                    });
+                }
+                Err(e) => {
+                    tracing::error!("UpdateMetadata channel dropped: {e}");
+                }
+            }
+        })
+        .detach();
+    }
+
+    /// Ask where to write the extracted pages and hand the selection to the
+    /// engine. Defaults to the current page when the selection is empty.
+    pub fn prompt_extract_pages(&mut self, cx: &mut Context<Self>) {
+        let Some(doc_id) = self.active_doc_id else {
+            self.status_message = Some("Open a document first to extract pages.".into());
+            cx.notify();
+            return;
+        };
+        let page_idx = self.viewport.current_page;
+        let cmd_tx = self.engine.cmd_tx.clone();
+
+        cx.spawn(async move |this, cx| {
+            let save_file = rfd::AsyncFileDialog::new()
+                .add_filter("PDF files (*.pdf)", &["pdf"])
+                .set_file_name("extracted.pdf")
+                .save_file()
+                .await;
+            let Some(save_file) = save_file else {
+                return;
+            };
+            let out_path = save_file.path().to_string_lossy().to_string();
+
+            let (tx, rx) = tokio::sync::oneshot::channel();
+            if let Err(e) = cmd_tx
+                .send(crate::commands::PdfCommand::ExtractPages(
+                    doc_id,
+                    vec![page_idx],
+                    tx,
+                ))
+                .await
+            {
+                tracing::error!("Failed to send ExtractPages command: {e}");
+                return;
+            }
+
+            match rx.await {
+                Ok(Ok(bytes)) => {
+                    let out_for_status = out_path.clone();
+                    let result = cx
+                        .background_spawn(async move {
+                            crate::storage::atomic_write_bytes(
+                                std::path::Path::new(&out_path),
+                                &bytes,
+                            )
+                        })
+                        .await;
+                    let _ = this.update(cx, |view, cx| {
+                        match result {
+                            Ok(()) => {
+                                view.status_message =
+                                    Some(format!("Extracted page to {out_for_status}."));
+                            }
+                            Err(e) => {
+                                tracing::error!("Failed writing {out_for_status}: {e}");
+                                view.status_message = Some(format!("Extraction failed: {e}"));
+                            }
+                        }
+                        cx.notify();
+                    });
+                }
+                Ok(Err(e)) => {
+                    let _ = this.update(cx, |view, cx| {
+                        view.status_message = Some(format!("Page extraction failed: {e}"));
+                        cx.notify();
+                    });
+                }
+                Err(e) => {
+                    tracing::error!("ExtractPages channel dropped: {e}");
+                }
+            }
+        })
+        .detach();
+    }
+
     pub fn handle_key_down(&mut self, event: &gpui::KeyDownEvent, cx: &mut Context<Self>) {
         let key = event.keystroke.key.to_lowercase();
         let ctrl = event.keystroke.modifiers.control || event.keystroke.modifiers.platform;
@@ -2284,6 +2796,8 @@ impl PdfbullView {
                             let removed = self.tabs.tabs.remove(idx);
                             if let Some(doc_id) = removed.doc_id {
                                 self.annotations_by_doc.remove(&doc_id);
+                                self.doc_geometry.remove(&doc_id);
+                                self.doc_metadata.remove(&doc_id);
                                 // The sibling `CloseTab` path logs and reports
                                 // this; Ctrl+W discarded it, so a full channel
                                 // left the parsed document and its render-cache
@@ -2414,7 +2928,7 @@ impl Render for PdfbullView {
             );
 
         // Ribbon Action Strip
-        let action_strip = self.ribbon.render_strip(cx, |this, action, _, cx| {
+        let action_strip = self.ribbon.render_strip(cx, |this, action, window, cx| {
             match action {
                 RibbonAction::OpenFile => {
                     this.prompt_open_file(cx);
@@ -2534,6 +3048,15 @@ impl Render for PdfbullView {
                 RibbonAction::PageOrganizer => {
                     this.dialogs.active = Some(ActiveDialog::PageOrganizer);
                 }
+                RibbonAction::Properties => {
+                    this.open_properties_dialog(window, cx);
+                }
+                RibbonAction::ExtractPages => {
+                    this.prompt_extract_pages(cx);
+                }
+                RibbonAction::ExtractTablesPlain => {
+                    this.extract_tables_plain_active_page(cx);
+                }
                 RibbonAction::ConvertMarkdown => {
                     this.convert_active_document("md", "Markdown", "Markdown files (*.md)", cx);
                 }
@@ -2542,6 +3065,9 @@ impl Render for PdfbullView {
                 }
                 RibbonAction::ConvertText => {
                     this.convert_active_document("txt", "Text", "Text files (*.txt)", cx);
+                }
+                RibbonAction::CopyAccessibleText => {
+                    this.copy_accessible_text(cx);
                 }
                 RibbonAction::ExtractTables => {
                     this.extract_tables_active_page(cx);
@@ -2575,6 +3101,7 @@ impl Render for PdfbullView {
                                 // grows for the life of the session.
                                 this.annotations_by_doc.remove(&doc_id);
                                 this.doc_geometry.remove(&doc_id);
+                                this.doc_metadata.remove(&doc_id);
                                 // Dropping this send left the parsed document and
                                 // its render-cache entries resident forever, with
                                 // no user-visible sign.
@@ -2611,6 +3138,7 @@ impl Render for PdfbullView {
                                 {
                                     this.annotations_by_doc.remove(&doc_id);
                                     this.doc_geometry.remove(&doc_id);
+                                    this.doc_metadata.remove(&doc_id);
                                     if let Err(e) = this
                                         .engine
                                         .cmd_tx
@@ -2637,6 +3165,7 @@ impl Render for PdfbullView {
                             if let Some(doc_id) = tab.doc_id {
                                 this.annotations_by_doc.remove(&doc_id);
                                 this.doc_geometry.remove(&doc_id);
+                                this.doc_metadata.remove(&doc_id);
                                 if let Err(e) = this
                                     .engine
                                     .cmd_tx
@@ -2760,6 +3289,9 @@ impl Render for PdfbullView {
                             this.sidebar
                                 .scroll_thumbnails_to(page, this.viewport.total_pages);
                             this.render_needed_pages(cx);
+                        }
+                        SidebarAction::FollowLink(link) => {
+                            this.follow_link(&link, cx);
                         }
                         SidebarAction::ToggleLayer(idx, visible) => {
                             this.set_layer_visibility(idx, visible, cx);
@@ -3134,6 +3666,38 @@ impl Render for PdfbullView {
                     }
                     DialogAction::ApplySecurity(algo) => {
                         this.apply_security(&algo, cx);
+                    }
+                    DialogAction::ApplyMetadata {
+                        title,
+                        author,
+                        subject,
+                        keywords,
+                        creator,
+                    } => {
+                        // Remember the committed values so reopening the dialog
+                        // shows what is actually on the document, not whatever
+                        // the editors happened to hold last time.
+                        let slots = [
+                            title.as_deref().unwrap_or("").to_string(),
+                            author.as_deref().unwrap_or("").to_string(),
+                            subject.as_deref().unwrap_or("").to_string(),
+                            keywords.as_deref().unwrap_or("").to_string(),
+                            creator.as_deref().unwrap_or("").to_string(),
+                        ];
+                        // Seed the editors from the document before applying,
+                        // so a partially-blank Apply does not silently drop the
+                        // fields the user left alone.
+                        for (slot, value) in this.dialogs.metadata_values.iter_mut().zip(slots) {
+                            *slot = value;
+                        }
+                        this.apply_metadata_update(
+                            title.as_deref(),
+                            author.as_deref(),
+                            subject.as_deref(),
+                            keywords.as_deref(),
+                            creator.as_deref(),
+                            cx,
+                        );
                     }
                     DialogAction::Close => {}
                 }

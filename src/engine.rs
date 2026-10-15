@@ -21,20 +21,29 @@ fn reload_if_needed(
     if store.has_document(doc_id) {
         return;
     }
-    // Re-check `has_document` *while holding the read lock* and keep the lock
-    // held across the reopen. Without this, a concurrent `Close` can land
-    // between the initial check and `open_document`, leaving the document
-    // resident (with its render-cache entries) after it was supposed to close.
-    let Ok(guard) = paths.read() else {
-        return;
+    // Copy the path and password out of the map, then *release* the lock before
+    // opening. The previous version held the read guard across
+    // `open_document`, which reads the whole file (up to 512 MB) and parses it.
+    // `RwLock` is write-preferring on Windows, so a single reopen blocked every
+    // `Open` and `Close` on all N workers for the entire parse.
+    //
+    // Releasing first does not reintroduce the race the old comment described.
+    // That race was about `close_document` running *concurrently* with the
+    // reopen on this same worker -- but a single worker processes commands
+    // serially from its channel, so `Close` cannot interleave with the command
+    // currently executing. What the shared lock actually guarded was the path
+    // map itself, which a short copy is sufficient for.
+    let (path, pass) = {
+        let Ok(guard) = paths.read() else {
+            return;
+        };
+        let Some((path, pass)) = guard.get(&doc_id) else {
+            return;
+        };
+        (path.clone(), pass.clone())
     };
-    if store.has_document(doc_id) {
-        return;
-    }
-    let Some((path, pass)) = guard.get(&doc_id) else {
-        return;
-    };
-    if let Err(e) = store.open_document(path, pass.as_ref().map(|s| s.as_str()), doc_id) {
+
+    if let Err(e) = store.open_document(&path, pass.as_ref().map(|s| s.as_str()), doc_id) {
         tracing::error!("Failed to reload document {doc_id:?} from path '{path}': {e:?}");
     }
 }
@@ -287,9 +296,28 @@ pub fn spawn_engine_thread(cache_size: u64, max_memory_mb: u64) -> EngineState {
                             });
                             let _ = tx.send(res);
                         }
-                        PdfCommand::Search(doc_id, query, tx) => {
+                        PdfCommand::ExtractAccessibleText(doc_id, page_num, tx) => {
                             reload_if_needed(&mut store, &paths, doc_id);
                             let store_ref = std::panic::AssertUnwindSafe(&store);
+                            let res = catch_worker_panic("extract_accessible_text", move || {
+                                store_ref.extract_accessible_text(doc_id, page_num)
+                            });
+                            let _ = tx.send(res);
+                        }
+                        PdfCommand::GetLinkDestinations(doc_id, tx) => {
+                            reload_if_needed(&mut store, &paths, doc_id);
+                            let store_ref = std::panic::AssertUnwindSafe(&store);
+                            let res = catch_worker_panic("link_destinations", move || {
+                                store_ref.extract_link_destinations(doc_id)
+                            });
+                            let _ = tx.send(res);
+                        }
+                        PdfCommand::Search(doc_id, query, tx) => {
+                            reload_if_needed(&mut store, &paths, doc_id);
+                            // `search` needs `&mut self` so it can share the
+                            // document-lifetime image cache instead of
+                            // re-decoding every embedded image on each query.
+                            let mut store_ref = std::panic::AssertUnwindSafe(&mut store);
                             let res = catch_worker_panic("search", move || {
                                 store_ref.search(doc_id, &query)
                             });
@@ -409,10 +437,27 @@ pub fn spawn_engine_thread(cache_size: u64, max_memory_mb: u64) -> EngineState {
                         }
                         PdfCommand::ExportPdf(doc_id, path, annotations, tx) => {
                             reload_if_needed(&mut store, &paths, doc_id);
+                            let new_path = path.clone();
                             let mut store_ref = std::panic::AssertUnwindSafe(&mut store);
                             let res = catch_worker_panic("export_pdf", move || {
-                                store_ref.save_annotations(doc_id, &annotations, Some(path))
+                                store_ref.save_annotations(doc_id, &annotations, Some(new_path))
                             });
+                            // A successful "Save As" makes the new file the
+                            // document's own path. The UI repoints the tab at
+                            // this path, so the engine must agree: previously
+                            // `paths` was left pointing at the *original*, and
+                            // the next Ctrl+S resolved its output path from this
+                            // map -- silently overwriting the original file with
+                            // the new annotation while the Save-As target never
+                            // received it. `reload_if_needed` had the same
+                            // problem, reloading the original rather than the
+                            // file the user was now editing.
+                            if res.is_ok()
+                                && let Ok(mut guard) = paths.write()
+                                && let Some(entry) = guard.get_mut(&doc_id)
+                            {
+                                entry.0 = path;
+                            }
                             let _ = tx.send(res);
                         }
                         PdfCommand::Merge(paths_list, out, tx) => {
@@ -516,6 +561,47 @@ pub fn spawn_engine_thread(cache_size: u64, max_memory_mb: u64) -> EngineState {
                             let store_ref = std::panic::AssertUnwindSafe(&store);
                             let res = catch_worker_panic("detect_tables", move || {
                                 store_ref.detect_tables_on_page(doc_id, page_num)
+                            });
+                            let _ = tx.send(res);
+                        }
+                        PdfCommand::DetectTablesPlain(doc_id, page_num, tx) => {
+                            reload_if_needed(&mut store, &paths, doc_id);
+                            let store_ref = std::panic::AssertUnwindSafe(&store);
+                            let res = catch_worker_panic("detect_tables_plain", move || {
+                                store_ref.detect_tables_plain_on_page(doc_id, page_num)
+                            });
+                            let _ = tx.send(res);
+                        }
+                        PdfCommand::UpdateMetadata(
+                            doc_id,
+                            title,
+                            author,
+                            subject,
+                            keywords,
+                            creator,
+                            producer,
+                            tx,
+                        ) => {
+                            reload_if_needed(&mut store, &paths, doc_id);
+                            let mut store_ref = std::panic::AssertUnwindSafe(&mut store);
+                            let res = catch_worker_panic("update_metadata", move || {
+                                store_ref.update_metadata(
+                                    doc_id,
+                                    title.as_deref(),
+                                    author.as_deref(),
+                                    subject.as_deref(),
+                                    keywords.as_deref(),
+                                    creator.as_deref(),
+                                    producer.as_deref(),
+                                )
+                            });
+                            let _ = tx.send(res);
+                        }
+                        PdfCommand::ExtractPages(doc_id, page_indices, tx) => {
+                            reload_if_needed(&mut store, &paths, doc_id);
+                            let mut store_ref = std::panic::AssertUnwindSafe(&mut store);
+                            let res = catch_worker_panic("extract_pages", move || {
+                                store_ref.extract_pages_to_new(doc_id, &page_indices)
                             });
                             let _ = tx.send(res);
                         }

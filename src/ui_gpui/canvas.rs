@@ -17,6 +17,111 @@ const CANVAS_PAGE_GAP: f32 = 24.0;
 /// cheap to rebuild on the next scroll.
 const MAX_CARD_WINDOW: usize = 48;
 
+/// Map an overlay rect from unrotated document space into the space of the
+/// rendered bitmap, which already has `rotation` applied.
+///
+/// Overlays (annotations, search hits, text selection, the text layer used for
+/// hit-testing) are all stored in unrotated page coordinates, but
+/// `with_page_rotation` bakes the rotation into the bitmap before the canvas
+/// ever sees it. Painting one against the other without this transform puts
+/// every overlay in the wrong place on any document with a non-zero `/Rotate`,
+/// and on every page after the user rotates.
+///
+/// `page_width`/`page_height` are the *unrotated* page dimensions; the result
+/// is expressed in the rotated frame, so its extents swap for 90/270.
+pub fn overlay_rect_in_rotated_space(
+    x: f32,
+    y: f32,
+    width: f32,
+    height: f32,
+    page_width: f32,
+    page_height: f32,
+    rotation: i32,
+) -> (f32, f32, f32, f32) {
+    match rotation.rem_euclid(360) {
+        90 => (y, page_width - (x + width), height, width),
+        180 => (
+            page_width - (x + width),
+            page_height - (y + height),
+            width,
+            height,
+        ),
+        270 => (page_height - (y + height), x, height, width),
+        _ => (x, y, width, height),
+    }
+}
+
+/// The inverse of [`overlay_rect_in_rotated_space`]: map a rect measured in the
+/// rendered (rotated) bitmap back into unrotated document space.
+///
+/// Needed for hit-testing. A drag selects a region of the bitmap the user can
+/// see, but the text layer it is matched against lives in unrotated space, so
+/// the selection rectangle has to be pulled back before comparing.
+pub fn rotated_rect_to_overlay_space(
+    x: f32,
+    y: f32,
+    width: f32,
+    height: f32,
+    page_width: f32,
+    page_height: f32,
+    rotation: i32,
+) -> (f32, f32, f32, f32) {
+    match rotation.rem_euclid(360) {
+        90 => (page_width - y - height, x, height, width),
+        180 => (
+            page_width - x - width,
+            page_height - y - height,
+            width,
+            height,
+        ),
+        270 => (y, page_height - x - width, height, width),
+        _ => (x, y, width, height),
+    }
+}
+
+/// The pages a two-page spread shows for `cur_page`.
+///
+/// Returns `(left_page, Option<right_page>)`. Shared between the render
+/// scheduler (`App::render_needed_pages`) and the painter below, which is the
+/// whole point: the two used to compute the spread independently and disagree.
+///
+/// The scheduler requested `{cur, cur + 1}` while the painter showed
+/// `{even, even + 1}` where `even` is the *even* page at or before `cur`. Be on
+/// page 2 (`cur == 1`) in Single-page mode, switch to Two-Page, and the
+/// scheduler requested pages 1 and 2 while the canvas painted pages 0 and 1.
+/// Page 0 was never requested, never appeared in `rendering_pages`, and nothing
+/// ever asked for it again -- so the left half sat on the "Rendering page…"
+/// placeholder until you zoomed or changed layout.
+pub fn two_page_spread_pages(
+    cur_page: usize,
+    total_pages: usize,
+    standalone_cover: bool,
+) -> (usize, Option<usize>) {
+    if total_pages == 0 {
+        return (0, None);
+    }
+    // A standalone cover page is shown alone; otherwise pages pair up on even
+    // boundaries, exactly as a printed book does.
+    if standalone_cover && cur_page == 0 {
+        return (0, None);
+    }
+    let left = if standalone_cover {
+        if cur_page % 2 == 1 {
+            cur_page
+        } else {
+            cur_page.saturating_sub(1)
+        }
+    } else if cur_page.is_multiple_of(2) {
+        cur_page
+    } else {
+        cur_page.saturating_sub(1)
+    };
+
+    let left = left.min(total_pages - 1);
+    let right = left.checked_add(1).filter(|r| *r < total_pages);
+    (left, right)
+}
+
 /// Layout of the virtualized Continuous-mode strip.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct ContinuousStripGeometry {
@@ -61,7 +166,7 @@ pub struct DocumentViewport {
     pub selection_start: Option<Point<Pixels>>,
     pub selection_end: Option<Point<Pixels>>,
     pub selected_text: Option<String>,
-    pub text_cache: std::collections::HashMap<usize, Vec<crate::models::TextItem>>,
+    pub text_cache: std::collections::HashMap<usize, std::sync::Arc<Vec<crate::models::TextItem>>>,
     pub rendered_pages: std::collections::HashMap<usize, std::sync::Arc<RenderImage>>,
     pub rendered_zoom: std::collections::HashMap<usize, f32>,
     pub scroll_handle: ScrollHandle,
@@ -72,7 +177,18 @@ pub struct DocumentViewport {
     /// `annotations` grouped by page, so painting a page is O(annotations on
     /// that page) instead of a full scan of every annotation.
     pub annotations_by_page: std::collections::HashMap<usize, Vec<crate::models::Annotation>>,
-    pub search_highlights: std::collections::HashMap<usize, Vec<(f32, f32, f32, f32)>>,
+    /// The same data as `annotations_by_page`, pre-shared for paint closures so
+    /// a frame does not have to deep-copy every annotation on every card.
+    pub annotations_arc:
+        std::collections::HashMap<usize, std::sync::Arc<Vec<crate::models::Annotation>>>,
+    pub search_highlights:
+        std::collections::HashMap<usize, std::sync::Arc<Vec<(f32, f32, f32, f32)>>>,
+    /// `/Rotate` per page, in degrees, from the document.
+    ///
+    /// Every overlay — annotations, search hits, text selection — is stored in
+    /// *unrotated* document space, while the rendered bitmap already has this
+    /// rotation baked in. Painting needs it to map between the two.
+    pub page_rotations: std::collections::HashMap<usize, i32>,
 }
 
 impl Default for DocumentViewport {
@@ -105,8 +221,10 @@ impl DocumentViewport {
                 std::collections::HashMap::new(),
             )),
             highlight_color: None,
+            page_rotations: std::collections::HashMap::new(),
             annotations: Vec::new(),
             annotations_by_page: std::collections::HashMap::new(),
+            annotations_arc: std::collections::HashMap::new(),
             search_highlights: std::collections::HashMap::new(),
         }
     }
@@ -132,10 +250,19 @@ impl DocumentViewport {
         self.search_highlights.clear();
         self.annotations.clear();
         self.annotations_by_page.clear();
+        self.annotations_arc.clear();
+        self.page_rotations.clear();
         if let Ok(mut origins) = self.page_origins.write() {
             origins.clear();
         }
         self.scroll_handle.set_offset(Point::default());
+    }
+
+    /// Total rotation applied to page `page_idx`'s rendered bitmap: the
+    /// document's own `/Rotate` plus whatever the user has applied on top.
+    pub fn effective_rotation(&self, page_idx: usize) -> i32 {
+        let page_rotate = self.page_rotations.get(&page_idx).copied().unwrap_or(0);
+        (page_rotate + self.rotation as i32).rem_euclid(360) / 90 * 90
     }
 
     /// Force a re-render of every visible page (zoom, rotation or render
@@ -301,16 +428,50 @@ impl DocumentViewport {
             .map_or(&[], Vec::as_slice)
     }
 
+    /// Shared handle to a page's annotations, suitable for handing to a paint
+    /// closure.
+    ///
+    /// Cloning the returned `Arc` is O(1); the previous code deep-copied the
+    /// whole vector on every frame of every visible card.
+    pub fn annotations_arc_by_page(
+        &self,
+        page_idx: usize,
+    ) -> std::sync::Arc<Vec<crate::models::Annotation>> {
+        self.annotations_arc
+            .get(&page_idx)
+            .cloned()
+            .unwrap_or_else(|| std::sync::Arc::new(Vec::new()))
+    }
+
+    /// Shared handle to a page's search-hit rects.
+    pub fn search_highlights_arc(
+        &self,
+        page_idx: usize,
+    ) -> std::sync::Arc<Vec<(f32, f32, f32, f32)>> {
+        self.search_highlights
+            .get(&page_idx)
+            .cloned()
+            .unwrap_or_else(|| std::sync::Arc::new(Vec::new()))
+    }
+
     /// Rebuild `annotations_by_page` from `annotations`. Call after any change
     /// to the annotation list.
     pub fn reindex_annotations(&mut self) {
         self.annotations_by_page.clear();
+        self.annotations_arc.clear();
         for ann in &self.annotations {
             self.annotations_by_page
                 .entry(ann.page)
                 .or_default()
                 .push(ann.clone());
         }
+        // Rebuild the shared handles alongside, so paint closures can grab an
+        // `Arc` instead of copying.
+        self.annotations_arc = self
+            .annotations_by_page
+            .iter()
+            .map(|(page, v)| (*page, std::sync::Arc::new(v.clone())))
+            .collect();
     }
 
     fn render_page_card<V: 'static>(
@@ -324,8 +485,18 @@ impl DocumentViewport {
         let primary = cx.theme().primary;
         let border = cx.theme().border;
         let muted_fg = cx.theme().muted_foreground;
-        let scaled_w = px(self.page_width * self.zoom);
-        let scaled_h = px(self.page_height * self.zoom);
+        // The bitmap the engine produces already has the page's `/Rotate` plus
+        // the user's view rotation applied, so its dimensions are swapped for
+        // 90/270. Sizing the card with the unrotated extents left the image
+        // letterboxed inside a wrongly-shaped card, and every overlay misplaced.
+        let page_rotation = self.effective_rotation(page_idx);
+        let (card_w, card_h) = if matches!(page_rotation, 90 | 270) {
+            (self.page_height, self.page_width)
+        } else {
+            (self.page_width, self.page_height)
+        };
+        let scaled_w = px(card_w * self.zoom);
+        let scaled_h = px(card_h * self.zoom);
         let is_active = page_idx == self.current_page;
         let total = self.total_pages;
 
@@ -345,22 +516,28 @@ impl DocumentViewport {
         // `Arc`-share the per-page text layer and annotations instead of deep
         // cloning them (every `TextItem` and `AnnotationStyle` owns `String`s).
         // The paint closures below only read them.
-        let text_items: Option<std::sync::Arc<Vec<crate::models::TextItem>>> = self
-            .text_cache
-            .get(&page_idx)
-            .cloned()
-            .map(std::sync::Arc::new);
+        //
+        // The cache now stores `Arc<Vec<..>>` directly. It previously stored a
+        // plain `Vec` and the code did `get(..).cloned().map(Arc::new)` -- which
+        // deep-copies every element and *then* wraps the copy, exactly
+        // defeating the stated intent. Continuous mode builds up to
+        // `MAX_CARD_WINDOW` cards and the text cache retains ~10 pages, so this
+        // was up to ~21 full `Vec<TextItem>` clones (each element owning a
+        // `String`) per frame, plus the annotation vectors.
+        let text_items: Option<std::sync::Arc<Vec<crate::models::TextItem>>> =
+            self.text_cache.get(&page_idx).cloned();
         let page_annotations: std::sync::Arc<Vec<crate::models::Annotation>> =
-            std::sync::Arc::new(self.annotations_on_page(page_idx).to_vec());
-        let page_search_matches: std::sync::Arc<Vec<(f32, f32, f32, f32)>> = std::sync::Arc::new(
-            self.search_highlights
-                .get(&page_idx)
-                .cloned()
-                .unwrap_or_default(),
-        );
+            self.annotations_arc_by_page(page_idx);
+        let page_search_matches: std::sync::Arc<Vec<(f32, f32, f32, f32)>> =
+            self.search_highlights_arc(page_idx);
         let page_origins = self.page_origins.clone();
         let zoom = self.zoom;
         let hl_color = self.highlight_color;
+        // Overlays are stored unrotated; the bitmap is not. See
+        // `overlay_rect_in_rotated_space`.
+        let overlay_rotation = page_rotation;
+        let unrotated_w = self.page_width;
+        let unrotated_h = self.page_height;
 
         let selection_overlay = canvas(
             move |bounds, _, _| bounds,
@@ -379,6 +556,15 @@ impl DocumentViewport {
                 // 0. Paint search matches on this page
                 let search_fill = hsla(45.0 / 360.0, 1.0, 0.5, 0.45);
                 for (mx, my, mw, mh) in page_search_matches.iter() {
+                    let (mx, my, mw, mh) = overlay_rect_in_rotated_space(
+                        *mx,
+                        *my,
+                        *mw,
+                        *mh,
+                        unrotated_w,
+                        unrotated_h,
+                        overlay_rotation,
+                    );
                     let quad = Bounds {
                         origin: Point::new(
                             card_bounds.origin.x + px(mx * zoom),
@@ -397,14 +583,23 @@ impl DocumentViewport {
 
                 // 1. Paint saved permanent annotations on this page
                 for ann in page_annotations.iter() {
+                    let (ax, ay, aw, ah) = overlay_rect_in_rotated_space(
+                        ann.x,
+                        ann.y,
+                        ann.width,
+                        ann.height,
+                        unrotated_w,
+                        unrotated_h,
+                        overlay_rotation,
+                    );
                     let ann_quad = Bounds {
                         origin: Point::new(
-                            card_bounds.origin.x + px(ann.x * zoom),
-                            card_bounds.origin.y + px(ann.y * zoom),
+                            card_bounds.origin.x + px(ax * zoom),
+                            card_bounds.origin.y + px(ay * zoom),
                         ),
                         size: Size {
-                            width: px(ann.width * zoom),
-                            height: px(ann.height * zoom),
+                            width: px(aw * zoom),
+                            height: px(ah * zoom),
                         },
                     };
                     let clipped_ann = ann_quad.intersect(&card_bounds);
@@ -583,6 +778,23 @@ impl DocumentViewport {
                     let page_min_y = ((sel_win_min_y - card_bounds.origin.y) / px(1.0)) / zoom;
                     let page_max_y = ((sel_win_max_y - card_bounds.origin.y) / px(1.0)) / zoom;
 
+                    // The drag selects a region of the *rotated* bitmap, but the
+                    // text layer below is in unrotated space. Pull the selection
+                    // back before hit-testing, or on any rotated page the words
+                    // under the cursor are compared against a transposed box and
+                    // nothing is ever selected.
+                    let (sel_x, sel_y, sel_w, sel_h) = rotated_rect_to_overlay_space(
+                        page_min_x,
+                        page_min_y,
+                        page_max_x - page_min_x,
+                        page_max_y - page_min_y,
+                        unrotated_w,
+                        unrotated_h,
+                        overlay_rotation,
+                    );
+                    let (page_min_x, page_max_x) = (sel_x, sel_x + sel_w);
+                    let (page_min_y, page_max_y) = (sel_y, sel_y + sel_h);
+
                     let word_fill = hl_color.unwrap_or_else(|| hsla(215.0 / 360.0, 0.9, 0.55, 0.4));
                     let word_border = hl_color
                         .map(|c| c.opacity(0.8))
@@ -600,14 +812,23 @@ impl DocumentViewport {
                                 && item.y <= page_max_y
                             {
                                 matched_any_text = true;
+                                let (wx, wy, ww, wh) = overlay_rect_in_rotated_space(
+                                    item.x,
+                                    item.y,
+                                    item.width,
+                                    item.height,
+                                    unrotated_w,
+                                    unrotated_h,
+                                    overlay_rotation,
+                                );
                                 let word_quad = Bounds {
                                     origin: Point::new(
-                                        card_bounds.origin.x + px(item.x * zoom),
-                                        card_bounds.origin.y + px(item.y * zoom),
+                                        card_bounds.origin.x + px(wx * zoom),
+                                        card_bounds.origin.y + px(wy * zoom),
                                     ),
                                     size: Size {
-                                        width: px(item.width * zoom),
-                                        height: px(item.height * zoom),
+                                        width: px(ww * zoom),
+                                        height: px(wh * zoom),
                                     },
                                 };
                                 let clipped_word = word_quad.intersect(&card_bounds);
@@ -813,32 +1034,8 @@ impl DocumentViewport {
                     .into_any_element()
             }
             PageLayoutMode::TwoPageSpread => {
-                let (left_idx, right_idx) = if self.standalone_cover {
-                    if cur_page == 0 {
-                        (0, None)
-                    } else {
-                        let odd = if cur_page % 2 == 1 {
-                            cur_page
-                        } else {
-                            cur_page - 1
-                        };
-                        (odd, if odd + 1 < total { Some(odd + 1) } else { None })
-                    }
-                } else {
-                    let even = if cur_page.is_multiple_of(2) {
-                        cur_page
-                    } else {
-                        cur_page - 1
-                    };
-                    (
-                        even,
-                        if even + 1 < total {
-                            Some(even + 1)
-                        } else {
-                            None
-                        },
-                    )
-                };
+                let (left_idx, right_idx) =
+                    two_page_spread_pages(cur_page, total, self.standalone_cover);
 
                 let left_card = self.render_page_card(cx, left_idx.min(total - 1), on_drag_start);
                 let right_card = right_idx

@@ -120,6 +120,10 @@ pub struct SignatureInfo {
     pub is_trusted: bool,
     pub trust_status: Option<String>,
     pub cert_chain: Vec<String>,
+    /// Revocation status of the signing certificate (CRL/OCSP check result)
+    pub revocation_status: Option<String>,
+    /// Whether the byte-range covering the signature is intact
+    pub byte_range_intact: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -230,6 +234,14 @@ pub struct OpenResult {
     pub page_count: usize,
     pub page_heights: Vec<f32>,
     pub max_width: f32,
+    /// `/Rotate` for each page, in degrees (0/90/180/270).
+    ///
+    /// The rendered bitmap has this rotation (plus any user-applied rotation)
+    /// already baked in, so its dimensions are swapped for 90/270. Without
+    /// knowing the value the canvas cannot size a page card correctly, nor map
+    /// an annotation, search hit or selection from unrotated document space
+    /// into the rotated bitmap's space.
+    pub page_rotations: Vec<i32>,
     pub outline: Vec<crate::pdf_engine::Bookmark>,
     pub links: Vec<Hyperlink>,
     pub metadata: DocumentMetadata,
@@ -311,6 +323,86 @@ pub struct Hyperlink {
     pub bounds: (f32, f32, f32, f32), // x, y, w, h in PDF points
     pub url: Option<String>,
     pub destination_page: Option<usize>,
+}
+
+/// Which kind of navigation a link performs.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum LinkKind {
+    /// An external URI opened by the OS browser.
+    External,
+    /// A jump to another page of the same document.
+    Internal,
+}
+
+/// One link annotation, resolved through zpdf's destination parser so the
+/// declared *view* (`Fit`, `XYZ left top zoom`, ...) survives rather than
+/// being collapsed to a bare page number.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct LinkDestinationInfo {
+    /// 0-based index of the page the annotation lives on.
+    pub page: usize,
+    pub kind: LinkKind,
+    /// External URI, when `kind` is [`LinkKind::External`].
+    pub url: Option<String>,
+    /// 0-based target page, when `kind` is [`LinkKind::Internal`].
+    pub target_page: Option<usize>,
+    /// The destination's declared view, as text (`Fit`, `XYZ(...)`, ...).
+    /// `None` when the kind is `GoTo` with no explicit view, or for URIs.
+    pub view: Option<String>,
+    /// Rectangle of the link on its own page, in PDF points (top-down).
+    pub bounds: (f32, f32, f32, f32),
+}
+
+impl LinkDestinationInfo {
+    /// Short label for the sidebar row: the URI for external links, "Page N"
+    /// for internal ones.
+    pub fn target_label(&self) -> String {
+        match self.kind {
+            LinkKind::External => self
+                .url
+                .clone()
+                .unwrap_or_else(|| "External link".to_string()),
+            LinkKind::Internal => self
+                .target_page
+                .map_or_else(|| "Unresolved".to_string(), |p| format!("Page {}", p + 1)),
+        }
+    }
+}
+
+/// Reading-order text extracted from a page.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AccessibleTextResult {
+    pub page: usize,
+    pub text: String,
+    /// True when the page was ordered by the document's tagged-structure tree
+    /// (`/MCID`); false when the page is untagged and the text falls back to
+    /// plain span order.
+    ///
+    /// The distinction matters: a fallback is *not* a guarantee that the copy
+    /// is in reading order, so the UI must say which one it handed over
+    /// rather than presenting both identically.
+    pub reading_order_applied: bool,
+    /// Number of characters returned, so the status line can report a size
+    /// without the caller re-measuring the string.
+    pub char_count: usize,
+}
+
+/// A resolved destination view, distilled from zpdf's `DestView`.
+///
+/// `ScrollTo` carries the `XYZ` parameters; everything else reduces to
+/// "show the whole page", which is what `Fit`, `FitH`, `FitV` and the
+/// bounding-box variants mean for a reader at this zoom range.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+pub enum DestinationView {
+    /// Scroll so that page-space `(x, y)` lands at the top-left, optionally
+    /// changing the zoom. `None` coords mean "keep current".
+    ScrollTo {
+        x: Option<f32>,
+        y: Option<f32>,
+        zoom: Option<f32>,
+    },
+    /// Show the whole page.
+    WholePage,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -1539,6 +1631,7 @@ mod tests {
             page_count: 10,
             page_heights: vec![100.0; 10],
             max_width: 800.0,
+            page_rotations: vec![0; 10],
             outline: vec![],
             links: vec![],
             metadata: DocumentMetadata::default(),
