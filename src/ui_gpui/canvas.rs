@@ -29,6 +29,49 @@ const MAX_CARD_WINDOW: usize = 48;
 ///
 /// `page_width`/`page_height` are the *unrotated* page dimensions; the result
 /// is expressed in the rotated frame, so its extents swap for 90/270.
+/// Join a slice of text items into the text the user actually selected,
+/// mirroring zpdf's `spans_to_text` word-gap heuristic: glyphs on the same
+/// baseline are concatenated directly when the gap between them is small
+/// (inside a word) and separated by a space otherwise. Newlines separate
+/// lines whose baselines differ by more than half a line.
+pub fn join_selected_text_items(items: &[crate::models::TextItem]) -> String {
+    if items.is_empty() {
+        return String::new();
+    }
+    let mut sorted: Vec<&crate::models::TextItem> = items.iter().collect();
+    sorted.sort_by(|a, b| {
+        a.y.partial_cmp(&b.y)
+            .unwrap_or(std::cmp::Ordering::Equal)
+            .then(a.x.partial_cmp(&b.x).unwrap_or(std::cmp::Ordering::Equal))
+    });
+
+    let mut combined = String::new();
+    let mut current_y: Option<f32> = None;
+    let mut prev_end_x: Option<f32> = None;
+    for item in sorted {
+        if let Some(cy) = current_y {
+            let line_tol = item.height * 0.5;
+            if (item.y - cy).abs() > line_tol {
+                if !combined.is_empty() && !combined.ends_with('\n') {
+                    combined.push('\n');
+                }
+            } else if let Some(px) = prev_end_x {
+                let gap = item.x - px;
+                let needs_space = gap > item.height * 0.25
+                    && !combined.ends_with(char::is_whitespace)
+                    && !item.text.starts_with(char::is_whitespace);
+                if needs_space {
+                    combined.push(' ');
+                }
+            }
+        }
+        combined.push_str(&item.text);
+        current_y = Some(item.y);
+        prev_end_x = Some(item.x + item.width);
+    }
+    combined
+}
+
 pub fn overlay_rect_in_rotated_space(
     x: f32,
     y: f32,

@@ -861,12 +861,23 @@ impl DocumentStore {
             max_font_cache_bytes: 32 * 1024 * 1024,
             ..ParseLimits::default()
         };
+        // Attach a system-enabled FontProvider so non-embedded fonts can be
+        // substituted and variable/multi-script glyphs resolve against the
+        // installed fonts (zpdf 0.15+). The scan of system fonts is cached
+        // globally inside zpdf, so this is cheap after the first document.
+        let font_provider = std::sync::Arc::new(zpdf::FontProvider::new(
+            true,
+            zpdf::FontProviderLimits::default(),
+        ));
         let doc = match PdfDocument::open_with_password_and_limits(
             data,
             password.unwrap_or("").as_bytes(),
             limits,
         ) {
-            Ok(doc) => doc,
+            Ok(mut doc) => {
+                doc.set_font_provider(font_provider);
+                doc
+            }
             Err(zpdf::Error::WrongPassword) => {
                 return Err(PdfError::PasswordRequired);
             }

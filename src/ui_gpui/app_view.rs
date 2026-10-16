@@ -889,17 +889,17 @@ impl PdfbullView {
         let (min_x, max_x) = (min_x, min_x + sel_w);
         let (min_y, max_y) = (min_y, min_y + sel_h);
 
-        let mut matched_words: Vec<String> = Vec::new();
+        let mut matched_items: Vec<crate::models::TextItem> = Vec::new();
         for item in items.iter() {
             let ix2 = item.x + item.width;
             let iy2 = item.y + item.height;
             if ix2 >= min_x && item.x <= max_x && iy2 >= min_y && item.y <= max_y {
-                matched_words.push(item.text.clone());
+                matched_items.push((*item).clone());
             }
         }
 
-        if !matched_words.is_empty() {
-            let combined = matched_words.join(" ");
+        if !matched_items.is_empty() {
+            let combined = crate::ui_gpui::canvas::join_selected_text_items(&matched_items);
             self.viewport.selected_text = Some(combined.clone());
             cx.write_to_clipboard(ClipboardItem::new_string(combined));
         }
@@ -3309,6 +3309,12 @@ impl Render for PdfbullView {
                     this.viewport.selection_start = Some(pos);
                     this.viewport.selection_end = Some(pos);
                     this.viewport.selected_text = None;
+                    // Fetch the text layer eagerly so per-word highlights render
+                    // while the drag is still in progress instead of only after
+                    // the mouse is released.
+                    if let Some(doc_id) = this.active_doc_id {
+                        this.request_text_items(doc_id, page_idx, cx);
+                    }
                     cx.notify();
                 },
                 |this, _page_idx, pos, _, cx| {
@@ -3477,6 +3483,12 @@ impl Render for PdfbullView {
                                         height: h,
                                     });
                                     this.viewport.reindex_annotations();
+                                    // The drag has now become a committed annotation; drop the
+                                    // transient selection highlight so the saved markup is
+                                    // what remains on the page.
+                                    this.viewport.selection_start = None;
+                                    this.viewport.selection_end = None;
+                                    this.viewport.selection_page = None;
                                     if let Some(tab) =
                                         this.tabs.tabs.get_mut(this.tabs.active_tab_index)
                                     {

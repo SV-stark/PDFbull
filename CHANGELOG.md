@@ -5,6 +5,13 @@ All notable changes to the PDFbull project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.18.0] - 2026-10-16
+
+### Changed
+- **Upgraded `zpdf` and related crates to `0.15.0`**: Cargo pins updated; documents now attach a system-enabled `FontProvider` so non-embedded fonts can be substituted and variable/multi-script glyphs resolve against installed fonts.
+- **Text selection extraction**: `extract_selected_text` joins selected items using zpdf's word-gap heuristic instead of always inserting a space, fixing spaced-out per-glyph spans such as "T e s t" while preserving word boundaries.
+- **Selection highlighting**: eagerly fetches the text layer on selection start for per-word highlight boxes; commits annotation drags clear the transient selection highlight; added `join_selected_text_items` helper and tests.
+
 ## [Unreleased]
 
 ### Improved
