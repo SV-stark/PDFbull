@@ -1100,8 +1100,19 @@ impl PdfbullView {
                 self.viewport.zoom = new_zoom;
                 // Zoom changes the geometry under any banked edge scroll.
                 self.viewport.wheel_residual_y = 0.0;
-                self.render_needed_pages(cx);
+                // Don't block the UI thread on a re-render for every wheel
+                // notch: keep showing the cached bitmap (scaled to the new size)
+                // immediately and re-render once zooming settles, so the page
+                // never falls back to the "Rendering page…" placeholder mid-gesture.
                 cx.notify();
+                cx.spawn(async move |this, cx| {
+                    tokio::time::sleep(std::time::Duration::from_millis(150)).await;
+                    let _ = this.update(cx, |view, cx| {
+                        view.render_needed_pages(cx);
+                        cx.notify();
+                    });
+                })
+                .detach();
             }
         } else {
             let (mut delta_x, delta_y) = match event.delta {
