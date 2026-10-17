@@ -138,6 +138,9 @@ jobs:
       - name: Install dependencies
         run: |
           ${{ matrix.packages_install }}
+      - name: Install additional Linux dependencies
+        if: ${{ contains(matrix.runner, 'ubuntu') }}
+        run: sudo apt-get update && sudo apt-get install -y libxkbcommon-x11-dev
       - name: Build artifacts
         run: |
           # Actually do builds and make zips and whatnot
@@ -234,6 +237,20 @@ jobs:
           name: cargo-dist-cache
           path: ~/.cargo/bin/
       - run: chmod +x ~/.cargo/bin/dist
+      # Ensure the GitHub release exists before uploading (stable.yml may have
+      # created it already; if not, create it here so cargo-dist's upload step
+      # has a target). Idempotent: a "release already exists" error is ignored.
+      - name: Ensure release exists
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          for i in $(seq 1 60); do
+            if gh release view "${{ needs.plan.outputs.tag }}" >/dev/null 2>&1; then
+              echo "release exists"; exit 0;
+            fi
+            echo "waiting for release to be created..."; sleep 5;
+          done
+          gh release create "${{ needs.plan.outputs.tag }}" --target "${{ github.sha }}" --title "Release ${{ needs.plan.outputs.tag }}" 2>/dev/null || echo "release already exists or created by another job"
       # Fetch artifacts from scratch-storage
       - name: Fetch artifacts
         uses: actions/download-artifact@v4
@@ -244,7 +261,7 @@ jobs:
       - id: host
         shell: bash
         run: |
-          dist host ${{ needs.plan.outputs.tag-flag }} --steps=upload --steps=release --output-format=json --allow-dirty > dist-manifest.json
+          dist host ${{ needs.plan.outputs.tag-flag }} --steps=upload --output-format=json --allow-dirty > dist-manifest.json
           echo "artifacts uploaded and released successfully"
           cat dist-manifest.json
           echo "manifest=$(jq -c "." dist-manifest.json)" >> "$GITHUB_OUTPUT"
@@ -275,7 +292,7 @@ jobs:
           # Write and read notes from a file to avoid quoting breaking things
           echo "$ANNOUNCEMENT_BODY" > $RUNNER_TEMP/notes.txt
 
-          gh release create "${{ needs.plan.outputs.tag }}" --target "$RELEASE_COMMIT" $PRERELEASE_FLAG --title "$ANNOUNCEMENT_TITLE" --notes-file "$RUNNER_TEMP/notes.txt" artifacts/*
+          gh release create "${{ needs.plan.outputs.tag }}" --target "$RELEASE_COMMIT" $PRERELEASE_FLAG --title "$ANNOUNCEMENT_TITLE" --notes-file "$RUNNER_TEMP/notes.txt" artifacts/* 2>/dev/null || gh release upload "${{ needs.plan.outputs.tag }}" artifacts/* --clobber
 
   announce:
     needs:
