@@ -629,6 +629,9 @@ impl DocumentViewport {
         on_drag_start: impl Fn(&mut V, usize, Point<Pixels>, &mut Window, &mut Context<V>)
         + 'static
         + Copy,
+        on_drag_move: impl Fn(&mut V, usize, Point<Pixels>, &mut Window, &mut Context<V>)
+        + 'static
+        + Copy,
     ) -> AnyElement {
         let primary = cx.theme().primary;
         let border = cx.theme().border;
@@ -1107,6 +1110,9 @@ impl DocumentViewport {
             .overflow_hidden()
             .cursor_text()
             .on_mouse_down(MouseButton::Left, down_listener)
+            .on_mouse_move(cx.listener(move |v, event: &MouseMoveEvent, w, cx| {
+                on_drag_move(v, page_idx, event.position, w, cx);
+            }))
             .child(card_content)
             .child(selection_overlay)
             .child(page_badge)
@@ -1150,7 +1156,8 @@ impl DocumentViewport {
 
         match self.layout_mode {
             PageLayoutMode::SinglePage => {
-                let card = self.render_page_card(cx, cur_page.min(total - 1), on_drag_start);
+                let card =
+                    self.render_page_card(cx, cur_page.min(total - 1), on_drag_start, on_drag_move);
                 div()
                     .id("canvas-single-scroll")
                     .flex()
@@ -1182,9 +1189,11 @@ impl DocumentViewport {
                 let (left_idx, right_idx) =
                     two_page_spread_pages(cur_page, total, self.standalone_cover);
 
-                let left_card = self.render_page_card(cx, left_idx.min(total - 1), on_drag_start);
-                let right_card = right_idx
-                    .map(|r_idx| self.render_page_card(cx, r_idx.min(total - 1), on_drag_start));
+                let left_card =
+                    self.render_page_card(cx, left_idx.min(total - 1), on_drag_start, on_drag_move);
+                let right_card = right_idx.map(|r_idx| {
+                    self.render_page_card(cx, r_idx.min(total - 1), on_drag_start, on_drag_move)
+                });
 
                 div()
                     .id("canvas-twopage-scroll")
@@ -1239,7 +1248,7 @@ impl DocumentViewport {
                         div()
                             .flex_none()
                             .h(strip.slot_height)
-                            .child(self.render_page_card(cx, idx, on_drag_start))
+                            .child(self.render_page_card(cx, idx, on_drag_start, on_drag_move))
                             .into_any_element()
                     })
                     .collect();
