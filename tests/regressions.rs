@@ -1,8 +1,9 @@
 use gpui_kit::RenderImage;
+use gpui_kit::gpui::px;
 use pdfbull::commands::PdfCommand;
 use pdfbull::models::next_doc_id;
 use pdfbull::pdf_engine::DocumentStore;
-use pdfbull::ui_gpui::canvas::DocumentViewport;
+use pdfbull::ui_gpui::canvas::{DocumentViewport, rotated_rect_to_overlay_space};
 use pdfbull::ui_gpui::dialogs::ActiveDialog;
 use pdfbull::ui_gpui::log_console::LogConsoleState;
 use pdfbull::ui_gpui::ribbon::PageLayoutMode;
@@ -306,6 +307,79 @@ fn test_scroll_to_page_and_visible_page_agree() {
 }
 
 #[test]
+fn test_scroll_to_page_and_visible_page_agree_for_short_pages() {
+    // Regression: `calculate_visible_page_continuous` inverted
+    // `page_top_in_content` with `+ CANVAS_PADDING_Y` instead of `-`. The test
+    // above only ever uses 842pt pages, where a slot is far taller than twice
+    // the padding and the two signs agree; a short slot (small page at a low
+    // zoom) made `+ PADDING` add a whole page, so `scroll_to_page(N)` read back
+    // as `N + 1`.
+    let mut vp = DocumentViewport::new();
+    vp.page_width = 595.0;
+    vp.page_height = 20.0;
+    vp.layout_mode = PageLayoutMode::Continuous;
+    vp.total_pages = 50;
+
+    for zoom in [0.5f32, 1.0, 2.0, 4.0] {
+        vp.zoom = zoom;
+        for page in [0usize, 1, 5, 49] {
+            vp.scroll_to_page(page);
+            assert_eq!(vp.current_page, page);
+            let back = vp.calculate_visible_page_continuous();
+            assert_eq!(
+                back, page,
+                "at zoom {zoom}, scrolling to page {page} reads back as page {back}"
+            );
+        }
+    }
+}
+
+#[test]
+fn test_overlay_rect_rotation_matches_the_quarter_turn_matrices() {
+    use pdfbull::ui_gpui::canvas::{overlay_rect_in_rotated_space, rotated_rect_to_overlay_space};
+
+    // A 90 degree turn maps a top-left overlay rect onto the *height* edge:
+    // zpdf's matrix `(0,-1,1,0,0,W)` composed with the renderer's y-flip gives
+    // `(H - y - h, x, h, w)`. On a 100x100 page, (10,20,30,5) -> (75,10,5,30).
+    // The 90 and 270 arms used to be transposed, mirroring overlays on every
+    // quarter-turn page.
+    assert_eq!(
+        overlay_rect_in_rotated_space(10.0, 20.0, 30.0, 5.0, 100.0, 100.0, 90),
+        (75.0, 10.0, 5.0, 30.0)
+    );
+    // 270 degrees is `(y, W - x - w, h, w)` -> (20, 60, 5, 30).
+    assert_eq!(
+        overlay_rect_in_rotated_space(10.0, 20.0, 30.0, 5.0, 100.0, 100.0, 270),
+        (20.0, 60.0, 5.0, 30.0)
+    );
+    // 180 degrees mirrors both axes and keeps the dimensions.
+    assert_eq!(
+        overlay_rect_in_rotated_space(10.0, 20.0, 30.0, 5.0, 100.0, 100.0, 180),
+        (60.0, 75.0, 30.0, 5.0)
+    );
+
+    // Forward and inverse must round-trip exactly for every quarter turn on a
+    // non-square page — the property hit-testing relies on.
+    let (pw, ph) = (595.0f32, 842.0f32);
+    let (x, y, w, h) = (37.0f32, 120.0, 210.0, 44.0);
+    for rotation in [0, 90, 180, 270] {
+        let (rx, ry, rw, rh) = overlay_rect_in_rotated_space(x, y, w, h, pw, ph, rotation);
+        let (bx, by, bw, bh) = rotated_rect_to_overlay_space(rx, ry, rw, rh, pw, ph, rotation);
+        for (got, want, axis) in [
+            (bx, x, "x"),
+            (by, y, "y"),
+            (bw, w, "width"),
+            (bh, h, "height"),
+        ] {
+            assert!(
+                (got - want).abs() < 1e-4,
+                "rotation {rotation}: {axis} round-tripped to {got}, expected {want}"
+            );
+        }
+    }
+}
+
+#[test]
 fn test_decoded_image_cache_is_bounded() {
     // Regression: `ContentInterpreter::new` inherits `ParseLimits::default()`,
     // whose `max_image_cache_bytes` is 1 GiB, and the engine hands it a
@@ -413,6 +487,82 @@ fn test_document_store_image_cache_stays_bounded() {
             store.image_cache_bytes()
         );
     }
+}
+
+#[test]
+fn test_minified_scan_is_retained_at_its_draw_footprint() {
+    // Regression: the CPU backend box-filters an image to its device footprint
+    // before sampling it, but the interpreter only filters up front when it is
+    // told the render scale (`ContentInterpreter::with_image_downscale`). The
+    // engine asks `CpuRenderer::raster_scale` and passes the answer, so a scan
+    // drawn thumbnail-small is retained in the document-lifetime cache at its
+    // footprint rather than at its full decoded size — the same retention that
+    // `with_image_cache_limit` bounds, one level down.
+    //
+    // Without that wiring a 1000x1000 RGB source is retained in full (~3 MB) to
+    // paint a single 40x40 pt rect at scale 1.0.
+    let (src_w, src_h) = (1000u32, 1000u32);
+    let pixels: Vec<u8> = (0..u64::from(src_w) * u64::from(src_h))
+        .flat_map(|i| {
+            let v = (i % 251) as u8;
+            [v, v / 2, 255u8.wrapping_sub(v)]
+        })
+        .collect();
+
+    let mut builder = zpdf_writer::DocumentBuilder::new();
+    let page = builder.add_page(200.0, 200.0);
+    builder
+        .add_image(
+            page,
+            zpdf_writer::ImageData::Rgb8 {
+                width: src_w,
+                height: src_h,
+                pixels,
+            },
+            72.0,
+            72.0,
+            40.0,
+            40.0,
+        )
+        .expect("the image must embed");
+    let bytes = builder.build().expect("the builder must produce a PDF");
+
+    let dir = tempfile::tempdir().expect("temp dir");
+    let path = dir.path().join("minified_scan.pdf");
+    std::fs::write(&path, &bytes).expect("the generated PDF must be writable");
+
+    let cache = pdfbull::pdf_engine::create_render_cache(8, 32 * 1024 * 1024);
+    let mut store = DocumentStore::new(cache);
+    let doc_id = next_doc_id();
+    let opened = store
+        .open_document(&path.to_string_lossy(), None, doc_id)
+        .expect("the generated document must open");
+    assert_eq!(opened.page_count, 1);
+
+    let options = pdfbull::pdf_engine::RenderOptions {
+        scale: 1.0,
+        rotation: 0,
+        filter: pdfbull::pdf_engine::RenderFilter::None,
+        auto_crop: false,
+        quality: pdfbull::pdf_engine::RenderQuality::Medium,
+    };
+    let rendered = store
+        .render_page(doc_id, 0, options)
+        .expect("the page must render");
+    assert!(rendered.width > 0 && rendered.height > 0);
+
+    let source_bytes = u64::from(src_w) * u64::from(src_h) * 3;
+    let retained = store.image_cache_bytes_used(doc_id);
+    assert!(
+        retained > 0,
+        "no decoded image was retained, so this test is not exercising the cache"
+    );
+    assert!(
+        retained < source_bytes / 2,
+        "the minified scan retained {retained} bytes for a 40x40 pt draw; its \
+         full-resolution source is {source_bytes} bytes, so the footprint filter \
+         did not engage"
+    );
 }
 
 #[test]
@@ -1111,6 +1261,7 @@ fn test_close_to_right_clamps_an_out_of_range_index() {
             title: format!("doc{n}.pdf"),
             path: None,
             is_modified: false,
+            page_rotations: std::collections::HashMap::new(),
         });
     }
     assert_eq!(tabs.tabs.len(), 3);
@@ -1272,6 +1423,588 @@ fn test_thumbnail_window_covers_the_viewport_at_every_scroll_position() {
             );
         }
     }
+}
+
+#[test]
+fn test_thumbnail_scroll_container_does_not_reapply_the_card_gap() {
+    // Regression: the thumbnail scroll container carried `.gap(THUMB_GAP)` on
+    // top of spacers and card pitches that already encode `THUMB_STRIDE`
+    // (card + gap). The flex gap is inserted between *every* child pair -- the
+    // two spacers included -- so each card sat `THUMB_GAP` below where
+    // `thumbnail_top_in_content` puts it, and the strip laid out
+    // `2 * THUMB_GAP` taller than `thumbnail_content_height` reports. The last
+    // 16px of the panel could not be scrolled to.
+    //
+    // `test_thumbnail_strip_layout_matches_scroll_maths` above only checks that
+    // the *formulae* agree with each other, and the real element tree cannot be
+    // laid out without a GPUI window, so this asserts on the source the way the
+    // canvas's Continuous-branch test does.
+    let src = std::fs::read_to_string(
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src/ui_gpui/sidebar.rs"),
+    )
+    .expect("sidebar.rs must be readable");
+
+    let start = src
+        .find(".id(\"sidebar-thumbnails-scroll\")")
+        .expect("the thumbnail scroll container must exist");
+    let end = src[start..]
+        .find(".children(thumb_cards)")
+        .map(|i| start + i)
+        .expect("the thumbnail container must mount `thumb_cards`");
+    let container = &src[start..end];
+
+    // Strip `//` comments: the explanatory notes right here talk about `.gap()`
+    // and would otherwise trip the scan.
+    let code: String = container
+        .lines()
+        .map(|l| match l.find("//") {
+            Some(i) => &l[..i],
+            None => l,
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+
+    assert!(
+        !code.contains(".gap("),
+        "the thumbnail scroll container must not add its own `.gap()`: the \
+         spacers and each card's bottom margin already encode THUMB_STRIDE"
+    );
+
+    // ...and the card must actually carry that margin, or the cards touch.
+    let card_start = src
+        .find(".h(px(THUMB_CARD_H))")
+        .expect("the thumbnail card must fix its own height");
+    let card = &src[card_start..];
+    let card_end = card.find(".into_any_element()").unwrap_or(card.len());
+    assert!(
+        card[..card_end].contains(".mb(px(THUMB_GAP))"),
+        "each thumbnail card must carry the inter-card gap as its own bottom \
+         margin, so the strip's emitted height matches thumbnail_content_height"
+    );
+}
+
+#[test]
+fn test_thumbnail_strip_emits_exactly_the_height_the_maths_reports() {
+    // The element-tree half of the same regression: model the real strip --
+    // a top spacer, `n` cards each `THUMB_CARD_H` tall plus their own
+    // `THUMB_GAP` bottom margin, and a bottom spacer -- and check it lands on
+    // `thumbnail_content_height` for every window the virtualiser can build.
+    //
+    // The bottom spacer sheds one `THUMB_GAP` because the last built card now
+    // supplies the trailing inset itself.
+    for total_pages in 1..=600usize {
+        let content = thumb_content_height(total_pages);
+        for first in 0..total_pages {
+            let last = (first + 7).min(total_pages);
+            let built = (last - first) as f32;
+
+            let top_pad = thumb_top_in_content(first);
+            let bottom_pad = THUMB_PADDING + THUMB_STRIDE * (total_pages - last) as f32 - THUMB_GAP;
+
+            // A spacer is only pushed when it is positive; with no container gap
+            // a dropped zero-height spacer changes nothing.
+            let emitted = top_pad + built * (THUMB_CARD_H + THUMB_GAP) + bottom_pad.max(0.0);
+
+            assert!(
+                (emitted - content).abs() < 0.01,
+                "{total_pages} pages, window {first}..{last}: the strip lays out \
+                 to {emitted} but the scroll maths assumes {content}"
+            );
+
+            for j in 0..(last - first) {
+                let card_top = top_pad + j as f32 * THUMB_STRIDE;
+                let expected = thumb_top_in_content(first + j);
+                assert!(
+                    (card_top - expected).abs() < 0.01,
+                    "{total_pages} pages, card {}: laid out at {card_top}, maths \
+                     says {expected}",
+                    first + j
+                );
+            }
+        }
+    }
+}
+
+#[test]
+fn test_wheel_banks_sub_threshold_deltas_until_a_page_turns() {
+    // Regression: the SinglePage / TwoPageSpread wheel arms required a *single*
+    // notch of more than 5px to turn the page. Precision touchpads send 1-3px
+    // notches, so at a page edge -- or on any page short enough to fit the
+    // viewport, where both "scroll within the page" branches are false -- those
+    // notches were dropped and scrolling could not turn the page at all.
+    let threshold = DocumentViewport::WHEEL_PAGE_TURN_THRESHOLD;
+    let notch = threshold / 5.0; // a trackpad-sized notch
+
+    // Sign convention, matching the wheel handler: a *negative* delta scrolls
+    // down (toward the next page), a positive one scrolls up.
+
+    let mut vp = DocumentViewport::new();
+    vp.total_pages = 4;
+    vp.current_page = 1;
+
+    // Four small notches in the same direction are still short of a turn...
+    for _ in 0..4 {
+        assert_eq!(
+            vp.bank_wheel_delta_at_edge(-notch, true, true),
+            None,
+            "a sub-threshold notch must bank, not turn"
+        );
+    }
+    // ...the fifth completes it.
+    assert_eq!(
+        vp.bank_wheel_delta_at_edge(-notch, true, true),
+        Some(1),
+        "{threshold}px of accumulated notches must turn to the next page"
+    );
+
+    // The turn consumes the bank, so the next turn needs a fresh notch.
+    assert_eq!(vp.bank_wheel_delta_at_edge(-notch, true, true), None);
+
+    // Notches in the other direction spend a fresh bank first.
+    let mut vp = DocumentViewport::new();
+    vp.total_pages = 4;
+    vp.current_page = 1;
+    for _ in 0..4 {
+        assert_eq!(vp.bank_wheel_delta_at_edge(notch, true, true), None);
+    }
+    assert_eq!(
+        vp.bank_wheel_delta_at_edge(notch, true, true),
+        Some(-1),
+        "reversing direction must turn back once the bank is spent"
+    );
+
+    // A mouse wheel's single large notch still turns immediately.
+    let mut vp = DocumentViewport::new();
+    vp.total_pages = 4;
+    vp.current_page = 1;
+    assert_eq!(vp.bank_wheel_delta_at_edge(-120.0, true, true), Some(1));
+    assert_eq!(vp.bank_wheel_delta_at_edge(120.0, true, true), Some(-1));
+
+    // While a turn is impossible the bank is capped at one notch, so a long
+    // scroll pressed against the first or last page cannot bank a surprise turn.
+    let mut vp = DocumentViewport::new();
+    vp.total_pages = 1;
+    vp.current_page = 0;
+    for _ in 0..50 {
+        assert_eq!(vp.bank_wheel_delta_at_edge(-notch, false, false), None);
+    }
+    assert_eq!(
+        vp.wheel_residual_y, -threshold,
+        "the bank must be capped at one notch while no turn is possible"
+    );
+    assert_eq!(
+        vp.bank_wheel_delta_at_edge(0.0, false, true),
+        Some(1),
+        "and then exactly one notch must turn when one becomes possible"
+    );
+
+    // Changing page through any other path resets the bank.
+    let mut vp = DocumentViewport::new();
+    vp.total_pages = 4;
+    vp.bank_wheel_delta_at_edge(notch, true, true);
+    vp.bank_wheel_delta_at_edge(notch, true, true);
+    assert_ne!(vp.wheel_residual_y, 0.0);
+    vp.scroll_to_page(2);
+    assert_eq!(
+        vp.wheel_residual_y, 0.0,
+        "a page change must not carry a part-banked turn across"
+    );
+}
+
+#[test]
+fn test_ocr_boxes_use_the_same_rotation_mapping_as_the_canvas() {
+    // Regression: `ocr_page` scaled OCR pixels by the *unrotated* `media_box` on
+    // both axes, while the bitmap it ran on is the page's effective (crop) box
+    // with `/Rotate` baked in. On a quarter-turned page the bitmap's axes are
+    // swapped, so every recognised word was placed somewhere else entirely --
+    // and on a cropped page the wrong box was used outright.
+    //
+    // The bitmap -> page mapping must be the exact inverse of the canvas's
+    // page -> bitmap overlay mapping, or OCR boxes and the text layer disagree.
+    let box_w = 600.0f32;
+    let box_h = 800.0f32;
+    let box_rect = (0.0f32, 0.0f32, box_w, box_h);
+
+    for rot in [0i32, 90, 180, 270, -90, 450] {
+        let normalized = rot.rem_euclid(360) / 90 * 90;
+        let (disp_w, disp_h) = if normalized == 90 || normalized == 270 {
+            (box_h, box_w)
+        } else {
+            (box_w, box_h)
+        };
+        // One point per pixel, so the "pixel" rect is already in points.
+        let bitmap = (disp_w as u32, disp_h as u32);
+
+        for (x, y, w, h) in [
+            (0.0f32, 0.0f32, 100.0f32, 20.0f32),
+            (50.0, 70.0, 10.0, 10.0),
+            (disp_w - 120.0, disp_h - 30.0, 120.0, 30.0),
+        ] {
+            let from_ocr = pdfbull::pdf_engine::rotated_bitmap_rect_to_page_space(
+                (x, y, x + w, y + h),
+                bitmap,
+                box_rect,
+                rot,
+            );
+            // The canvas works in top-left-origin layout space; the OCR helper
+            // returns PDF user space (y up), which is what `OcrWord::bbox`
+            // documents. Convert before comparing.
+            let (ox, oy0, ox1, oy1) = from_ocr;
+            let ocr_overlay = (ox, box_h - oy1, ox1 - ox, oy1 - oy0);
+            let from_canvas = rotated_rect_to_overlay_space(x, y, w, h, box_w, box_h, rot);
+
+            for (a, b) in [
+                (ocr_overlay.0, from_canvas.0),
+                (ocr_overlay.1, from_canvas.1),
+                (ocr_overlay.2, from_canvas.2),
+                (ocr_overlay.3, from_canvas.3),
+            ] {
+                assert!(
+                    (a - b).abs() < 0.01,
+                    "rotation {rot}, rect ({x}, {y}, {w}, {h}): OCR says {ocr_overlay:?} \
+                     but the canvas inverse says {from_canvas:?}"
+                );
+            }
+        }
+    }
+
+    // And a crop box with a non-zero origin is honoured: the whole bitmap is
+    // the whole effective box, not the media box.
+    let cropped = (10.0f32, 20.0f32, 110.0f32, 220.0f32);
+    let full = pdfbull::pdf_engine::rotated_bitmap_rect_to_page_space(
+        (0.0, 0.0, 100.0, 200.0),
+        (100, 200),
+        cropped,
+        0,
+    );
+    assert_eq!(full, cropped, "the bitmap covers the effective box exactly");
+}
+
+#[test]
+fn test_search_and_the_text_layer_share_one_coordinate_space() {
+    // Regression: `search` baked the page's `/Rotate` into the spans
+    // (`with_page_rotation`) while `extract_text_items` did not, so a hit and the
+    // word under the cursor lived in different coordinate systems. Search results
+    // *looked* right only because the canvas painted them without rotating --
+    // the very same path that then mispainted every unrotated annotation on a
+    // rotated page. Everything overlay-ish must now live in unrotated model
+    // space and be rotated at paint time.
+    let src = std::fs::read_to_string(
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src/pdf_engine.rs"),
+    )
+    .expect("pdf_engine.rs must be readable");
+
+    let start = src
+        .find("pub fn search(&mut self")
+        .expect("`search` must exist");
+    let end = src[start..]
+        .find("\n    pub fn ")
+        .map(|i| start + i)
+        .unwrap_or(src.len());
+    let search = &src[start..end];
+
+    assert!(
+        !search.contains("with_page_rotation"),
+        "`search` must not bake `/Rotate` into the spans; the canvas rotates at \
+         paint time, and search results must share the text layer's space"
+    );
+    assert!(
+        search.contains("eff_box.y1 - bounds.y1"),
+        "`search` must convert into the same top-down box space `extract_text_items` uses"
+    );
+
+    let av = std::fs::read_to_string(
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src/ui_gpui/app_view.rs"),
+    )
+    .expect("app_view.rs must be readable");
+    let push = av
+        .find("this.viewport.annotations.push(crate::models::Annotation {")
+        .expect("the annotation commit site must exist");
+    let before = &av[..push];
+    let rotate_at = before
+        .rfind("rotated_rect_to_overlay_space")
+        .expect("a committed annotation must be un-rotated before it is stored");
+    assert!(
+        before[rotate_at..push].contains("effective_rotation(commit_page)"),
+        "the annotation commit must invert the page's rotation using the viewport's \
+         own effective rotation"
+    );
+}
+
+#[test]
+fn test_continuous_pitch_covers_a_quarter_turned_page() {
+    // Regression: `/Rotate` is per page, and a quarter-turned card is as tall as
+    // the page is *wide*. The strip lays out one uniform slot per page, so the
+    // slot must be the tallest card in the document — otherwise the scroll maths
+    // and the layout disagree, the strip runs long, and the bottom pages can
+    // never be scrolled into view.
+    // Landscape document.
+    let mut landscape = DocumentViewport::new();
+    landscape.page_width = 842.0;
+    landscape.page_height = 595.0;
+    landscape.zoom = 1.0;
+    landscape.layout_mode = PageLayoutMode::Continuous;
+    landscape.total_pages = 4;
+    landscape.current_page = 0;
+    let landscape_pitch = landscape.continuous_item_height();
+
+    // A portrait page stands inside it: it is taller than every landscape card,
+    // so the uniform slot pitch must widen to cover it.
+    let mut mixed = DocumentViewport::new();
+    mixed.page_width = 842.0;
+    mixed.page_height = 595.0;
+    mixed.zoom = 1.0;
+    mixed.layout_mode = PageLayoutMode::Continuous;
+    mixed.total_pages = 4;
+    mixed.current_page = 0;
+    mixed.page_rotations.insert(2, 90);
+    let mixed_pitch = mixed.continuous_item_height();
+
+    assert!(
+        (mixed_pitch - landscape_pitch) > px(1.0),
+        "a portrait page in a landscape document must widen the pitch: \
+         landscape {landscape_pitch:?}, mixed {mixed_pitch:?}"
+    );
+    assert_eq!(mixed_pitch, px(842.0 + 24.0));
+    assert_eq!(mixed.page_display_height(2), 842.0);
+    assert_eq!(mixed.page_display_height(0), 595.0);
+
+    // The invariant the uniform slot exists for: it must fit every card, so the
+    // layout and the scroll maths can never disagree. `render_page_card` sizes
+    // itself from the same `display_size`.
+    for page in 0..mixed.total_pages {
+        assert!(
+            px(mixed.display_size(page).1 * mixed.zoom) <= mixed_pitch,
+            "the slot must fit page {page} ({} tall, pitch {mixed_pitch:?})",
+            mixed.display_size(page).1
+        );
+        assert_eq!(
+            mixed.display_size(page).1,
+            mixed.page_display_height(page),
+            "the height accessor must agree with `display_size`"
+        );
+    }
+
+    // 180 and 360 keep the same aspect, so they must not widen the pitch.
+    mixed.page_rotations.clear();
+    mixed.page_rotations.insert(0, 180);
+    mixed.page_rotations.insert(3, 360);
+    assert_eq!(mixed.continuous_item_height(), landscape_pitch);
+    assert_eq!(mixed.page_display_height(0), 595.0);
+
+    // Zoom still scales the pitch.
+    mixed.page_rotations.clear();
+    mixed.page_rotations.insert(2, 90);
+    mixed.zoom = 2.0;
+    assert_eq!(mixed.continuous_item_height(), px(842.0 * 2.0 + 24.0));
+
+    // The user's own rotation drives the pitch too: at 90° an upright page is as
+    // tall as it is *wide*, so the pitch shrinks.
+    let mut rotated = DocumentViewport::new();
+    rotated.page_width = 595.0;
+    rotated.page_height = 842.0;
+    rotated.zoom = 2.0;
+    rotated.layout_mode = PageLayoutMode::Continuous;
+    rotated.total_pages = 2;
+    rotated.current_page = 0;
+    rotated.rotation = 90;
+    assert_eq!(
+        rotated.continuous_item_height(),
+        px(595.0 * 2.0 + 24.0),
+        "the view rotation must widen or narrow the slot pitch like a page's own"
+    );
+}
+
+#[test]
+fn test_page_organizer_rotations_follow_the_card_and_selection_follows_a_drag() {
+    // Regression: `page_rotations` was keyed by *slot*, so a page's rotation was
+    // dropped on the first reorder/delete/undo. And `reorder_card` only moved
+    // the dragged card's own selection entry, leaving every other selected slot
+    // pointing at whichever card shifted into its place.
+    let mut st = pdfbull::organize::PageOrganizerState::new(6);
+
+    // Rotate the cards at slots 1 and 3 (pages 1 and 3).
+    st.selected_pages.insert(1);
+    st.selected_pages.insert(3);
+    st.rotate_selected(90);
+    assert_eq!(st.page_rotations.get(&1), Some(&90));
+    assert_eq!(st.page_rotations.get(&3), Some(&90));
+
+    // Drag slot 1 to slot 4: order becomes [0, 2, 3, 4, 1, 5].
+    st.reorder_card(1, 4);
+    assert_eq!(st.page_order, vec![0, 2, 3, 4, 1, 5]);
+    assert_eq!(
+        st.page_rotations.get(&1),
+        Some(&90),
+        "the rotation must follow its card, not the slot it left"
+    );
+    assert_eq!(st.page_rotations.get(&3), Some(&90));
+
+    // Selection follows the move: page 1 went 1 -> 4, page 3 went 3 -> 2.
+    assert!(
+        st.selected_pages.contains(&4),
+        "the dragged card stays selected"
+    );
+    assert!(
+        st.selected_pages.contains(&2),
+        "a card the drag passed over keeps its selection"
+    );
+    assert!(!st.selected_pages.contains(&1));
+    assert!(!st.selected_pages.contains(&3));
+
+    // Drag backwards: slot 4 (page 1) back to slot 1.
+    st.clear_selection();
+    st.selected_pages.insert(4);
+    st.selected_pages.insert(2);
+    st.reorder_card(4, 1);
+    assert_eq!(st.page_order, vec![0, 1, 2, 3, 4, 5]);
+    assert!(st.selected_pages.contains(&1));
+    assert!(
+        st.selected_pages.contains(&3),
+        "a backwards drag shifts the slots it opens up, not closes"
+    );
+
+    // Rotating and undoing a page that has moved still restores its rotation.
+    st.clear_selection();
+    st.selected_pages.insert(1);
+    st.rotate_selected(90);
+    assert_eq!(st.page_rotations.get(&1), Some(&180));
+    assert!(st.undo());
+    assert_eq!(
+        st.page_rotations.get(&1),
+        Some(&90),
+        "undo must restore the rotation the page had before the move"
+    );
+    assert_eq!(st.page_rotations.get(&3), Some(&90));
+}
+
+#[test]
+fn test_form_calculations_resolve_dependencies_and_write_every_variant() {
+    use pdfbull::form_scripting::PdfFormScriptEngine;
+    use pdfbull::models::{FormField, FormFieldVariant};
+    use std::collections::HashMap;
+
+    // A chain: F2 needs F1, F3 needs F2, ... `calc_scripts` is a `HashMap`, so a
+    // single pass evaluates them in an arbitrary order and can read a field
+    // before it has been computed. With eight links, the chance that one
+    // arbitrary order happens to be a valid one is 1/8!.
+    let names: Vec<String> = (1..=8).map(|n| format!("F{n}")).collect();
+    let mut fields: Vec<FormField> = names
+        .iter()
+        .map(|name| FormField {
+            name: name.clone(),
+            variant: FormFieldVariant::Text {
+                value: String::new(),
+            },
+            page: 0,
+        })
+        .collect();
+    // The head of the chain is a literal the scripts read but never write.
+    fields[0].variant = FormFieldVariant::Text {
+        value: "1".to_string(),
+    };
+
+    let mut scripts = HashMap::new();
+    for n in 2..=8 {
+        scripts.insert(
+            format!("F{n}"),
+            format!("event.value = this.getField(\"F{}\").value + 1;", n - 1),
+        );
+    }
+    // A checkbox target: a calculation aimed at a non-`Text` field must land.
+    fields.push(FormField {
+        name: "Approved".to_string(),
+        variant: FormFieldVariant::Checkbox {
+            is_checked: false,
+            on_value: Some("Yes".to_string()),
+        },
+        page: 0,
+    });
+    scripts.insert(
+        "Approved".to_string(),
+        r#"AFSimple_Calculate("SUM", ["F8"])"#.to_string(),
+    );
+
+    let mut engine = PdfFormScriptEngine::new(&fields);
+    engine.recalculate_all(&mut fields, &scripts);
+
+    for n in 1..=8 {
+        let name = format!("F{n}");
+        let FormFieldVariant::Text { value } =
+            &fields.iter().find(|f| f.name == name).unwrap().variant
+        else {
+            panic!("{name} is not a text field");
+        };
+        assert_eq!(
+            *value,
+            n.to_string(),
+            "F{n} was evaluated before the field it depends on"
+        );
+    }
+    assert!(
+        matches!(
+            fields
+                .iter()
+                .find(|f| f.name == "Approved")
+                .unwrap()
+                .variant,
+            FormFieldVariant::Checkbox {
+                is_checked: true,
+                ..
+            }
+        ),
+        "a calculation aimed at a checkbox must not be silently dropped"
+    );
+}
+
+#[test]
+fn test_form_engine_keeps_text_verbatim_and_reports_unknown_operations() {
+    use pdfbull::form_scripting::PdfFormScriptEngine;
+    use pdfbull::models::{FormField, FormFieldVariant};
+
+    let mut engine = PdfFormScriptEngine::new(&[
+        FormField {
+            name: "Code".to_string(),
+            variant: FormFieldVariant::Text {
+                value: "007".to_string(),
+            },
+            page: 0,
+        },
+        FormField {
+            name: "Price".to_string(),
+            variant: FormFieldVariant::Text {
+                value: "3.5".to_string(),
+            },
+            page: 0,
+        },
+    ]);
+
+    // Regression: the engine coerced numeric-looking text to a number when it
+    // was built, so reading the field back reformatted it -- "007" came out as
+    // "7" and "3.5" as "3.50". A script must see the value the field holds.
+    assert_eq!(engine.evaluate_calculation("Code", "").unwrap(), "007");
+    assert_eq!(engine.evaluate_calculation("Price", "").unwrap(), "3.5");
+
+    // Regression: an unrecognised `AFSimple_Calculate` operation evaluated to
+    // `0.0` -- a perfectly plausible sum, and therefore silent. It now errors.
+    let err = engine
+        .evaluate_calculation("Code", r#"AFSimple_Calculate("MEDIAN", ["Price"])"#)
+        .expect_err("an unsupported operation must not silently evaluate to 0");
+    assert!(
+        err.contains("MEDIAN"),
+        "the error should name the operation: {err}"
+    );
+
+    // Arithmetic still coerces: the text is read as a number for the maths.
+    assert_eq!(
+        engine
+            .evaluate_calculation(
+                "Price",
+                r#"event.value = this.getField("Price").value * 2;"#
+            )
+            .unwrap(),
+        "7"
+    );
 }
 
 #[test]
@@ -1745,4 +2478,57 @@ fn test_byte_range_coverage_struct_exists() {
     };
     assert!(coverage.covers_whole_document);
     assert_eq!(coverage.ranges.len(), 1);
+}
+
+#[cfg(windows)]
+#[test]
+fn test_single_instance_forwarding_reaches_the_ui_channel() {
+    // A second launch is supposed to connect to the running instance and hand
+    // it its command line, not start a second copy. Nothing bound the endpoint
+    // before, so the connect always failed, the second copy fell through and
+    // started anyway, and the arguments were never delivered.
+    use interprocess::local_socket::{GenericNamespaced, Stream, prelude::*};
+    use std::io::Write;
+
+    // If a real PDFbull instance is running on this machine the mutex reports
+    // "already exists" and this process cannot own the listener: skip rather
+    // than fail on the environment.
+    match pdfbull::platform::ensure_single_instance(&["pdfbull".to_string()]) {
+        Ok(false) => {}
+        Ok(true) => return,
+        Err(e) => panic!("ensure_single_instance failed: {e}"),
+    }
+
+    let mut forwarded = pdfbull::platform::take_forwarded_args()
+        .expect("the primary instance must expose a forwarding channel");
+
+    let name = "pdfbull-single-instance.sock"
+        .to_ns_name::<GenericNamespaced>()
+        .expect("the endpoint name must resolve");
+    let mut stream = Stream::connect(name).expect("the listener must be accepting");
+    stream
+        .write_all(br#"["pdfbull","C:\\docs\\a.pdf"]"#)
+        .expect("the payload must be writable");
+    stream
+        .write_all(b"\n")
+        .expect("the terminator must be writable");
+    stream.flush().expect("the payload must flush");
+
+    assert_eq!(
+        {
+            // Bounded: a receiver that never gets its line (because the bind
+            // failed) must fail the test rather than hang it.
+            let runtime = tokio::runtime::Builder::new_current_thread()
+                .enable_time()
+                .build()
+                .expect("a test runtime must build");
+            runtime.block_on(async {
+                tokio::time::timeout(std::time::Duration::from_secs(5), forwarded.recv())
+                    .await
+                    .expect("the forwarded command line must arrive within 5s")
+            })
+        },
+        Some(vec!["pdfbull".to_string(), r"C:\docs\a.pdf".to_string()]),
+        "the second instance's command line must arrive at the UI"
+    );
 }

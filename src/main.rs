@@ -4,19 +4,56 @@ use pdfbull::platform;
 use tracing_subscriber::layer::SubscriberExt;
 use tracing_subscriber::util::SubscriberInitExt;
 
+/// How many days of rotated `pdfbull.log.*` files to keep.
+///
+/// `tracing_appender` has no size-based rotation — `rolling::never` grows the
+/// log without bound, and `rolling::daily` only names one file per day without
+/// ever removing them. The files are reaped at startup instead.
+const LOG_RETENTION_DAYS: u64 = 7;
+
+/// Delete rotated log files older than [`LOG_RETENTION_DAYS`].
+fn prune_old_logs(config_dir: &std::path::Path) {
+    let Ok(entries) = std::fs::read_dir(config_dir) else {
+        return;
+    };
+    let Some(cutoff) = std::time::SystemTime::now().checked_sub(std::time::Duration::from_secs(
+        LOG_RETENTION_DAYS * 24 * 60 * 60,
+    )) else {
+        return;
+    };
+    for entry in entries.flatten() {
+        let name = entry.file_name();
+        let Some(name) = name.to_str() else {
+            continue;
+        };
+        // `rolling::daily` names its files `<prefix>.YYYY-MM-DD`.
+        if !name.starts_with("pdfbull.log.") {
+            continue;
+        }
+        if let Ok(meta) = entry.metadata()
+            && meta.modified().is_ok_and(|t| t < cutoff)
+        {
+            let _ = std::fs::remove_file(entry.path());
+        }
+    }
+}
+
 fn main() {
     let config_dir = pdfbull::storage::get_config_dir();
     let _ = std::fs::create_dir_all(&config_dir);
-    let log_path = config_dir.join("pdfbull.log");
     let panic_path = config_dir.join("panic_out.log");
 
-    let log_path_clone = log_path.clone();
     let panic_path_clone = panic_path.clone();
 
     let prev_panic_hook = std::panic::take_hook();
     human_panic::setup_panic!();
     let human_panic_hook = std::panic::take_hook();
 
+    // The panic hook writes its own crash report to `panic_out.log`. It used to
+    // also append the same message to `pdfbull.log` through a second, raw file
+    // handle. That duplicated the `tracing::error!` line the appender below has
+    // already written, and the two unsynchronised handles could interleave (or
+    // truncate) each other's output.
     std::panic::set_hook(Box::new(move |info| {
         let msg = if let Some(s) = info.payload().downcast_ref::<&str>() {
             *s
@@ -36,19 +73,15 @@ fn main() {
         );
         tracing::error!(target: "panic", "PANIC at {}: {}\nBacktrace:\n{:?}", location, msg, backtrace);
         let _ = std::fs::write(&panic_path_clone, &panic_msg);
-        if let Ok(mut f) = std::fs::OpenOptions::new()
-            .create(true)
-            .append(true)
-            .open(&log_path_clone)
-        {
-            use std::io::Write;
-            let _ = f.write_all(panic_msg.as_bytes());
-        }
         human_panic_hook(info);
         prev_panic_hook(info);
     }));
 
-    let file_appender = tracing_appender::rolling::never(&config_dir, "pdfbull.log");
+    // The tracing appender only offers hourly/daily/never rotation, so the
+    // rotated files are reaped here instead of letting them accumulate forever.
+    prune_old_logs(&config_dir);
+
+    let file_appender = tracing_appender::rolling::daily(&config_dir, "pdfbull.log");
     let (non_blocking_file, guard) = tracing_appender::non_blocking(file_appender);
     let _guard = Box::leak(Box::new(guard));
 
@@ -107,4 +140,10 @@ fn main() {
 
     tracing::info!("Starting PDFbull with GPUI-Kit presentation engine...");
     pdfbull::ui_gpui::run_gpui_app();
+    // Config writes run on a background thread by design, so anything still
+    // queued when the window loop returns was lost on exit — most visibly a
+    // `session.json`, `settings.json` or `recent_files.json` change made just
+    // before quitting. `flush_config_writes` exists for exactly this and had no
+    // caller.
+    pdfbull::storage::flush_config_writes();
 }

@@ -16,6 +16,24 @@ pub enum OrganizeCommand {
     InsertBlank { inserted_index: usize },
 }
 
+/// Where a slot lands when a card is dragged from `from_index` to `to_index`.
+///
+/// The dragged card itself lands at `to_index`; every slot it passes over shifts
+/// by one to close the gap it left (or open the one it fills). Selection and the
+/// Shift-click anchor are stored as slots, so both must be remapped after a
+/// drag, or they end up pointing at the wrong cards.
+fn remap_slot(slot: usize, from_index: usize, to_index: usize) -> usize {
+    if slot == from_index {
+        to_index
+    } else if from_index < to_index && slot > from_index && slot <= to_index {
+        slot - 1
+    } else if to_index < from_index && slot >= to_index && slot < from_index {
+        slot + 1
+    } else {
+        slot
+    }
+}
+
 /// State controller for the Interactive "Organize Pages" Card Grid (Light-Table Mode).
 #[derive(Debug, Clone)]
 pub struct PageOrganizerState {
@@ -23,7 +41,11 @@ pub struct PageOrganizerState {
     pub total_pages: usize,
     /// Current logical ordering of pages (index -> original document page).
     pub page_order: Vec<usize>,
-    /// Accumulated page rotations (page_index -> angle in degrees: 0, 90, 180, 270).
+    /// Accumulated page rotations (page id -> angle in degrees: 0, 90, 180, 270).
+    ///
+    /// Keyed by the page's own id (`page_order[slot]`), not by slot: the slot is
+    /// where the card happens to sit right now, so keying by it lost the rotation
+    /// the moment the card was reordered, deleted or undone.
     pub page_rotations: HashMap<usize, i32>,
     /// Currently selected pages in the light-table card grid.
     pub selected_pages: BTreeSet<usize>,
@@ -114,12 +136,17 @@ impl PageOrganizerState {
             return;
         }
 
+        // Keyed by page id so a rotation follows its card through reorder,
+        // delete and undo. The previous version keyed by slot and so rotated
+        // whichever card happened to be sitting there after a move.
         let mut deltas = HashMap::new();
-        for &page_idx in &self.selected_pages {
-            let current = *self.page_rotations.get(&page_idx).unwrap_or(&0);
-            let updated = (current + delta_degrees).rem_euclid(360);
-            deltas.insert(page_idx, (current, updated));
-            self.page_rotations.insert(page_idx, updated);
+        for &slot in &self.selected_pages {
+            if let Some(&page) = self.page_order.get(slot) {
+                let current = *self.page_rotations.get(&page).unwrap_or(&0);
+                let updated = (current + delta_degrees).rem_euclid(360);
+                deltas.insert(page, (current, updated));
+                self.page_rotations.insert(page, updated);
+            }
         }
 
         self.undo_stack.push(OrganizeCommand::Rotate { deltas });
@@ -166,9 +193,17 @@ impl PageOrganizerState {
         self.page_order.insert(to_index, moved);
         let new_order = self.page_order.clone();
 
-        // Update selection if the moved card was selected
-        if self.selected_pages.remove(&from_index) {
-            self.selected_pages.insert(to_index);
+        // Selection and the Shift-click anchor are slots, so they have to be
+        // remapped with the move. Only following the dragged card was not
+        // enough: every selected slot it passed over stayed put and started
+        // selecting the card that shifted into its place.
+        self.selected_pages = self
+            .selected_pages
+            .iter()
+            .map(|&slot| remap_slot(slot, from_index, to_index))
+            .collect();
+        if let Some(anchor) = self.selection_anchor {
+            self.selection_anchor = Some(remap_slot(anchor, from_index, to_index));
         }
 
         self.undo_stack.push(OrganizeCommand::Reorder {

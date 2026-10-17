@@ -37,8 +37,11 @@ impl TiledPageGeometry {
         let total_w = ((page_width_pt * scale).ceil() as u32).max(1);
         let total_h = ((page_height_pt * scale).ceil() as u32).max(1);
 
-        let cols = (total_w + TILE_DIMENSION - 1) / TILE_DIMENSION;
-        let rows = (total_h + TILE_DIMENSION - 1) / TILE_DIMENSION;
+        // `div_ceil`, not `(n + D - 1) / D`: the latter overflows for a page
+        // box near `u32::MAX` (debug panic; release wraps to `cols == 0`, which
+        // then renders no tiles at all).
+        let cols = total_w.div_ceil(TILE_DIMENSION);
+        let rows = total_h.div_ceil(TILE_DIMENSION);
 
         Self {
             total_width_px: total_w,
@@ -78,9 +81,9 @@ impl TiledPageGeometry {
         let max_y = ((viewport_y + viewport_h).ceil() as u32).min(self.total_height_px);
 
         let start_col = min_x / self.tile_size;
-        let end_col = (max_x + self.tile_size - 1) / self.tile_size;
+        let end_col = max_x.div_ceil(self.tile_size);
         let start_row = min_y / self.tile_size;
-        let end_row = (max_y + self.tile_size - 1) / self.tile_size;
+        let end_row = max_y.div_ceil(self.tile_size);
 
         let mut tiles = Vec::new();
         for r in start_row..end_row.min(self.rows) {

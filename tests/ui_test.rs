@@ -31,6 +31,7 @@ fn test_tabs_state_management() {
         title: "doc1.pdf".to_string(),
         path: Some(PathBuf::from("doc1.pdf")),
         is_modified: false,
+        page_rotations: std::collections::HashMap::new(),
     });
     tabs_state.tabs.push(DocumentTab {
         id: 1,
@@ -38,6 +39,7 @@ fn test_tabs_state_management() {
         title: "doc2.pdf".to_string(),
         path: Some(PathBuf::from("doc2.pdf")),
         is_modified: true,
+        page_rotations: std::collections::HashMap::new(),
     });
     tabs_state.tabs.push(DocumentTab {
         id: 2,
@@ -45,6 +47,7 @@ fn test_tabs_state_management() {
         title: "Sample.pdf".to_string(),
         path: None,
         is_modified: false,
+        page_rotations: std::collections::HashMap::new(),
     });
 
     assert_eq!(tabs_state.tabs.len(), 3);
@@ -911,10 +914,7 @@ fn test_ribbon_actions_cover_the_new_tools() {
     assert_ne!(RibbonAction::Properties, RibbonAction::ExtractPages);
 
     let action = RibbonAction::ExtractTablesPlain;
-    assert_ne!(
-        RibbonAction::ExtractTablesPlain,
-        RibbonAction::ExtractTables
-    );
+    assert_ne!(action, RibbonAction::ExtractTables);
 
     // `Debug` must still be derivable for every variant (tracing logs them).
     assert_eq!(format!("{:?}", RibbonAction::Properties), "Properties");

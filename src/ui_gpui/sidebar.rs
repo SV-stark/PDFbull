@@ -355,9 +355,16 @@ impl SidebarState {
                 // Derived from the same helpers the scroll maths uses, so the
                 // spacers and the window can never disagree about where a page
                 // sits.
+                //
+                // Each card supplies its own trailing gap (below), so
+                // `thumbnail_content_height` counts only `n - 1` gaps and the
+                // last built card contributes `THUMB_CARD_H`, not a whole stride.
+                // The bottom spacer therefore sheds the one strided gap the
+                // final card does not need.
                 let top_pad = thumbnail_top_in_content(first);
-                let bottom_pad =
-                    THUMB_PADDING + THUMB_STRIDE * total_pages.saturating_sub(last) as f32;
+                let bottom_pad = THUMB_PADDING
+                    + THUMB_STRIDE * total_pages.saturating_sub(last) as f32
+                    - THUMB_GAP;
 
                 let mut thumb_cards: Vec<AnyElement> = Vec::new();
                 if top_pad > 0.0 {
@@ -378,7 +385,17 @@ impl SidebarState {
                             // pitch equal THUMB_STRIDE. Nothing in the card may
                             // be sized by its content, or the strip grows past
                             // what the scroll maths expects.
+                            //
+                            // The inter-card gap is this card's own bottom margin
+                            // rather than a `.gap()` on the scroll container. The
+                            // spacers already count `THUMB_STRIDE` (card + gap),
+                            // so a container gap applied a second one: every card
+                            // sat `THUMB_GAP` below `thumbnail_top_in_content` and
+                            // the strip emitted `2 * THUMB_GAP` more than
+                            // `thumbnail_content_height` reports, which left the
+                            // last 16px of the strip unreachable.
                             .h(px(THUMB_CARD_H))
+                            .mb(px(THUMB_GAP))
                             .p_2()
                             .rounded_md()
                             .border_1()
@@ -443,11 +460,16 @@ impl SidebarState {
                     .flex_1()
                     .min_h_0()
                     .size_full()
-                    .gap(px(THUMB_GAP))
-                    // Horizontal padding only. The vertical inset lives in the
-                    // spacers above and below: padding on this container is not
-                    // part of any spacer's height, so it made the strip 16px
-                    // taller than `thumbnail_content_height` reports.
+                    // No `.gap()` here: the inter-card gap lives on each card's
+                    // bottom margin. A container gap is counted *in addition to*
+                    // the stride the spacers and the cards encode, which shifts
+                    // every card down by `THUMB_GAP` and makes the strip
+                    // `2 * THUMB_GAP` taller than `thumbnail_content_height`
+                    // reports.
+                    //
+                    // Horizontal padding only: the vertical inset lives in the
+                    // spacers above and below, because padding on this container
+                    // is not part of any spacer's height.
                     .px_2()
                     .overflow_y_scroll()
                     .track_scroll(&self.thumb_scroll)
@@ -480,10 +502,16 @@ impl SidebarState {
                         // to document B's row *n*.
                         items.push(
                             div()
+                                // Keyed on the bookmark's target and its *title*,
+                                // not the title's length: two same-length titles
+                                // on one target page produced identical ids and
+                                // shared hover state. Lists are rebuilt from
+                                // scratch on every document switch, so
+                                // position-based ids handed document A's row *n*
+                                // retained hover state to document B's row *n*.
                                 .id(SharedString::from(format!(
                                     "bm-item-{}-{}",
-                                    target_page,
-                                    title.len()
+                                    target_page, title
                                 )))
                                 .flex()
                                 .flex_row()
@@ -920,17 +948,18 @@ impl SidebarState {
                     let mut items = Vec::new();
                     for link in self.links.iter() {
                         let info = link.clone();
-                        // Keyed on page + target rather than list position: the
-                        // list is rebuilt on every document switch, so a
-                        // position-based id would hand document A's row *n*
-                        // hover state to document B's row *n*.
-                        let key = format!(
-                            "link-{}-{}",
-                            link.page,
-                            link.target_page
-                                .or_else(|| link.url.as_ref().map(|_| usize::MAX))
-                                .unwrap_or(usize::MAX),
-                        );
+                        // Keyed on page + target *identity* rather than list
+                        // position: the list is rebuilt on every document
+                        // switch, so a position-based id would hand document A's
+                        // row *n* hover state to document B's row *n*. Mapping
+                        // every external link to the same `usize::MAX`
+                        // placeholder collapsed all of a page's external links
+                        // onto one id, so they shared selection and hover state.
+                        let key = match (link.target_page, link.url.as_deref()) {
+                            (Some(target), _) => format!("link-{}-page-{}", link.page, target),
+                            (None, Some(url)) => format!("link-{}-url-{}", link.page, url),
+                            (None, None) => format!("link-{}-none", link.page),
+                        };
                         let is_external = link.kind == crate::models::LinkKind::External;
                         let (badge, badge_fg) = if is_external {
                             ("URL", muted_fg)

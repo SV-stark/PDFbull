@@ -72,6 +72,15 @@ pub fn join_selected_text_items(items: &[crate::models::TextItem]) -> String {
     combined
 }
 
+/// Map an overlay rect (top-left origin, unrotated document space) into the
+/// coordinates of the *rendered* bitmap, which zpdf rotates by the page's
+/// `/Rotate` plus the view rotation.
+///
+/// The quarter-turn cases follow zpdf's matrices (`zpdf-content`'s
+/// `with_page_rotation`: 90 is `(0,-1,1,0,0,W)`, 270 is `(0,1,-1,0,H,0)`)
+/// composed with the renderer's y-flip (`device_y = rect_y1 - pdf_y`). For a
+/// 90° turn a top-left overlay rect `(x, y, w, h)` therefore lands at
+/// `(H - y - h, x, h, w)` — note the *height* edge, not the width.
 pub fn overlay_rect_in_rotated_space(
     x: f32,
     y: f32,
@@ -82,14 +91,14 @@ pub fn overlay_rect_in_rotated_space(
     rotation: i32,
 ) -> (f32, f32, f32, f32) {
     match rotation.rem_euclid(360) {
-        90 => (y, page_width - (x + width), height, width),
+        90 => (page_height - (y + height), x, height, width),
         180 => (
             page_width - (x + width),
             page_height - (y + height),
             width,
             height,
         ),
-        270 => (page_height - (y + height), x, height, width),
+        270 => (y, page_width - (x + width), height, width),
         _ => (x, y, width, height),
     }
 }
@@ -110,14 +119,14 @@ pub fn rotated_rect_to_overlay_space(
     rotation: i32,
 ) -> (f32, f32, f32, f32) {
     match rotation.rem_euclid(360) {
-        90 => (page_width - y - height, x, height, width),
+        90 => (y, page_height - x - width, height, width),
         180 => (
             page_width - x - width,
             page_height - y - height,
             width,
             height,
         ),
-        270 => (y, page_height - x - width, height, width),
+        270 => (page_width - y - height, x, height, width),
         _ => (x, y, width, height),
     }
 }
@@ -232,6 +241,11 @@ pub struct DocumentViewport {
     /// *unrotated* document space, while the rendered bitmap already has this
     /// rotation baked in. Painting needs it to map between the two.
     pub page_rotations: std::collections::HashMap<usize, i32>,
+    /// Vertical wheel delta banked while the view is pinned against a page
+    /// edge, so a precision touchpad's sub-threshold notches still add up to a
+    /// page turn. Cleared whenever a delta is consumed by real scrolling,
+    /// whenever the page changes, and when a turn is taken.
+    pub wheel_residual_y: f32,
 }
 
 impl Default for DocumentViewport {
@@ -265,6 +279,7 @@ impl DocumentViewport {
             )),
             highlight_color: None,
             page_rotations: std::collections::HashMap::new(),
+            wheel_residual_y: 0.0,
             annotations: Vec::new(),
             annotations_by_page: std::collections::HashMap::new(),
             annotations_arc: std::collections::HashMap::new(),
@@ -295,6 +310,7 @@ impl DocumentViewport {
         self.annotations_by_page.clear();
         self.annotations_arc.clear();
         self.page_rotations.clear();
+        self.wheel_residual_y = 0.0;
         if let Ok(mut origins) = self.page_origins.write() {
             origins.clear();
         }
@@ -316,10 +332,50 @@ impl DocumentViewport {
         self.rendered_zoom.clear();
     }
 
-    /// Page-slot pitch in Continuous mode: one page height plus the gap that
+    /// Page-slot pitch in Continuous mode: one card height plus the gap that
     /// follows it. Every scroll calculation must use this same value.
+    ///
+    /// The strip uses one uniform slot per page, so the slot has to be as tall
+    /// as the **tallest** card in the document: a quarter-turned card is as tall
+    /// as the page is *wide*, and `/Rotate` is per page, so a document can mix
+    /// portrait and landscape cards. Extra slack under a shorter card is just
+    /// padding inside its own slot. Picking any single page's height instead
+    /// would make the layout disagree with `page_top_in_content` and leave the
+    /// bottom of the strip unreachable, which is exactly what the sidebar's
+    /// thumbnail strip did.
     pub fn continuous_item_height(&self) -> Pixels {
-        px(self.page_height * self.zoom) + px(CANVAS_PAGE_GAP)
+        // Only a page carrying a non-zero `/Rotate` can differ from page 0, so
+        // the scan is over the sparse map rather than every page.
+        let mut card_h = self.page_display_height(0);
+        for &page_idx in self.page_rotations.keys() {
+            card_h = card_h.max(self.page_display_height(page_idx));
+        }
+        px(card_h * self.zoom) + px(CANVAS_PAGE_GAP)
+    }
+
+    /// Display (post-rotation) extents of page `page_idx`, in points.
+    ///
+    /// `page_width`/`page_height` are the *unrotated* extents — the engine
+    /// reports them that way and the overlay transform depends on it. The
+    /// rendered bitmap, though, is turned by the page's `/Rotate` plus the
+    /// user's view rotation, so a quarter turn swaps the axes.
+    ///
+    /// Every sizing decision goes through here: the card box in
+    /// `render_page_card` and the slot pitch in `continuous_item_height`. This
+    /// rule used to be written out three times, and the layout, the overlay
+    /// transform and the scroll maths each drifted on their own.
+    pub fn display_size(&self, page_idx: usize) -> (f32, f32) {
+        if matches!(self.effective_rotation(page_idx), 90 | 270) {
+            (self.page_height, self.page_width)
+        } else {
+            (self.page_width, self.page_height)
+        }
+    }
+
+    /// Display (post-rotation) height of page `page_idx`, in points.
+    /// See [`Self::display_size`].
+    pub fn page_display_height(&self, page_idx: usize) -> f32 {
+        self.display_size(page_idx).1
     }
 
     /// Absolute content-space Y of page `page_idx`'s top edge.
@@ -370,6 +426,9 @@ impl DocumentViewport {
         }
         let target_page = page_idx.min(total.saturating_sub(1));
         self.current_page = target_page;
+        // A new page is a new scroll context; never carry a part-banked turn
+        // across it.
+        self.wheel_residual_y = 0.0;
 
         match self.layout_mode {
             PageLayoutMode::Continuous => {
@@ -382,6 +441,48 @@ impl DocumentViewport {
         }
     }
 
+    /// How much vertical wheel delta (in points) must accumulate before the
+    /// view turns a page. A single notch this big turns immediately, a bigger
+    /// one turns once, and anything smaller banks toward the threshold.
+    pub const WHEEL_PAGE_TURN_THRESHOLD: f32 = 5.0;
+
+    /// Bank one vertical wheel delta while the view is pinned at a page edge.
+    ///
+    /// `delta_y` is the raw wheel delta; negative scrolls down, i.e. toward the
+    /// next page. Returns `Some(-1)` to turn to the previous page, `Some(1)`
+    /// for the next, or `None` while the banked total is still short of a full
+    /// notch.
+    ///
+    /// The threshold is applied to the *accumulated* delta, not to a single
+    /// event. Precision touchpads send 1–3 px notches, so the old single-event
+    /// `> 5px` test discarded every one of them: at a page edge, or on any page
+    /// short enough to fit the viewport, scrolling could not turn the page at
+    /// all.
+    pub fn bank_wheel_delta_at_edge(
+        &mut self,
+        delta_y: f32,
+        can_turn_prev: bool,
+        can_turn_next: bool,
+    ) -> Option<i32> {
+        self.wheel_residual_y += delta_y;
+        if self.wheel_residual_y <= -Self::WHEEL_PAGE_TURN_THRESHOLD && can_turn_next {
+            self.wheel_residual_y = 0.0;
+            return Some(1);
+        }
+        if self.wheel_residual_y >= Self::WHEEL_PAGE_TURN_THRESHOLD && can_turn_prev {
+            self.wheel_residual_y = 0.0;
+            return Some(-1);
+        }
+        // Cap while a turn is impossible, so a long scroll pressed against the
+        // first or last page does not bank several notches and then turn the
+        // page the instant one becomes available.
+        self.wheel_residual_y = self.wheel_residual_y.clamp(
+            -Self::WHEEL_PAGE_TURN_THRESHOLD,
+            Self::WHEEL_PAGE_TURN_THRESHOLD,
+        );
+        None
+    }
+
     pub fn calculate_visible_page_continuous(&self) -> usize {
         let total = self.total_pages;
         if total == 0 {
@@ -391,8 +492,12 @@ impl DocumentViewport {
         let scrolled_px = (-self.scroll_handle.offset().y).max(px(0.0));
         // Invert `page_top_in_content`: page N occupies
         // `[PADDING + N*item, PADDING + (N+1)*item)`, so the page at the
-        // viewport's top edge is `floor((scrolled + PADDING) / item)`.
-        let visible_page = ((scrolled_px + px(CANVAS_PADDING_Y)) / item_h).floor() as usize;
+        // viewport's top edge is `floor((scrolled - PADDING) / item)`. Using
+        // `+ PADDING` added a whole extra page once the slot was short enough
+        // (`item <= 2*PADDING`): `scroll_to_page(N)` then read back as `N + 1`.
+        let visible_page = ((scrolled_px - px(CANVAS_PADDING_Y)) / item_h)
+            .floor()
+            .max(0.0) as usize;
         visible_page.min(total.saturating_sub(1))
     }
 
@@ -532,12 +637,9 @@ impl DocumentViewport {
         // the user's view rotation applied, so its dimensions are swapped for
         // 90/270. Sizing the card with the unrotated extents left the image
         // letterboxed inside a wrongly-shaped card, and every overlay misplaced.
+        // `display_size` is the same rule the slot pitch uses.
         let page_rotation = self.effective_rotation(page_idx);
-        let (card_w, card_h) = if matches!(page_rotation, 90 | 270) {
-            (self.page_height, self.page_width)
-        } else {
-            (self.page_width, self.page_height)
-        };
+        let (card_w, card_h) = self.display_size(page_idx);
         let scaled_w = px(card_w * self.zoom);
         let scaled_h = px(card_h * self.zoom);
         let is_active = page_idx == self.current_page;

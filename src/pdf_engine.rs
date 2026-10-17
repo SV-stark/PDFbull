@@ -264,6 +264,74 @@ pub fn normalize_rotation(degrees: i32) -> i32 {
     degrees.rem_euclid(360) / 90 * 90
 }
 
+/// Map a rect measured on a *rendered* page bitmap back into the page's
+/// user-space coordinates, `[x0, y0, x1, y1]` with `y0 < y1` (y up).
+///
+/// `render_page_internal` rasterizes the page's **effective** (crop) box with
+/// the page's own `/Rotate` baked in, so the bitmap is not `box_w × box_h`:
+/// for a quarter turn the axes swap. `ocr_page` used to scale OCR pixels by the
+/// unrotated `media_box` on both axes, which misplaced every word on a rotated
+/// page and used the wrong box entirely on a cropped one.
+///
+/// `rect` is the OCR pixel rect (top-left origin), `bitmap` is the rendered
+/// bitmap's `(width, height)`, `box_rect` is the effective box as
+/// `(x0, y0, x1, y1)`, and `rotation` is the page's `/Rotate`.
+///
+/// The rotation arms are the exact inverse of
+/// [`crate::ui_gpui::canvas::overlay_rect_in_rotated_space`]; changing one
+/// without the other desynchronises OCR from the text layer and every overlay.
+pub fn rotated_bitmap_rect_to_page_space(
+    rect: (f32, f32, f32, f32),
+    bitmap: (u32, u32),
+    box_rect: (f32, f32, f32, f32),
+    rotation: i32,
+) -> (f32, f32, f32, f32) {
+    let (box_x0, box_y0, box_x1, box_y1) = box_rect;
+    let box_w = (box_x1 - box_x0).abs();
+    let box_h = (box_y1 - box_y0).abs();
+    let rot = normalize_rotation(rotation);
+
+    // The bitmap's axes are swapped for a quarter turn; its points-per-pixel
+    // therefore follow the *display* size, not the unrotated box size.
+    let (display_w, display_h) = if rot == 90 || rot == 270 {
+        (box_h, box_w)
+    } else {
+        (box_w, box_h)
+    };
+    let sx = if bitmap.0 == 0 {
+        0.0
+    } else {
+        display_w / bitmap.0 as f32
+    };
+    let sy = if bitmap.1 == 0 {
+        0.0
+    } else {
+        display_h / bitmap.1 as f32
+    };
+
+    // Pixels -> display (rotated) space, in points.
+    let dx = rect.0 * sx;
+    let dy = rect.1 * sy;
+    let dw = (rect.2 - rect.0) * sx;
+    let dh = (rect.3 - rect.1) * sy;
+
+    // Display space -> unrotated box space, top-left origin. Inverse of
+    // `overlay_rect_in_rotated_space`.
+    let (ux, uy, uw, uh) = match rot {
+        90 => (dy, box_h - dx - dw, dh, dw),
+        180 => (box_w - dx - dw, box_h - dy - dh, dw, dh),
+        270 => (box_w - dy - dh, dx, dh, dw),
+        _ => (dx, dy, dw, dh),
+    };
+
+    // Top-left box space -> PDF user space (y up).
+    let x0 = box_x0 + ux;
+    let x1 = box_x0 + ux + uw;
+    let y1 = box_y1 - uy;
+    let y0 = box_y1 - uy - uh;
+    (x0.min(x1), y0.min(y1), x0.max(x1), y0.max(y1))
+}
+
 /// Build a `zpdf::OcConfig` with the user's visibility overrides applied **on
 /// top of** the document's own optional-content configuration.
 ///
@@ -425,6 +493,17 @@ fn is_pdfbull_annotation(obj: &zpdf::PdfObject) -> bool {
         Some(zpdf::PdfObject::Name(n)) => n.as_str().starts_with(PDFBULL_ANNOT_MARKER),
         _ => false,
     }
+}
+
+/// [`is_pdfbull_annotation`] for a `lopdf` dictionary, used on the read path.
+///
+/// `load_annotations` parses with `lopdf` while `save_annotations` strips with
+/// `zpdf`, so the same marker has to be recognised in both object models.
+fn is_pdfbull_annotation_lopdf(dict: &lopdf::Dictionary) -> bool {
+    dict.get(b"NM")
+        .ok()
+        .and_then(|obj| obj.as_str().ok())
+        .is_some_and(|nm| nm.starts_with(PDFBULL_ANNOT_MARKER.as_bytes()))
 }
 
 #[derive(Hash, Eq, PartialEq, Clone, Debug)]
@@ -896,19 +975,19 @@ impl DocumentStore {
                 let rect = page.effective_box();
                 let w = rect.width() as f32;
                 let h = rect.height() as f32;
-                // `/Rotate` swaps the rendered bitmap's dimensions for 90/270,
-                // so the "maximum width" the canvas needs to lay cards out is
-                // the *rotated* width.
+                // Report the **unrotated** extents, and the page's own `/Rotate`
+                // alongside them. The canvas applies the rotation itself — it
+                // needs `page_rotations` for that — and the overlay transform is
+                // only correct when `page_width`/`page_height` are unrotated.
+                // Reporting the *laid-out* extents here (as this used to) made
+                // the canvas treat a rotated document as already turned, so
+                // annotations, search hits and selections were all placed as if
+                // the page were upright.
                 let rotated = normalize_rotation(page.rotate);
                 rotations.push(rotated);
-                let (laid_out_w, _) = if matches!(rotated, 90 | 270) {
-                    (h, w)
-                } else {
-                    (w, h)
-                };
-                heights.push(if matches!(rotated, 90 | 270) { w } else { h });
-                if laid_out_w > max_width {
-                    max_width = laid_out_w;
+                heights.push(h);
+                if w > max_width {
+                    max_width = w;
                 }
             } else {
                 heights.push(0.0);
@@ -994,6 +1073,18 @@ impl DocumentStore {
             geo_annotations,
             color_profile,
         })
+    }
+
+    /// Repoint a document at the file it should be read from and written to.
+    ///
+    /// [`Self::save_annotations`] and [`Self::apply_redactions`] take their
+    /// *source* bytes from `paths` while writing to an explicit `output_path`.
+    /// A successful Save-As must therefore move this map too, not only the
+    /// worker's shared path map: otherwise the next Ctrl+S reads the original
+    /// file and writes it over the Save-As target, silently discarding whatever
+    /// that target held.
+    pub fn set_document_path(&mut self, doc_id: DocumentId, path: String) {
+        self.paths.insert(doc_id, path);
     }
 
     fn extract_links_internal(&self, doc: &PdfDocument) -> Vec<Hyperlink> {
@@ -1516,6 +1607,22 @@ impl DocumentStore {
                     continue;
                 }
 
+                // Only this app's own annotations are loaded. A highlight another
+                // reader wrote carries no `/NM` marker, so `save_annotations`
+                // does not strip it — but it *is* in the list handed back to the
+                // UI, and the save path appends that whole list. Loading a
+                // foreign annotation therefore made every Ctrl+S append one more
+                // copy of it. The marker exists precisely to identify this app's
+                // own annotations; honouring it on read as well as on write is
+                // what makes the annotation set round-trip.
+                //
+                // Consequence: annotations written by other applications are no
+                // longer shown in the sidebar, because the app cannot save them
+                // back without duplicating them.
+                if !is_pdfbull_annotation_lopdf(dict) {
+                    continue;
+                }
+
                 // Parse Rect [x0, y0, x1, y1] in PDF coords
                 let rect = dict
                     .get(b"Rect")
@@ -1736,6 +1843,7 @@ impl DocumentStore {
         let content = doc
             .page_content_bytes(&page)
             .map_err(|e| PdfError::RenderFailed(e.to_string()))?;
+        let page_rect = page.effective_box();
 
         // Incorporate custom option rotation into the display list rotation.
         //
@@ -1744,12 +1852,33 @@ impl DocumentStore {
         // 1 GiB, and `images` below is the document-lifetime cache. Without
         // this line the store silently retains up to a gigabyte of decoded
         // pixels per open document.
-        let mut interp = ContentInterpreter::new(page.effective_box())
+        let mut interp = ContentInterpreter::new(page_rect)
             .with_image_cache_limit(self.image_cache_bytes)
             .with_page_rotation(page.rotate + options.rotation)
             .with_fonts(&mut fonts)
             .with_document(doc.file(), &page.resources)
             .with_images(images);
+
+        // Ask the CPU backend what scale it will actually rasterize this page
+        // at — `fit_raster` may reduce it to stay inside the page-pixel budget
+        // — and pre-filter every image the backend would box-filter on draw
+        // (an axis below 0.5x of its samples) down to that footprint. The
+        // backend applies the same rule and filter on draw, so the pixels are
+        // unchanged; what changes is that a scan is no longer retained in the
+        // document-lifetime cache above at its full decoded size when it is
+        // drawn thumbnail-small. See `DEFAULT_IMAGE_CACHE_BYTES` for why that
+        // retention is the binding constraint here.
+        //
+        // A bare `CpuRenderer::new()` is the correct oracle for the scale:
+        // `raster_scale` reads only the page-pixel budget, which `with_fonts`
+        // and `with_images` below do not affect, and the budget is derived from
+        // the pixel *count*, so passing the unrotated box is equivalent to what
+        // the rotated display list yields. If a `with_limits` call is ever added
+        // to the renderer below, it must be mirrored here or the two scale
+        // calculations will diverge.
+        if let Some(scale) = CpuRenderer::new().raster_scale(page_rect, options.scale) {
+            interp = interp.with_image_downscale(scale);
+        }
 
         // Build optional-content config with user visibility overrides applied.
         let oc_for_render: Option<zpdf::OcConfig> = self.oc_configs.get(&doc_id).map(|base_oc| {
@@ -2452,7 +2581,6 @@ impl DocumentStore {
             {
                 let interp = ContentInterpreter::new(eff_box)
                     .with_image_cache_limit(self.image_cache_bytes)
-                    .with_page_rotation(page.rotate)
                     .with_fonts(&mut fonts)
                     .with_document(doc.file(), &page.resources)
                     .with_images(images)
@@ -2840,9 +2968,16 @@ impl DocumentStore {
     fn has_placed_images(&self, data: &[u8]) -> bool {
         // Not a security boundary, just a cheap way to skip a full-size clone
         // for the image pass: if no object names an image subtype, none exists.
-        data.windows(5)
-            .any(|w| w == b"/Image" || w == b"/DCTDec" || w == b"/JPXDec")
-            || data.windows(6).any(|w| w == b"/JBIG2Dec")
+        //
+        // The window width must equal the needle length. Comparing a 5-byte
+        // window against `b"/Image"` (6 bytes) is *always* false, so the
+        // previous form returned `false` for every input and `optimize_pdf`
+        // skipped its image pass unconditionally.
+        const IMAGE_SUBTYPES: [&[u8]; 4] =
+            [b"/Image", b"/DCTDecode", b"/JPXDecode", b"/JBIG2Decode"];
+        IMAGE_SUBTYPES
+            .iter()
+            .any(|needle| data.windows(needle.len()).any(|w| w == *needle))
     }
 
     /// Overwrite each replaced image stream in an incremental update.
@@ -3268,8 +3403,10 @@ impl DocumentStore {
         }
 
         // Load and use the first document as the base of the IncrementalWriter.
-        let first_data =
-            std::fs::read(&paths[0]).map_err(|e| PdfError::OpenFailed(e.to_string()))?;
+        // Capped like the documents appended below: a bare `std::fs::read` here
+        // allocated room for the whole file before any size check, so a
+        // multi-GB input OOMs the process instead of being refused.
+        let first_data = read_input_capped(&paths[0])?;
         let mut writer =
             IncrementalWriter::new(first_data).map_err(|e| PdfError::OpenFailed(e.to_string()))?;
 
@@ -3326,6 +3463,7 @@ impl DocumentStore {
         path: &str,
         page_indices: Vec<usize>,
         output_dir: String,
+        password: Option<&str>,
     ) -> PdfResult<Vec<String>> {
         let base_data = read_input_capped(path)?;
 
@@ -3342,18 +3480,21 @@ impl DocumentStore {
         //
         // `PdfDocument` resolves the tree exactly as `open_document` does and
         // exposes the same underlying `PdfFile` via `file()`, so this does not
-        // re-read or re-serialize the document. An encrypted document cannot be
-        // opened here (this path is not given a password), so it falls back to
-        // the object scan.
+        // re-read or re-serialize the document.
+        //
+        // This path historically took no password, so an **encrypted** document
+        // could not be split at all. A password can now be supplied; without one
+        // the open reports `PasswordRequired` rather than an opaque parse error,
+        // so the caller can ask for one. (There is no object-scan fallback: the
+        // page tree cannot be walked while the file is encrypted.)
         let doc =
-            zpdf::PdfDocument::open(base_data).map_err(|e| PdfError::OpenFailed(e.to_string()))?;
+            zpdf::PdfDocument::open_with_password(base_data, password.unwrap_or("").as_bytes())
+                .map_err(|e| match e {
+                    zpdf::Error::WrongPassword => PdfError::PasswordRequired,
+                    other => PdfError::OpenFailed(other.to_string()),
+                })?;
         let pdf_file = doc.file();
         let total_pages = doc.page_count();
-        if total_pages == 0 {
-            return Err(PdfError::OpenFailed(
-                "document reports no pages".to_string(),
-            ));
-        }
         if total_pages == 0 {
             return Err(PdfError::OpenFailed(
                 "document reports no pages".to_string(),
@@ -3438,20 +3579,30 @@ impl DocumentStore {
         let mut by_page: HashMap<usize, Vec<ZpdfRect>> = HashMap::new();
         for ann in annotations {
             if let AnnotationStyle::Redact { .. } = &ann.style {
-                // Get the page height for coordinate conversion.
-                let page_height = self
+                // Convert from screen (top-left, box-relative) coords back to PDF
+                // (bottom-left, box-absolute) coords, mirroring
+                // `save_annotations`. Using the box *height* here and dropping
+                // its own `x0`/`y1` burned the wrong region on every page whose
+                // box does not start at the origin: a `CropBox` with a non-zero
+                // left edge redacted an area shifted by exactly that edge.
+                let page_box = self
                     .documents
                     .get(&doc_id)
                     .and_then(|d| d.page(ann.page).ok())
-                    .map(|p| p.effective_box().height())
-                    .unwrap_or(792.0);
+                    .map(|p| p.effective_box())
+                    .unwrap_or(ZpdfRect {
+                        x0: 0.0,
+                        y0: 0.0,
+                        x1: 612.0,
+                        y1: 792.0,
+                    });
 
-                // Convert from screen (top-left) coords to PDF (bottom-left) coords.
-                let pdf_y = page_height - ann.y as f64 - ann.height as f64;
+                let pdf_x = ann.x as f64 + page_box.x0;
+                let pdf_y = page_box.y1 - ann.y as f64 - ann.height as f64;
                 let rect = ZpdfRect {
-                    x0: ann.x as f64,
+                    x0: pdf_x,
                     y0: pdf_y,
-                    x1: ann.x as f64 + ann.width as f64,
+                    x1: pdf_x + ann.width as f64,
                     y1: pdf_y + ann.height as f64,
                 };
                 by_page.entry(ann.page).or_default().push(rect);
@@ -3560,7 +3711,12 @@ impl DocumentStore {
                     }
                     FieldKind::Button => {
                         let (is_checked, on_value) = match &f.value {
-                            Some(FieldValue::Name(n)) => (n != "Off", Some(n.clone())),
+                            Some(FieldValue::Name(n)) if n != "Off" => (true, Some(n.clone())),
+                            // `/V /Off` is how an *unchecked* button records its
+                            // state, so it says nothing about the on-value.
+                            // Carrying it as `Some("Off")` made a fill write
+                            // "Off" straight back, leaving the box unchecked
+                            // after the user had asked to check it.
                             _ => (false, None),
                         };
                         if f.flags & FF_RADIO != 0 {
@@ -3722,10 +3878,11 @@ impl DocumentStore {
             .write(&mut buf)
             .map_err(|e| PdfError::IoError(e.to_string()))?;
 
-        // Write the file only after the content is known-good, and only report
-        // success if every requested field actually landed.
-        write_pdf_output(&output_path, &buf.into_inner())?;
-
+        // Refuse *before* writing. The write below replaces the destination
+        // atomically, and the save dialog permits that destination to be the file
+        // the form was opened from — so writing a partially-filled form and then
+        // reporting failure replaced the user's original with an artifact this
+        // function had just declared invalid.
         if !failures.is_empty() {
             return Err(PdfError::EngineError(EngineErrorKind::Generic(format!(
                 "filled {} of {} fields; these were rejected: {}",
@@ -3734,6 +3891,8 @@ impl DocumentStore {
                 failures.join("; ")
             ))));
         }
+
+        write_pdf_output(&output_path, &buf.into_inner())?;
 
         Ok(output_path)
     }
@@ -3791,8 +3950,12 @@ impl DocumentStore {
     }
 
     pub fn add_watermark(input_path: &str, text: &str, output_path: &str) -> PdfResult<String> {
+        // Capped, like every other input path: a bare `Document::load` reads the
+        // whole file with no size check, so a multi-GB input OOMs the process
+        // rather than being rejected up front.
+        let input = read_input_capped(input_path)?;
         let mut doc =
-            Document::load(input_path).map_err(|e| PdfError::OpenFailed(e.to_string()))?;
+            Document::load_mem(&input).map_err(|e| PdfError::OpenFailed(e.to_string()))?;
 
         let pages: Vec<ObjectId> = doc.get_pages().into_values().collect();
         let page_count = pages.len();
@@ -3945,8 +4108,12 @@ impl DocumentStore {
         footer_format: &str,
         output_path: &str,
     ) -> PdfResult<String> {
+        // Capped, like every other input path: a bare `Document::load` reads the
+        // whole file with no size check, so a multi-GB input OOMs the process
+        // rather than being rejected up front.
+        let input = read_input_capped(input_path)?;
         let mut doc =
-            Document::load(input_path).map_err(|e| PdfError::OpenFailed(e.to_string()))?;
+            Document::load_mem(&input).map_err(|e| PdfError::OpenFailed(e.to_string()))?;
 
         let pages: Vec<ObjectId> = doc.get_pages().into_values().collect();
         let page_count = pages.len();
@@ -4348,11 +4515,13 @@ impl DocumentStore {
         };
         let rendered = self.render_page_internal(doc_id, page_num, render_opts, false)?;
 
-        let page_rect = page.media_box;
-        let page_width = (page_rect.x1 - page_rect.x0).abs() as f32;
-        let page_height = (page_rect.y1 - page_rect.y0).abs() as f32;
-        let scale_x = page_width / rendered.width as f32;
-        let scale_y = page_height / rendered.height as f32;
+        let page_rect = page.effective_box();
+        let page_box = (
+            page_rect.x0 as f32,
+            page_rect.y0 as f32,
+            page_rect.x1 as f32,
+            page_rect.y1 as f32,
+        );
 
         let img_source =
             ocrs::ImageSource::from_bytes(&rendered.data, (rendered.width, rendered.height))
@@ -4393,10 +4562,20 @@ impl DocumentStore {
             for word in line.words() {
                 let w_text = word.to_string();
                 let rect = word.bounding_rect();
-                let x0 = page_rect.x0 as f32 + (rect.left() as f32 * scale_x);
-                let x1 = page_rect.x0 as f32 + (rect.right() as f32 * scale_x);
-                let y0 = page_rect.y1 as f32 - (rect.bottom() as f32 * scale_y);
-                let y1 = page_rect.y1 as f32 - (rect.top() as f32 * scale_y);
+                // The bitmap is the page's *effective* box with `/Rotate` baked
+                // in, and its axes swap on a quarter turn, so the mapping is not
+                // a plain two-axis scale of the unrotated box.
+                let (x0, y0, x1, y1) = rotated_bitmap_rect_to_page_space(
+                    (
+                        rect.left() as f32,
+                        rect.top() as f32,
+                        rect.right() as f32,
+                        rect.bottom() as f32,
+                    ),
+                    (rendered.width, rendered.height),
+                    page_box,
+                    page.rotate,
+                );
                 words.push(crate::ocr::OcrWord {
                     text: w_text,
                     bbox: [x0, y0, x1, y1],

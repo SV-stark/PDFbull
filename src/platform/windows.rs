@@ -24,8 +24,26 @@ impl Drop for MutexHolder {
 
 static PRIMARY_MUTEX: OnceLock<MutexHolder> = OnceLock::new();
 
+/// Command lines forwarded by a second instance, for the UI to drain.
+///
+/// The listener thread hands them over through this channel; it is taken exactly
+/// once, by `run_gpui_app`, which then `await`s it. `None` on a secondary
+/// instance and on any platform without forwarding.
+static FORWARD_RX: OnceLock<std::sync::Mutex<Option<ForwardedArgs>>> = OnceLock::new();
+
+/// Receiver end of the forwarded-command-line channel.
+type ForwardedArgs = tokio::sync::mpsc::UnboundedReceiver<Vec<String>>;
+
+/// Takes the channel of command lines forwarded by a second instance.
+///
+/// Returns `None` when this process is not the primary, or when the listener
+/// could not be started — in both cases there is nothing to drain.
+pub fn take_forwarded_args() -> Option<ForwardedArgs> {
+    FORWARD_RX.get()?.lock().ok()?.take()
+}
+
 pub fn ensure_single_instance(args: &[String]) -> Result<bool, Box<dyn std::error::Error>> {
-    use interprocess::local_socket::{GenericNamespaced, Stream, prelude::*};
+    use interprocess::local_socket::{GenericNamespaced, ListenerOptions, Stream, prelude::*};
     use std::io::Write;
 
     // SAFETY: We call CreateMutexW with a static null-terminated UTF-16 mutex name.
@@ -79,6 +97,67 @@ pub fn ensure_single_instance(args: &[String]) -> Result<bool, Box<dyn std::erro
             }
 
             return Ok(true);
+        }
+
+        // The mutex says another PDFbull exists but it did not answer. Its mutex
+        // handle dies with its process, so a stale lock cannot persist; this is
+        // either a foreign process holding the name or a primary that is wedged.
+        // Starting normally keeps the app launchable in that case.
+        tracing::warn!(
+            "Another PDFbull instance owns the single-instance mutex but did not \
+             accept the arguments; starting a separate instance."
+        );
+        return Ok(false);
+    }
+
+    // Primary. Bind the endpoint a second instance connects to and forward what
+    // it sends to the UI. Nothing bound this before, so a second copy's connect
+    // always failed, it fell through to the branch above, and it started a whole
+    // second instance — "single instance" mode never actually applied.
+    //
+    // Bound synchronously so a second instance launched immediately afterwards
+    // finds a live endpoint instead of racing the bind (its 1s retry loop would
+    // cover that, but there is no reason to rely on it).
+    match ListenerOptions::new().name(name).create_sync() {
+        Ok(listener) => {
+            let (forward_tx, forward_rx) = tokio::sync::mpsc::unbounded_channel();
+            // Publishing the channel only once the endpoint is genuinely
+            // accepting keeps `take_forwarded_args() == Some` meaningful: it
+            // means a second instance can actually be heard.
+            let _ = FORWARD_RX.set(std::sync::Mutex::new(Some(forward_rx)));
+
+            let spawned = std::thread::Builder::new()
+                .name("pdfbull-single-instance".to_string())
+                .spawn(move || {
+                    use std::io::{BufRead, BufReader};
+                    for conn in listener.incoming() {
+                        let Ok(stream) = conn else { continue };
+                        let mut line = String::new();
+                        if BufReader::new(stream).read_line(&mut line).is_err() {
+                            continue;
+                        }
+                        match serde_json::from_str::<Vec<String>>(line.trim()) {
+                            Ok(args) => {
+                                if forward_tx.send(args).is_err() {
+                                    // The UI dropped the receiver; nothing left to forward to.
+                                    break;
+                                }
+                            }
+                            Err(e) => {
+                                tracing::warn!("Ignoring malformed single-instance payload: {e}");
+                            }
+                        }
+                    }
+                });
+            if let Err(e) = spawned {
+                tracing::warn!("Could not start the single-instance listener thread: {e}");
+            }
+        }
+        Err(e) => {
+            tracing::warn!(
+                "Could not bind the single-instance socket; file arguments from a \
+                 second launch will not be forwarded: {e}"
+            );
         }
     }
 

@@ -73,18 +73,17 @@ pub struct PdfFormScriptEngine {
 
 impl PdfFormScriptEngine {
     /// Initializes the script engine from the document's extracted `FormField` list.
+    ///
+    /// Text and Combo fields keep their exact string. Coercing a numeric-looking
+    /// value to `Number` at construction discarded the representation, so `"007"`
+    /// came back as `"7"` and `"3.50"` as `"3.5"` the moment the value was read.
+    /// Only a calculation produces a number.
     pub fn new(form_fields: &[FormField]) -> Self {
         let mut fields = HashMap::new();
 
         for f in form_fields {
             let val = match &f.variant {
-                FormFieldVariant::Text { value } => {
-                    if let Ok(n) = value.trim().parse::<f64>() {
-                        FormFieldValue::Number(n)
-                    } else {
-                        FormFieldValue::Text(value.clone())
-                    }
-                }
+                FormFieldVariant::Text { value } => FormFieldValue::Text(value.clone()),
                 FormFieldVariant::Checkbox { is_checked, .. } => {
                     FormFieldValue::Boolean(*is_checked)
                 }
@@ -100,11 +99,7 @@ impl PdfFormScriptEngine {
                         .and_then(|idx| export_values.get(idx).or_else(|| options.get(idx)))
                         .cloned()
                         .unwrap_or_default();
-                    if let Ok(n) = text.trim().parse::<f64>() {
-                        FormFieldValue::Number(n)
-                    } else {
-                        FormFieldValue::Text(text)
-                    }
+                    FormFieldValue::Text(text)
                 }
             };
             fields.insert(f.name.clone(), val);
@@ -151,11 +146,17 @@ impl PdfFormScriptEngine {
 
         // 1. Check for standard Acrobat calculation function:
         // AFSimple_Calculate(cFunction, cFields)
-        if let Some(result) = self.eval_af_simple_calculate(clean_script) {
-            event.value = FormFieldValue::Number(result);
-            let out_str = event.value.as_string();
-            self.set_field_value(target_field, event.value);
-            return Ok(out_str);
+        match self.eval_af_simple_calculate(clean_script) {
+            Ok(Some(result)) => {
+                event.value = FormFieldValue::Number(result);
+                let out_str = event.value.as_string();
+                self.set_field_value(target_field, event.value);
+                return Ok(out_str);
+            }
+            Ok(None) => {}
+            // An `AFSimple_Calculate` call whose operation we do not implement is
+            // reported, not evaluated to zero.
+            Err(e) => return Err(e),
         }
 
         // 2. Parse general calculation expressions:
@@ -230,27 +231,44 @@ impl PdfFormScriptEngine {
     /// - `"AVG"`: Average of all listed fields
     /// - `"MIN"`: Minimum of all listed fields
     /// - `"MAX"`: Maximum of all listed fields
-    fn eval_af_simple_calculate(&self, script: &str) -> Option<f64> {
+    ///
+    /// Returns `Ok(None)` when the script is not an `AFSimple_Calculate` call at
+    /// all (so the caller can try the expression path), and `Err` for a call
+    /// whose operation is unknown. An unknown operation used to evaluate to
+    /// `0.0`, which is a perfectly plausible sum and therefore silent.
+    fn eval_af_simple_calculate(&self, script: &str) -> Result<Option<f64>, String> {
         if !script.contains("AFSimple_Calculate") {
-            return None;
+            return Ok(None);
         }
 
-        let start_paren = script.find('(')?;
-        let end_paren = script.rfind(')')?;
+        let start_paren = script
+            .find('(')
+            .ok_or_else(|| "unterminated AFSimple_Calculate call (missing '(')".to_string())?;
+        let end_paren = script
+            .rfind(')')
+            .ok_or_else(|| "unterminated AFSimple_Calculate call (missing ')')".to_string())?;
         let args_str = &script[start_paren + 1..end_paren];
 
         // Parse operation string (e.g., "SUM" or 'PRD')
         let mut parts = args_str.splitn(2, ',');
-        let op_part = parts.next()?.trim().trim_matches(|c| c == '"' || c == '\'');
-        let fields_part = parts.next()?.trim();
+        let op_part = parts
+            .next()
+            .unwrap_or("")
+            .trim()
+            .trim_matches(|c| c == '"' || c == '\'');
+        let fields_part = parts.next().unwrap_or("").trim();
 
         // Extract field names from Array/list: `["A", "B"]` or `new Array("A", "B")`
         let mut field_names = Vec::new();
         let array_content = if let Some(bracket_start) = fields_part.find('[') {
-            let bracket_end = fields_part.rfind(']')?;
+            let bracket_end = fields_part.rfind(']').ok_or_else(|| {
+                "unterminated field list in AFSimple_Calculate (missing ']')".to_string()
+            })?;
             &fields_part[bracket_start + 1..bracket_end]
         } else if let Some(arr_start) = fields_part.find("Array(") {
-            let arr_end = fields_part.rfind(')')?;
+            let arr_end = fields_part
+                .rfind(')')
+                .ok_or_else(|| "unterminated Array(...) in AFSimple_Calculate".to_string())?;
             &fields_part[arr_start + 6..arr_end]
         } else {
             fields_part
@@ -266,7 +284,7 @@ impl PdfFormScriptEngine {
         }
 
         if field_names.is_empty() {
-            return Some(0.0);
+            return Ok(Some(0.0));
         }
 
         let nums: Vec<f64> = field_names
@@ -280,10 +298,15 @@ impl PdfFormScriptEngine {
             "AVG" => nums.iter().sum::<f64>() / nums.len() as f64,
             "MIN" => nums.into_iter().fold(f64::INFINITY, f64::min),
             "MAX" => nums.into_iter().fold(f64::NEG_INFINITY, f64::max),
-            _ => 0.0,
+            other => {
+                return Err(format!(
+                    "unsupported AFSimple_Calculate operation `{other}` \
+                     (expected SUM, PRD, AVG, MIN or MAX)"
+                ));
+            }
         };
 
-        Some(result)
+        Ok(Some(result))
     }
 
     /// Evaluates an arithmetic expression with `this.getField("...").value` substitutions.
@@ -435,20 +458,95 @@ impl PdfFormScriptEngine {
             .map_err(|_| format!("Cannot parse numeric term in expression: '{clean}'"))
     }
 
-    /// Re-evaluates all calculations in sequence across a collection of fields.
+    /// Re-evaluates every calculation across a collection of fields.
+    ///
+    /// Calculations routinely depend on one another (`Tax = Total * 0.18` while
+    /// `Total = Price * Qty`), but `calc_scripts` is a `HashMap`, so a single
+    /// pass visits them in an arbitrary order and evaluates a field against
+    /// whatever its inputs happened to hold at that instant. Passes are repeated
+    /// until the values stop changing, and bounded, so a cyclic set of scripts
+    /// settles rather than hanging.
     pub fn recalculate_all(
         &mut self,
         fields: &mut [FormField],
         calc_scripts: &HashMap<String, String>,
     ) {
-        for (field_name, script) in calc_scripts {
-            if let Ok(new_val) = self.evaluate_calculation(field_name, script) {
-                if let Some(target) = fields.iter_mut().find(|f| f.name == *field_name) {
-                    if let FormFieldVariant::Text { value } = &mut target.variant {
-                        *value = new_val;
-                    }
+        /// Generous bound: a dependency chain settles after at most one pass per
+        /// link, and no real form nests anywhere near this deep.
+        const MAX_PASSES: usize = 16;
+
+        for _ in 0..MAX_PASSES {
+            let mut changed = false;
+            for (field_name, script) in calc_scripts {
+                let Ok(new_val) = self.evaluate_calculation(field_name, script) else {
+                    continue;
+                };
+                let Some(target) = fields.iter_mut().find(|f| f.name == *field_name) else {
+                    continue;
+                };
+                // Every variant is written, not just `Text`. A calculation aimed
+                // at a checkbox, radio button or combo box used to be computed
+                // and then silently dropped.
+                if write_calculated_value(target, &new_val) {
+                    changed = true;
                 }
             }
+            if !changed {
+                break;
+            }
+        }
+    }
+}
+
+/// Writes a calculated value into a form field, in that variant's own terms.
+///
+/// Returns whether the field actually changed. A checkbox holds a boolean, not
+/// a string, so the calculated text has to be interpreted rather than stored:
+/// writing it straight into the variant was a type error, and the previous code
+/// quietly skipped every non-`Text` target instead.
+fn write_calculated_value(field: &mut FormField, value: &str) -> bool {
+    // Reuses the engine's own notion of truth rather than inventing a second
+    // one; a calculated value of `""`, `"0"` or `"Off"` means unchecked.
+    let truthy = FormFieldValue::Text(value.to_string()).is_truthy();
+
+    match &mut field.variant {
+        FormFieldVariant::Text { value: current } => {
+            if *current == value {
+                return false;
+            }
+            *current = value.to_string();
+            true
+        }
+        FormFieldVariant::Checkbox { is_checked, .. } => {
+            if *is_checked == truthy {
+                return false;
+            }
+            *is_checked = truthy;
+            true
+        }
+        FormFieldVariant::RadioButton { is_selected, .. } => {
+            if *is_selected == truthy {
+                return false;
+            }
+            *is_selected = truthy;
+            true
+        }
+        FormFieldVariant::ComboBox {
+            selected_index,
+            export_values,
+            options,
+        } => {
+            // A calculated value names the option's *export* value; fall back to
+            // the label, and to clearing the selection when neither matches.
+            let idx = export_values
+                .iter()
+                .position(|v| v == value)
+                .or_else(|| options.iter().position(|v| v == value));
+            if *selected_index == idx {
+                return false;
+            }
+            *selected_index = idx;
+            true
         }
     }
 }

@@ -33,6 +33,9 @@ pub fn run_gpui_app() {
                     window_min_size: Some(gpui_kit::size(px(800.0), px(600.0))),
                     ..WindowOptions::default()
                 };
+                // The view is needed after the window exists, to hand it the
+                // files a second launch forwards.
+                let mut view_slot: Option<gpui_kit::Entity<app_view::PdfbullView>> = None;
                 match cx.open_window(window_options, |window, cx| {
                     let view = cx.new(|cx| {
                         let mut v = app_view::PdfbullView::new(window, cx);
@@ -41,6 +44,7 @@ pub fn run_gpui_app() {
                         }
                         v
                     });
+                    view_slot = Some(view.clone());
                     cx.new(|cx| {
                         let bg = cx.theme().background;
                         Root::new(view, window, cx).bg(bg)
@@ -51,6 +55,38 @@ pub fn run_gpui_app() {
                         tracing::error!("Failed to open the PDFbull window: {e}");
                         eprintln!("PDFbull: failed to open window: {e}");
                     }
+                }
+
+                // A second launch does not start a second copy: it connects to
+                // this process and sends its command line, which we open here.
+                // Nothing drained the channel before, so those arguments were
+                // received and thrown away.
+                if let (Some(view), Some(mut forwarded)) =
+                    (view_slot, crate::platform::take_forwarded_args())
+                {
+                    cx.spawn(async move |cx| {
+                        while let Some(args) = forwarded.recv().await {
+                            let paths: Vec<String> = args
+                                .into_iter()
+                                .skip(1)
+                                .filter(|arg| {
+                                    !arg.starts_with('-')
+                                        && sidebar::SidebarState::is_openable_pdf(
+                                            std::path::Path::new(arg.as_str()),
+                                        )
+                                })
+                                .collect();
+                            if paths.is_empty() {
+                                continue;
+                            }
+                            view.update(cx, |view, cx| {
+                                for path in &paths {
+                                    view.open_pdf_path(path, cx);
+                                }
+                            });
+                        }
+                    })
+                    .detach();
                 }
             })
             .detach();

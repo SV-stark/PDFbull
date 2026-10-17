@@ -273,6 +273,12 @@ impl PdfbullView {
             .collect();
 
         let doc_id = crate::models::next_doc_id();
+        // Keep the outgoing document's annotations before `active_doc_id` is
+        // repointed and `reset_for_document` below wipes the viewport.
+        // `sync_viewport_to_active_tab` does this on every tab switch; the open
+        // path did not, so opening a file while another document had unsaved
+        // annotations discarded them.
+        self.stash_active_annotations();
         self.active_doc_id = Some(doc_id);
         self.doc_geometry.insert(
             doc_id,
@@ -290,6 +296,7 @@ impl PdfbullView {
             title,
             path: Some(path.clone()),
             is_modified: false,
+            page_rotations: std::collections::HashMap::new(),
         });
         self.tabs.active_tab_index = new_id;
         // `reset_for_document` drops every scrap of the *previous* document:
@@ -306,6 +313,10 @@ impl PdfbullView {
         self.sidebar.bookmarks.clear();
         self.sidebar.attachments.clear();
         self.sidebar.layers.clear();
+        // The links panel is per-document too. The tab-switch path already
+        // cleared it; leaving it out here kept the previous document's link
+        // rows (and their hover state) visible after opening a new file.
+        self.sidebar.links.clear();
         self.sidebar.reset_search(cx);
         self.rendering_pages.clear();
         self.dialogs.signatures.clear();
@@ -369,6 +380,25 @@ impl PdfbullView {
                                 && first_h > 0.0
                             {
                                 view.viewport.page_height = first_h;
+                            }
+                            // `/Rotate` per page. Overlays (annotations, search hits,
+                            // the text layer) are stored in unrotated space and
+                            // painted onto a bitmap that already has the rotation
+                            // baked in, so this is what makes the two line up on a
+                            // rotated document. Pages with no `/Rotate` are omitted,
+                            // so the "does any page turn?" check stays cheap.
+                            let rotations: std::collections::HashMap<usize, i32> = open_res
+                                .page_rotations
+                                .iter()
+                                .enumerate()
+                                .filter(|(_, r)| **r != 0)
+                                .map(|(i, r)| (i, *r))
+                                .collect();
+                            view.viewport.page_rotations = rotations.clone();
+                            if let Some(tab) =
+                                view.tabs.tabs.iter_mut().find(|t| t.doc_id == Some(doc_id))
+                            {
+                                tab.page_rotations = rotations;
                             }
                             view.dialogs.signatures = open_res.signatures;
                             view.render_needed_pages(cx);
@@ -569,6 +599,15 @@ impl PdfbullView {
                     self.viewport.current_page = self.viewport.total_pages.saturating_sub(1);
                 }
             }
+            // Per-page `/Rotate`, restored with the geometry. Without this,
+            // switching tabs on a rotated document silently dropped the rotation
+            // map and painted every overlay against an unrotated page.
+            self.viewport.page_rotations = self
+                .tabs
+                .tabs
+                .get(self.tabs.active_tab_index)
+                .map(|t| t.page_rotations.clone())
+                .unwrap_or_default();
         }
         self.render_needed_pages(cx);
     }
@@ -1059,6 +1098,8 @@ impl PdfbullView {
             let new_zoom = (self.viewport.zoom * factor).clamp(0.25, 5.0);
             if (new_zoom - self.viewport.zoom).abs() > 0.001 {
                 self.viewport.zoom = new_zoom;
+                // Zoom changes the geometry under any banked edge scroll.
+                self.viewport.wheel_residual_y = 0.0;
                 self.render_needed_pages(cx);
                 cx.notify();
             }
@@ -1093,25 +1134,34 @@ impl PdfbullView {
                     let mut offset = self.viewport.scroll_handle.offset();
                     let dy_f = delta_y / px(1.0);
 
-                    // When page overflows vertically (e.g. zoomed in), scroll smoothly within the page first
-                    if dy_f < 0.0 && offset.y > -max_offset_y + px(1.0) {
+                    // Does this delta actually scroll *within* the page? At a
+                    // page edge (or when the page fits the viewport) neither
+                    // answer is yes, and the delta is banked instead of dropped.
+                    let scrolls_within_page = (dy_f < 0.0 && offset.y > -max_offset_y + px(1.0))
+                        || (dy_f > 0.0 && offset.y < px(-1.0));
+
+                    if scrolls_within_page {
+                        // A real scroll invalidates a part-banked turn.
+                        self.viewport.wheel_residual_y = 0.0;
                         offset.y = (offset.y + delta_y).clamp(-max_offset_y, px(0.0));
                         self.viewport.scroll_handle.set_offset(offset);
                         cx.notify();
-                    } else if dy_f < -5.0
-                        && self.viewport.current_page + 1 < self.viewport.total_pages
-                    {
-                        self.viewport.scroll_to_page(self.viewport.current_page + 1);
-                        self.render_needed_pages(cx);
-                        cx.notify();
-                    } else if dy_f > 0.0 && offset.y < px(-1.0) {
-                        offset.y = (offset.y + delta_y).clamp(-max_offset_y, px(0.0));
-                        self.viewport.scroll_handle.set_offset(offset);
-                        cx.notify();
-                    } else if dy_f > 5.0 && self.viewport.current_page > 0 {
-                        self.viewport.scroll_to_page(self.viewport.current_page - 1);
-                        self.render_needed_pages(cx);
-                        cx.notify();
+                    } else if dy_f != 0.0 {
+                        let can_prev = self.viewport.current_page > 0;
+                        let can_next = self.viewport.current_page + 1 < self.viewport.total_pages;
+                        if let Some(dir) = self
+                            .viewport
+                            .bank_wheel_delta_at_edge(dy_f, can_prev, can_next)
+                        {
+                            let target = if dir > 0 {
+                                self.viewport.current_page + 1
+                            } else {
+                                self.viewport.current_page - 1
+                            };
+                            self.viewport.scroll_to_page(target);
+                            self.render_needed_pages(cx);
+                            cx.notify();
+                        }
                     }
                 }
                 super::ribbon::PageLayoutMode::TwoPageSpread => {
@@ -1125,27 +1175,31 @@ impl PdfbullView {
                     let mut offset = self.viewport.scroll_handle.offset();
                     let dy_f = delta_y / px(1.0);
 
-                    if dy_f < 0.0 && offset.y > -max_offset_y + px(1.0) {
+                    let scrolls_within_page = (dy_f < 0.0 && offset.y > -max_offset_y + px(1.0))
+                        || (dy_f > 0.0 && offset.y < px(-1.0));
+
+                    if scrolls_within_page {
+                        self.viewport.wheel_residual_y = 0.0;
                         offset.y = (offset.y + delta_y).clamp(-max_offset_y, px(0.0));
                         self.viewport.scroll_handle.set_offset(offset);
                         cx.notify();
-                    } else if dy_f < -5.0
-                        && self.viewport.current_page + 1 < self.viewport.total_pages
-                    {
-                        let target =
-                            (self.viewport.current_page + step).min(self.viewport.total_pages - 1);
-                        self.viewport.scroll_to_page(target);
-                        self.render_needed_pages(cx);
-                        cx.notify();
-                    } else if dy_f > 0.0 && offset.y < px(-1.0) {
-                        offset.y = (offset.y + delta_y).clamp(-max_offset_y, px(0.0));
-                        self.viewport.scroll_handle.set_offset(offset);
-                        cx.notify();
-                    } else if dy_f > 5.0 && self.viewport.current_page > 0 {
-                        let target = self.viewport.current_page.saturating_sub(step);
-                        self.viewport.scroll_to_page(target);
-                        self.render_needed_pages(cx);
-                        cx.notify();
+                    } else if dy_f != 0.0 {
+                        let can_prev = self.viewport.current_page > 0;
+                        let can_next = self.viewport.current_page + 1 < self.viewport.total_pages;
+                        if let Some(dir) = self
+                            .viewport
+                            .bank_wheel_delta_at_edge(dy_f, can_prev, can_next)
+                        {
+                            let target = if dir > 0 {
+                                (self.viewport.current_page + step)
+                                    .min(self.viewport.total_pages.saturating_sub(1))
+                            } else {
+                                self.viewport.current_page.saturating_sub(step)
+                            };
+                            self.viewport.scroll_to_page(target);
+                            self.render_needed_pages(cx);
+                            cx.notify();
+                        }
                     }
                 }
                 super::ribbon::PageLayoutMode::Continuous => {
@@ -1160,6 +1214,10 @@ impl PdfbullView {
                         let mut offset = self.viewport.scroll_handle.offset();
                         offset.y = (offset.y + delta_y).clamp(min_scroll_y, px(0.0));
                         self.viewport.scroll_handle.set_offset(offset);
+
+                        // Continuous scrolling consumes the delta directly, so
+                        // nothing should stay banked for a later page-edge turn.
+                        self.viewport.wheel_residual_y = 0.0;
 
                         self.sync_current_page_from_scroll(cx);
                         cx.notify();
@@ -3117,7 +3175,17 @@ impl Render for PdfbullView {
                                         Some("Document closed, but the engine kept its cache.".into());
                                 }
                             }
+                            // Closing a tab *left* of the active one shifts the
+                            // active document down a slot, so the index has to
+                            // be decremented as well as clamped. The clamp alone
+                            // only covered closing the last tab: with tabs
+                            // [A,B,C,D] active on C, removing index 0 left
+                            // `min(2, 3) == 2`, which activated D while C had
+                            // moved to index 1.
                             if !this.tabs.tabs.is_empty() {
+                                if idx < this.tabs.active_tab_index {
+                                    this.tabs.active_tab_index -= 1;
+                                }
                                 this.tabs.active_tab_index =
                                     this.tabs.active_tab_index.min(this.tabs.tabs.len() - 1);
                             } else {
@@ -3384,6 +3452,23 @@ impl Render for PdfbullView {
                                     let max_y = ((start.y.max(end.y) - origin.y) / px(1.0)) / zoom;
                                     let w = (max_x - min_x).max(10.0);
                                     let h = (max_y - min_y).max(10.0);
+
+                                    // The drag is measured in the *rotated* bitmap,
+                                    // but annotations are stored in unrotated space,
+                                    // exactly like the selection marquee and the text
+                                    // layer. Committing the raw bitmap rect saved the
+                                    // highlight on the wrong part of the page on
+                                    // every document with a non-zero `/Rotate`.
+                                    let (min_x, min_y, w, h) =
+                                        super::canvas::rotated_rect_to_overlay_space(
+                                            min_x,
+                                            min_y,
+                                            w,
+                                            h,
+                                            this.viewport.page_width,
+                                            this.viewport.page_height,
+                                            this.viewport.effective_rotation(commit_page),
+                                        );
 
                                     // Use the global monotonic counter, never
                                     // `annotations.len() + 1`. `len()` shrinks on

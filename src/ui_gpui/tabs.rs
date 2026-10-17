@@ -15,6 +15,11 @@ pub struct DocumentTab {
     pub title: String,
     pub path: Option<PathBuf>,
     pub is_modified: bool,
+    /// `/Rotate` per page, in degrees, keyed by page index. Populated from
+    /// `OpenResult::page_rotations` when the document is opened and restored on
+    /// tab switch; the viewport needs it to map overlays onto the rotated
+    /// bitmap.
+    pub page_rotations: std::collections::HashMap<usize, i32>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

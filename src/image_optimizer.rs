@@ -565,7 +565,44 @@ fn image_filter_name(dict: &PdfDict) -> Option<&str> {
 
 fn decode_image(file: &PdfFile, id: ObjectId, dict: &PdfDict) -> Option<DecodedImage> {
     let raw = file.resolve_stream_data(id).ok()?;
-    zpdf_image::decode_image_xobject(&raw, dict).ok()
+    let decoded = zpdf_image::decode_image_xobject(&raw, dict).ok()?;
+    Some(rgba_to_rgb(decoded))
+}
+
+/// Drop the alpha byte from an RGBA decode, producing the tight RGB buffer the
+/// resampler and encoders below expect.
+///
+/// `zpdf_image::decode_image_xobject` always returns **RGBA** — every branch of
+/// its decoder appends an opaque alpha byte, including for a plain RGB or
+/// grayscale image — while the rest of this module infers one or three bytes per
+/// pixel from [`channel_count`]. That inference never matched the four-byte
+/// buffer, so [`resize_nearest`] rejected every image and
+/// [`plan_replacements`] never emitted a single replacement.
+///
+/// No alpha can be lost here: [`is_rewritable_image`] rejects any image with an
+/// `/SMask`, `/Mask` or `/ImageMask`, so the alpha byte is always fully opaque.
+/// A buffer that is not a whole number of 4-byte pixels is passed through
+/// untouched.
+fn rgba_to_rgb(img: DecodedImage) -> DecodedImage {
+    let pixel_count = (img.width as usize).saturating_mul(img.height as usize);
+    if pixel_count == 0 || img.data.len() != pixel_count * 4 {
+        return img;
+    }
+    // `as_chunks`, not `chunks_exact`: the length check above guarantees only
+    // whole four-byte pixels reach the loop.
+    let (pixels, _) = img.data.as_chunks::<4>();
+    let mut data = Vec::with_capacity(pixel_count * 3);
+    for px in pixels {
+        data.extend_from_slice(&px[..3]);
+    }
+    DecodedImage {
+        width: img.width,
+        height: img.height,
+        data,
+        has_alpha: false,
+        is_image_mask: img.is_image_mask,
+        premultiplied: img.premultiplied,
+    }
 }
 
 /// Nearest-neighbour resample of a decoded image.
@@ -621,7 +658,8 @@ fn resize_nearest(img: &DecodedImage, new_w: u32, new_h: u32) -> Option<DecodedI
 /// `DecodedImage` carries no colour-space tag, so this is inferred: a mask or
 /// alpha-bearing image is single-channel, everything else RGB. Grayscale images
 /// decoded at 8bpc are widened to RGB by the decoder, which keeps this correct
-/// without inspecting the dictionary.
+/// without inspecting the dictionary. The decoder's own four-byte RGBA output is
+/// reduced to RGB by [`decode_image`] before it reaches this function.
 fn channel_count(img: &DecodedImage) -> usize {
     let expected = if img.has_alpha || img.is_image_mask {
         1
@@ -1028,6 +1066,49 @@ mod tests {
     }
 
     // --- Buffer handling ------------------------------------------------
+
+    #[test]
+    fn rgba_decode_is_reduced_to_rgb() {
+        // Regression: `zpdf_image::decode_image_xobject` always returns RGBA
+        // (`4 * w * h` bytes), but `channel_count` inferred 3 bytes per pixel for
+        // an opaque image, so the buffer never matched, `resize_nearest`
+        // rejected every image, and `plan_replacements` never emitted a single
+        // replacement.
+        let rgba = DecodedImage {
+            width: 2,
+            height: 2,
+            data: vec![
+                1, 2, 3, 255, //
+                4, 5, 6, 255, //
+                7, 8, 9, 255, //
+                10, 11, 12, 255,
+            ],
+            has_alpha: false,
+            is_image_mask: false,
+            premultiplied: false,
+        };
+        let rgb = rgba_to_rgb(rgba);
+        assert_eq!(rgb.data, vec![1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12]);
+        assert_eq!(channel_count(&rgb), 3);
+        // The converted buffer is what the resampler now accepts.
+        let resized = resize_nearest(&rgb, 1, 1).expect("RGB buffer must resize");
+        assert_eq!(resized.data.len(), 3);
+
+        // A buffer that is not a whole number of RGBA pixels is passed through
+        // untouched, so a genuinely single-channel decode still behaves as
+        // before.
+        let gray = DecodedImage {
+            width: 2,
+            height: 1,
+            data: vec![9, 8],
+            has_alpha: true,
+            is_image_mask: false,
+            premultiplied: false,
+        };
+        let untouched = rgba_to_rgb(gray);
+        assert_eq!(untouched.data, vec![9, 8]);
+        assert_eq!(channel_count(&untouched), 1);
+    }
 
     fn decoded_gray(w: u32, h: u32) -> DecodedImage {
         DecodedImage {

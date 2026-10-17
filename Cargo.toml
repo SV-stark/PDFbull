@@ -1,6 +1,6 @@
 [package]
 name = "pdfbull"
-version = "0.18.0"
+version = "0.18.1"
 description = "A lightweight PDF reader"
 authors = ["SV-stark"]
 edition = "2024"
@@ -23,8 +23,8 @@ exclude = [
 [dependencies]
 gpui-kit = "0.7.1"
 image = { version = "0.25", default-features = false }
-zpdf = { version = "=0.15.0", features = ["cpu-render"] }
-zpdf-writer = "=0.15.0"
+zpdf = { version = "=0.16.0", features = ["cpu-render"] }
+zpdf-writer = "=0.16.0"
 tokio = { version = "1.0", features = ["rt-multi-thread", "sync", "time", "process", "fs", "io-util", "macros"] }
 rfd = "0.17"
 zune-image = "0.5"
@@ -49,13 +49,13 @@ jbig2enc-rust = { version = "0.5.4", default-features = false, features = ["enco
 # deriving effective DPI. `zpdf` re-exports the crate's high-level helpers but
 # not its tokenizer, and its interpreter reports a display-list-local image id
 # rather than the object id needed to rewrite a stream. Pinned to the exact
-# version `zpdf` 0.14.0 depends on so both see one copy of the types.
-zpdf-content = "=0.15.0"
+# version `zpdf` 0.16.0 depends on so both see one copy of the types.
+zpdf-content = "=0.16.0"
 # `parse_resource_dict`, for reading a Form XObject's own /Resources when
 # following a scan nested inside a form. Pinned to the exact version `zpdf`
-# 0.15.0 depends on so both see one copy of the types.
-zpdf-document = "=0.15.0"
-zpdf-image = "=0.15.0"
+# 0.16.0 depends on so both see one copy of the types.
+zpdf-document = "=0.16.0"
+zpdf-image = "=0.16.0"
 csscolorparser = "0.8"
 timeago = "0.6"
 tempfile = "3"

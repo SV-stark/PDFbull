@@ -43,7 +43,21 @@ fn reload_if_needed(
         (path.clone(), pass.clone())
     };
 
-    if let Err(e) = store.open_document(&path, pass.as_ref().map(|s| s.as_str()), doc_id) {
+    // `open_document` parses an untrusted file and can panic on a malformed
+    // document. Every command *around* this call is wrapped in
+    // `catch_worker_panic`, but this pre-command reload was not, so a panic here
+    // unwound the worker thread itself and it never returned to its command
+    // loop. Every malformed document that panicked on reload therefore retired
+    // one worker permanently, until the pool was empty and every UI command
+    // awaited a channel whose receiver had died.
+    let mut store_ref = std::panic::AssertUnwindSafe(&mut *store);
+    let reload_path = path.clone();
+    let res = catch_worker_panic("reload_if_needed", move || {
+        store_ref
+            .open_document(&reload_path, pass.as_ref().map(|s| s.as_str()), doc_id)
+            .map(|_| ())
+    });
+    if let Err(e) = res {
         tracing::error!("Failed to reload document {doc_id:?} from path '{path}': {e:?}");
     }
 }
@@ -452,11 +466,20 @@ pub fn spawn_engine_thread(cache_size: u64, max_memory_mb: u64) -> EngineState {
                             // received it. `reload_if_needed` had the same
                             // problem, reloading the original rather than the
                             // file the user was now editing.
-                            if res.is_ok()
-                                && let Ok(mut guard) = paths.write()
-                                && let Some(entry) = guard.get_mut(&doc_id)
-                            {
-                                entry.0 = path;
+                            //
+                            // Both maps have to move. `save_annotations` reads
+                            // its *source* bytes from `DocumentStore::paths`
+                            // while writing to an explicit output path, so
+                            // updating only the shared map left the store
+                            // reading the original file and writing it over the
+                            // Save-As target on the next save.
+                            if res.is_ok() {
+                                store.set_document_path(doc_id, path.clone());
+                                if let Ok(mut guard) = paths.write()
+                                    && let Some(entry) = guard.get_mut(&doc_id)
+                                {
+                                    entry.0 = path;
+                                }
                             }
                             let _ = tx.send(res);
                         }
@@ -470,7 +493,7 @@ pub fn spawn_engine_thread(cache_size: u64, max_memory_mb: u64) -> EngineState {
                         PdfCommand::Split(path, pages, out, tx) => {
                             let store_ref = std::panic::AssertUnwindSafe(&store);
                             let res = catch_worker_panic("split", move || {
-                                store_ref.split_pdf(&path, pages, out)
+                                store_ref.split_pdf(&path, pages, out, None)
                             });
                             let _ = tx.send(res);
                         }
