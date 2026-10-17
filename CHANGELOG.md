@@ -14,6 +14,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.18.2] - 2026-10-17
+
+### Fixed
+- **Text selection did nothing on drag (`src/ui_gpui/canvas.rs`)**: the container-level `on_mouse_move` listener was the only thing updating `selection_end`, and it never fired while the cursor sat over a page card (the card's own hitbox intercepted the move), so `selection_end` stayed equal to `selection_start`, the marquee never grew, and `extract_selected_text` saw a zero-size box and treated the drag as a click. Each page card now forwards `on_drag_move` itself, so the end point tracks the cursor whenever the drag started on that card.
+- **Wheel zoom dropped the page onto the "Rendering page…" placeholder (`src/ui_gpui/app_view.rs`)**: Ctrl+wheel called `render_needed_pages` on every notch, spawning a render per notch that piled up behind the in-flight one and left not-yet-rendered pages on the placeholder until zooming stopped. Zoom now updates the viewport and notifies immediately (the cached bitmap scales to the new size for a smooth gesture) and re-renders once, 150 ms after the last notch, reading the latest zoom at wake time. Discrete zoom (toolbar buttons and `+`/`-`/`0` keys) still re-renders immediately.
+- **macOS and Linux releases were not published (`.github/workflows/release.yml`)**: the cargo-dist Linux "Build artifacts" step failed on `rust-lld: unable to find library -lxkbcommon-x11` (missing `libxkbcommon-x11-dev`), aborting the whole workflow before `host`/`announce`, so no mac or linux tarballs were attached. An explicit install step now provides the library. Publishing also raced `stable.yml`, which creates the GitHub release first; cargo-dist now waits for the release to exist (creating it as a fallback), uploads with `--steps=upload` only, and the final "Create GitHub Release" step falls back to `gh release upload` when the release already exists, so Windows (stable.yml) and mac/Linux (cargo-dist) end up in one release.
+
+### Changed
+- **Landing page (`docs/index.html`)**: version badge, hero button, comparison-table header and Windows installer link moved from v0.14.0 to v0.18.1; the macOS/Linux cards no longer advertise never-published `.dmg`/`AppImage`/`.deb` artifacts — they now link to the real `.tar.xz` builds, last published with v0.15.1, and state that fact.
+
 ## [0.18.1] - 2026-10-17
 
 ### Changed
