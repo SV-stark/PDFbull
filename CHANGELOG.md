@@ -14,6 +14,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.18.3] - 2026-10-19
+
+### Fixed
+- **Text selection never committed on some platforms (`src/ui_gpui/app_view.rs`)**: the drag-end handler now captures the final cursor position directly from the window via `window.mouse_position()`, so a drag resolves to a real selection box even when intermediate mouse-move events were not delivered during the press-drag. Previously `selection_end` stayed equal to `selection_start`, the drag was treated as a click, and no text was selected or highlighted.
+
+### Changed
+- **Windows installer now ships in releases (`dist-workspace.toml`)**: `installers` changed from `[]` to `["msi", "powershell"]`, so cargo-dist now builds a `pdfbull-*.msi` (and a PowerShell install script) for the Windows target. The release workflow's plan step picks this up automatically; no NSIS installer is produced by cargo-dist (the hand-written `installer.nsi` is not wired into CI).
+
 ## [0.18.2] - 2026-10-17
 
 ### Fixed

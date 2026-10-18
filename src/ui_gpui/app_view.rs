@@ -3411,7 +3411,7 @@ impl Render for PdfbullView {
                         cx.notify();
                     }
                 },
-                |this, _page_idx, _, cx| {
+                |this, _page_idx, window, cx| {
                     // Bug 3 fix: gate only on is_selecting; do NOT check selection_page ==
                     // Some(_page_idx).  When mousedown is on page 3 and mouseup fires on
                     // page 4, _page_idx==4 but selection_page==Some(3) — the old guard
@@ -3419,6 +3419,13 @@ impl Render for PdfbullView {
                     // selection_page so text extraction and annotation coordinates are
                     // relative to the correct page origin.
                     if this.viewport.is_selecting {
+                        // Capture the final cursor location from the window, even when
+                        // intermediate mouse-move events never fired (which would leave
+                        // selection_end stuck at the start and turn the drag into a
+                        // click). This is the robust fallback for the "no marquee /
+                        // no selection" case on platforms where per-element move
+                        // events are not delivered during a press-drag.
+                        this.viewport.selection_end = Some(window.mouse_position());
                         // Always clear is_selecting first so no edge-case can leave the
                         // viewport stuck in selecting mode.
                         this.viewport.is_selecting = false;
