@@ -20,6 +20,12 @@ exclude = [
     "installer.nsi",
 ]
 
+[package.metadata.wix]
+upgrade-guid = "1B237900-04FB-481F-9D5D-F0EDF9509BB5"
+path-guid = "6809003F-8E5F-44E1-99F7-FE7E2B2FA137"
+license = false
+eula = false
+
 [dependencies]
 gpui-kit = "0.7.1"
 image = { version = "0.25", default-features = false }
