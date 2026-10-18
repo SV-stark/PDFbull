@@ -214,15 +214,14 @@ fn scan_content_stream(
                     operands.clear();
                 }
                 "Do" => {
-                    if let Some(name) = last_name_operand(operands) {
-                        if let Some(&id) = resources.xobjects.get(name) {
+                    if let Some(name) = last_name_operand(operands)
+                        && let Some(&id) = resources.xobjects.get(name) {
                             record_placement(file, id, ctm, out);
                             follow_form(
                                 file, id, resources, ctm, stack, operands, forms_seen, form_depth,
                                 out,
                             );
                         }
-                    }
                     operands.clear();
                 }
                 _ => operands.clear(),
@@ -303,11 +302,10 @@ fn follow_form(
     // A form carries its own /Matrix and /Resources, both defaulting to
     // identity/inherited.
     let mut ctm = *parent_ctm;
-    if let Some(m) = stream.dict.get("Matrix") {
-        if let Some(m) = matrix_from_object(m) {
+    if let Some(m) = stream.dict.get("Matrix")
+        && let Some(m) = matrix_from_object(m) {
             ctm = mul_matrix(&m, &ctm);
         }
-    }
     // A form without its own /Resources inherits the parent's; a malformed one
     // falls back to inherited rather than dropping the image entirely.
     let parsed_res = match stream.dict.get("Resources") {
@@ -691,7 +689,7 @@ fn encode_jpeg(img: &DecodedImage) -> Option<Replacement> {
     // alpha-bearing and stencil cases are already excluded upstream.
     let rgb: Vec<u8> = if img.has_alpha || img.is_image_mask {
         let mut v = Vec::with_capacity(w * h * 3);
-        for px in img.data.chunks_exact(1) {
+        for px in img.data.as_chunks::<1>().0 {
             v.extend_from_slice(&[px[0], px[0], px[0]]);
         }
         v
@@ -1167,7 +1165,7 @@ mod tests {
         // A small RGB gradient, wide enough that halving still leaves detail.
         let (w, h) = (64u32, 48u32);
         let mut data = vec![0u8; (w as usize) * (h as usize) * 3];
-        for (i, px) in data.chunks_exact_mut(3).enumerate() {
+        for (i, px) in data.as_chunks_mut::<3>().0.iter_mut().enumerate() {
             px[0] = (i % 256) as u8;
             px[1] = 128;
             px[2] = 255 - (i % 256) as u8;

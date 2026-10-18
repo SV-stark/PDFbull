@@ -4999,7 +4999,7 @@ mod tests {
         for i in 0..(MAX_TRACKED_KEYS_PER_DOC * 4) {
             let key = RenderKey {
                 doc_id: doc,
-                page_num: (i % 40) as usize,
+                page_num: (i % 40),
                 scale: 50 + (i % 400) as u32,
                 rotation: (i % 4) as i32,
                 auto_crop: false,

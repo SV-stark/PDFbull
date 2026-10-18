@@ -233,6 +233,7 @@ pub struct DocumentViewport {
     /// a frame does not have to deep-copy every annotation on every card.
     pub annotations_arc:
         std::collections::HashMap<usize, std::sync::Arc<Vec<crate::models::Annotation>>>,
+    #[allow(clippy::type_complexity)]
     pub search_highlights:
         std::collections::HashMap<usize, std::sync::Arc<Vec<(f32, f32, f32, f32)>>>,
     /// `/Rotate` per page, in degrees, from the document.

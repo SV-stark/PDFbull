@@ -2202,14 +2202,13 @@ fn test_reset_for_document_is_lossless_when_annotations_are_cached() {
 ///
 /// Hand-written so the test does not depend on any particular builder API.
 fn pdf_with_offset_mediabox() -> Vec<u8> {
-    let mut objects: Vec<String> = Vec::new();
-    objects.push("<< /Type /Catalog /Pages 2 0 R >>".to_string());
-    objects.push("<< /Type /Pages /Kids [3 0 R] /Count 1 >>".to_string());
-    objects.push(
+    let objects: Vec<String> = vec![
+        "<< /Type /Catalog /Pages 2 0 R >>".to_string(),
+        "<< /Type /Pages /Kids [3 0 R] /Count 1 >>".to_string(),
         "<< /Type /Page /Parent 2 0 R /MediaBox [0 100 612 892] \
          /Resources << >> >>"
             .to_string(),
-    );
+    ];
 
     let mut out = String::from("%PDF-1.4\n");
     // Byte offsets in the xref table must be measured from the start of the file.
@@ -2272,7 +2271,7 @@ fn test_annotations_do_not_drift_on_pages_whose_box_starts_below_zero() {
 
     let path_str = path.to_string_lossy().to_string();
     store
-        .save_annotations(doc_id, &[original.clone()], Some(path_str.clone()))
+        .save_annotations(doc_id, std::slice::from_ref(&original), Some(path_str.clone()))
         .expect("save annotations");
 
     let reloaded = store

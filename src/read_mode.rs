@@ -109,7 +109,7 @@ impl ReadModeConfig {
             }
             TwoUpLayout::Continuous => {
                 // Facing pairs: (0, 1), (2, 3), (4, 5)...
-                let left = if current_page % 2 == 0 {
+                let left = if current_page.is_multiple_of(2) {
                     current_page
                 } else {
                     current_page.saturating_sub(1)
