@@ -2271,7 +2271,11 @@ fn test_annotations_do_not_drift_on_pages_whose_box_starts_below_zero() {
 
     let path_str = path.to_string_lossy().to_string();
     store
-        .save_annotations(doc_id, std::slice::from_ref(&original), Some(path_str.clone()))
+        .save_annotations(
+            doc_id,
+            std::slice::from_ref(&original),
+            Some(path_str.clone()),
+        )
         .expect("save annotations");
 
     let reloaded = store

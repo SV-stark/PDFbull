@@ -5,6 +5,15 @@ All notable changes to the PDFbull project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.18.4] - 2026-10-24
+
+### Changed
+- **Upgraded `zpdf` and its sibling crates `0.16.0` → `0.17.0` (`Cargo.toml`)**: `zpdf`, `zpdf-writer`, `zpdf-content`, `zpdf-document` and `zpdf-image` pins moved to `=0.17.0` together so the exact-version type-identity requirement across the chain still holds. 0.17.0's only source-breaking change — `PositionedGlyph` gaining a `code: u32` field — is not touched by this codebase, so the bump is source-compatible here: the workspace compiled unchanged. Everything else arrives through the dependency: bounded decoder memory amplification (CCITT/JBIG2/mesh/font/image paths now drop or refuse oversized work instead of amplifying writes into memory), rotation about the effective page-box origin, pending clips applied after painting and scoped to their originating stream, JPEG dimension recovery, JPX codestream geometry and colour-space overrides winning over stale dictionaries, soft-mask matte handling, corrected Separation/DeviceN/Lab/Indexed/CMYK image conversion (some of which also touches the `0.16.0` render path), signature byte-range rejection of malformed/overlapping/backward ranges, OS-random incremental AES-CBC IVs, a shared native headless `wgpu` instance across GPU contexts (fixes concurrent device-teardown races in the system Vulkan loader — visible only to `render_bench`), and repeated Form content/fonts/masks/patterns/glyph work now cached across the interpreter. Building this tree now needs rustc ≥ 1.89 (the default 1.88.0 toolchain error-exits the resolver; use the installed `1.99.0-x86_64-pc-windows-msvc`).
+- **Redactions are now destructive (`src/pdf_engine.rs`)**: `apply_redactions` wrote the redacted page back through `IncrementalWriter::redact_page` + `write`, which appends a *new revision* to the file — and the original file prefix, containing the unredacted content stream, stayed in the output. Anything wiped with the Redact tool was still recoverable from the saved file. The burn now goes through zpdf 0.17's `redact_pdf`: excise the same operators, then rewrite the whole document so superseded revisions are absent from the output. Output is deterministic across the annotation-load `HashMap`'s iteration order (pages redact in ascending order via a `BTreeMap`). Two posture notes: the rewritten output is always unencrypted (the rewrite cannot retain `/Encrypt` without the owner password — same unencrypted posture as `save_annotations`'s write path), and document-level text not tied to a region (metadata, bookmarks, attachments, other pages) is retained, exactly as before.
+
+### Improved
+- Formatting (`cargo fmt`): `src/image_optimizer.rs` reflowed to rustfmt's current let-chain brace style; `tests/regressions.rs` reflowed a single call. No behaviour change.
+
 ## [0.18.0] - 2026-10-16
 
 ### Changed

@@ -52,6 +52,7 @@ impl crate::models::DestinationView {
 }
 use zpdf_writer::{
     builder::DocumentBuilder,
+    redact::{RedactOptions, redact_pdf},
     sign::{SignatureOptions, SigningKey},
     stamp::StampItem,
 };
@@ -3558,8 +3559,14 @@ impl DocumentStore {
     }
 
     /// Burn redaction annotations permanently into the PDF, making the
-    /// redacted content irrecoverable. Uses `IncrementalWriter::redact_page`
-    /// for proper flate-paint redaction with content stream rewriting.
+    /// redacted content irrecoverable. Goes through zpdf's destructive
+    /// `redact_pdf` (0.17+): after removing the matching text/XObject/path
+    /// operators from the page content, the whole document is rewritten so
+    /// the superseded revisions — in particular the **original, unredacted
+    /// content stream** — are absent from the bytes we write.
+    /// `IncrementalWriter::redact_page` alone is not sufficient: it appends a
+    /// new revision and leaves the original file prefix in the output, which
+    /// is exactly what a redaction must not do.
     pub fn apply_redactions(
         &self,
         doc_id: DocumentId,
@@ -3572,11 +3579,12 @@ impl DocumentStore {
             .ok_or(PdfError::EngineError(EngineErrorKind::DocumentPathNotFound))?;
 
         let data = std::fs::read(pdf_path).map_err(|e| PdfError::OpenFailed(e.to_string()))?;
-        let mut writer =
-            IncrementalWriter::new(data).map_err(|e| PdfError::OpenFailed(e.to_string()))?;
 
-        // Group Redact annotations by page.
-        let mut by_page: HashMap<usize, Vec<ZpdfRect>> = HashMap::new();
+        // `redact_pdf` redacts one page per call and rebuilds the whole file,
+        // so feed each call the previous call's output. Pages are visited in
+        // ascending order (BTreeMap) so the result does not depend on the
+        // annotation collection's map iteration order.
+        let mut by_page: std::collections::BTreeMap<usize, Vec<ZpdfRect>> = Default::default();
         for ann in annotations {
             if let AnnotationStyle::Redact { .. } = &ann.style {
                 // Convert from screen (top-left, box-relative) coords back to PDF
@@ -3609,19 +3617,22 @@ impl DocumentStore {
             }
         }
 
+        // Empty password matches what `IncrementalWriter::new` accepted for
+        // this code's callers: documents redacted here were opened by the
+        // engine with a password the caller already supplied, but the writer
+        // path never carried it. `redact_pdf` maps `WrongPassword` onto the
+        // same open error as before — nothing silently succeeds on an
+        // encrypted file.
+        let mut out_bytes = data;
         for (page_idx, rects) in by_page {
-            writer
-                .redact_page(page_idx, &rects, &Default::default())
+            out_bytes = redact_pdf(out_bytes, b"", page_idx, &rects, &RedactOptions::default())
                 .map_err(|e| PdfError::IoError(e.to_string()))?;
         }
-
-        let out_bytes = {
-            let mut buf = std::io::Cursor::new(Vec::new());
-            writer
-                .write(&mut buf)
-                .map_err(|e| PdfError::IoError(e.to_string()))?;
-            buf.into_inner()
-        };
+        // `redact_pdf` decrypts while rewriting (its output cannot retain the
+        // encryption dictionary, only the password it was given — which here
+        // is empty), so the written file is unencrypted even if the source
+        // was not. Redacted output leaving the app unencrypted is the same
+        // posture as `save_annotations`'s write path.
 
         let pdf_path_buf = std::path::Path::new(pdf_path);
         let final_path = output_path.unwrap_or_else(|| {

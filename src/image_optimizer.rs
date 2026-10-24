@@ -215,13 +215,13 @@ fn scan_content_stream(
                 }
                 "Do" => {
                     if let Some(name) = last_name_operand(operands)
-                        && let Some(&id) = resources.xobjects.get(name) {
-                            record_placement(file, id, ctm, out);
-                            follow_form(
-                                file, id, resources, ctm, stack, operands, forms_seen, form_depth,
-                                out,
-                            );
-                        }
+                        && let Some(&id) = resources.xobjects.get(name)
+                    {
+                        record_placement(file, id, ctm, out);
+                        follow_form(
+                            file, id, resources, ctm, stack, operands, forms_seen, form_depth, out,
+                        );
+                    }
                     operands.clear();
                 }
                 _ => operands.clear(),
@@ -303,9 +303,10 @@ fn follow_form(
     // identity/inherited.
     let mut ctm = *parent_ctm;
     if let Some(m) = stream.dict.get("Matrix")
-        && let Some(m) = matrix_from_object(m) {
-            ctm = mul_matrix(&m, &ctm);
-        }
+        && let Some(m) = matrix_from_object(m)
+    {
+        ctm = mul_matrix(&m, &ctm);
+    }
     // A form without its own /Resources inherits the parent's; a malformed one
     // falls back to inherited rather than dropping the image entirely.
     let parsed_res = match stream.dict.get("Resources") {
