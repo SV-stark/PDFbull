@@ -556,6 +556,28 @@ pub fn spawn_engine_thread(cache_size: u64, max_memory_mb: u64) -> EngineState {
                             });
                             let _ = tx.send(res);
                         }
+                        PdfCommand::RotatePages(input, rotations, output, tx) => {
+                            let store_ref = std::panic::AssertUnwindSafe(&store);
+                            let res = catch_worker_panic("rotate_pages", move || {
+                                store_ref.rotate_pages(&input, &rotations, &output)
+                            });
+                            let _ = tx.send(res);
+                        }
+                        PdfCommand::DeletePages(input, page_indices, output, tx) => {
+                            let store_ref = std::panic::AssertUnwindSafe(&store);
+                            let res = catch_worker_panic("delete_pages", move || {
+                                store_ref.delete_pages(&input, &page_indices, &output)
+                            });
+                            let _ = tx.send(res);
+                        }
+                        PdfCommand::ExportSvg(doc_id, page_num, tx) => {
+                            reload_if_needed(&mut store, &paths, doc_id);
+                            let store_ref = std::panic::AssertUnwindSafe(&store);
+                            let res = catch_worker_panic("export_svg", move || {
+                                store_ref.export_page_svg(doc_id, page_num)
+                            });
+                            let _ = tx.send(res);
+                        }
                         PdfCommand::LoadAnnotations(doc_id, path, tx) => {
                             let _ = doc_id;
                             let store_ref = std::panic::AssertUnwindSafe(&store);

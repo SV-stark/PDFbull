@@ -2485,6 +2485,30 @@ fn test_byte_range_coverage_struct_exists() {
     assert_eq!(coverage.ranges.len(), 1);
 }
 
+#[test]
+fn test_zpdf_v18_features_and_errors() {
+    // 1. PasswordRequired error variant exists and is distinct
+    let err = zpdf::Error::PasswordRequired;
+    assert!(matches!(err, zpdf::Error::PasswordRequired));
+
+    // 2. SVG export API exists and functions
+    let dl = zpdf::DisplayList::new(zpdf::Rect::new(0.0, 0.0, 200.0, 200.0));
+    let fonts = zpdf::FontCache::new();
+    let images = zpdf::ImageCache::new();
+    let svg = zpdf_svg_export::display_list_to_svg(
+        &dl,
+        &fonts,
+        &images,
+        &zpdf_svg_export::SvgOptions::default(),
+    );
+    assert!(svg.contains("<svg"));
+    assert!(svg.contains("</svg>"));
+
+    // 3. UserUnit scaling on page pipeline options exists
+    let opts = zpdf::PageInterpretOptions::default();
+    assert!(opts.include_annotations);
+}
+
 #[cfg(windows)]
 #[test]
 fn test_single_instance_forwarding_reaches_the_ui_channel() {

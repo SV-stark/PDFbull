@@ -783,6 +783,7 @@ pub struct RenderOptions {
 pub struct DocumentStore {
     documents: HashMap<DocumentId, PdfDocument>,
     paths: HashMap<DocumentId, String>,
+    passwords: HashMap<DocumentId, String>,
     render_cache: SharedRenderCache,
     /// Base `OcConfig` as decoded from the document (read-only after load).
     oc_configs: HashMap<DocumentId, zpdf::OcConfig>,
@@ -888,6 +889,7 @@ impl DocumentStore {
         Self {
             documents: HashMap::new(),
             paths: HashMap::new(),
+            passwords: HashMap::new(),
             render_cache: cache,
             oc_configs: HashMap::new(),
             oc_groups: HashMap::new(),
@@ -958,7 +960,7 @@ impl DocumentStore {
                 doc.set_font_provider(font_provider);
                 doc
             }
-            Err(zpdf::Error::WrongPassword) => {
+            Err(zpdf::Error::WrongPassword | zpdf::Error::PasswordRequired) => {
                 return Err(PdfError::PasswordRequired);
             }
             Err(e) => {
@@ -974,8 +976,9 @@ impl DocumentStore {
         for i in 0..page_count {
             if let Ok(page) = doc.page(i) {
                 let rect = page.effective_box();
-                let w = rect.width() as f32;
-                let h = rect.height() as f32;
+                let user_unit = page.user_unit as f32;
+                let w = (rect.width() as f32) * user_unit;
+                let h = (rect.height() as f32) * user_unit;
                 // Report the **unrotated** extents, and the page's own `/Rotate`
                 // alongside them. The canvas applies the rotation itself — it
                 // needs `page_rotations` for that — and the overlay transform is
@@ -1054,6 +1057,9 @@ impl DocumentStore {
 
         self.documents.insert(doc_id, doc);
         self.paths.insert(doc_id, path.to_string());
+        if let Some(pw) = password {
+            self.passwords.insert(doc_id, pw.to_string());
+        }
         self.image_caches.insert(doc_id, ImageCache::new());
 
         Ok(crate::models::OpenResult {
@@ -1147,6 +1153,7 @@ impl DocumentStore {
         let mut spans = Vec::new();
         {
             let interp = ContentInterpreter::new(page.effective_box())
+                .with_page_user_unit(page.user_unit)
                 .with_image_cache_limit(self.image_cache_bytes)
                 .with_fonts(&mut fonts)
                 .with_document(doc.file(), &page.resources)
@@ -1313,6 +1320,7 @@ impl DocumentStore {
     pub fn close_document(&mut self, doc_id: DocumentId) {
         self.documents.remove(&doc_id);
         self.paths.remove(&doc_id);
+        self.passwords.remove(&doc_id);
         self.oc_configs.remove(&doc_id);
         self.oc_groups.remove(&doc_id);
         self.oc_visibility.remove(&doc_id);
@@ -1856,6 +1864,7 @@ impl DocumentStore {
         let mut interp = ContentInterpreter::new(page_rect)
             .with_image_cache_limit(self.image_cache_bytes)
             .with_page_rotation(page.rotate + options.rotation)
+            .with_page_user_unit(page.user_unit)
             .with_fonts(&mut fonts)
             .with_document(doc.file(), &page.resources)
             .with_images(images);
@@ -2012,6 +2021,7 @@ impl DocumentStore {
         let mut spans = Vec::new();
         {
             let interp = ContentInterpreter::new(page.effective_box())
+                .with_page_user_unit(page.user_unit)
                 .with_image_cache_limit(self.image_cache_bytes)
                 .with_fonts(&mut fonts)
                 .with_document(doc.file(), &page.resources)
@@ -2052,6 +2062,7 @@ impl DocumentStore {
         let mut spans = Vec::new();
         {
             let interp = ContentInterpreter::new(page.effective_box())
+                .with_page_user_unit(page.user_unit)
                 .with_image_cache_limit(self.image_cache_bytes)
                 .with_fonts(&mut fonts)
                 .with_document(doc.file(), &page.resources)
@@ -2103,6 +2114,7 @@ impl DocumentStore {
         let mut rules = Vec::new();
         {
             let interp = ContentInterpreter::new(page.effective_box())
+                .with_page_user_unit(page.user_unit)
                 .with_image_cache_limit(self.image_cache_bytes)
                 .with_fonts(&mut fonts)
                 .with_document(doc.file(), &page.resources)
@@ -2153,8 +2165,13 @@ impl DocumentStore {
             .clone();
 
         let data = std::fs::read(&pdf_path).map_err(|e| PdfError::OpenFailed(e.to_string()))?;
-        let mut writer =
-            IncrementalWriter::new(data).map_err(|e| PdfError::OpenFailed(e.to_string()))?;
+        let pass = self
+            .passwords
+            .get(&doc_id)
+            .map(|s| s.as_bytes())
+            .unwrap_or(b"");
+        let mut writer = IncrementalWriter::new_with_password(data, pass)
+            .map_err(|e| PdfError::OpenFailed(e.to_string()))?;
 
         // Idempotency: drop every annotation a *previous* save wrote before
         // appending the current set. Without this, each Ctrl+S re-reads the
@@ -2420,6 +2437,7 @@ impl DocumentStore {
         let display_list = ContentInterpreter::new(page.effective_box())
             .with_image_cache_limit(self.image_cache_bytes)
             .with_page_rotation(page.rotate)
+            .with_page_user_unit(page.user_unit)
             .with_fonts(&mut fonts)
             .with_document(doc.file(), &page.resources)
             .with_images(&mut images)
@@ -2581,6 +2599,7 @@ impl DocumentStore {
             let eff_box = page.effective_box();
             {
                 let interp = ContentInterpreter::new(eff_box)
+                    .with_page_user_unit(page.user_unit)
                     .with_image_cache_limit(self.image_cache_bytes)
                     .with_fonts(&mut fonts)
                     .with_document(doc.file(), &page.resources)
@@ -2712,6 +2731,7 @@ impl DocumentStore {
         let mut spans = Vec::new();
         {
             let interp = ContentInterpreter::new(page.effective_box())
+                .with_page_user_unit(page.user_unit)
                 .with_image_cache_limit(self.image_cache_bytes)
                 .with_fonts(&mut fonts)
                 .with_document(doc.file(), &page.resources)
@@ -3459,6 +3479,78 @@ impl DocumentStore {
         Ok(output_path.to_string())
     }
 
+    pub fn rotate_pages(
+        &self,
+        input_path: &str,
+        rotations: &[(usize, i32)],
+        output_path: &str,
+    ) -> PdfResult<String> {
+        let data = read_input_capped(input_path)?;
+        let mut writer =
+            IncrementalWriter::new(data).map_err(|e| PdfError::OpenFailed(e.to_string()))?;
+
+        for &(page_idx, degrees) in rotations {
+            writer
+                .rotate_page(page_idx, degrees)
+                .map_err(|e| PdfError::IoError(e.to_string()))?;
+        }
+
+        let out_bytes = {
+            let mut buf = std::io::Cursor::new(Vec::new());
+            writer
+                .write(&mut buf)
+                .map_err(|e| PdfError::IoError(e.to_string()))?;
+            buf.into_inner()
+        };
+        write_pdf_output(output_path, &out_bytes)?;
+
+        Ok(output_path.to_string())
+    }
+
+    pub fn delete_pages(
+        &self,
+        input_path: &str,
+        page_indices: &[usize],
+        output_path: &str,
+    ) -> PdfResult<String> {
+        let data = read_input_capped(input_path)?;
+        let mut writer =
+            IncrementalWriter::new(data).map_err(|e| PdfError::OpenFailed(e.to_string()))?;
+
+        writer
+            .delete_pages(page_indices)
+            .map_err(|e| PdfError::IoError(e.to_string()))?;
+
+        let out_bytes = {
+            let mut buf = std::io::Cursor::new(Vec::new());
+            writer
+                .write(&mut buf)
+                .map_err(|e| PdfError::IoError(e.to_string()))?;
+            buf.into_inner()
+        };
+        write_pdf_output(output_path, &out_bytes)?;
+
+        Ok(output_path.to_string())
+    }
+
+    pub fn export_page_svg(&self, doc_id: DocumentId, page_num: usize) -> PdfResult<String> {
+        let doc = self
+            .documents
+            .get(&doc_id)
+            .ok_or(PdfError::EngineError(EngineErrorKind::DocumentNotFound))?;
+        let interpreted =
+            zpdf::interpret_page(doc, page_num, zpdf::PageInterpretOptions::default())
+                .map_err(|e| PdfError::RenderFailed(e.to_string()))?;
+
+        let svg = zpdf_svg_export::display_list_to_svg(
+            &interpreted.display_list,
+            &interpreted.fonts,
+            &interpreted.images,
+            &zpdf_svg_export::SvgOptions::default(),
+        );
+        Ok(svg)
+    }
+
     pub fn split_pdf(
         &self,
         path: &str,
@@ -3491,7 +3583,9 @@ impl DocumentStore {
         let doc =
             zpdf::PdfDocument::open_with_password(base_data, password.unwrap_or("").as_bytes())
                 .map_err(|e| match e {
-                    zpdf::Error::WrongPassword => PdfError::PasswordRequired,
+                    zpdf::Error::WrongPassword | zpdf::Error::PasswordRequired => {
+                        PdfError::PasswordRequired
+                    }
                     other => PdfError::OpenFailed(other.to_string()),
                 })?;
         let pdf_file = doc.file();
@@ -3623,9 +3717,14 @@ impl DocumentStore {
         // path never carried it. `redact_pdf` maps `WrongPassword` onto the
         // same open error as before — nothing silently succeeds on an
         // encrypted file.
+        let pass = self
+            .passwords
+            .get(&doc_id)
+            .map(|s| s.as_bytes())
+            .unwrap_or(b"");
         let mut out_bytes = data;
         for (page_idx, rects) in by_page {
-            out_bytes = redact_pdf(out_bytes, b"", page_idx, &rects, &RedactOptions::default())
+            out_bytes = redact_pdf(out_bytes, pass, page_idx, &rects, &RedactOptions::default())
                 .map_err(|e| PdfError::IoError(e.to_string()))?;
         }
         // `redact_pdf` decrypts while rewriting (its output cannot retain the

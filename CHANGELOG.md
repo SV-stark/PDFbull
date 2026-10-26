@@ -5,6 +5,28 @@ All notable changes to the PDFbull project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.19.2] - 2026-10-26
+
+### Changed
+- **Upgraded `zpdf` and sibling crates `0.17.0` → `0.18.0` (`Cargo.toml`)**:
+  - Bumped `zpdf`, `zpdf-writer`, `zpdf-content`, `zpdf-document`, and `zpdf-image` to `=0.18.0`.
+  - Added `zpdf-svg-export` `=0.18.0` for vector-faithful standalone SVG export.
+
+### Added
+- **Vector SVG Page Export (`src/commands.rs`, `src/engine.rs`, `src/pdf_engine.rs`)**:
+  - Implemented `DocumentStore::export_page_svg` and `PdfCommand::ExportSvg` to generate resolution-independent vector SVG documents with glyph-outline paths directly from page display lists.
+- **Page Tree Operations (`src/commands.rs`, `src/engine.rs`, `src/pdf_engine.rs`)**:
+  - Implemented `DocumentStore::rotate_pages` and `PdfCommand::RotatePages` using `IncrementalWriter::rotate_page` for non-destructive page rotation revisions.
+  - Implemented `DocumentStore::delete_pages` and `PdfCommand::DeletePages` using `IncrementalWriter::delete_pages` for incremental page deletion.
+
+### Fixed
+- **Encrypted PDF Authentication & Updates (`src/pdf_engine.rs`)**:
+  - Handled `zpdf::Error::PasswordRequired` in `DocumentStore::open_document` and `split_pdf` so password prompt dialogs trigger reliably when opening encrypted files without passwords.
+  - Added session password caching in `DocumentStore` and routed passwords through `IncrementalWriter::new_with_password` and `redact_pdf`, enabling annotation saving and redaction on password-protected documents.
+- **`/UserUnit` Page Scaling Fidelity (`src/pdf_engine.rs`)**:
+  - Incorporated `page.user_unit` into physical page dimensions in `open_document`, accurately sizing blueprints, CAD plans, and large-format PDFs.
+  - Wired `.with_page_user_unit(page.user_unit)` into all `ContentInterpreter` invocations across rasterization, text search, text extraction, annotation drawing, and form rendering.
+
 ## [0.19.1] - 2026-10-26
 
 ### Fixed

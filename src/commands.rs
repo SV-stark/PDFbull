@@ -181,6 +181,19 @@ pub enum PdfCommand {
         crate::ocr::OcrScript,
         oneshot::Sender<PdfResult<crate::ocr::OcrPageResult>>,
     ),
+    RotatePages(
+        String,
+        Vec<(usize, i32)>,
+        String,
+        oneshot::Sender<PdfResult<String>>,
+    ),
+    DeletePages(
+        String,
+        Vec<usize>,
+        String,
+        oneshot::Sender<PdfResult<String>>,
+    ),
+    ExportSvg(DocumentId, usize, oneshot::Sender<PdfResult<String>>),
 }
 
 impl std::fmt::Debug for PdfCommand {
@@ -227,6 +240,9 @@ impl std::fmt::Debug for PdfCommand {
             Self::OcrPage(..) => "OcrPage",
             Self::UpdateMetadata(..) => "UpdateMetadata",
             Self::ExtractPages(..) => "ExtractPages",
+            Self::RotatePages(..) => "RotatePages",
+            Self::DeletePages(..) => "DeletePages",
+            Self::ExportSvg(..) => "ExportSvg",
         };
         f.write_str(name)
     }
