@@ -444,7 +444,7 @@ impl SidebarState {
                                     .right_1()
                                     .px_1()
                                     .rounded_sm()
-                                    .bg(gpui_kit::rgba(0x00000099))
+                                    .bg(gpui_kit::rgba(0x0000_0099))
                                     .text_color(gpui_kit::white())
                                     .text_xs()
                                     .child(format!("{}", page_idx + 1)),

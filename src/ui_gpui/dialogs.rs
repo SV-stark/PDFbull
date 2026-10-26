@@ -802,7 +802,7 @@ impl DialogsState {
                 .absolute()
                 .inset_0()
                 .size_full()
-                .bg(gpui_kit::rgba(0x00000080))
+                .bg(gpui_kit::rgba(0x0000_0080))
                 .flex()
                 .items_center()
                 .justify_center()

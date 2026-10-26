@@ -104,13 +104,13 @@ pub fn spawn_engine_thread(cache_size: u64, max_memory_mb: u64) -> EngineState {
         .max(2);
 
     // Dedicated unicast-broadcast channels per worker so every worker receives Close/ToggleLayer
-    let mut broadcast_txs = Vec::with_capacity(num_workers);
-    let mut broadcast_rxs = Vec::with_capacity(num_workers);
+    let mut broadcast_senders = Vec::with_capacity(num_workers);
+    let mut broadcast_receivers = Vec::with_capacity(num_workers);
 
     for _ in 0..num_workers {
         let (btx, brx) = crossbeam_channel::unbounded::<PdfCommand>();
-        broadcast_txs.push(btx);
-        broadcast_rxs.push(brx);
+        broadcast_senders.push(btx);
+        broadcast_receivers.push(brx);
     }
 
     let forwarder = {
@@ -119,14 +119,14 @@ pub fn spawn_engine_thread(cache_size: u64, max_memory_mb: u64) -> EngineState {
             while let Some(cmd) = cmd_rx.recv().await {
                 match cmd {
                     PdfCommand::Close(doc_id) => {
-                        for tx in &broadcast_txs {
+                        for tx in &broadcast_senders {
                             if let Err(e) = tx.send(PdfCommand::Close(doc_id)) {
                                 tracing::error!("Failed to broadcast Close to engine worker: {e}");
                             }
                         }
                     }
                     PdfCommand::ToggleLayer(doc_id, obj_id, vis) => {
-                        for tx in &broadcast_txs {
+                        for tx in &broadcast_senders {
                             if let Err(e) = tx.send(PdfCommand::ToggleLayer(doc_id, obj_id, vis)) {
                                 tracing::error!(
                                     "Failed to broadcast ToggleLayer to engine worker: {e}"
@@ -188,7 +188,7 @@ pub fn spawn_engine_thread(cache_size: u64, max_memory_mb: u64) -> EngineState {
         });
     }
 
-    for (i, b_rx) in broadcast_rxs.into_iter().enumerate() {
+    for (i, b_rx) in broadcast_receivers.into_iter().enumerate() {
         let rx = worker_rx.clone();
         let cache = render_cache.clone();
         let paths = shared_paths.clone();

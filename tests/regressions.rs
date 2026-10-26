@@ -8,6 +8,7 @@ use pdfbull::ui_gpui::dialogs::ActiveDialog;
 use pdfbull::ui_gpui::log_console::LogConsoleState;
 use pdfbull::ui_gpui::ribbon::PageLayoutMode;
 use pdfbull::ui_gpui::sidebar::SidebarState;
+use std::fmt::Write as _;
 use std::sync::Arc;
 
 // ── Regression tests for the bug fixes ──────────────────────────────────────
@@ -2215,20 +2216,21 @@ fn pdf_with_offset_mediabox() -> Vec<u8> {
     let mut offsets: Vec<usize> = Vec::new();
     for (i, body) in objects.iter().enumerate() {
         offsets.push(out.len());
-        out.push_str(&format!("{} 0 obj\n{body}\nendobj\n", i + 1));
+        let _ = write!(out, "{} 0 obj\n{body}\nendobj\n", i + 1);
     }
 
     let xref_start = out.len();
-    out.push_str(&format!("xref\n0 {}\n", objects.len() + 1));
+    let _ = write!(out, "xref\n0 {}\n", objects.len() + 1);
     out.push_str("0000000000 65535 f \n");
     for off in &offsets {
-        out.push_str(&format!("{off:010} 00000 n \n"));
+        let _ = write!(out, "{off:010} 00000 n \n");
     }
-    out.push_str(&format!(
+    let _ = write!(
+        out,
         "trailer\n<< /Size {} /Root 1 0 R >>\nstartxref\n{}\n%%EOF\n",
         objects.len() + 1,
         xref_start
-    ));
+    );
     out.into_bytes()
 }
 

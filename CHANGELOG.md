@@ -5,6 +5,15 @@ All notable changes to the PDFbull project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.19.1] - 2026-10-26
+
+### Fixed
+- **Non-blocking recent files loading (`src/ui_gpui/welcome.rs`)**: `WelcomeState::load_recent_files` now calls `load_recent_files_impl(false)` during initial view construction, deferring expensive synchronous `lopdf` page-count rescans to prevent UI hangs or hitches on startup.
+- **Allocation optimization in test generation (`tests/regressions.rs`)**: Replaced repeated `push_str(&format!(...))` allocations with direct `write!(out, ...)` buffer writing in PDF object assembly.
+- **Hex color literal formatting (`src/ui_gpui/sidebar.rs`, `src/ui_gpui/dialogs.rs`)**: Formatted color literals with digit separators (`0x0000_0099`, `0x0000_0080`) for visual channel clarity.
+- **Float-to-integer conversion safety (`src/ui_gpui/app_view.rs`)**: Guarded page dimension calculations in `page_size_name` against negative or non-finite float coordinates with `.max(0.0).round() as u32`.
+- **Disambiguated channel identifiers (`src/engine.rs`)**: Renamed `broadcast_txs` and `broadcast_rxs` to `broadcast_senders` and `broadcast_receivers` to eliminate variable naming collisions in the engine dispatcher.
+
 ## [0.19.0] - 2026-10-26
 
 ### Improved

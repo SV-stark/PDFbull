@@ -72,9 +72,9 @@ impl WelcomeState {
         }
     }
 
-    /// Full reload: re-probes page counts. Used once, at view construction.
+    /// Initial load without the expensive synchronous `lopdf` rescan on the UI thread.
     pub fn load_recent_files(&mut self) {
-        self.load_recent_files_impl(true)
+        self.load_recent_files_impl(false)
     }
 
     /// List refresh without the expensive `lopdf` rescan. The welcome screen

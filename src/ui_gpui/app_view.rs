@@ -137,7 +137,9 @@ fn page_size_name(width: f32, height: f32) -> String {
     } else if close(w, 792.0) && close(h, 1224.0) {
         "Tabloid"
     } else {
-        return format!("{} × {} pt", width.round() as u32, height.round() as u32);
+        let w_int = width.max(0.0).round() as u32;
+        let h_int = height.max(0.0).round() as u32;
+        return format!("{w_int} × {h_int} pt");
     };
 
     let orientation = if width > height { " (Landscape)" } else { "" };
