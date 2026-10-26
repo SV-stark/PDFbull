@@ -845,7 +845,7 @@ impl PdfbullView {
                 .is_ok()
                 && let Ok(Ok(items)) = resp_rx.await
             {
-                let _ = this.update(cx, |view, _| {
+                let _ = this.update(cx, |view, cx| {
                     // Guard on doc: `text_cache` is keyed by page index only, so
                     // an unguarded write let document A's text layer answer
                     // selection requests (and paint word highlights) for
@@ -857,6 +857,15 @@ impl PdfbullView {
                         view.viewport
                             .text_cache
                             .insert(page_idx, std::sync::Arc::new(items));
+                        // If there is an active selection or a completed drag on this page awaiting extraction,
+                        // re-run extraction now so that selected_text and clipboard are populated promptly.
+                        if view.viewport.selection_page == Some(page_idx)
+                            && let (Some(start), Some(end)) =
+                                (view.viewport.selection_start, view.viewport.selection_end)
+                        {
+                            view.extract_selected_text(page_idx, start, end, cx);
+                        }
+                        cx.notify();
                     }
                 });
             }
@@ -971,7 +980,12 @@ impl PdfbullView {
         if !matched_items.is_empty() {
             let combined = crate::ui_gpui::canvas::join_selected_text_items(&matched_items);
             self.viewport.selected_text = Some(combined.clone());
-            cx.write_to_clipboard(ClipboardItem::new_string(combined));
+            cx.write_to_clipboard(ClipboardItem::new_string(combined.clone()));
+            let count = combined.chars().count();
+            self.status_message = Some(format!(
+                "Selected and copied {count} character{} to clipboard",
+                if count == 1 { "" } else { "s" }
+            ));
         }
     }
 
@@ -2976,6 +2990,41 @@ impl PdfbullView {
                     self.sidebar.mode = super::sidebar::SidebarMode::Search;
                     cx.notify();
                 }
+                "c" => {
+                    if let Some(ref text) = self.viewport.selected_text {
+                        cx.write_to_clipboard(ClipboardItem::new_string(text.clone()));
+                        let count = text.chars().count();
+                        self.status_message = Some(format!(
+                            "Copied {count} character{} to clipboard",
+                            if count == 1 { "" } else { "s" }
+                        ));
+                        cx.notify();
+                    }
+                }
+                "a" => {
+                    let page_idx = self.viewport.current_page;
+                    if let Some(items) = self.viewport.text_cache.get(&page_idx).cloned() {
+                        if !items.is_empty() {
+                            let combined = crate::ui_gpui::canvas::join_selected_text_items(&items);
+                            self.viewport.selected_text = Some(combined.clone());
+                            cx.write_to_clipboard(ClipboardItem::new_string(combined.clone()));
+                            self.viewport.selection_page = Some(page_idx);
+                            self.viewport.selection_start = Some(Point::new(px(0.0), px(0.0)));
+                            self.viewport.selection_end = Some(Point::new(
+                                px(self.viewport.page_width * self.viewport.zoom),
+                                px(self.viewport.page_height * self.viewport.zoom),
+                            ));
+                            self.status_message = Some(format!(
+                                "Selected all text ({} chars) on page {}",
+                                combined.chars().count(),
+                                page_idx + 1
+                            ));
+                            cx.notify();
+                        }
+                    } else if let Some(doc_id) = self.active_doc_id {
+                        self.request_text_items(doc_id, page_idx, cx);
+                    }
+                }
                 "=" | "+" => {
                     self.viewport.zoom = (self.viewport.zoom + 0.1).min(5.0);
                     self.render_needed_pages(cx);
@@ -3002,10 +3051,13 @@ impl PdfbullView {
                     } else if self.log_console.is_open {
                         self.log_console.is_open = false;
                         cx.notify();
-                    } else if self.viewport.selection_page.is_some() {
+                    } else if self.viewport.selection_page.is_some()
+                        || self.viewport.selected_text.is_some()
+                    {
                         self.viewport.selection_page = None;
                         self.viewport.selection_start = None;
                         self.viewport.selection_end = None;
+                        self.viewport.selected_text = None;
                         cx.notify();
                     }
                 }

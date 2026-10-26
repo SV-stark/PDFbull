@@ -47,7 +47,7 @@ Measured on Windows 11 (x86_64) loading and rendering a 120.74 MB high-resolutio
 
 | Reader / Engine | Core Backend | Cold Open / Launch | Page 1 Render (100% DPI) | 20-Page Batch Render | RAM Footprint (Working Set) | Memory Safety |
 | :--- | :--- | :---: | :---: | :---: | :---: | :---: |
-| **PDFbull (v0.19.2)** | **Pure Rust (`zpdf` + `mimalloc`)** | **`79.05 ms`** ⚡ | **`2.14 ms`** ⚡ | **`15.87 ms`** *(1,260 FPS)* ⚡ | `249.5 MB` *(with full mmap)* | **100% Memory Safe (Rust)** |
+| **PDFbull (v0.19.3)** | **Pure Rust (`zpdf` + `mimalloc`)** | **`79.05 ms`** ⚡ | **`2.14 ms`** ⚡ | **`15.87 ms`** *(1,260 FPS)* ⚡ | `249.5 MB` *(with full mmap)* | **100% Memory Safe (Rust)** |
 | **SumatraPDF (v3.6.1)** | C / C++ (`MuPDF`) | `385.07 ms` | `~25.0 - 40.0 ms` | `~650 - 800 ms` | `118.0 MB` | C/C++ Manual Memory |
 | **Google Chrome** | C++ (`PDFium` Chromium) | `692.30 ms` | `~45.0 - 65.0 ms` | `~950 - 1,200 ms` | `257.0 MB` *(Multi-proc)* | C++ Process Sandbox |
 | **Microsoft Edge** | C++ (`PDFium` / WebView2) | `669.00 ms` | `~40.0 - 60.0 ms` | `~900 - 1,150 ms` | `470.9 MB` *(Multi-proc)* | C++ Process Sandbox |
@@ -235,7 +235,7 @@ Timings measured across diverse document scales on Windows 11:
 ## 📦 Installation & Development
 
 ### Release Builds
-Download the latest binaries from the [Releases Page](https://github.com/SV-stark/PDFbull/releases). The current release tag is **`v0.19.2`**.
+Download the latest binaries from the [Releases Page](https://github.com/SV-stark/PDFbull/releases). The current release tag is **`v0.19.3`**.
 
 ### Building from Source
 

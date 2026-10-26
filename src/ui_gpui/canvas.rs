@@ -632,6 +632,7 @@ impl DocumentViewport {
         on_drag_move: impl Fn(&mut V, usize, Point<Pixels>, &mut Window, &mut Context<V>)
         + 'static
         + Copy,
+        on_drag_end: impl Fn(&mut V, usize, &mut Window, &mut Context<V>) + 'static + Copy,
     ) -> AnyElement {
         let primary = cx.theme().primary;
         let border = cx.theme().border;
@@ -651,11 +652,9 @@ impl DocumentViewport {
         let down_listener = cx.listener(move |v, event: &MouseDownEvent, w, cx| {
             on_drag_start(v, page_idx, event.position, w, cx);
         });
-        // on_mouse_move and on_mouse_up are intentionally NOT on the page card.
-        // They live on the outer scroll container (added in render()) so that drag
-        // events are captured even when the cursor leaves the card bounds or enters
-        // the gap between pages. Only on_mouse_down stays per-card so we know which
-        // page started the drag.
+        let up_listener = cx.listener(move |v, _event: &MouseUpEvent, w, cx| {
+            on_drag_end(v, page_idx, w, cx);
+        });
 
         let is_sel_page = self.selection_page == Some(page_idx);
         let sel_start = self.selection_start;
@@ -1100,6 +1099,7 @@ impl DocumentViewport {
             .on_mouse_move(cx.listener(move |v, event: &MouseMoveEvent, w, cx| {
                 on_drag_move(v, page_idx, event.position, w, cx);
             }))
+            .on_mouse_up(MouseButton::Left, up_listener)
             .child(card_content)
             .child(selection_overlay)
             .into_any_element()
@@ -1142,8 +1142,13 @@ impl DocumentViewport {
 
         match self.layout_mode {
             PageLayoutMode::SinglePage => {
-                let card =
-                    self.render_page_card(cx, cur_page.min(total - 1), on_drag_start, on_drag_move);
+                let card = self.render_page_card(
+                    cx,
+                    cur_page.min(total - 1),
+                    on_drag_start,
+                    on_drag_move,
+                    on_drag_end,
+                );
                 div()
                     .id("canvas-single-scroll")
                     .flex()
@@ -1175,10 +1180,21 @@ impl DocumentViewport {
                 let (left_idx, right_idx) =
                     two_page_spread_pages(cur_page, total, self.standalone_cover);
 
-                let left_card =
-                    self.render_page_card(cx, left_idx.min(total - 1), on_drag_start, on_drag_move);
+                let left_card = self.render_page_card(
+                    cx,
+                    left_idx.min(total - 1),
+                    on_drag_start,
+                    on_drag_move,
+                    on_drag_end,
+                );
                 let right_card = right_idx.map(|r_idx| {
-                    self.render_page_card(cx, r_idx.min(total - 1), on_drag_start, on_drag_move)
+                    self.render_page_card(
+                        cx,
+                        r_idx.min(total - 1),
+                        on_drag_start,
+                        on_drag_move,
+                        on_drag_end,
+                    )
                 });
 
                 div()
@@ -1234,7 +1250,13 @@ impl DocumentViewport {
                         div()
                             .flex_none()
                             .h(strip.slot_height)
-                            .child(self.render_page_card(cx, idx, on_drag_start, on_drag_move))
+                            .child(self.render_page_card(
+                                cx,
+                                idx,
+                                on_drag_start,
+                                on_drag_move,
+                                on_drag_end,
+                            ))
                             .into_any_element()
                     })
                     .collect();

@@ -2081,13 +2081,63 @@ impl DocumentStore {
             if span.text.trim().is_empty() {
                 continue;
             }
-            text_items.push(crate::models::TextItem {
-                text: span.text,
-                x: (span.x - eff_box.x0) as f32,
-                y: (eff_box.y1 - span.y - span.size as f64) as f32,
-                width: span.advance.abs() as f32,
-                height: span.size,
-            });
+            let char_count = span.text.chars().count();
+            let total_adv = span.advance.abs() as f32;
+            let char_step = if char_count > 0 {
+                total_adv / char_count as f32
+            } else {
+                0.0
+            };
+
+            let base_x = (span.x - eff_box.x0) as f32;
+            let base_y = (eff_box.y1 - span.y - span.size as f64) as f32;
+
+            if span.text.contains(char::is_whitespace) {
+                let mut current_word = String::new();
+                let mut word_start_idx = 0;
+                for (idx, ch) in span.text.chars().enumerate() {
+                    if ch.is_whitespace() {
+                        if !current_word.is_empty() {
+                            let word_chars = current_word.chars().count();
+                            let word_x = base_x + char_step * word_start_idx as f32;
+                            let word_w = char_step * word_chars as f32;
+                            text_items.push(crate::models::TextItem {
+                                text: current_word,
+                                x: word_x,
+                                y: base_y,
+                                width: word_w,
+                                height: span.size,
+                            });
+                            current_word = String::new();
+                        }
+                    } else {
+                        if current_word.is_empty() {
+                            word_start_idx = idx;
+                        }
+                        current_word.push(ch);
+                    }
+                }
+                if !current_word.is_empty() {
+                    let word_chars = current_word.chars().count();
+                    let word_x = base_x + char_step * word_start_idx as f32;
+                    let word_w = char_step * word_chars as f32;
+                    text_items.push(crate::models::TextItem {
+                        text: current_word,
+                        x: word_x,
+                        y: base_y,
+                        width: word_w,
+                        height: span.size,
+                    });
+                }
+            } else {
+                text_items.push(crate::models::TextItem {
+                    text: span.text,
+                    x: base_x,
+                    y: base_y,
+                    width: total_adv,
+                    height: span.size,
+                });
+            }
         }
         Ok(text_items)
     }

@@ -5,6 +5,22 @@ All notable changes to the PDFbull project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.19.3] - 2026-10-27
+
+### Fixed
+- **Canvas Text Layer Drag Selection (`src/ui_gpui/canvas.rs`, `src/ui_gpui/app_view.rs`)**:
+  - Bound `on_mouse_up` directly onto page cards across `SinglePage`, `TwoPageSpread`, and `Continuous` virtualized slots so mouse release events commit reliably when releasing over rendered pages, resolving stuck selection marquees and dropped extraction calls.
+  - Added UI notification (`cx.notify()`) and pending-selection re-extraction to `request_text_items` upon async arrival of text layer items, ensuring word highlights and clipboard synchronization occur immediately without requiring subsequent mouse events.
+- **Word-Level Span Tokenization & Precision Hit-Testing (`src/pdf_engine.rs`)**:
+  - Tokenized multi-word text spans with internal whitespace into character-interpolated, word-level `TextItem`s, preventing whole-sentence selection over-matching when dragging across individual words.
+- **Selection Shortcuts & Feedback (`src/ui_gpui/app_view.rs`)**:
+  - Added `Ctrl+C` shortcut to copy the active text selection to clipboard with character-count status notification.
+  - Added `Ctrl+A` shortcut to select and copy all text on the active page.
+  - Wired `Escape` to dismiss active text selections alongside open dialogs and console drawers.
+- **Sidebar Thumbnail Proportions & Scrollbar (`src/ui_gpui/sidebar.rs`)**:
+  - Restored true page aspect ratios (`calc_aspect_ratio`) in thumbnail rendering to prevent A4 portrait pages from squashing into squares.
+  - Restored full vertical scrollbar tracking and wheel scrolling on the thumbnails sidebar panel.
+
 ## [0.19.2] - 2026-10-26
 
 ### Changed
