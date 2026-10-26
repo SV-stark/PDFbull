@@ -1,6 +1,6 @@
 use gpui_kit::component::button::{Button, ButtonVariants};
 use gpui_kit::component::input::{Input, InputState};
-use gpui_kit::component::scroll::ScrollableElement;
+use gpui_kit::component::scroll::{ScrollableElement, Scrollbar, ScrollbarMode};
 use gpui_kit::component::{
     ActiveTheme, Disableable as _, Icon, IconName, Selectable as _, Sizable,
 };
@@ -383,11 +383,32 @@ impl SidebarState {
                     let click_listener = cx.listener(move |v, _, w, cx| {
                         on_action(v, SidebarAction::SelectPage(page_idx), w, cx)
                     });
+
+                    // Maintain true page aspect ratio (e.g. portrait A4 ~1:1.414)
+                    // centered within the fixed-stride thumbnail card slot.
+                    let max_w = (self.width - 44.0).max(100.0);
+                    let max_h = (THUMB_CARD_H - 16.0).max(50.0);
+                    let (disp_w, disp_h) = if let Some(thumb_img) = self.thumbnails.get(&page_idx) {
+                        let size = thumb_img.size(0);
+                        let (w, h) = (size.width.0 as f32, size.height.0 as f32);
+                        if w > 0.0 && h > 0.0 {
+                            let scale = (max_w / w).min(max_h / h);
+                            (px((w * scale).round()), px((h * scale).round()))
+                        } else {
+                            (px(124.0), px(176.0))
+                        }
+                    } else {
+                        // Standard portrait A4 proportions (124px × 176px) for loading placeholders
+                        (px(124.0), px(176.0))
+                    };
+
                     thumb_cards.push(
                         div()
                             .id(SharedString::from(format!("side-page-{}", page_idx)))
                             .flex()
                             .flex_none()
+                            .items_center()
+                            .justify_center()
                             .relative()
                             // Explicit height: this is what makes the laid-out
                             // pitch equal THUMB_STRIDE. Nothing in the card may
@@ -412,20 +433,26 @@ impl SidebarState {
                             .on_click(click_listener)
                             .child(if let Some(thumb_img) = self.thumbnails.get(&page_idx) {
                                 div()
-                                    .w_full()
-                                    .h_full()
+                                    .w(disp_w)
+                                    .h(disp_h)
                                     .bg(gpui_kit::white())
                                     .overflow_hidden()
                                     .rounded_sm()
                                     .border_1()
                                     .border_color(border)
-                                    .child(img(thumb_img.clone()).w_full().h_full())
+                                    .shadow_sm()
+                                    .child(img(thumb_img.clone()).size_full())
                             } else {
                                 div()
-                                    .w_full()
-                                    .h_full()
+                                    .w(disp_w)
+                                    .h(disp_h)
                                     .bg(muted)
+                                    .overflow_hidden()
+                                    .rounded_sm()
+                                    .border_1()
+                                    .border_color(border)
                                     .flex()
+                                    .flex_col()
                                     .items_center()
                                     .justify_center()
                                     .text_xs()
@@ -456,33 +483,36 @@ impl SidebarState {
                     thumb_cards.push(div().flex_none().h(px(bottom_pad)).into_any_element());
                 }
 
-                // `overflow_y_scroll` + `track_scroll`: GPUI owns the wheel
-                // handling and clamping, and notifies on every change so this
-                // window is recomputed. We deliberately do *not* also apply the
-                // wheel delta ourselves (that combination is what made the
-                // canvas scroll at 2x speed).
+                // Outer relative container hosts both the scrollable thumbnail strip
+                // and the vertical scrollbar overlay anchored to its viewport.
                 div()
-                    .id("sidebar-thumbnails-scroll")
+                    .id("sidebar-thumbnails-container")
+                    .relative()
                     .flex()
                     .flex_col()
                     .flex_1()
                     .min_h_0()
                     .size_full()
-                    // No `.gap()` here: the inter-card gap lives on each card's
-                    // bottom margin. A container gap is counted *in addition to*
-                    // the stride the spacers and the cards encode, which shifts
-                    // every card down by `THUMB_GAP` and makes the strip
-                    // `2 * THUMB_GAP` taller than `thumbnail_content_height`
-                    // reports.
-                    //
-                    // Horizontal padding only: the vertical inset lives in the
-                    // spacers above and below, because padding on this container
-                    // is not part of any spacer's height.
-                    .px_2()
-                    .overflow_y_scroll()
-                    .track_scroll(&self.thumb_scroll)
-                    .vertical_scrollbar(&self.thumb_scroll)
-                    .children(thumb_cards)
+                    .child(
+                        // `overflow_y_scroll` + `track_scroll`: GPUI owns the wheel
+                        // handling and clamping, and notifies on every change so this
+                        // window is recomputed.
+                        div()
+                            .id("sidebar-thumbnails-scroll")
+                            .flex()
+                            .flex_col()
+                            .flex_1()
+                            .min_h_0()
+                            .size_full()
+                            // Horizontal padding: left inset for card margin and
+                            // right inset for scrollbar clearance.
+                            .pl_2()
+                            .pr_3()
+                            .overflow_y_scroll()
+                            .track_scroll(&self.thumb_scroll)
+                            .children(thumb_cards),
+                    )
+                    .child(Scrollbar::vertical(&self.thumb_scroll).mode(ScrollbarMode::Always))
                     .into_any_element()
             }
 

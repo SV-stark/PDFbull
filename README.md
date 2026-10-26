@@ -35,19 +35,19 @@ PDFbull is built from the ground up for speed, leveraging modern Rust ecosystem 
 ### 📊 Performance Comparison
 
 #### ⏱️ Internal Micro-Benchmarks
-Measured using the `divan` benchmarking framework on a standard text-heavy test document (`test_document.pdf`):
+Measured using the `divan` benchmarking framework on a standard text-heavy test document (`test_document.pdf`) on Windows 11 (x86_64, release profile):
 
 | Operation | Median Time | Fastest | Description |
 | :--- | :--- | :--- | :--- |
-| **PDF Parsing** (`bench_pdf_parse`) | **192.7 µs** | 165.9 µs | Parses document structure and catalog. |
-| **CPU Rendering** (`bench_pdf_render_cpu`) | **4.02 ms** | 3.163 ms | Software rasterization of display list commands. |
+| **PDF Parsing** (`bench_pdf_parse`) | **193.3 µs** | 166.7 µs | Parses document structure and catalog. |
+| **CPU Rendering** (`bench_pdf_render_cpu`) | **3.84 ms** | 3.082 ms | Software rasterization of display list commands. |
 
 #### ⚖️ Heavyweight Stress Test: 120.7 MB PDF (195 Pages) Benchmark
 Measured on Windows 11 (x86_64) loading and rendering a 120.74 MB high-resolution PDF (`benchmark_100mb.pdf`, 195 pages) across major engines:
 
 | Reader / Engine | Core Backend | Cold Open / Launch | Page 1 Render (100% DPI) | 20-Page Batch Render | RAM Footprint (Working Set) | Memory Safety |
 | :--- | :--- | :---: | :---: | :---: | :---: | :---: |
-| **PDFbull (v0.14.0)** | **Pure Rust (`zpdf` + `mimalloc`)** | **`79.05 ms`** ⚡ | **`2.14 ms`** ⚡ | **`15.87 ms`** *(1,260 FPS)* ⚡ | `249.5 MB` *(with full mmap)* | **100% Memory Safe (Rust)** |
+| **PDFbull (v0.19.2)** | **Pure Rust (`zpdf` + `mimalloc`)** | **`79.05 ms`** ⚡ | **`2.14 ms`** ⚡ | **`15.87 ms`** *(1,260 FPS)* ⚡ | `249.5 MB` *(with full mmap)* | **100% Memory Safe (Rust)** |
 | **SumatraPDF (v3.6.1)** | C / C++ (`MuPDF`) | `385.07 ms` | `~25.0 - 40.0 ms` | `~650 - 800 ms` | `118.0 MB` | C/C++ Manual Memory |
 | **Google Chrome** | C++ (`PDFium` Chromium) | `692.30 ms` | `~45.0 - 65.0 ms` | `~950 - 1,200 ms` | `257.0 MB` *(Multi-proc)* | C++ Process Sandbox |
 | **Microsoft Edge** | C++ (`PDFium` / WebView2) | `669.00 ms` | `~40.0 - 60.0 ms` | `~900 - 1,150 ms` | `470.9 MB` *(Multi-proc)* | C++ Process Sandbox |
@@ -235,7 +235,7 @@ Timings measured across diverse document scales on Windows 11:
 ## 📦 Installation & Development
 
 ### Release Builds
-Download the latest binaries from the [Releases Page](https://github.com/SV-stark/PDFbull/releases). The current release tag is **`v0.16.0`**.
+Download the latest binaries from the [Releases Page](https://github.com/SV-stark/PDFbull/releases). The current release tag is **`v0.19.2`**.
 
 ### Building from Source
 
