@@ -1,7 +1,8 @@
+use gpui_kit::assets::IconName;
 use gpui_kit::base::StyledExt;
 use gpui_kit::component::ActiveTheme;
+use gpui_kit::component::Icon;
 use gpui_kit::component::button::{Button, ButtonVariants};
-use gpui_kit::component::{Icon, IconName};
 use gpui_kit::prelude::FluentBuilder;
 use gpui_kit::*;
 use std::path::PathBuf;

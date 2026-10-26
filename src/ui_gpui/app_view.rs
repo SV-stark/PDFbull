@@ -1,7 +1,7 @@
 use gpui_kit::base::StyledExt;
 use gpui_kit::component::button::{Button, ButtonVariants};
 use gpui_kit::component::input::InputEvent;
-use gpui_kit::component::{ActiveTheme, Disableable as _, IconName, Sizable};
+use gpui_kit::component::{ActiveTheme, Disableable as _, IconName, Selectable as _, Sizable};
 use gpui_kit::prelude::FluentBuilder;
 use gpui_kit::*;
 
@@ -9,7 +9,7 @@ use super::{
     canvas::DocumentViewport,
     dialogs::{ActiveDialog, DialogAction, DialogsState},
     log_console::{LogAction, LogConsoleState},
-    ribbon::{RibbonAction, RibbonState},
+    ribbon::{PageLayoutMode, RibbonAction, RibbonState},
     sidebar::{SidebarAction, SidebarState},
     tabs::{DocumentTab, TabAction, TabsState},
     welcome::{WelcomeAction, WelcomeState},
@@ -117,7 +117,40 @@ pub fn inspect_pdf_geometry(path: &std::path::Path) -> Option<(usize, f32, f32)>
     Some((page_count, page_width, page_height))
 }
 
+fn page_size_name(width: f32, height: f32) -> String {
+    let (w, h) = if width > height {
+        (height, width)
+    } else {
+        (width, height)
+    };
+    let close = |a: f32, b: f32| (a - b).abs() <= 4.0;
+    let name = if close(w, 595.0) && close(h, 842.0) {
+        "A4"
+    } else if close(w, 612.0) && close(h, 792.0) {
+        "Letter"
+    } else if close(w, 612.0) && close(h, 1008.0) {
+        "Legal"
+    } else if close(w, 842.0) && close(h, 1191.0) {
+        "A3"
+    } else if close(w, 420.0) && close(h, 595.0) {
+        "A5"
+    } else if close(w, 792.0) && close(h, 1224.0) {
+        "Tabloid"
+    } else {
+        return format!("{} × {} pt", width.round() as u32, height.round() as u32);
+    };
+
+    let orientation = if width > height { " (Landscape)" } else { "" };
+    format!("{name}{orientation}")
+}
+
 impl PdfbullView {
+    pub fn set_layout_mode(&mut self, mode: PageLayoutMode, cx: &mut Context<Self>) {
+        self.ribbon.layout_mode = mode;
+        self.viewport.layout_mode = mode;
+        self.render_needed_pages(cx);
+        cx.notify();
+    }
     pub fn new(_window: &mut Window, _cx: &mut Context<Self>) -> Self {
         let mut welcome = WelcomeState::new();
         welcome.load_recent_files();
@@ -266,11 +299,7 @@ impl PdfbullView {
             inspect_pdf_geometry(&path).unwrap_or((1, 595.0, 842.0));
 
         crate::storage::add_recent_file(&path);
-        self.welcome.recent_files = crate::storage::load_recent_files()
-            .into_iter()
-            .map(|f| std::path::PathBuf::from(f.path))
-            .filter(|p| p.is_file())
-            .collect();
+        self.welcome.refresh_recent_files();
 
         let doc_id = crate::models::next_doc_id();
         // Keep the outgoing document's annotations before `active_doc_id` is
@@ -1279,8 +1308,6 @@ impl PdfbullView {
         let total = self.viewport.total_pages;
         let current = self.viewport.current_page;
         let zoom_pct = (self.viewport.zoom * 100.0).round() as u32;
-        let page_w = self.viewport.page_width.round() as u32;
-        let page_h = self.viewport.page_height.round() as u32;
         let has_doc = self.active_doc_id.is_some();
 
         let prev_click = cx.listener(|this, _, _, cx| {
@@ -1342,12 +1369,10 @@ impl PdfbullView {
                     .gap_3()
                     .flex_none()
                     .when(has_doc, |el| {
-                        el.child(
-                            div()
-                                .text_xs()
-                                .text_color(muted_fg)
-                                .child(format!("{} × {} pt", page_w, page_h)),
-                        )
+                        el.child(div().text_xs().text_color(muted_fg).child(page_size_name(
+                            self.viewport.page_width,
+                            self.viewport.page_height,
+                        )))
                         .child(
                             div()
                                 .text_xs()
@@ -1378,65 +1403,114 @@ impl PdfbullView {
                     .items_center()
                     .gap_2()
                     .flex_none()
+                    .when(has_doc, |el| {
+                        el.child(
+                            Button::new("btn-status-prev")
+                                .icon(IconName::ChevronLeft)
+                                .ghost()
+                                .small()
+                                .disabled(current == 0)
+                                .tooltip("Previous page")
+                                .on_click(prev_click),
+                        )
+                        // Reserve a fixed lane so the readout does not shift as the
+                        // page count grows from 9 to 10.
+                        .child(
+                            div()
+                                .min_w(px(112.0))
+                                .text_xs()
+                                .font_medium()
+                                .text_color(fg)
+                                .child(format!("Page {} of {}", current + 1, total)),
+                        )
+                        .child(
+                            Button::new("btn-status-next")
+                                .icon(IconName::ChevronRight)
+                                .ghost()
+                                .small()
+                                .disabled(current + 1 >= total)
+                                .tooltip("Next page")
+                                .on_click(next_click),
+                        )
+                        .child(div().w_px().h(px(12.0)).bg(border))
+                        .child(
+                            Button::new("btn-status-zoom-out")
+                                .icon(IconName::Minus)
+                                .ghost()
+                                .small()
+                                .tooltip("Zoom out")
+                                .on_click(zoom_out_click),
+                        )
+                        .child(
+                            Button::new("btn-status-zoom-pct")
+                                .label(SharedString::from(format!("{zoom_pct}%")))
+                                .ghost()
+                                .small()
+                                .tooltip("Reset zoom to 100%")
+                                .on_click(zoom_reset_click),
+                        )
+                        .child(
+                            Button::new("btn-status-zoom-in")
+                                .icon(IconName::Plus)
+                                .ghost()
+                                .small()
+                                .tooltip("Zoom in")
+                                .on_click(zoom_in_click),
+                        )
+                        // Layout switcher next to the zoom controls: page layout is
+                        // a reading-control, and the only other place it lived was
+                        // one ribbon tab deep (View). Ghost + selected state so the
+                        // three icons read as one mutually-exclusive choice.
+                        .child(div().w_px().h(px(12.0)).bg(border))
+                        .child(
+                            Button::new("btn-status-layout-continuous")
+                                .icon(IconName::GalleryVerticalEnd)
+                                .ghost()
+                                .small()
+                                .selected(self.ribbon.layout_mode == PageLayoutMode::Continuous)
+                                .tooltip("Continuous scroll")
+                                .on_click(cx.listener(|this, _, _, cx| {
+                                    this.set_layout_mode(PageLayoutMode::Continuous, cx);
+                                })),
+                        )
+                        .child(
+                            Button::new("btn-status-layout-single")
+                                .icon(IconName::Square)
+                                .ghost()
+                                .small()
+                                .selected(self.ribbon.layout_mode == PageLayoutMode::SinglePage)
+                                .tooltip("Single page")
+                                .on_click(cx.listener(|this, _, _, cx| {
+                                    this.set_layout_mode(PageLayoutMode::SinglePage, cx);
+                                })),
+                        )
+                        .child(
+                            Button::new("btn-status-layout-two-page")
+                                .icon(IconName::BookOpen)
+                                .ghost()
+                                .small()
+                                .selected(self.ribbon.layout_mode == PageLayoutMode::TwoPageSpread)
+                                .tooltip("Two-page spread")
+                                .on_click(cx.listener(|this, _, _, cx| {
+                                    this.set_layout_mode(PageLayoutMode::TwoPageSpread, cx);
+                                })),
+                        )
+                        .child(div().w_px().h(px(12.0)).bg(border))
+                    })
+                    // Logs used to be a labelled header button; it is a
+                    // diagnostic, not navigation, so it lives at the end of the
+                    // status bar where diagnostics belong.
                     .child(
-                        Button::new("btn-status-prev")
-                            .icon(IconName::ChevronLeft)
+                        Button::new("btn-status-logs")
+                            .icon(IconName::SquareTerminal)
                             .ghost()
                             .small()
-                            .disabled(!has_doc || current == 0)
-                            .tooltip("Previous page")
-                            .on_click(prev_click),
-                    )
-                    // Reserve a fixed lane so the readout does not shift as the
-                    // page count grows from 9 to 10.
-                    .child(
-                        div()
-                            .min_w(px(112.0))
-                            .text_xs()
-                            .font_medium()
-                            .text_color(fg)
-                            .child(if has_doc {
-                                format!("Page {} of {}", current + 1, total)
-                            } else {
-                                "No document".to_string()
-                            }),
-                    )
-                    .child(
-                        Button::new("btn-status-next")
-                            .icon(IconName::ChevronRight)
-                            .ghost()
-                            .small()
-                            .disabled(!has_doc || current + 1 >= total)
-                            .tooltip("Next page")
-                            .on_click(next_click),
-                    )
-                    .child(div().w_px().h(px(12.0)).bg(border))
-                    .child(
-                        Button::new("btn-status-zoom-out")
-                            .icon(IconName::Minus)
-                            .ghost()
-                            .small()
-                            .disabled(!has_doc)
-                            .tooltip("Zoom out")
-                            .on_click(zoom_out_click),
-                    )
-                    .child(
-                        Button::new("btn-status-zoom-pct")
-                            .label(SharedString::from(format!("{zoom_pct}%")))
-                            .ghost()
-                            .small()
-                            .disabled(!has_doc)
-                            .tooltip("Reset zoom to 100%")
-                            .on_click(zoom_reset_click),
-                    )
-                    .child(
-                        Button::new("btn-status-zoom-in")
-                            .icon(IconName::Plus)
-                            .ghost()
-                            .small()
-                            .disabled(!has_doc)
-                            .tooltip("Zoom in")
-                            .on_click(zoom_in_click),
+                            .selected(self.log_console.is_open)
+                            .tooltip("Logs")
+                            .on_click(cx.listener(|this, _, _, cx| {
+                                this.log_console.is_open = !this.log_console.is_open;
+                                cx.notify();
+                            })),
                     ),
             )
             .into_any_element()
@@ -2981,19 +3055,14 @@ impl Render for PdfbullView {
                     .flex_row()
                     .items_center()
                     .gap_3()
-                    .child(div().text_lg().text_color(primary).child("PDFbull"))
-                    .child(ribbon_tabs),
-            )
-            .child(
-                div().flex().flex_row().items_center().gap_2().child(
-                    Button::new("btn-toggle-logs")
-                        .label("Logs")
-                        .ghost()
-                        .on_click(cx.listener(|this, _, _, cx| {
-                            this.log_console.is_open = !this.log_console.is_open;
-                            cx.notify();
-                        })),
-                ),
+                    .child(
+                        div()
+                            .text_lg()
+                            .font_semibold()
+                            .text_color(primary)
+                            .child("PDFbull"),
+                    )
+                    .when(has_tabs, |el| el.child(ribbon_tabs)),
             );
 
         // Ribbon Action Strip
@@ -3035,16 +3104,7 @@ impl Render for PdfbullView {
                     }
                 }
                 RibbonAction::SetLayout(mode) => {
-                    this.ribbon.layout_mode = mode;
-                    this.viewport.layout_mode = mode;
-                    // Neither arm used to request renders. `render` deliberately
-                    // no longer drives rendering (a frame can be speculative),
-                    // so switching Single -> Two-Page exposed a page that had
-                    // never been rasterized and left it on the "Rendering
-                    // page..." placeholder with no way to recover except
-                    // scrolling. Ask for the newly visible pages here, exactly
-                    // as the zoom, rotate and midnight arms already do.
-                    this.render_needed_pages(cx);
+                    this.set_layout_mode(mode, cx);
                 }
                 RibbonAction::ToggleCover => {
                     this.ribbon.standalone_cover = !this.ribbon.standalone_cover;
@@ -3667,8 +3727,8 @@ impl Render for PdfbullView {
                             this.dialogs.active = Some(ActiveDialog::Security);
                         }
                         WelcomeAction::OpenRecent(idx) => {
-                            if let Some(path) = this.welcome.recent_files.get(idx).cloned() {
-                                this.open_pdf_path(&path.to_string_lossy(), cx);
+                            if let Some(entry) = this.welcome.recent_files.get(idx).cloned() {
+                                this.open_pdf_path(&entry.path.to_string_lossy(), cx);
                             }
                         }
                     }
@@ -3850,7 +3910,7 @@ impl Render for PdfbullView {
                 }
             }))
             .child(header_bar)
-            .child(action_strip)
+            .when(has_tabs, |el| el.child(action_strip))
             .children(tabs_bar)
             .child(
                 div()

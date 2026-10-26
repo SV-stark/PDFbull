@@ -10,7 +10,7 @@ use pdfbull::ui_gpui::log_console::LogConsoleState;
 use pdfbull::ui_gpui::ribbon::{AnnotationTool, PageLayoutMode, RibbonState, RibbonTab};
 use pdfbull::ui_gpui::sidebar::{SidebarMode, SidebarState};
 use pdfbull::ui_gpui::tabs::{DocumentTab, TabsState};
-use pdfbull::ui_gpui::welcome::WelcomeState;
+use pdfbull::ui_gpui::welcome::{RecentEntry, WelcomeState};
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -341,11 +341,23 @@ fn test_welcome_state() {
     let mut welcome = WelcomeState::new();
     assert!(welcome.recent_files.is_empty());
 
-    welcome.recent_files.push(PathBuf::from("recent1.pdf"));
-    welcome.recent_files.push(PathBuf::from("recent2.pdf"));
+    welcome.recent_files.push(RecentEntry {
+        path: PathBuf::from("recent1.pdf"),
+        name: "recent1.pdf".to_string(),
+        last_opened: 0,
+        size_bytes: 1024,
+        page_count: Some(5),
+    });
+    welcome.recent_files.push(RecentEntry {
+        path: PathBuf::from("recent2.pdf"),
+        name: "recent2.pdf".to_string(),
+        last_opened: 0,
+        size_bytes: 2048,
+        page_count: None,
+    });
     assert_eq!(welcome.recent_files.len(), 2);
-    assert_eq!(welcome.recent_files[0], PathBuf::from("recent1.pdf"));
-    assert_eq!(welcome.recent_files[1], PathBuf::from("recent2.pdf"));
+    assert_eq!(welcome.recent_files[0].path, PathBuf::from("recent1.pdf"));
+    assert_eq!(welcome.recent_files[1].path, PathBuf::from("recent2.pdf"));
 }
 
 #[test]

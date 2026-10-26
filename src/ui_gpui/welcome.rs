@@ -1,10 +1,12 @@
-use super::sidebar::SidebarState;
+use super::sidebar::{self, SidebarState};
+use gpui_kit::assets::IconName;
 use gpui_kit::base::StyledExt;
 use gpui_kit::component::ActiveTheme;
+use gpui_kit::component::Icon;
 use gpui_kit::component::Sizable as _;
 use gpui_kit::component::button::{Button, ButtonVariants};
 use gpui_kit::component::scroll::ScrollableElement;
-use gpui_kit::component::{Icon, IconName};
+use gpui_kit::prelude::FluentBuilder;
 use gpui_kit::*;
 use std::path::PathBuf;
 
@@ -13,11 +15,34 @@ use std::path::PathBuf;
 /// ignore the theme's foreground colour, and cannot dim with a row. One icon
 /// family, themeable, everywhere.
 const ICON_DROP: IconName = IconName::Inbox;
-const ICON_OPEN: IconName = IconName::FolderOpen;
-const ICON_ORGANIZE: IconName = IconName::FileText;
-const ICON_SIGN: IconName = IconName::Check;
-const ICON_PROTECT: IconName = IconName::Ban;
+const ICON_MERGE: IconName = IconName::Merge;
+const ICON_ORGANIZE: IconName = IconName::PencilRuler;
+const ICON_SIGN: IconName = IconName::Signature;
+const ICON_PROTECT: IconName = IconName::ShieldLock;
 const ICON_FILE: IconName = IconName::FileText;
+
+/// Only the first few recents are probed for metadata. These are the caps that
+/// keep the dashboard's first paint cheap: `inspect_pdf_geometry` re-parses the
+/// file with `lopdf`, which is linear in file size, so a 500 MB scan job would
+/// freeze the welcome screen for nothing a user can perceptibly use.
+const PAGE_COUNT_SCAN_COUNT: usize = 8;
+const PAGE_COUNT_SCAN_MAX_BYTES: u64 = 20 * 1024 * 1024;
+
+/// A recent document plus the metadata the recents list shows inline.
+///
+/// The old list rendered a bare `PathBuf` per row: no timestamp, no size, no
+/// page count, so the "recents" area only ever told you a file name you already
+/// knew when you last looked at this screen.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RecentEntry {
+    pub path: PathBuf,
+    pub name: String,
+    /// Unix timestamp, seconds.
+    pub last_opened: u64,
+    pub size_bytes: u64,
+    /// `None` when unknown (probing skipped, failed, or unavailable).
+    pub page_count: Option<usize>,
+}
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum WelcomeAction {
@@ -31,7 +56,7 @@ pub enum WelcomeAction {
 }
 
 pub struct WelcomeState {
-    pub recent_files: Vec<PathBuf>,
+    pub recent_files: Vec<RecentEntry>,
 }
 
 impl Default for WelcomeState {
@@ -47,16 +72,63 @@ impl WelcomeState {
         }
     }
 
+    /// Full reload: re-probes page counts. Used once, at view construction.
     pub fn load_recent_files(&mut self) {
+        self.load_recent_files_impl(true)
+    }
+
+    /// List refresh without the expensive `lopdf` rescan. The welcome screen
+    /// reloads on every open/toggle, and probing eight PDFs per paint burst is
+    /// how a "fast dashboard" becomes a beached one; prior page counts are
+    /// kept by path instead.
+    pub fn refresh_recent_files(&mut self) {
+        self.load_recent_files_impl(false)
+    }
+
+    fn load_recent_files_impl(&mut self, scan_page_counts: bool) {
         let loaded = crate::storage::load_recent_files();
         self.recent_files = loaded
             .into_iter()
-            .map(|f| PathBuf::from(f.path))
-            // `is_file()` rather than `exists()`: a directory or a socket in the
-            // recent list used to produce a clickable entry that could never
-            // open anything.
-            .filter(|p| p.is_file())
+            .map(|f| {
+                let path = PathBuf::from(&f.path);
+                // `is_file()` rather than `exists()`: a directory or a socket in
+                // the recent list used to produce a clickable entry that could
+                // never open anything.
+                let size_bytes = if path.is_file() {
+                    std::fs::metadata(&path).map(|m| m.len()).unwrap_or(0)
+                } else {
+                    0
+                };
+                RecentEntry {
+                    path: path.clone(),
+                    name: if f.name.is_empty() {
+                        path.file_name()
+                            .and_then(|n| n.to_str())
+                            .unwrap_or("Document.pdf")
+                            .to_string()
+                    } else {
+                        f.name
+                    },
+                    last_opened: f.last_opened,
+                    size_bytes,
+                    page_count: None,
+                }
+            })
+            .filter(|e| e.path.is_file())
             .collect();
+
+        if scan_page_counts {
+            for entry in self.recent_files.iter_mut().take(PAGE_COUNT_SCAN_COUNT) {
+                if entry.size_bytes > PAGE_COUNT_SCAN_MAX_BYTES {
+                    continue;
+                }
+                if let Some((pages, _, _)) =
+                    crate::ui_gpui::app_view::inspect_pdf_geometry(&entry.path)
+                {
+                    entry.page_count = Some(pages);
+                }
+            }
+        }
     }
 
     pub fn render<V: 'static>(
@@ -98,9 +170,12 @@ impl WelcomeState {
                                     .rounded_xl()
                                     .bg(primary)
                                     .text_color(cx.theme().primary_foreground)
-                                    .text_xl()
-                                    .font_bold()
-                                    .child("PB"),
+                                    // The hero tile used to hold the literal
+                                    // letters "PB", which repeated the name
+                                    // beside it one syllable later. A document
+                                    // glyph says what the app is; the wordmark
+                                    // keeps the brand.
+                                    .child(Icon::new(ICON_FILE).large()),
                             )
                             .child(
                                 div()
@@ -217,82 +292,76 @@ impl WelcomeState {
                         ),
                 )
                 .child(
-                    // Feature Action Cards (2x2 Grid)
+                    // Feature Action Cards (2x2 grid) — the quick actions a
+                    // person actually opens a PDF studio for. "Open document"
+                    // used to take one of the four slots while the dropzone one
+                    // row above already had the same job covered by *two*
+                    // controls; the redundant card is gone and its single
+                    // purpose lives in the dropzone it duplicated.
                     div()
                         .flex()
-                        .flex_col()
+                        .flex_wrap()
+                        .justify_center()
                         .gap_3()
-                        .child(
-                            div()
-                                .flex()
-                                .flex_row()
-                                .flex_wrap()
-                                .gap_3()
-                                .child(render_action_card(
-                                    cx,
-                                    "card-open-browse",
-                                    ICON_OPEN,
-                                    "Open Document",
-                                    "Browse and view PDF documents from disk",
-                                    WelcomeAction::OpenFile,
-                                    on_action,
-                                ))
-                                .child(render_action_card(
-                                    cx,
-                                    "card-page-organizer",
-                                    ICON_ORGANIZE,
-                                    "Page Organizer",
-                                    "Reorder, rotate, extract, or delete pages",
-                                    WelcomeAction::PageOrganizer,
-                                    on_action,
-                                )),
-                        )
-                        .child(
-                            div()
-                                .flex()
-                                .flex_row()
-                                .gap_3()
-                                .child(render_action_card(
-                                    cx,
-                                    "card-digital-signatures",
-                                    ICON_SIGN,
-                                    "Digital Signatures",
-                                    "Review signature and certificate trust status",
-                                    WelcomeAction::DigitalSignatures,
-                                    on_action,
-                                ))
-                                .child(render_action_card(
-                                    cx,
-                                    "card-protect-encrypt",
-                                    ICON_PROTECT,
-                                    "Protect & Encrypt",
-                                    "Set passwords and restrict printing or copying",
-                                    WelcomeAction::Security,
-                                    on_action,
-                                )),
-                        ),
+                        .max_w(px(680.0))
+                        .child(render_action_card(
+                            cx,
+                            "card-merge-pdfs",
+                            ICON_MERGE,
+                            "Merge PDFs",
+                            "Combine multiple documents into one file",
+                            WelcomeAction::MergeFiles,
+                            on_action,
+                        ))
+                        .child(render_action_card(
+                            cx,
+                            "card-page-organizer",
+                            ICON_ORGANIZE,
+                            "Page Organizer",
+                            "Reorder, rotate, extract, or delete pages",
+                            WelcomeAction::PageOrganizer,
+                            on_action,
+                        ))
+                        .child(render_action_card(
+                            cx,
+                            "card-digital-signatures",
+                            ICON_SIGN,
+                            "Digital Signatures",
+                            "Review signature and certificate trust status",
+                            WelcomeAction::DigitalSignatures,
+                            on_action,
+                        ))
+                        .child(render_action_card(
+                            cx,
+                            "card-protect-encrypt",
+                            ICON_PROTECT,
+                            "Protect & Encrypt",
+                            "Set passwords and restrict printing or copying",
+                            WelcomeAction::Security,
+                            on_action,
+                        )),
                 );
 
-        // Recent Documents Shelf
+        // Recent Documents — a row list, not a shelf of cards. Name in the
+        // primary column, then when it was touched, how big it is and how
+        // many pages it has; the path is demoted to a muted, truncated
+        // second line. The old rows showed only a name and a full-length
+        // path, and dresses the group in a bordered "card" that just boxed
+        // the border it already had.
         let recent_section = if !self.recent_files.is_empty() {
             let mut items = Vec::new();
-            for p in self.recent_files.iter().take(4) {
-                let file_name = p
-                    .file_name()
-                    .and_then(|n| n.to_str())
-                    .unwrap_or("Document.pdf")
-                    .to_string();
-                let path_str = p.to_string_lossy().to_string();
+            for (idx, entry) in self.recent_files.iter().enumerate().take(6) {
+                let path_str = entry.path.to_string_lossy().to_string();
                 // Keyed on the path, not the list position. The recent list is
                 // re-sorted most-recent-first on every open, so a positional id
                 // handed one file's hover state to a different file.
                 let key = format!("recent-item-{}", path_str);
-                let idx = self
-                    .recent_files
-                    .iter()
-                    .take(4)
-                    .position(|candidate| candidate == p)
-                    .unwrap_or(0);
+                let time_label = crate::storage::time_ago(entry.last_opened);
+                let size_label = sidebar::human_bytes(entry.size_bytes);
+                let pages_label = match entry.page_count {
+                    Some(n) => format!("{} pg", n),
+                    None => String::new(),
+                };
 
                 // A real Button rather than a clickable div: the previous row was
                 // a bare `on_click` div, so it could not be reached with Tab and
@@ -303,8 +372,8 @@ impl WelcomeState {
                         .w_full()
                         .ghost()
                         .h_auto()
-                        .px_3()
-                        .py_2()
+                        .px_2()
+                        .py_1p5()
                         .rounded_lg()
                         .justify_start()
                         .on_click(cx.listener(move |v, _, w, cx| {
@@ -340,21 +409,52 @@ impl WelcomeState {
                                                 .text_sm()
                                                 .font_medium()
                                                 .text_color(fg)
-                                                .child(file_name),
+                                                .truncate()
+                                                .max_w_full()
+                                                .child(entry.name.clone()),
                                         )
                                         .child(
                                             div()
                                                 .text_xs()
                                                 .text_color(muted_fg)
                                                 .truncate()
+                                                .max_w_full()
                                                 .child(path_str),
                                         ),
                                 )
                                 .child(
-                                    Icon::new(IconName::ArrowRight)
-                                        .small()
+                                    // Meta column: kept out of the primary
+                                    // column so it stays scannable as a table.
+                                    div()
+                                        .flex()
+                                        .flex_row()
+                                        .items_center()
+                                        .gap_3()
                                         .flex_none()
-                                        .text_color(muted_fg),
+                                        .child(
+                                            div().text_xs().text_color(muted_fg).child(time_label),
+                                        )
+                                        .when(!size_label.is_empty(), |el| {
+                                            el.child(
+                                                div()
+                                                    .text_xs()
+                                                    .text_color(muted_fg)
+                                                    .child(size_label),
+                                            )
+                                        })
+                                        .when(!pages_label.is_empty(), |el| {
+                                            el.child(
+                                                div()
+                                                    .text_xs()
+                                                    .text_color(muted_fg)
+                                                    .child(pages_label),
+                                            )
+                                        })
+                                        .child(
+                                            Icon::new(IconName::ArrowRight)
+                                                .small()
+                                                .text_color(muted_fg),
+                                        ),
                                 ),
                         ),
                 );
@@ -369,30 +469,12 @@ impl WelcomeState {
                     .gap_2()
                     .child(
                         div()
-                            .flex()
-                            .flex_row()
-                            .items_center()
-                            .justify_between()
-                            .child(
-                                div()
-                                    .text_xs()
-                                    .font_semibold()
-                                    .text_color(muted_fg)
-                                    .child("Recent documents"),
-                            ),
+                            .text_xs()
+                            .font_semibold()
+                            .text_color(muted_fg)
+                            .child("Recent documents"),
                     )
-                    .child(
-                        div()
-                            .flex()
-                            .flex_col()
-                            .gap_1()
-                            .p_1p5()
-                            .rounded_xl()
-                            .border_1()
-                            .border_color(border)
-                            .bg(cx.theme().group_box)
-                            .children(items),
-                    ),
+                    .child(div().flex().flex_col().gap_0p5().children(items)),
             )
         } else {
             None
@@ -432,9 +514,7 @@ fn render_action_card<V: 'static>(
         .id(id)
         .flex()
         .flex_col()
-        .flex_1()
-        .min_w(px(220.0))
-        .max_w(px(320.0))
+        .w(px(320.0))
         .p_3p5()
         .rounded_xl()
         .border_1()

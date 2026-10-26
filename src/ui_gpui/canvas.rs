@@ -1,5 +1,4 @@
 use super::ribbon::PageLayoutMode;
-use gpui_kit::base::StyledExt;
 use gpui_kit::component::ActiveTheme;
 use gpui_kit::component::scroll::ScrollableElement;
 use gpui_kit::gpui::{BorderStyle, fill, outline};
@@ -1085,19 +1084,6 @@ impl DocumentViewport {
                 .into_any_element()
         };
 
-        let page_badge = div()
-            .absolute()
-            .bottom_2()
-            .right_2()
-            .px_2()
-            .py_0p5()
-            .rounded_md()
-            .bg(gpui_kit::hsla(0.0, 0.0, 0.1, 0.6))
-            .text_color(gpui_kit::white())
-            .text_xs()
-            .font_medium()
-            .child(format!("{}/{}", page_idx + 1, total));
-
         div()
             .id(SharedString::from(format!("canvas-page-{}", page_idx)))
             .w(scaled_w)
@@ -1116,7 +1102,6 @@ impl DocumentViewport {
             }))
             .child(card_content)
             .child(selection_overlay)
-            .child(page_badge)
             .into_any_element()
     }
 

@@ -20,7 +20,12 @@ pub fn run_gpui_app() {
     });
 
     gpui_kit::application()
-        .with_assets(gpui_kit::assets::Assets)
+        // `assets::Assets` embeds only gpui-kit's curated subset (its
+        // `default-icons.txt`); the reader's icon set (House, PanelTopClose,
+        // Rows2, Columns2, Merge, Signature, …) reaches past that subset, and
+        // every missing glyph is a guaranteed panic at first paint. `AllAssets`
+        // ships the full Lucide set instead.
+        .with_assets(gpui_kit::assets::AllAssets)
         .run(move |cx| {
             gpui_kit::init(cx);
 

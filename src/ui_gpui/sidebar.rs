@@ -11,7 +11,7 @@ use gpui_kit::*;
 ///
 /// The sidebar used to print the raw count ("4194304 bytes"), which nobody can
 /// compare at a glance. Unit-scaled so the values line up in the column.
-fn human_bytes(bytes: u64) -> String {
+pub fn human_bytes(bytes: u64) -> String {
     const UNITS: [(u64, &str); 4] = [
         (1024 * 1024 * 1024, "GB"),
         (1024 * 1024, "MB"),
@@ -334,13 +334,21 @@ impl SidebarState {
         }
 
         let modes = [
-            (SidebarMode::Thumbnails, "Pages"),
-            (SidebarMode::Bookmarks, "Bookmarks"),
-            (SidebarMode::Annotations, "Notes"),
-            (SidebarMode::Search, "Search"),
-            (SidebarMode::Attachments, "Files"),
-            (SidebarMode::Layers, "Layers"),
-            (SidebarMode::Links, "Links"),
+            (
+                SidebarMode::Thumbnails,
+                IconName::GalleryVerticalEnd,
+                "Pages",
+            ),
+            (SidebarMode::Bookmarks, IconName::BookOpen, "Bookmarks"),
+            (
+                SidebarMode::Annotations,
+                IconName::FileText,
+                "Notes & Annotations",
+            ),
+            (SidebarMode::Search, IconName::Search, "Search in Document"),
+            (SidebarMode::Attachments, IconName::Folder, "Attachments"),
+            (SidebarMode::Layers, IconName::Frame, "Layers"),
+            (SidebarMode::Links, IconName::ExternalLink, "Links"),
         ];
 
         let cur_mode = self.mode;
@@ -1026,27 +1034,30 @@ impl SidebarState {
             .bg(background)
             .child({
                 let mut mode_buttons = Vec::new();
-                for (m, label) in modes {
+                for (m, icon, label) in modes {
                     let is_active = m == cur_mode;
                     let click_listener = cx.listener(move |v, _, w, cx| {
                         on_action(v, SidebarAction::SelectMode(m), w, cx)
                     });
                     mode_buttons.push(
                         Button::new(format!("side-mode-{:?}", m))
-                            .label(label)
+                            .icon(icon)
+                            .ghost()
                             .small()
                             // The active panel is a *selection*, not the
                             // primary commit of a decision area.
                             .selected(is_active)
+                            .tooltip(label)
                             .on_click(click_listener),
                     );
                 }
                 div()
                     .flex()
                     .flex_row()
-                    .flex_wrap()
-                    .gap_1()
-                    .p_2()
+                    .items_center()
+                    .justify_between()
+                    .px_2()
+                    .py_1p5()
                     .border_b_1()
                     .border_color(border)
                     .bg(muted)

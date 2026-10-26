@@ -1,6 +1,6 @@
+use gpui_kit::assets::IconName;
 use gpui_kit::base::StyledExt;
 use gpui_kit::component::ActiveTheme;
-use gpui_kit::component::IconName;
 use gpui_kit::component::Selectable as _;
 use gpui_kit::component::Sizable;
 use gpui_kit::component::button::{Button, ButtonVariants};

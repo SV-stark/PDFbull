@@ -5,6 +5,34 @@ All notable changes to the PDFbull project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.19.0] - 2026-10-26
+
+### Improved
+- **Welcome / Home Dashboard Modernization (`src/ui_gpui/welcome.rs`)**:
+  - Replaced the plain `"PB"` text tile with a styled brand mark and document icon badge.
+  - Interactive dropzone now features smooth hover states, strict PDF-only extension filtering, and fixed event propagation (`cx.stop_propagation()`) on the "Browse files…" button so clicking it no longer opens duplicate native file dialogs.
+  - Replaced the redundant "Open Document" action card with **"Merge PDFs"**, updating all quick action cards to use Lucide vector icons (`Merge`, `PencilRuler`, `Signature`, `ShieldLock`) and responsive container sizing.
+  - Overhauled the recent documents section from plain path cards into a structured, scannable table displaying formatted file titles, relative last opened times (`timeago`), human-readable file sizes (`human_bytes`), and bounded lazy page counts (`PAGE_COUNT_SCAN_COUNT = 8`, 20 MB ceiling) to prevent UI freezes.
+- **Reading Chrome & Status Bar (`src/ui_gpui/app_view.rs`)**:
+  - Reclaimed vertical space on the Welcome screen by conditionally hiding the 54px Ribbon Action Strip and ribbon tabs when no document is active.
+  - Added reading layout mode switcher buttons directly beside the zoom controls in the status bar (`GalleryVerticalEnd` for Continuous, `Square` for Single Page, `BookOpen` for Two-page spread) with active state indicators.
+  - Relocated the diagnostic `Logs` toggle button from the top header down to the status bar next to layout controls, using the `SquareTerminal` icon.
+  - Added human-readable page dimension formatting via `page_size_name` (A4, Letter, Legal, A3, A5, Tabloid with portrait/landscape detection) rather than raw points.
+- **Sidebar Navigation (`src/ui_gpui/sidebar.rs`)**:
+  - Replaced the two wrapped rows of text buttons with a single-row icon navigation bar with tooltips (`Pages`, `Bookmarks`, `Notes & Annotations`, `Search`, `Attachments`, `Layers`, `Links`), reclaiming vertical space.
+- **Reading Canvas (`src/ui_gpui/canvas.rs`)**:
+  - Removed the dark floating `page_badge` (`1/15`) overlay that previously covered bottom-right page content (footnotes, signatures, and disclaimers). Complete page information is already displayed in the status bar.
+
+### Fixed
+- **Type compatibility in recent documents (`src/ui_gpui/app_view.rs`, `tests/ui_test.rs`)**:
+  - Fixed `RecentEntry` mapping and path extraction in `open_pdf_path` and `OpenRecent`.
+  - Updated `test_welcome_state` unit test to construct `RecentEntry` structs with `PartialEq` assertions.
+- **Compiler errors resolved (`src/ui_gpui/app_view.rs`, `src/ui_gpui/welcome.rs`, `src/ui_gpui/sidebar.rs`)**:
+  - Implemented missing `set_layout_mode` method on `PdfbullView`.
+  - Corrected `human_bytes` visibility in `sidebar.rs`.
+  - Replaced invalid `.filter()` on `std::fs::metadata` result in `welcome.rs`.
+  - Cleaned up duplicate `btn-toggle-logs` button from the top header bar.
+
 ## [0.18.4] - 2026-10-24
 
 ### Changed
@@ -20,8 +48,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Upgraded `zpdf` and related crates to `0.15.0`**: Cargo pins updated; documents now attach a system-enabled `FontProvider` so non-embedded fonts can be substituted and variable/multi-script glyphs resolve against installed fonts.
 - **Text selection extraction**: `extract_selected_text` joins selected items using zpdf's word-gap heuristic instead of always inserting a space, fixing spaced-out per-glyph spans such as "T e s t" while preserving word boundaries.
 - **Selection highlighting**: eagerly fetches the text layer on selection start for per-word highlight boxes; commits annotation drags clear the transient selection highlight; added `join_selected_text_items` helper and tests.
-
-## [Unreleased]
 
 ## [0.18.3] - 2026-10-19
 
