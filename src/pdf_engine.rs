@@ -52,7 +52,7 @@ impl crate::models::DestinationView {
 }
 use zpdf_writer::{
     builder::DocumentBuilder,
-    redact::{RedactOptions, redact_pdf},
+    redact::RedactOptions,
     sign::{SignatureOptions, SigningKey},
     stamp::StampItem,
 };
@@ -933,6 +933,33 @@ impl DocumentStore {
         self.documents.contains_key(&doc_id)
     }
 
+    pub fn doc_id_for_path(&self, path: &str) -> Option<DocumentId> {
+        let norm_target = path.replace('\\', "/");
+        self.paths.iter().find_map(|(id, p)| {
+            let norm_p = p.replace('\\', "/");
+            let matches = if cfg!(windows) {
+                norm_p.eq_ignore_ascii_case(&norm_target)
+            } else {
+                norm_p == norm_target
+            };
+            if matches { Some(*id) } else { None }
+        })
+    }
+
+    pub fn password_for_path<'a>(&'a self, path: &str) -> &'a [u8] {
+        self.doc_id_for_path(path)
+            .and_then(|id| self.passwords.get(&id))
+            .map(|s| s.as_bytes())
+            .unwrap_or(b"")
+    }
+
+    pub fn password_for_doc(&self, doc_id: DocumentId) -> &[u8] {
+        self.passwords
+            .get(&doc_id)
+            .map(|s| s.as_bytes())
+            .unwrap_or(b"")
+    }
+
     /// Size and `/Rotate` of every page in an already-open document.
     ///
     /// Used after a reload so the view can resize its cards to the new file
@@ -1150,18 +1177,19 @@ impl DocumentStore {
 
         for i in 0..page_count {
             if let Ok(page) = doc.page(i) {
+                let eff_box = page.effective_box().normalize();
                 let annots = doc.page_annotations(&page);
                 for annot in annots {
                     if annot.subtype == "Link" {
-                        let rect = annot.rect;
+                        let rect = annot.rect.normalize();
                         let url = annot.uri.clone();
                         let dest = annot.dest.as_ref().and_then(|d| d.page);
                         if url.is_some() || dest.is_some() {
                             all_links.push(Hyperlink {
                                 page: i,
                                 bounds: (
-                                    rect.x0 as f32,
-                                    rect.y0 as f32,
+                                    (rect.x0 - eff_box.x0) as f32,
+                                    (eff_box.y1 - rect.y1) as f32,
                                     rect.width() as f32,
                                     rect.height() as f32,
                                 ),
@@ -1195,7 +1223,6 @@ impl DocumentStore {
             .page(page_num)
             .map_err(|_| PdfError::PageNotFound(page_num))?;
         let mut fonts = doc.load_page_fonts(&page);
-        let mut images = ImageCache::new();
         let content = doc
             .page_content_bytes(&page)
             .map_err(|e| PdfError::SearchError(e.to_string()))?;
@@ -1204,10 +1231,8 @@ impl DocumentStore {
         {
             let interp = ContentInterpreter::new(page.effective_box())
                 .with_page_user_unit(page.user_unit)
-                .with_image_cache_limit(self.image_cache_bytes)
                 .with_fonts(&mut fonts)
                 .with_document(doc.file(), &page.resources)
-                .with_images(&mut images)
                 .with_text_sink(&mut spans);
             let _ = interp.interpret(&content);
         }
@@ -1245,18 +1270,18 @@ impl DocumentStore {
             let Ok(page) = doc.page(page_idx) else {
                 continue;
             };
-            // The page box is only needed to normalise the annotation rect.
-            let eff_box = page.effective_box();
+            let eff_box = page.effective_box().normalize();
             let annots = doc.page_annotations(&page);
             for annot in annots {
                 if annot.subtype != "Link" {
                     continue;
                 }
+                let rect = annot.rect.normalize();
                 let bounds = (
-                    annot.rect.x0 as f32 - eff_box.x0 as f32,
-                    (eff_box.y1 - annot.rect.y1) as f32,
-                    (annot.rect.x1 - annot.rect.x0) as f32,
-                    (annot.rect.y1 - annot.rect.y0) as f32,
+                    (rect.x0 - eff_box.x0) as f32,
+                    (eff_box.y1 - rect.y1) as f32,
+                    rect.width() as f32,
+                    rect.height() as f32,
                 );
                 match annot.uri.clone() {
                     Some(url) => results.push(crate::models::LinkDestinationInfo {
@@ -1961,6 +1986,7 @@ impl DocumentStore {
             .with_page_rotation(page.rotate + options.rotation)
             .with_page_user_unit(page.user_unit)
             .with_fonts(&mut fonts)
+            .with_shared_fonts(doc)
             .with_document(doc.file(), &page.resources)
             .with_images(images);
 
@@ -2108,7 +2134,6 @@ impl DocumentStore {
             .page(page_num)
             .map_err(|_| PdfError::PageNotFound(page_num))?;
         let mut fonts = doc.load_page_fonts(&page);
-        let mut images = ImageCache::new();
         let content = doc
             .page_content_bytes(&page)
             .map_err(|e| PdfError::SearchError(e.to_string()))?;
@@ -2117,10 +2142,8 @@ impl DocumentStore {
         {
             let interp = ContentInterpreter::new(page.effective_box())
                 .with_page_user_unit(page.user_unit)
-                .with_image_cache_limit(self.image_cache_bytes)
                 .with_fonts(&mut fonts)
                 .with_document(doc.file(), &page.resources)
-                .with_images(&mut images)
                 .with_text_sink(&mut spans);
             let _ = interp.interpret(&content);
         }
@@ -2149,7 +2172,6 @@ impl DocumentStore {
             .page(page_num)
             .map_err(|_| PdfError::PageNotFound(page_num))?;
         let mut fonts = doc.load_page_fonts(&page);
-        let mut images = ImageCache::new();
         let content = doc
             .page_content_bytes(&page)
             .map_err(|e| PdfError::SearchError(e.to_string()))?;
@@ -2158,10 +2180,8 @@ impl DocumentStore {
         {
             let interp = ContentInterpreter::new(page.effective_box())
                 .with_page_user_unit(page.user_unit)
-                .with_image_cache_limit(self.image_cache_bytes)
                 .with_fonts(&mut fonts)
                 .with_document(doc.file(), &page.resources)
-                .with_images(&mut images)
                 .with_text_sink(&mut spans);
             let _ = interp.interpret(&content);
         }
@@ -2254,7 +2274,6 @@ impl DocumentStore {
             .page(page_num)
             .map_err(|_| PdfError::PageNotFound(page_num))?;
         let mut fonts = doc.load_page_fonts(&page);
-        let mut images = ImageCache::new();
         let content = doc
             .page_content_bytes(&page)
             .map_err(|e| PdfError::SearchError(e.to_string()))?;
@@ -2264,10 +2283,8 @@ impl DocumentStore {
         {
             let interp = ContentInterpreter::new(page.effective_box())
                 .with_page_user_unit(page.user_unit)
-                .with_image_cache_limit(self.image_cache_bytes)
                 .with_fonts(&mut fonts)
                 .with_document(doc.file(), &page.resources)
-                .with_images(&mut images)
                 .with_text_sink(&mut spans)
                 .with_rule_sink(&mut rules);
             let _ = interp.interpret(&content);
@@ -2601,6 +2618,7 @@ impl DocumentStore {
 
         let mut fonts = doc.load_page_fonts(&page);
         let mut images = ImageCache::new();
+        let annotations = doc.page_annotations(&page);
         let content = doc
             .page_content_bytes(&page)
             .map_err(|e| PdfError::RenderFailed(e.to_string()))?;
@@ -2610,8 +2628,10 @@ impl DocumentStore {
             .with_page_rotation(page.rotate)
             .with_page_user_unit(page.user_unit)
             .with_fonts(&mut fonts)
+            .with_shared_fonts(doc)
             .with_document(doc.file(), &page.resources)
             .with_images(&mut images)
+            .with_annotations(&annotations)
             .interpret(&content);
 
         let mut renderer = CpuRenderer::new()
@@ -2756,12 +2776,6 @@ impl DocumentStore {
                 continue;
             };
             let mut fonts = doc.load_page_fonts(&page);
-            // Share the document-lifetime image cache instead of building a fresh
-            // one per page, per query. A local `ImageCache::new()` inside this
-            // loop meant every keystroke re-ran `ContentInterpreter` over every
-            // page and re-decoded every embedded image from scratch, while the
-            // caches `render_page_internal` maintains went unused.
-            let images = self.image_caches.entry(doc_id).or_default();
             let Ok(content) = doc.page_content_bytes(&page) else {
                 continue;
             };
@@ -2771,10 +2785,8 @@ impl DocumentStore {
             {
                 let interp = ContentInterpreter::new(eff_box)
                     .with_page_user_unit(page.user_unit)
-                    .with_image_cache_limit(self.image_cache_bytes)
                     .with_fonts(&mut fonts)
                     .with_document(doc.file(), &page.resources)
-                    .with_images(images)
                     .with_text_sink(&mut spans);
                 let _ = interp.interpret(&content);
             }
@@ -2917,7 +2929,6 @@ impl DocumentStore {
             .page(page_num)
             .map_err(|_| PdfError::PageNotFound(page_num))?;
         let mut fonts = doc.load_page_fonts(&page);
-        let mut images = ImageCache::new();
         let content = doc
             .page_content_bytes(&page)
             .map_err(|e| PdfError::SearchError(e.to_string()))?;
@@ -2926,10 +2937,8 @@ impl DocumentStore {
         {
             let interp = ContentInterpreter::new(page.effective_box())
                 .with_page_user_unit(page.user_unit)
-                .with_image_cache_limit(self.image_cache_bytes)
                 .with_fonts(&mut fonts)
                 .with_document(doc.file(), &page.resources)
-                .with_images(&mut images)
                 .with_text_sink(&mut spans);
             let _ = interp.interpret(&content);
         }
@@ -2939,17 +2948,13 @@ impl DocumentStore {
         Ok(tables
             .into_iter()
             .map(|t| {
-                // Compute bounding box from col_x/row_y arrays
-                let min_x = t.col_x.first().copied().unwrap_or(0.0);
-                let max_x = t.col_x.last().copied().unwrap_or(0.0);
-                let max_y = t.row_y.first().copied().unwrap_or(0.0);
-                let min_y = t.row_y.last().copied().unwrap_or(0.0);
+                let (x0, y0, x1, y1) = t.bbox();
                 crate::models::DetectedTable {
                     bbox: (
-                        (min_x - eff_box.x0) as f32,
-                        (eff_box.y1 - max_y) as f32,
-                        (max_x - min_x) as f32,
-                        (max_y - min_y) as f32,
+                        (x0 - eff_box.x0) as f32,
+                        (eff_box.y1 - y1) as f32,
+                        (x1 - x0) as f32,
+                        (y1 - y0) as f32,
                     ),
                     csv: t.to_csv(),
                     tsv: t.to_tsv(),
@@ -3124,6 +3129,7 @@ impl DocumentStore {
     /// then garbage-collected and compressed as usual.
     pub fn optimize_pdf(&self, input_path: &str, output_path: &str) -> PdfResult<String> {
         let data = read_input_capped(input_path)?;
+        let pass = self.password_for_path(input_path);
 
         // `PdfFile::parse` takes ownership of the bytes, so the buffer it parses
         // *is* the document — there is no separate copy to free. The only place
@@ -3133,7 +3139,7 @@ impl DocumentStore {
         // image XObjects, and its result buffer is released as soon as the
         // replacements have been planned.
         let staged_pdf = if self.has_placed_images(&data) {
-            let pdf = zpdf::PdfFile::parse(data.clone())
+            let pdf = zpdf::PdfFile::parse_with_password(data.clone(), pass)
                 .map_err(|e| PdfError::OpenFailed(e.to_string()))?;
 
             let dpi = crate::image_optimizer::collect_placed_dpi(&pdf);
@@ -3151,13 +3157,16 @@ impl DocumentStore {
             if replacements.is_empty() {
                 // Nothing to stage: hand the original buffer straight to the
                 // final parse rather than building a second full-size copy.
-                zpdf::PdfFile::parse(data).map_err(|e| PdfError::OpenFailed(e.to_string()))?
+                zpdf::PdfFile::parse_with_password(data, pass)
+                    .map_err(|e| PdfError::OpenFailed(e.to_string()))?
             } else {
-                let staged = self.apply_image_replacements(data, &replacements)?;
-                zpdf::PdfFile::parse(staged).map_err(|e| PdfError::OpenFailed(e.to_string()))?
+                let staged = self.apply_image_replacements(data, &replacements, pass)?;
+                zpdf::PdfFile::parse_with_password(staged, pass)
+                    .map_err(|e| PdfError::OpenFailed(e.to_string()))?
             }
         } else {
-            zpdf::PdfFile::parse(data).map_err(|e| PdfError::OpenFailed(e.to_string()))?
+            zpdf::PdfFile::parse_with_password(data, pass)
+                .map_err(|e| PdfError::OpenFailed(e.to_string()))?
         };
 
         let opts = RewriteOptions {
@@ -3206,9 +3215,10 @@ impl DocumentStore {
         &self,
         data: Vec<u8>,
         replacements: &[(zpdf::ObjectId, crate::image_optimizer::Replacement)],
+        pass: &[u8],
     ) -> PdfResult<Vec<u8>> {
-        let mut writer =
-            IncrementalWriter::new(data).map_err(|e| PdfError::OpenFailed(e.to_string()))?;
+        let mut writer = IncrementalWriter::new_with_password(data, pass)
+            .map_err(|e| PdfError::OpenFailed(e.to_string()))?;
         for (id, replacement) in replacements {
             let stream = zpdf::PdfObject::Stream(zpdf::PdfStream {
                 dict: replacement.dict.clone(),
@@ -3232,7 +3242,9 @@ impl DocumentStore {
         algorithm: &str,
     ) -> PdfResult<String> {
         let data = read_input_capped(input_path)?;
-        let pdf = zpdf::PdfFile::parse(data).map_err(|e| PdfError::OpenFailed(e.to_string()))?;
+        let pass = self.password_for_path(input_path);
+        let pdf = zpdf::PdfFile::parse_with_password(data, pass)
+            .map_err(|e| PdfError::OpenFailed(e.to_string()))?;
         let enc_config = if algorithm.eq_ignore_ascii_case("rc4") {
             zpdf_writer::EncryptionConfig::rc4_128(user_pass, owner_pass)
         } else {
@@ -3249,7 +3261,9 @@ impl DocumentStore {
 
     pub fn linearize_pdf(&self, input_path: &str, output_path: &str) -> PdfResult<String> {
         let data = read_input_capped(input_path)?;
-        let pdf = zpdf::PdfFile::parse(data).map_err(|e| PdfError::OpenFailed(e.to_string()))?;
+        let pass = self.password_for_path(input_path);
+        let pdf = zpdf::PdfFile::parse_with_password(data, pass)
+            .map_err(|e| PdfError::OpenFailed(e.to_string()))?;
         let out_bytes =
             zpdf_writer::linearize_pdf(&pdf).map_err(|e| PdfError::IoError(e.to_string()))?;
         write_pdf_output(output_path, &out_bytes)?;
@@ -3258,8 +3272,9 @@ impl DocumentStore {
 
     pub fn tag_pdf(&self, input_path: &str, output_path: &str) -> PdfResult<String> {
         let data = read_input_capped(input_path)?;
-        let mut writer =
-            IncrementalWriter::new(data).map_err(|e| PdfError::OpenFailed(e.to_string()))?;
+        let pass = self.password_for_path(input_path);
+        let mut writer = IncrementalWriter::new_with_password(data, pass)
+            .map_err(|e| PdfError::OpenFailed(e.to_string()))?;
         writer
             .tag_pdf()
             .map_err(|e| PdfError::IoError(e.to_string()))?;
@@ -3280,7 +3295,9 @@ impl DocumentStore {
         profile_str: &str,
     ) -> PdfResult<crate::models::ConformanceReport> {
         let data = read_input_capped(path)?;
-        let pdf = zpdf::PdfFile::parse(data).map_err(|e| PdfError::OpenFailed(e.to_string()))?;
+        let pass = self.password_for_path(path);
+        let pdf = zpdf::PdfFile::parse_with_password(data, pass)
+            .map_err(|e| PdfError::OpenFailed(e.to_string()))?;
         let normalized = profile_str.to_lowercase().replace(['-', '/', '_', ' '], "");
         match normalized.as_str() {
             "pdfa1b" | "1b" | "a1b" => {
@@ -3610,7 +3627,9 @@ impl DocumentStore {
             ));
         }
         let data = read_input_capped(path)?;
-        let doc = zpdf::PdfDocument::open(data).map_err(|e| PdfError::OpenFailed(e.to_string()))?;
+        let pass = self.password_for_path(path);
+        let doc = zpdf::PdfDocument::open_with_password(data, pass)
+            .map_err(|e| PdfError::OpenFailed(e.to_string()))?;
         Self::convert_inner(&doc, mode, format)
     }
 
@@ -3635,20 +3654,22 @@ impl DocumentStore {
         // allocated room for the whole file before any size check, so a
         // multi-GB input OOMs the process instead of being refused.
         let first_data = read_input_capped(first_path)?;
-        let mut writer = IncrementalWriter::new_with_password(
-            first_data,
-            first_password.as_deref().unwrap_or("").as_bytes(),
-        )
-        .map_err(|e| PdfError::OpenFailed(e.to_string()))?;
+        let first_pass = first_password
+            .as_deref()
+            .map(|p| p.as_bytes())
+            .unwrap_or_else(|| self.password_for_path(first_path));
+        let mut writer = IncrementalWriter::new_with_password(first_data, first_pass)
+            .map_err(|e| PdfError::OpenFailed(e.to_string()))?;
 
         // Append remaining documents — this preserves outlines, forms, and OCGs.
         for (path, password) in documents.iter().skip(1) {
             let data = read_input_capped(path)?;
-            let doc = zpdf::PdfFile::parse_with_password(
-                data,
-                password.as_deref().unwrap_or("").as_bytes(),
-            )
-            .map_err(|e| PdfError::OpenFailed(e.to_string()))?;
+            let pass = password
+                .as_deref()
+                .map(|p| p.as_bytes())
+                .unwrap_or_else(|| self.password_for_path(path));
+            let doc = zpdf::PdfFile::parse_with_password(data, pass)
+                .map_err(|e| PdfError::OpenFailed(e.to_string()))?;
             writer
                 .append_document(&doc)
                 .map_err(|e| PdfError::IoError(e.to_string()))?;
@@ -3674,9 +3695,11 @@ impl DocumentStore {
         password: Option<&str>,
     ) -> PdfResult<String> {
         let data = read_input_capped(input_path)?;
-        let mut writer =
-            IncrementalWriter::new_with_password(data, password.unwrap_or("").as_bytes())
-                .map_err(|e| PdfError::OpenFailed(e.to_string()))?;
+        let pass = password
+            .map(|p| p.as_bytes())
+            .unwrap_or_else(|| self.password_for_path(input_path));
+        let mut writer = IncrementalWriter::new_with_password(data, pass)
+            .map_err(|e| PdfError::OpenFailed(e.to_string()))?;
 
         writer
             .reorder_pages(page_order)
@@ -3702,9 +3725,11 @@ impl DocumentStore {
         password: Option<&str>,
     ) -> PdfResult<String> {
         let data = read_input_capped(input_path)?;
-        let mut writer =
-            IncrementalWriter::new_with_password(data, password.unwrap_or("").as_bytes())
-                .map_err(|e| PdfError::OpenFailed(e.to_string()))?;
+        let pass = password
+            .map(|p| p.as_bytes())
+            .unwrap_or_else(|| self.password_for_path(input_path));
+        let mut writer = IncrementalWriter::new_with_password(data, pass)
+            .map_err(|e| PdfError::OpenFailed(e.to_string()))?;
 
         for &(page_idx, degrees) in rotations {
             writer
@@ -3732,9 +3757,11 @@ impl DocumentStore {
         password: Option<&str>,
     ) -> PdfResult<String> {
         let data = read_input_capped(input_path)?;
-        let mut writer =
-            IncrementalWriter::new_with_password(data, password.unwrap_or("").as_bytes())
-                .map_err(|e| PdfError::OpenFailed(e.to_string()))?;
+        let pass = password
+            .map(|p| p.as_bytes())
+            .unwrap_or_else(|| self.password_for_path(input_path));
+        let mut writer = IncrementalWriter::new_with_password(data, pass)
+            .map_err(|e| PdfError::OpenFailed(e.to_string()))?;
 
         writer
             .delete_pages(page_indices)
@@ -3799,14 +3826,15 @@ impl DocumentStore {
         // the open reports `PasswordRequired` rather than an opaque parse error,
         // so the caller can ask for one. (There is no object-scan fallback: the
         // page tree cannot be walked while the file is encrypted.)
-        let doc =
-            zpdf::PdfDocument::open_with_password(base_data, password.unwrap_or("").as_bytes())
-                .map_err(|e| match e {
-                    zpdf::Error::WrongPassword | zpdf::Error::PasswordRequired => {
-                        PdfError::PasswordRequired
-                    }
-                    other => PdfError::OpenFailed(other.to_string()),
-                })?;
+        let pass = password
+            .map(|p| p.as_bytes())
+            .unwrap_or_else(|| self.password_for_path(path));
+        let doc = zpdf::PdfDocument::open_with_password(base_data, pass).map_err(|e| match e {
+            zpdf::Error::WrongPassword | zpdf::Error::PasswordRequired => {
+                PdfError::PasswordRequired
+            }
+            other => PdfError::OpenFailed(other.to_string()),
+        })?;
         let pdf_file = doc.file();
         let total_pages = doc.page_count();
         if total_pages == 0 {
@@ -3935,28 +3963,6 @@ impl DocumentStore {
             }
         }
 
-        // Empty password matches what `IncrementalWriter::new` accepted for
-        // this code's callers: documents redacted here were opened by the
-        // engine with a password the caller already supplied, but the writer
-        // path never carried it. `redact_pdf` maps `WrongPassword` onto the
-        // same open error as before — nothing silently succeeds on an
-        // encrypted file.
-        let pass = self
-            .passwords
-            .get(&doc_id)
-            .map(|s| s.as_bytes())
-            .unwrap_or(b"");
-        let mut out_bytes = data;
-        for (page_idx, rects) in by_page {
-            out_bytes = redact_pdf(out_bytes, pass, page_idx, &rects, &RedactOptions::default())
-                .map_err(|e| PdfError::IoError(e.to_string()))?;
-        }
-        // `redact_pdf` decrypts while rewriting (its output cannot retain the
-        // encryption dictionary, only the password it was given — which here
-        // is empty), so the written file is unencrypted even if the source
-        // was not. Redacted output leaving the app unencrypted is the same
-        // posture as `save_annotations`'s write path.
-
         let pdf_path_buf = std::path::Path::new(pdf_path);
         let final_path = output_path.unwrap_or_else(|| {
             let stem = pdf_path_buf
@@ -3973,6 +3979,31 @@ impl DocumentStore {
                 format!("{}/{}_redacted.pdf", dir, stem)
             }
         });
+
+        if by_page.is_empty() {
+            write_pdf_output(&final_path, &data)?;
+            return Ok(final_path);
+        }
+
+        let pass = self.password_for_doc(doc_id);
+        let mut writer = IncrementalWriter::new_with_password(data, pass)
+            .map_err(|e| PdfError::OpenFailed(e.to_string()))?;
+        for (page_idx, rects) in by_page {
+            writer
+                .redact_page(page_idx, &rects, &RedactOptions::default())
+                .map_err(|e| PdfError::IoError(e.to_string()))?;
+        }
+        let mut updated = std::io::Cursor::new(Vec::new());
+        writer
+            .write(&mut updated)
+            .map_err(|e| PdfError::IoError(e.to_string()))?;
+
+        // Re-open the update and serialize only the reachable object graph. The
+        // original file prefix (and every superseded revision in it) is dropped.
+        let doc = PdfDocument::open_with_password(updated.into_inner(), pass)
+            .map_err(|e| PdfError::OpenFailed(e.to_string()))?;
+        let out_bytes = rewrite_pdf(doc.file(), &RewriteOptions::default())
+            .map_err(|e| PdfError::IoError(e.to_string()))?;
 
         write_pdf_output(&final_path, &out_bytes)?;
 
@@ -4000,11 +4031,7 @@ impl DocumentStore {
     }
 
     pub fn get_form_fields(&mut self, path: &str) -> PdfResult<Vec<FormField>> {
-        let doc_id = self
-            .paths
-            .iter()
-            .find(|(_, p)| *p == path)
-            .map(|(id, _)| *id);
+        let doc_id = self.doc_id_for_path(path);
 
         if let Some(id) = doc_id
             && let Some(doc) = self.documents.get(&id)
@@ -4013,7 +4040,9 @@ impl DocumentStore {
         }
 
         let data = read_input_capped(path)?;
-        let doc = PdfDocument::open(data).map_err(|e| PdfError::OpenFailed(e.to_string()))?;
+        let pass = self.password_for_path(path);
+        let doc = PdfDocument::open_with_password(data, pass)
+            .map_err(|e| PdfError::OpenFailed(e.to_string()))?;
         Ok(self.extract_form_fields_from_doc(&doc))
     }
 
@@ -4822,8 +4851,9 @@ impl DocumentStore {
             location: Some("PDFbull Desktop Application".to_string()),
             ..SignatureOptions::default()
         };
-        let writer =
-            IncrementalWriter::new(doc_bytes).map_err(|e| PdfError::IoError(e.to_string()))?;
+        let pass = self.password_for_doc(doc_id);
+        let writer = IncrementalWriter::new_with_password(doc_bytes, pass)
+            .map_err(|e| PdfError::IoError(e.to_string()))?;
         // sign() consumes the writer and returns the final signed bytes
         let signed_bytes = writer
             .sign(&cert_der_bytes, &key, &opts)
@@ -4867,8 +4897,9 @@ impl DocumentStore {
             size: 36.0,
             color: (r, g, b),
         };
-        let mut writer =
-            IncrementalWriter::new(doc_bytes).map_err(|e| PdfError::IoError(e.to_string()))?;
+        let pass = self.password_for_doc(doc_id);
+        let mut writer = IncrementalWriter::new_with_password(doc_bytes, pass)
+            .map_err(|e| PdfError::IoError(e.to_string()))?;
         writer
             .stamp_page(page_num, &[stamp])
             .map_err(|e| PdfError::IoError(e.to_string()))?;
@@ -5992,5 +6023,110 @@ mod tests {
             err_res.is_err(),
             "Expected error for invalid profile string"
         );
+    }
+
+    #[test]
+    fn test_password_propagation_helpers() {
+        let mut store = DocumentStore::new(create_render_cache(10, 0));
+        let doc_id = DocumentId(42);
+        let path = "test_doc_pw.pdf";
+        let pw = "secret_pass";
+
+        assert_eq!(store.password_for_doc(doc_id), b"");
+        assert_eq!(store.password_for_path(path), b"");
+
+        store.paths.insert(doc_id, path.to_string());
+        store.passwords.insert(doc_id, pw.to_string());
+
+        assert_eq!(store.password_for_doc(doc_id), pw.as_bytes());
+        assert_eq!(store.password_for_path(path), pw.as_bytes());
+        assert_eq!(store.password_for_path("other_file.pdf"), b"");
+
+        // Verify slash normalization and case tolerance
+        store
+            .paths
+            .insert(doc_id, "C:\\folder\\file.pdf".to_string());
+        assert_eq!(store.password_for_path("C:/folder/file.pdf"), pw.as_bytes());
+        if cfg!(windows) {
+            assert_eq!(
+                store.password_for_path("c:\\FOLDER\\file.pdf"),
+                pw.as_bytes()
+            );
+        }
+    }
+
+    #[test]
+    fn test_apply_redactions_multi_page_and_empty() {
+        let mut builder = DocumentBuilder::new();
+        builder.add_page(200.0, 200.0);
+        builder.add_page(200.0, 200.0);
+        let bytes = builder.build().expect("build pdf");
+
+        let dir = tempfile::tempdir().expect("tempdir");
+        let pdf_path = dir.path().join("redact_test.pdf");
+        std::fs::write(&pdf_path, &bytes).expect("write");
+
+        let mut store = DocumentStore::new(create_render_cache(10, 0));
+        let doc_id = DocumentId(101);
+        store
+            .open_document(&pdf_path.to_string_lossy(), None, doc_id)
+            .expect("open");
+
+        // 1. Test empty redaction (passes through source bytes)
+        let out_empty = dir.path().join("out_empty.pdf");
+        let res_empty =
+            store.apply_redactions(doc_id, &[], Some(out_empty.to_string_lossy().to_string()));
+        assert!(res_empty.is_ok());
+        let empty_bytes = std::fs::read(&out_empty).expect("read empty output");
+        assert_eq!(empty_bytes, bytes);
+
+        // 2. Test multi-page redaction
+        let ann1 = Annotation {
+            id: 1,
+            page: 0,
+            x: 10.0,
+            y: 10.0,
+            width: 50.0,
+            height: 20.0,
+            style: AnnotationStyle::Redact {
+                color: "#000000".to_string(),
+            },
+        };
+        let ann2 = Annotation {
+            id: 2,
+            page: 1,
+            x: 20.0,
+            y: 20.0,
+            width: 40.0,
+            height: 30.0,
+            style: AnnotationStyle::Redact {
+                color: "#000000".to_string(),
+            },
+        };
+        let out_redacted = dir.path().join("out_redacted.pdf");
+        let res_redacted = store.apply_redactions(
+            doc_id,
+            &[ann1, ann2],
+            Some(out_redacted.to_string_lossy().to_string()),
+        );
+        assert!(res_redacted.is_ok());
+        let redacted_bytes = std::fs::read(&out_redacted).expect("read redacted output");
+        assert!(!redacted_bytes.is_empty());
+        let reopened = PdfDocument::open(redacted_bytes).expect("reopen redacted");
+        assert_eq!(reopened.page_count(), 2);
+    }
+
+    #[test]
+    fn test_inspect_pdf_geometry_zpdf() {
+        let manifest_dir = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+        let fixture_pdf = manifest_dir.join("tests").join("test_document.pdf");
+        if fixture_pdf.exists() {
+            let geom = crate::ui_gpui::app_view::inspect_pdf_geometry(&fixture_pdf);
+            assert!(geom.is_some());
+            let (page_count, width, height) = geom.unwrap();
+            assert!(page_count >= 1);
+            assert!(width > 100.0);
+            assert!(height > 100.0);
+        }
     }
 }

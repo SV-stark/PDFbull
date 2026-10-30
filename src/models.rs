@@ -337,7 +337,8 @@ impl SearchResult {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Hyperlink {
     pub page: usize,
-    pub bounds: (f32, f32, f32, f32), // x, y, w, h in PDF points
+    /// (x, y, w, h) in top-down PDF points relative to the page effective box origin.
+    pub bounds: (f32, f32, f32, f32),
     pub url: Option<String>,
     pub destination_page: Option<usize>,
 }

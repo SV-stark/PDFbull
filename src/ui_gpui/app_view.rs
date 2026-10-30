@@ -93,26 +93,16 @@ pub struct DocGeometry {
 
 pub fn inspect_pdf_geometry(path: &std::path::Path) -> Option<(usize, f32, f32)> {
     let data = crate::pdf_engine::read_input_capped(&path.to_string_lossy()).ok()?;
-    let doc = lopdf::Document::load_mem(&data).ok()?;
-    let pages = doc.get_pages();
-    let page_count = pages.len().max(1);
+    let doc = zpdf::PdfDocument::open(data).ok()?;
+    let page_count = doc.page_count().max(1);
     let mut page_width = 595.0;
     let mut page_height = 842.0;
 
-    if let Some((_, &first_page_id)) = pages.iter().next()
-        && let Ok(first_page) = doc.get_object(first_page_id)
-        && let Ok(dict) = first_page.as_dict()
-        && let Ok(media_box) = dict.get(b"MediaBox")
-        && let Ok(arr) = media_box.as_array()
-        && arr.len() == 4
-    {
-        let to_f32 = |obj: &lopdf::Object| match obj {
-            lopdf::Object::Real(v) => *v,
-            lopdf::Object::Integer(v) => *v as f32,
-            _ => 0.0,
-        };
-        let w = (to_f32(&arr[2]) - to_f32(&arr[0])).abs();
-        let h = (to_f32(&arr[3]) - to_f32(&arr[1])).abs();
+    if let Ok(first_page) = doc.page(0) {
+        let eff_box = first_page.effective_box();
+        let u = first_page.user_unit as f32;
+        let w = (eff_box.width() as f32) * u;
+        let h = (eff_box.height() as f32) * u;
         if w > 0.0 && h > 0.0 {
             page_width = w;
             page_height = h;
@@ -480,7 +470,7 @@ impl PdfbullView {
                 Ok(Ok(open_res)) => {
                     let _ = this.update(cx, |view, cx| {
                         // The engine's numbers are authoritative and refine the
-                        // `lopdf` estimate, so record them in the per-document
+                        // initial geometry estimate, so record them in the per-document
                         // cache — otherwise switching away and back would restore
                         // the rougher estimate instead.
                         let page_height = open_res

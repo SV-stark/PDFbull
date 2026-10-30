@@ -22,9 +22,9 @@ const ICON_PROTECT: IconName = IconName::ShieldLock;
 const ICON_FILE: IconName = IconName::FileText;
 
 /// Only the first few recents are probed for metadata. These are the caps that
-/// keep the dashboard's first paint cheap: `inspect_pdf_geometry` re-parses the
-/// file with `lopdf`, which is linear in file size, so a 500 MB scan job would
-/// freeze the welcome screen for nothing a user can perceptibly use.
+/// keep the dashboard's first paint cheap: `inspect_pdf_geometry` parses the
+/// file with `zpdf`, avoiding freezing the welcome screen for nothing a user
+/// can perceptibly use.
 const PAGE_COUNT_SCAN_COUNT: usize = 8;
 const PAGE_COUNT_SCAN_MAX_BYTES: u64 = 20 * 1024 * 1024;
 
@@ -74,12 +74,12 @@ impl WelcomeState {
         }
     }
 
-    /// Initial load without the expensive synchronous `lopdf` rescan on the UI thread.
+    /// Initial load with fast zpdf geometry scan on the UI thread.
     pub fn load_recent_files(&mut self) {
-        self.load_recent_files_impl(false)
+        self.load_recent_files_impl(true)
     }
 
-    /// List refresh without the expensive `lopdf` rescan. The welcome screen
+    /// List refresh without the expensive geometry rescan. The welcome screen
     /// reloads on every open/toggle, and probing eight PDFs per paint burst is
     /// how a "fast dashboard" becomes a beached one; prior page counts are
     /// kept by path instead.

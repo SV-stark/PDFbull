@@ -5,6 +5,32 @@ All notable changes to the PDFbull project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.19.6] - 2026-10-30
+
+### Fixed
+- **Multi-Page Redaction Quadratic Rewrite Loop (`src/pdf_engine.rs`)**:
+  - Replaced single-page `redact_pdf` loop with a batched `IncrementalWriter::new_with_password` pass.
+  - Staged all target page redactions in memory before executing a single garbage-collected `zpdf_writer::rewrite_pdf`, resolving the $O(N \times P)$ document rewrite cycle.
+  - Added an early-exit check when `by_page.is_empty()` to avoid redundant rewrites.
+- **Image Decoding Overhead in Text, Search & Table Operations (`src/pdf_engine.rs`)**:
+  - Removed `ImageCache` construction and `.with_images(...)` bindings across `extract_accessible_text`, `extract_text`, `extract_text_items`, `detect_tables_on_page`, `search`, and `detect_tables_plain_on_page`.
+  - Prevented unnecessary DCT, JBIG2, and Flate image decoding during pure text and table operations, eliminating memory churn and UI stalls on scanned documents.
+- **Export Page as Image Annotation & Shared Font Parity (`src/pdf_engine.rs`)**:
+  - Attached page annotations via `.with_annotations(&annotations)` in `export_page_as_image`, ensuring exported raster images preserve user stamps, drawings, highlights, and form signatures matching `export_page_svg`.
+  - Added `.with_shared_fonts(doc)` to both `export_page_as_image` and `render_page_internal` to share parsed form and pattern fonts across pages.
+- **Complete Password Propagation & Windows Path Normalization (`src/pdf_engine.rs`)**:
+  - Added `DocumentStore::doc_id_for_path` with slash-agnostic (`\` vs `/`) and case-insensitive matching on Windows.
+  - Propagated stored passwords into `apply_image_replacements`, `tag_pdf`, `sign_with_certificate`, `apply_stamp`, `convert_pdf_doc`, `get_form_fields`, `optimize_pdf`, `encrypt_pdf`, `linearize_pdf`, and `validate_conformance`.
+  - Added automatic fallback to stored passwords in `merge_documents`, `reorder_pages`, `rotate_pages`, `delete_pages`, and `split_pdf` when `password: None` is supplied.
+- **Link Bounds Coordinate Normalization (`src/pdf_engine.rs`)**:
+  - Applied `.normalize()` to both `annot.rect` and `eff_box` in `extract_links_internal` and `extract_link_destinations` before computing relative offsets, eliminating inverted Y-axes and negative bounds.
+- **Fast Native `zpdf` Geometry Inspection (`src/ui_gpui/app_view.rs`, `src/ui_gpui/welcome.rs`)**:
+  - Replaced UI-thread `lopdf::Document::load_mem` in `inspect_pdf_geometry` with lazy `zpdf::PdfDocument::open_with_limits` / `zpdf::PdfFile::parse`.
+  - Scaled physical point dimensions by `first_page.user_unit` to properly handle large format and engineering PDFs.
+  - Enabled fast initial page count inspection for recent files on the Welcome screen without UI freeze risk.
+- **Native Table Bounding Box Calculation (`src/pdf_engine.rs`)**:
+  - Replaced manual min/max calculations on `col_x` and `row_y` with `t.bbox()` from `zpdf_content::tables::Table`.
+
 ## [0.19.5] - 2026-10-30
 
 ### Fixed
