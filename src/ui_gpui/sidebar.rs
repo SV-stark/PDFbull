@@ -627,6 +627,8 @@ impl SidebarState {
                             }
                             crate::models::AnnotationStyle::Text { text, .. } => text.as_str(),
                             crate::models::AnnotationStyle::Redact { .. } => "Redact",
+                            crate::models::AnnotationStyle::Underline { .. } => "Underline",
+                            crate::models::AnnotationStyle::Strikeout { .. } => "Strikeout",
                         };
 
                         items.push(

@@ -53,6 +53,8 @@ pub enum WelcomeAction {
     DigitalSignatures,
     Security,
     OpenRecent(usize),
+    Settings,
+    About,
 }
 
 pub struct WelcomeState {
@@ -480,6 +482,36 @@ impl WelcomeState {
             None
         };
 
+        let quick_footer = div()
+            .flex()
+            .flex_row()
+            .items_center()
+            .justify_center()
+            .gap_3()
+            .pt_2()
+            .pb_6()
+            .child(
+                Button::new("btn-welcome-settings")
+                    .label("Settings")
+                    .ghost()
+                    .small()
+                    .icon(IconName::Settings)
+                    .on_click(cx.listener(move |v, _, w, cx| {
+                        on_action(v, WelcomeAction::Settings, w, cx);
+                    })),
+            )
+            .child(div().text_xs().text_color(muted_fg).child("•"))
+            .child(
+                Button::new("btn-welcome-about")
+                    .label("About PDFbull")
+                    .ghost()
+                    .small()
+                    .icon(IconName::Info)
+                    .on_click(cx.listener(move |v, _, w, cx| {
+                        on_action(v, WelcomeAction::About, w, cx);
+                    })),
+            );
+
         div()
             .id("welcome-scroll-container")
             .flex()
@@ -489,7 +521,7 @@ impl WelcomeState {
             .size_full()
             .bg(bg)
             .overflow_y_scrollbar()
-            .child(container.children(recent_section))
+            .child(container.children(recent_section).child(quick_footer))
             .into_any_element()
     }
 }

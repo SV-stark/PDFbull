@@ -9,18 +9,45 @@ pub struct EngineState {
     pub cmd_tx: mpsc::Sender<PdfCommand>,
 }
 
-pub type SharedPathMap =
-    Arc<RwLock<HashMap<crate::models::DocumentId, (String, Option<zeroize::Zeroizing<String>>)>>>;
+/// Where a document lives and which revision of it the workers should hold.
+///
+/// `generation` is the fix for the "Properties/Extract work from stale bytes"
+/// bug: every operation that rewrites the file bumps it, and a worker reopens
+/// the document whenever the generation it loaded no longer matches. Comparing
+/// generations rather than broadcasting a "reload now" message keeps this
+/// race-free — a worker cannot miss the memo, because the memo *is* the value
+/// it checks before every command.
+#[derive(Clone)]
+pub struct DocPathEntry {
+    pub path: String,
+    pub password: Option<zeroize::Zeroizing<String>>,
+    pub generation: u64,
+}
 
-/// Re-open a document from its remembered path and password if it isn't currently loaded.
+pub type SharedPathMap = Arc<RwLock<HashMap<crate::models::DocumentId, DocPathEntry>>>;
+
+/// The password this session already knows for `path`, if that file is open.
+///
+/// Page operations (`merge`, `reorder`, `rotate`, `delete`, `fill_form`, `split`)
+/// are addressed by path rather than by document id, so they cannot ask the
+/// worker for a document's password. Looking it up here means an encrypted
+/// document that the user already unlocked stays usable for those operations
+/// instead of failing with an opaque parse error.
+fn password_for_path(paths: &SharedPathMap, path: &str) -> Option<String> {
+    let guard = paths.read().ok()?;
+    guard
+        .values()
+        .find(|entry| crate::models::paths_equal(&entry.path, path))
+        .and_then(|entry| entry.password.as_ref().map(|p| p.to_string()))
+}
+
+/// Re-open a document from its remembered path and password when this worker's
+/// copy is missing or stale.
 fn reload_if_needed(
     store: &mut DocumentStore,
     paths: &SharedPathMap,
     doc_id: crate::models::DocumentId,
 ) {
-    if store.has_document(doc_id) {
-        return;
-    }
     // Copy the path and password out of the map, then *release* the lock before
     // opening. The previous version held the read guard across
     // `open_document`, which reads the whole file (up to 512 MB) and parses it.
@@ -33,15 +60,24 @@ fn reload_if_needed(
     // serially from its channel, so `Close` cannot interleave with the command
     // currently executing. What the shared lock actually guarded was the path
     // map itself, which a short copy is sufficient for.
-    let (path, pass) = {
+    let (path, pass, generation) = {
         let Ok(guard) = paths.read() else {
             return;
         };
-        let Some((path, pass)) = guard.get(&doc_id) else {
+        let Some(entry) = guard.get(&doc_id) else {
             return;
         };
-        (path.clone(), pass.clone())
+        (entry.path.clone(), entry.password.clone(), entry.generation)
     };
+
+    if store.has_document(doc_id) && store.loaded_generation(doc_id) == Some(generation) {
+        return;
+    }
+
+    // Drop the stale copy first: `open_document` replaces `documents[doc_id]`
+    // but would otherwise leave the old render-cache keys and layer state in
+    // place, which is exactly the stale view this reload exists to prevent.
+    store.close_document(doc_id);
 
     // `open_document` parses an untrusted file and can panic on a malformed
     // document. Every command *around* this call is wrapped in
@@ -57,8 +93,12 @@ fn reload_if_needed(
             .open_document(&reload_path, pass.as_ref().map(|s| s.as_str()), doc_id)
             .map(|_| ())
     });
-    if let Err(e) = res {
-        tracing::error!("Failed to reload document {doc_id:?} from path '{path}': {e:?}");
+    match res {
+        Ok(()) => store.set_loaded_generation(doc_id, generation),
+        Err(e) => {
+            tracing::error!("Failed to reload document {doc_id:?} from path '{path}': {e:?}");
+            store.clear_loaded_generation(doc_id);
+        }
     }
 }
 
@@ -115,6 +155,7 @@ pub fn spawn_engine_thread(cache_size: u64, max_memory_mb: u64) -> EngineState {
 
     let forwarder = {
         let worker_tx = worker_tx.clone();
+        let shared_paths = shared_paths.clone();
         async move {
             while let Some(cmd) = cmd_rx.recv().await {
                 match cmd {
@@ -123,6 +164,19 @@ pub fn spawn_engine_thread(cache_size: u64, max_memory_mb: u64) -> EngineState {
                             if let Err(e) = tx.send(PdfCommand::Close(doc_id)) {
                                 tracing::error!("Failed to broadcast Close to engine worker: {e}");
                             }
+                        }
+                        if let Ok(mut guard) = shared_paths.write() {
+                            guard.remove(&doc_id);
+                        }
+                    }
+                    // Bumping the shared generation is the whole command: each
+                    // worker compares it against the revision it loaded before
+                    // running its next command, so none of them can miss it.
+                    PdfCommand::Reload(doc_id) => {
+                        if let Ok(mut guard) = shared_paths.write()
+                            && let Some(entry) = guard.get_mut(&doc_id)
+                        {
+                            entry.generation = entry.generation.wrapping_add(1);
                         }
                     }
                     PdfCommand::ToggleLayer(doc_id, obj_id, vis) => {
@@ -236,12 +290,25 @@ pub fn spawn_engine_thread(cache_size: u64, max_memory_mb: u64) -> EngineState {
                             });
 
                             if res.is_ok() {
+                                let mut generation = 0;
                                 if let Ok(mut guard) = paths.write() {
+                                    // A reopen keeps its generation; a fresh
+                                    // open starts one past whatever the map had
+                                    // (normally nothing, so zero).
+                                    generation = guard
+                                        .get(&doc_id)
+                                        .map(|e| e.generation.wrapping_add(1))
+                                        .unwrap_or(0);
                                     guard.insert(
                                         doc_id,
-                                        (path, password.map(zeroize::Zeroizing::new)),
+                                        DocPathEntry {
+                                            path,
+                                            password: password.map(zeroize::Zeroizing::new),
+                                            generation,
+                                        },
                                     );
                                 }
+                                store.set_loaded_generation(doc_id, generation);
                             } else {
                                 tracing::error!("Engine worker: open failed: {:?}", res);
                                 if let Some(ref mut p) = password {
@@ -301,6 +368,18 @@ pub fn spawn_engine_thread(cache_size: u64, max_memory_mb: u64) -> EngineState {
                             if let Ok(mut guard) = paths.write() {
                                 guard.remove(&doc_id);
                             }
+                        }
+                        // The forwarder consumes this and bumps the shared
+                        // generation; a worker never receives it. Ignoring it
+                        // here keeps the match exhaustive.
+                        PdfCommand::Reload(_) => {}
+                        PdfCommand::GetPageGeometry(doc_id, tx) => {
+                            reload_if_needed(&mut store, &paths, doc_id);
+                            let store_ref = std::panic::AssertUnwindSafe(&store);
+                            let res = catch_worker_panic("page_geometry", move || {
+                                store_ref.page_geometry(doc_id)
+                            });
+                            let _ = tx.send(res);
                         }
                         PdfCommand::ExtractText(doc_id, page_num, tx) => {
                             reload_if_needed(&mut store, &paths, doc_id);
@@ -369,7 +448,7 @@ pub fn spawn_engine_thread(cache_size: u64, max_memory_mb: u64) -> EngineState {
                             let out_path = paths
                                 .read()
                                 .ok()
-                                .and_then(|g| g.get(&doc_id).map(|(p, _)| p.clone()));
+                                .and_then(|g| g.get(&doc_id).map(|e| e.path.clone()));
                             let Some(out_path) = out_path else {
                                 let _ = tx.send(Err(crate::models::PdfError::EngineError(
                                     crate::models::EngineErrorKind::DocumentPathNotFound,
@@ -380,6 +459,35 @@ pub fn spawn_engine_thread(cache_size: u64, max_memory_mb: u64) -> EngineState {
                             let res = catch_worker_panic("save_annotations", move || {
                                 store_ref.save_annotations(doc_id, &annotations, Some(out_path))
                             });
+                            let _ = tx.send(res);
+                        }
+                        PdfCommand::ApplyRedactions(doc_id, annotations, tx) => {
+                            reload_if_needed(&mut store, &paths, doc_id);
+                            let out_path = paths
+                                .read()
+                                .ok()
+                                .and_then(|g| g.get(&doc_id).map(|e| e.path.clone()));
+                            let Some(out_path) = out_path else {
+                                let _ = tx.send(Err(crate::models::PdfError::EngineError(
+                                    crate::models::EngineErrorKind::DocumentPathNotFound,
+                                )));
+                                continue;
+                            };
+                            let store_ref = std::panic::AssertUnwindSafe(&store);
+                            let res = catch_worker_panic("apply_redactions", move || {
+                                store_ref.apply_redactions(doc_id, &annotations, Some(out_path))
+                            });
+                            // The file on disk was rewritten destructively; the
+                            // in-memory copy (and every other worker's) is now
+                            // stale, so force a reopen before the next command.
+                            if res.is_ok() {
+                                store.clear_loaded_generation(doc_id);
+                                if let Ok(mut guard) = paths.write()
+                                    && let Some(entry) = guard.get_mut(&doc_id)
+                                {
+                                    entry.generation = entry.generation.wrapping_add(1);
+                                }
+                            }
                             let _ = tx.send(res);
                         }
                         PdfCommand::ExportImage(doc_id, page_num, scale, tx) => {
@@ -475,25 +583,38 @@ pub fn spawn_engine_thread(cache_size: u64, max_memory_mb: u64) -> EngineState {
                             // Save-As target on the next save.
                             if res.is_ok() {
                                 store.set_document_path(doc_id, path.clone());
+                                store.clear_loaded_generation(doc_id);
                                 if let Ok(mut guard) = paths.write()
                                     && let Some(entry) = guard.get_mut(&doc_id)
                                 {
-                                    entry.0 = path;
+                                    entry.path = path;
+                                    entry.generation = entry.generation.wrapping_add(1);
                                 }
                             }
                             let _ = tx.send(res);
                         }
                         PdfCommand::Merge(paths_list, out, tx) => {
+                            // Each input carries its own password so an
+                            // encrypted source can be merged rather than
+                            // rejected by the writer's empty-password open.
+                            let documents = paths_list
+                                .into_iter()
+                                .map(|path| {
+                                    let password = password_for_path(&paths, &path);
+                                    (path, password)
+                                })
+                                .collect();
                             let store_ref = std::panic::AssertUnwindSafe(&store);
                             let res = catch_worker_panic("merge", move || {
-                                store_ref.merge_documents(paths_list, out)
+                                store_ref.merge_documents(documents, out)
                             });
                             let _ = tx.send(res);
                         }
                         PdfCommand::Split(path, pages, out, tx) => {
+                            let password = password_for_path(&paths, &path);
                             let store_ref = std::panic::AssertUnwindSafe(&store);
                             let res = catch_worker_panic("split", move || {
-                                store_ref.split_pdf(&path, pages, out, None)
+                                store_ref.split_pdf(&path, pages, out, password.as_deref())
                             });
                             let _ = tx.send(res);
                         }
@@ -505,9 +626,10 @@ pub fn spawn_engine_thread(cache_size: u64, max_memory_mb: u64) -> EngineState {
                             let _ = tx.send(res);
                         }
                         PdfCommand::FillForm(path, fields, out, tx) => {
+                            let password = password_for_path(&paths, &path);
                             let mut store_ref = std::panic::AssertUnwindSafe(&mut store);
                             let res = catch_worker_panic("fill_form", move || {
-                                store_ref.fill_form(&path, fields, out)
+                                store_ref.fill_form(&path, fields, out, password.as_deref())
                             });
                             let _ = tx.send(res);
                         }
@@ -550,23 +672,41 @@ pub fn spawn_engine_thread(cache_size: u64, max_memory_mb: u64) -> EngineState {
                             let _ = tx.send(res);
                         }
                         PdfCommand::ReorderPages(input, page_order, output, tx) => {
+                            let password = password_for_path(&paths, &input);
                             let store_ref = std::panic::AssertUnwindSafe(&store);
                             let res = catch_worker_panic("reorder_pages", move || {
-                                store_ref.reorder_pages(&input, &page_order, &output)
+                                store_ref.reorder_pages(
+                                    &input,
+                                    &page_order,
+                                    &output,
+                                    password.as_deref(),
+                                )
                             });
                             let _ = tx.send(res);
                         }
                         PdfCommand::RotatePages(input, rotations, output, tx) => {
+                            let password = password_for_path(&paths, &input);
                             let store_ref = std::panic::AssertUnwindSafe(&store);
                             let res = catch_worker_panic("rotate_pages", move || {
-                                store_ref.rotate_pages(&input, &rotations, &output)
+                                store_ref.rotate_pages(
+                                    &input,
+                                    &rotations,
+                                    &output,
+                                    password.as_deref(),
+                                )
                             });
                             let _ = tx.send(res);
                         }
                         PdfCommand::DeletePages(input, page_indices, output, tx) => {
+                            let password = password_for_path(&paths, &input);
                             let store_ref = std::panic::AssertUnwindSafe(&store);
                             let res = catch_worker_panic("delete_pages", move || {
-                                store_ref.delete_pages(&input, &page_indices, &output)
+                                store_ref.delete_pages(
+                                    &input,
+                                    &page_indices,
+                                    &output,
+                                    password.as_deref(),
+                                )
                             });
                             let _ = tx.send(res);
                         }

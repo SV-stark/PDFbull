@@ -39,7 +39,7 @@ impl LogLevelFilter {
     pub fn matches(&self, level: &str) -> bool {
         match self {
             Self::All => true,
-            Self::Trace => true,
+            Self::Trace => matches!(level, "TRACE" | "DEBUG" | "INFO" | "WARN" | "ERROR"),
             Self::Debug => matches!(level, "DEBUG" | "INFO" | "WARN" | "ERROR"),
             Self::Info => matches!(level, "INFO" | "WARN" | "ERROR"),
             Self::Warn => matches!(level, "WARN" | "ERROR"),
@@ -95,7 +95,11 @@ impl tracing::field::Visit for FieldVisitor {
         if field.name() == "message" {
             let mut s = format!("{value:?}");
             if s.starts_with('"') && s.ends_with('"') && s.len() >= 2 {
-                s = s[1..s.len() - 1].replace("\\\"", "\"");
+                s = s[1..s.len() - 1]
+                    .replace("\\\"", "\"")
+                    .replace("\\\\", "\\")
+                    .replace("\\n", "\n")
+                    .replace("\\t", "\t");
             }
             self.message = s;
         } else {

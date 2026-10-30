@@ -1,3 +1,4 @@
+use gpui_kit::assets::IconName;
 use gpui_kit::base::StyledExt;
 use gpui_kit::component::ActiveTheme;
 use gpui_kit::component::Icon;
@@ -21,6 +22,9 @@ pub enum ActiveDialog {
     /// Edit the document information dictionary (title, author, subject,
     /// keywords, creator, producer).
     Properties,
+    About,
+    /// Edit the text content of a Text or StickyNote annotation.
+    NoteContent,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -36,6 +40,8 @@ pub enum DialogAction {
     /// like `SelectWatermark` — Apply commits whatever is selected.
     SelectSecurityAlgorithm(String),
     RotatePages(i32),
+    RotateCurrentPage(i32),
+    RotateAllPages(i32),
     DeleteCurrentPage,
     ApplySecurity(String),
     Close,
@@ -49,6 +55,19 @@ pub enum DialogAction {
         keywords: Option<String>,
         creator: Option<String>,
     },
+    /// Replace the text/comment of the annotation currently being edited.
+    SetNoteContent(String),
+    // Settings & Preferences actions
+    SetSettingsTheme(crate::models::AppTheme),
+    SetSettingsZoom(u32),
+    SetSettingsQuality(crate::pdf_engine::RenderQuality),
+    SetSettingsCacheMemory(usize),
+    ToggleRestoreSession,
+    ToggleRememberLastFile,
+    ToggleAutoSave,
+    ToggleShowLogsOnStart,
+    ResetSettings,
+    OpenGitHub,
 }
 
 /// Dialogs that present no configurable state must not offer an Apply button
@@ -60,6 +79,7 @@ pub fn dialog_has_apply(active: &ActiveDialog) -> bool {
             | ActiveDialog::HeaderFooter
             | ActiveDialog::Security
             | ActiveDialog::Properties
+            | ActiveDialog::NoteContent
     )
 }
 
@@ -85,6 +105,7 @@ pub struct DialogsState {
     pub header_input: Option<Entity<InputState>>,
     pub footer_input: Option<Entity<InputState>>,
     pub password_input: String,
+    pub password_input_state: Option<Entity<InputState>>,
     pub signatures: Vec<crate::models::SignatureInfo>,
     /// Chosen encryption standard in the Security dialog.
     ///
@@ -92,6 +113,11 @@ pub struct DialogsState {
     /// which option was on screen, so picking AES-128 and pressing Apply
     /// encrypted with AES-256.
     pub security_algorithm: String,
+    /// Password editors for the Security dialog.
+    pub user_password_input: Option<Entity<InputState>>,
+    pub owner_password_input: Option<Entity<InputState>>,
+    pub user_password: String,
+    pub owner_password: String,
     /// Editors for the Properties dialog's metadata fields, in the order
     /// `[title, author, subject, keywords, creator]`. `None` (or a `None`
     /// element) when built without a window — the dialog then shows the
@@ -100,6 +126,14 @@ pub struct DialogsState {
     /// Last-applied metadata, shown as the placeholder when the dialog is
     /// (re)opened. Written by the Apply handler.
     pub metadata_values: [String; 5],
+    /// Editor backing the NoteContent dialog.
+    pub note_input: Option<Entity<InputState>>,
+    /// The annotation id currently being edited in the NoteContent dialog.
+    pub note_annotation_id: Option<u64>,
+    /// `true` when the edited annotation is a StickyNote (comment) rather
+    /// than a Text annotation.
+    pub note_is_sticky: bool,
+    pub settings: crate::models::AppSettings,
 }
 
 impl Default for DialogsState {
@@ -132,10 +166,22 @@ impl DialogsState {
         for (slot, ph) in metadata_inputs.iter_mut().zip(PLACEHOLDERS) {
             *slot = Some(owner.new(|cx| InputState::new(window, cx).placeholder(ph)));
         }
+        // Note editor.
+        let note_input = owner.new(|cx| InputState::new(window, cx).placeholder("Note text"));
+        let password_input_state =
+            owner.new(|cx| InputState::new(window, cx).placeholder("Password"));
+        let user_pw_input =
+            owner.new(|cx| InputState::new(window, cx).placeholder("User password (open)"));
+        let owner_pw_input =
+            owner.new(|cx| InputState::new(window, cx).placeholder("Owner password (permissions)"));
         Self {
             header_input: Some(header_input),
             footer_input: Some(footer_input),
             metadata_inputs,
+            note_input: Some(note_input),
+            password_input_state: Some(password_input_state),
+            user_password_input: Some(user_pw_input),
+            owner_password_input: Some(owner_pw_input),
             ..Self::new()
         }
     }
@@ -149,6 +195,7 @@ impl DialogsState {
             header_input: None,
             footer_input: None,
             password_input: String::new(),
+            password_input_state: None,
             signatures: Vec::new(),
             security_algorithm: "AES-256".to_string(),
             metadata_inputs: [None, None, None, None, None],
@@ -159,6 +206,14 @@ impl DialogsState {
                 String::new(),
                 String::new(),
             ],
+            note_input: None,
+            note_annotation_id: None,
+            note_is_sticky: false,
+            user_password_input: None,
+            owner_password_input: None,
+            user_password: String::new(),
+            owner_password: String::new(),
+            settings: crate::storage::load_settings(),
         }
     }
 
@@ -174,6 +229,8 @@ impl DialogsState {
         let fg = cx.theme().foreground;
         let muted = cx.theme().muted;
         let muted_fg = cx.theme().muted_foreground;
+        let primary = cx.theme().primary;
+        let accent = cx.theme().accent;
 
         let (title, description): (&str, &str) = match active {
             ActiveDialog::Watermark => (
@@ -201,12 +258,17 @@ impl DialogsState {
             }
             ActiveDialog::Settings => (
                 "Settings & Preferences",
-                "Configure theme, default zoom, and startup behavior.",
+                "Customize appearance, rendering performance, and workspace behavior.",
+            ),
+            ActiveDialog::About => (
+                "About PDFbull",
+                "High-performance GPU-accelerated PDF Reader & Studio.",
             ),
             ActiveDialog::Properties => (
                 "Document Properties",
                 "Edit the document information dictionary. Blank fields are left unchanged.",
             ),
+            ActiveDialog::NoteContent => ("Annotation Text", "Edit the text of this annotation."),
         };
 
         let cur_watermark = self.selected_watermark.clone();
@@ -217,6 +279,8 @@ impl DialogsState {
         // editors without reaching into the owning view (this overlay is
         // generic over `V`).
         let meta_inputs = self.metadata_inputs.clone();
+        let note_input = self.note_input.clone();
+        let password_input_state = self.password_input_state.clone();
 
         let panel_body: AnyElement = match active {
             ActiveDialog::Watermark => {
@@ -347,6 +411,14 @@ impl DialogsState {
                             })),
                     );
                 }
+                let user_pw_input = self
+                    .user_password_input
+                    .as_ref()
+                    .map(|i| Input::new(i).id("dlg-user-pw").w_full());
+                let owner_pw_input = self
+                    .owner_password_input
+                    .as_ref()
+                    .map(|i| Input::new(i).id("dlg-owner-pw").w_full());
                 div()
                     .flex()
                     .flex_col()
@@ -358,10 +430,37 @@ impl DialogsState {
                             .child("Encryption standard"),
                     )
                     .child(div().flex().flex_row().gap_2().children(buttons))
-                    .child(div().text_xs().text_color(muted_fg).child(
-                        "The document opens with the password \"user\" and the owner \
-                                 password \"owner\".",
-                    ))
+                    .child(
+                        div()
+                            .flex()
+                            .flex_col()
+                            .gap_1()
+                            .child(
+                                div()
+                                    .text_xs()
+                                    .text_color(muted_fg)
+                                    .child("User password (to open)"),
+                            )
+                            .when_some(user_pw_input, |el, i| el.child(i)),
+                    )
+                    .child(
+                        div()
+                            .flex()
+                            .flex_col()
+                            .gap_1()
+                            .child(
+                                div()
+                                    .text_xs()
+                                    .text_color(muted_fg)
+                                    .child("Owner password (permissions)"),
+                            )
+                            .when_some(owner_pw_input, |el, i| el.child(i)),
+                    )
+                    .child(
+                        div().text_xs().text_color(muted_fg).child(
+                            "Leave blank to keep the default \"user\" / \"owner\" passwords.",
+                        ),
+                    )
                     .into_any_element()
             }
 
@@ -382,27 +481,35 @@ impl DialogsState {
                         .flex_wrap()
                         .gap_2()
                         .child(
-                            Button::new("btn-rot-cw")
-                                .label("Rotate 90° CW")
+                            Button::new("btn-rot-page-cw")
+                                .label("Rotate Page CW")
                                 .outline()
                                 .on_click(cx.listener(move |v, _, w, cx| {
-                                    on_action(v, DialogAction::RotatePages(90), w, cx)
+                                    on_action(v, DialogAction::RotateCurrentPage(90), w, cx)
                                 })),
                         )
                         .child(
-                            Button::new("btn-rot-ccw")
-                                .label("Rotate 90° CCW")
+                            Button::new("btn-rot-page-ccw")
+                                .label("Rotate Page CCW")
                                 .outline()
                                 .on_click(cx.listener(move |v, _, w, cx| {
-                                    on_action(v, DialogAction::RotatePages(-90), w, cx)
+                                    on_action(v, DialogAction::RotateCurrentPage(-90), w, cx)
+                                })),
+                        )
+                        .child(
+                            Button::new("btn-rot-all-cw")
+                                .label("Rotate All CW")
+                                .outline()
+                                .on_click(cx.listener(move |v, _, w, cx| {
+                                    on_action(v, DialogAction::RotateAllPages(90), w, cx)
                                 })),
                         )
                         .child(
                             Button::new("btn-rot-180")
-                                .label("Rotate 180°")
+                                .label("Rotate Page 180°")
                                 .outline()
                                 .on_click(cx.listener(move |v, _, w, cx| {
-                                    on_action(v, DialogAction::RotatePages(180), w, cx)
+                                    on_action(v, DialogAction::RotateCurrentPage(180), w, cx)
                                 })),
                         )
                         .child(
@@ -455,6 +562,26 @@ impl DialogsState {
                     .flex_col()
                     .gap_3()
                     .children(rows)
+                    .into_any_element()
+            }
+
+            ActiveDialog::NoteContent => {
+                let input = self
+                    .note_input
+                    .as_ref()
+                    .map(|i| Input::new(i).id("dlg-note-input").w_full());
+                div()
+                    .flex()
+                    .flex_col()
+                    .gap_3()
+                    .child(
+                        div()
+                            .flex()
+                            .flex_col()
+                            .gap_1()
+                            .child(div().text_xs().text_color(muted_fg).child("Text"))
+                            .when_some(input, |el, i| el.child(i)),
+                    )
                     .into_any_element()
             }
 
@@ -633,60 +760,504 @@ impl DialogsState {
             // text "Document Password Configuration" with no input and no way
             // forward. Say what is actually true instead of showing a form that
             // cannot be filled in.
-            ActiveDialog::Password => div()
-                .flex()
-                .flex_col()
-                .items_center()
-                .justify_center()
-                .p_6()
-                .gap_2()
-                .bg(muted)
-                .rounded_md()
-                .border_1()
-                .border_color(border)
-                .child(
-                    div()
-                        .text_sm()
-                        .font_semibold()
-                        .text_color(fg)
-                        .child("Opening encrypted documents is not supported yet"),
-                )
-                .child(div().text_xs().text_color(muted_fg).text_center().child(
-                    "PDFbull cannot yet supply the password required to decrypt \
-                             a protected PDF.",
-                ))
-                .into_any_element(),
+            ActiveDialog::Password => {
+                let pw_input = self
+                    .password_input_state
+                    .as_ref()
+                    .map(|i| Input::new(i).id("dlg-pw-input").w_full());
+                div()
+                    .flex()
+                    .flex_col()
+                    .gap_3()
+                    .child(
+                        div()
+                            .text_xs()
+                            .text_color(muted_fg)
+                            .child("This document is encrypted. Enter its password to open."),
+                    )
+                    .child(
+                        div()
+                            .flex()
+                            .flex_col()
+                            .gap_1()
+                            .child(div().text_xs().text_color(muted_fg).child("Password"))
+                            .when_some(pw_input, |el, i| el.child(i)),
+                    )
+                    .into_any_element()
+            }
 
-            ActiveDialog::Settings => div()
-                .flex()
-                .flex_col()
-                .items_center()
-                .justify_center()
-                .p_6()
-                .gap_2()
-                .bg(muted)
-                .rounded_md()
-                .border_1()
-                .border_color(border)
-                .child(
+            ActiveDialog::Settings => {
+                let settings = &self.settings;
+                let cur_theme = settings.theme.clone();
+                let cur_zoom = (settings.default_zoom * 100.0).round() as u32;
+                let cur_quality = settings.render_quality;
+                let cur_cache = settings.max_cache_memory;
+                let restore_session = settings.restore_session;
+                let remember_last = settings.remember_last_file;
+                let auto_save = settings.auto_save;
+                let show_logs = settings.show_logs_on_start;
+
+                let theme_options = [
+                    (crate::models::AppTheme::System, "System", IconName::Monitor),
+                    (crate::models::AppTheme::Light, "Light", IconName::Sun),
+                    (crate::models::AppTheme::Dark, "Dark", IconName::Moon),
+                ];
+                let mut theme_chips = Vec::new();
+                for (th, label, icon) in theme_options {
+                    let is_sel = cur_theme == th;
+                    let th_clone = th.clone();
+                    theme_chips.push(
+                        Button::new(format!("setting-theme-{}", label))
+                            .label(label)
+                            .small()
+                            .icon(icon)
+                            .when(is_sel, |b| b.primary())
+                            .when(!is_sel, |b| b.ghost())
+                            .on_click(cx.listener(move |v, _, w, cx| {
+                                on_action(
+                                    v,
+                                    DialogAction::SetSettingsTheme(th_clone.clone()),
+                                    w,
+                                    cx,
+                                )
+                            })),
+                    );
+                }
+
+                let zoom_options = [75, 100, 125, 150, 200];
+                let mut zoom_chips = Vec::new();
+                for z in zoom_options {
+                    let is_sel = cur_zoom == z;
+                    zoom_chips.push(
+                        Button::new(format!("setting-zoom-{}", z))
+                            .label(format!("{}%", z))
+                            .small()
+                            .when(is_sel, |b| b.primary())
+                            .when(!is_sel, |b| b.ghost())
+                            .on_click(cx.listener(move |v, _, w, cx| {
+                                on_action(v, DialogAction::SetSettingsZoom(z), w, cx)
+                            })),
+                    );
+                }
+
+                let quality_options = [
+                    (crate::pdf_engine::RenderQuality::Low, "Low (Fast)"),
+                    (
+                        crate::pdf_engine::RenderQuality::Medium,
+                        "Medium (Balanced)",
+                    ),
+                    (crate::pdf_engine::RenderQuality::High, "High (Sharp)"),
+                ];
+                let mut quality_chips = Vec::new();
+                for (q, label) in quality_options {
+                    let is_sel = cur_quality == q;
+                    quality_chips.push(
+                        Button::new(format!("setting-quality-{:?}", q))
+                            .label(label)
+                            .small()
+                            .when(is_sel, |b| b.primary())
+                            .when(!is_sel, |b| b.ghost())
+                            .on_click(cx.listener(move |v, _, w, cx| {
+                                on_action(v, DialogAction::SetSettingsQuality(q), w, cx)
+                            })),
+                    );
+                }
+
+                let cache_options = [
+                    (256, "256 MB"),
+                    (512, "512 MB (Default)"),
+                    (1024, "1024 MB (1 GB)"),
+                ];
+                let mut cache_chips = Vec::new();
+                for (mem, label) in cache_options {
+                    let is_sel = cur_cache == mem;
+                    cache_chips.push(
+                        Button::new(format!("setting-cache-{}", mem))
+                            .label(label)
+                            .small()
+                            .when(is_sel, |b| b.primary())
+                            .when(!is_sel, |b| b.ghost())
+                            .on_click(cx.listener(move |v, _, w, cx| {
+                                on_action(v, DialogAction::SetSettingsCacheMemory(mem), w, cx)
+                            })),
+                    );
+                }
+
+                let toggle_row = |id: &'static str,
+                                  label: &'static str,
+                                  desc: &'static str,
+                                  active: bool,
+                                  act: DialogAction| {
                     div()
-                        .text_sm()
-                        .font_semibold()
-                        .text_color(fg)
-                        .child("Settings are not configurable yet"),
-                )
-                .child(
+                        .flex()
+                        .flex_row()
+                        .items_center()
+                        .justify_between()
+                        .py_1p5()
+                        .child(
+                            div()
+                                .flex()
+                                .flex_col()
+                                .gap_0p5()
+                                .child(div().text_sm().font_medium().text_color(fg).child(label))
+                                .child(div().text_xs().text_color(muted_fg).child(desc)),
+                        )
+                        .child(
+                            Button::new(id)
+                                .label(if active { "Enabled" } else { "Disabled" })
+                                .small()
+                                .when(active, |b| b.primary())
+                                .when(!active, |b| b.outline())
+                                .on_click(
+                                    cx.listener(move |v, _, w, cx| {
+                                        on_action(v, act.clone(), w, cx)
+                                    }),
+                                ),
+                        )
+                };
+
+                div()
+                    .flex()
+                    .flex_col()
+                    .gap_3()
+                    .max_h(px(400.0))
+                    .overflow_y_scrollbar()
+                    .child(
+                        div()
+                            .flex()
+                            .flex_col()
+                            .gap_1p5()
+                            .child(
+                                div()
+                                    .text_xs()
+                                    .font_semibold()
+                                    .text_color(fg)
+                                    .child("Theme Mode"),
+                            )
+                            .child(div().flex().flex_row().gap_2().children(theme_chips)),
+                    )
+                    .child(
+                        div()
+                            .flex()
+                            .flex_col()
+                            .gap_1p5()
+                            .child(
+                                div()
+                                    .text_xs()
+                                    .font_semibold()
+                                    .text_color(fg)
+                                    .child("Default Startup Zoom"),
+                            )
+                            .child(div().flex().flex_row().gap_2().children(zoom_chips)),
+                    )
+                    .child(
+                        div()
+                            .flex()
+                            .flex_col()
+                            .gap_1p5()
+                            .child(
+                                div()
+                                    .text_xs()
+                                    .font_semibold()
+                                    .text_color(fg)
+                                    .child("Tile Rendering Quality"),
+                            )
+                            .child(
+                                div()
+                                    .flex()
+                                    .flex_row()
+                                    .flex_wrap()
+                                    .gap_2()
+                                    .children(quality_chips),
+                            ),
+                    )
+                    .child(
+                        div()
+                            .flex()
+                            .flex_col()
+                            .gap_1p5()
+                            .child(
+                                div()
+                                    .text_xs()
+                                    .font_semibold()
+                                    .text_color(fg)
+                                    .child("Raster Cache Memory Limit"),
+                            )
+                            .child(
+                                div()
+                                    .flex()
+                                    .flex_row()
+                                    .flex_wrap()
+                                    .gap_2()
+                                    .children(cache_chips),
+                            ),
+                    )
+                    .child(
+                        div()
+                            .flex()
+                            .flex_col()
+                            .gap_1()
+                            .border_t_1()
+                            .border_color(border)
+                            .pt_2()
+                            .child(
+                                div()
+                                    .text_xs()
+                                    .font_semibold()
+                                    .text_color(fg)
+                                    .child("Behavior & Workspace"),
+                            )
+                            .child(toggle_row(
+                                "setting-toggle-restore",
+                                "Restore Open Tabs",
+                                "Re-open previous documents when PDFbull launches",
+                                restore_session,
+                                DialogAction::ToggleRestoreSession,
+                            ))
+                            .child(toggle_row(
+                                "setting-toggle-remember",
+                                "Remember Recent Files",
+                                "Keep history of opened files in Welcome dashboard and Jump List",
+                                remember_last,
+                                DialogAction::ToggleRememberLastFile,
+                            ))
+                            .child(toggle_row(
+                                "setting-toggle-autosave",
+                                "Auto-save Annotations",
+                                "Save highlights and notes back to the document automatically",
+                                auto_save,
+                                DialogAction::ToggleAutoSave,
+                            ))
+                            .child(toggle_row(
+                                "setting-toggle-logs",
+                                "Diagnostic Console on Startup",
+                                "Automatically open bottom debug logs when starting up",
+                                show_logs,
+                                DialogAction::ToggleShowLogsOnStart,
+                            )),
+                    )
+                    .child(
+                        div()
+                            .flex()
+                            .flex_row()
+                            .items_center()
+                            .justify_between()
+                            .border_t_1()
+                            .border_color(border)
+                            .pt_2()
+                            .child(
+                                div()
+                                    .text_xs()
+                                    .text_color(muted_fg)
+                                    .child("Settings are saved automatically."),
+                            )
+                            .child(
+                                Button::new("btn-settings-reset")
+                                    .label("Reset to Defaults")
+                                    .ghost()
+                                    .small()
+                                    .icon(IconName::RotateCw)
+                                    .on_click(cx.listener(move |v, _, w, cx| {
+                                        on_action(v, DialogAction::ResetSettings, w, cx)
+                                    })),
+                            ),
+                    )
+                    .into_any_element()
+            }
+
+            ActiveDialog::About => {
+                let spec_row = |name: &'static str, val: &'static str| {
                     div()
+                        .flex()
+                        .flex_row()
+                        .items_baseline()
+                        .justify_between()
                         .text_xs()
-                        .text_color(muted_fg)
-                        .text_center()
-                        .child("Theme, default zoom and startup behaviour are not wired up."),
-                )
-                .into_any_element(),
+                        .child(div().font_medium().text_color(muted_fg).child(name))
+                        .child(div().font_semibold().text_color(fg).child(val))
+                };
+
+                let cap_item = |text: &'static str| {
+                    div()
+                        .flex()
+                        .flex_row()
+                        .items_center()
+                        .gap_1p5()
+                        .text_xs()
+                        .text_color(fg)
+                        .child(div().text_color(primary).child("•"))
+                        .child(div().child(text))
+                };
+
+                div()
+                    .flex()
+                    .flex_col()
+                    .gap_3()
+                    .max_h(px(400.0))
+                    .overflow_y_scrollbar()
+                    .child(
+                        div()
+                            .flex()
+                            .flex_row()
+                            .items_center()
+                            .gap_3()
+                            .p_3()
+                            .bg(muted)
+                            .rounded_lg()
+                            .border_1()
+                            .border_color(border)
+                            .child(
+                                div()
+                                    .flex()
+                                    .items_center()
+                                    .justify_center()
+                                    .size_10()
+                                    .rounded_lg()
+                                    .bg(accent)
+                                    .child(Icon::new(IconName::BookOpen).text_color(primary)),
+                            )
+                            .child(
+                                div()
+                                    .flex()
+                                    .flex_col()
+                                    .gap_0p5()
+                                    .child(
+                                        div()
+                                            .flex()
+                                            .flex_row()
+                                            .items_center()
+                                            .gap_2()
+                                            .child(
+                                                div()
+                                                    .text_base()
+                                                    .font_bold()
+                                                    .text_color(fg)
+                                                    .child("PDFbull"),
+                                            )
+                                            .child(
+                                                div()
+                                                    .px_2()
+                                                    .py_0p5()
+                                                    .rounded_md()
+                                                    .border_1()
+                                                    .border_color(border)
+                                                    .bg(bg)
+                                                    .text_xs()
+                                                    .font_semibold()
+                                                    .text_color(primary)
+                                                    .child(concat!("v", env!("CARGO_PKG_VERSION"))),
+                                            ),
+                                    )
+                                    .child(
+                                        div()
+                                            .text_xs()
+                                            .text_color(muted_fg)
+                                            .child("High-Performance GPU-Accelerated PDF Studio"),
+                                    ),
+                            ),
+                    )
+                    .child(
+                        div()
+                            .flex()
+                            .flex_col()
+                            .gap_1p5()
+                            .p_3()
+                            .bg(muted)
+                            .rounded_lg()
+                            .border_1()
+                            .border_color(border)
+                            .child(
+                                div()
+                                    .text_xs()
+                                    .font_bold()
+                                    .text_color(fg)
+                                    .child("Engine & Architecture Specifications"),
+                            )
+                            .child(spec_row(
+                                "Core Engine",
+                                "zpdf 0.18.0 (tiny-skia CPU + wgpu GPU)",
+                            ))
+                            .child(spec_row("Memory Allocator", "mimalloc (High-throughput)"))
+                            .child(spec_row(
+                                "Memory Safety",
+                                "100% Rust, Zero Poppler/MuPDF C++",
+                            ))
+                            .child(spec_row(
+                                "IPC & Messaging",
+                                "Single-instance Local Socket IPC",
+                            )),
+                    )
+                    .child(
+                        div()
+                            .flex()
+                            .flex_col()
+                            .gap_1()
+                            .p_3()
+                            .bg(muted)
+                            .rounded_lg()
+                            .border_1()
+                            .border_color(border)
+                            .child(
+                                div()
+                                    .text_xs()
+                                    .font_bold()
+                                    .text_color(fg)
+                                    .child("Built-in Features"),
+                            )
+                            .child(cap_item("Word-level drag text selection & clipboard copy"))
+                            .child(cap_item("Multi-document tabs & continuous scrolling"))
+                            .child(cap_item(
+                                "PDF Annotations: highlight, underline, shapes, notes",
+                            ))
+                            .child(cap_item("AcroForm inspection, form filling & XFDF export"))
+                            .child(cap_item("X.509 Cryptographic digital signature validation"))
+                            .child(cap_item("Table detection (CSV) & SVG vector export")),
+                    )
+                    .child(
+                        div()
+                            .flex()
+                            .flex_row()
+                            .items_center()
+                            .justify_between()
+                            .pt_1()
+                            .child(
+                                div()
+                                    .flex()
+                                    .flex_col()
+                                    .gap_0p5()
+                                    .child(
+                                        div()
+                                            .text_xs()
+                                            .font_medium()
+                                            .text_color(fg)
+                                            .child("Author: SV-stark"),
+                                    )
+                                    .child(
+                                        div()
+                                            .text_xs()
+                                            .text_color(muted_fg)
+                                            .child("Released under the MIT License"),
+                                    ),
+                            )
+                            .child(
+                                Button::new("btn-about-github")
+                                    .label("GitHub Repository")
+                                    .outline()
+                                    .small()
+                                    .icon(IconName::ExternalLink)
+                                    .on_click(cx.listener(move |v, _, w, cx| {
+                                        on_action(v, DialogAction::OpenGitHub, w, cx)
+                                    })),
+                            ),
+                    )
+                    .into_any_element()
+            }
         };
 
         let dialog_width = if matches!(active, ActiveDialog::Signature) {
             px(560.0)
+        } else if matches!(active, ActiveDialog::Settings | ActiveDialog::About) {
+            px(520.0)
         } else {
             px(480.0)
         };
@@ -720,7 +1291,11 @@ impl DialogsState {
                     .gap_2()
                     .child(
                         Button::new("btn-dialog-cancel")
-                            .label("Cancel")
+                            .label(if dialog_has_apply(&active) {
+                                "Cancel"
+                            } else {
+                                "Close"
+                            })
                             .outline()
                             .on_click(cx.listener(move |v, _, w, cx| on_close(v, w, cx))),
                     )
@@ -785,6 +1360,20 @@ impl DialogsState {
                                             w,
                                             cx,
                                         );
+                                    }
+                                    ActiveDialog::NoteContent => {
+                                        let text = note_input
+                                            .as_ref()
+                                            .map(|i| i.read(cx).value().to_string())
+                                            .unwrap_or_default();
+                                        on_action(v, DialogAction::SetNoteContent(text), w, cx);
+                                    }
+                                    ActiveDialog::Password => {
+                                        let text = password_input_state
+                                            .as_ref()
+                                            .map(|i| i.read(cx).value().to_string())
+                                            .unwrap_or_default();
+                                        on_action(v, DialogAction::SetPassword(text), w, cx);
                                     }
                                     _ => {}
                                 })),

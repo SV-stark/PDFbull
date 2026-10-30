@@ -5,6 +5,44 @@ All notable changes to the PDFbull project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.19.4] - 2026-10-29
+
+### Fixed
+- **Image Optimizer Quality & Fidelity (M8)**: Implemented area-averaging box filtering for multi-level images to eliminate downsampling aliasing and thin line disappearance; fixed Form XObject cycle tracking to allow multiple placements per page; protected `DeviceCMYK`, `ICCBased`, `Separation`, `DeviceN`, and `Lab` color spaces from profile stripping; added `DeviceGray` JPEG support with `ColorSpace::Luma`.
+- **Watermark & Header/Footer Placement & Transparency (M7)**: Added semi-transparent `ExtGState` dictionary (`/GS_WM` with `ca: 0.35`, `CA: 0.35`) so watermarks blend underneath page content; implemented rotation-aware text matrix transforms for 0°, 90°, 180°, and 270° pages; ensured complete graphics-state isolation (`q`/`Q`).
+- **Page Organizer Rotation Persistence (M9)**: Added `RotateCurrentPage` and `RotateAllPages` dialog actions, persisting rotations via engine `RotatePages` commands and keeping viewport state synchronized.
+- **Settings, Auto-Save & Session Restore (H1, H2)**: Implemented periodic background auto-save timer (every 30s) and tab switch auto-save; implemented session restoration on startup via `storage::load_session()` and `load_recent_files()`; connected `render_quality` to scale multiplier, `cache_size` to page buffer window, and `default_filter` to midnight mode.
+- **UI Thread Non-Blocking Document Open (M12)**: Removed synchronous blocking `inspect_pdf_geometry` file reads from UI thread on `open_pdf_path` and `sync_viewport_to_active_tab`, relying on async background engine updates.
+- **OCR Result Clipboard Copy (L4)**: Extracted and concatenated full multi-line OCR text and automatically copied to system clipboard via `arboard`.
+- **Windows Single-Instance Pipe Bounded Read (L7)**: Enforced 64KB bounded input reading (`stream.take(64 * 1024)`) on single-instance named pipe to prevent memory exhaustion from rogue connections.
+- **Windows Root Certificate Store Caching (L8)**: Cached system trust anchors using `OnceLock` to eliminate redundant certificate store enumeration on every document open.
+- **TileCache Eviction (L12)**: Replaced arbitrary hash map key eviction in `TileCache::put` with true FIFO eviction tracked via `VecDeque<TileCoordinate>`.
+- **Windows Console Attachment (L13)**: Attached to parent console via `AttachConsole(ATTACH_PARENT_PROCESS)` for `--help` and `--version` in Windows subsystem binaries.
+- **Log Console Precision (L14)**: Fixed `LogLevelFilter` trace matching logic and unescaped control characters (`\n`, `\t`, `\\`) in logging field visitors.
+- **Search Race Resolution (L15)**: Added monotonic search sequence tracking in `execute_search` to prevent stale background search responses from replacing newer queries.
+- **Tab Bar Horizontal Scroll (L16)**: Added horizontal scrollbar support (`overflow_x_scrollbar`) to allow navigating documents when tab count exceeds window width.
+- **Form Combobox Integrity (L17)**: Skipped combo-box field modification when `selected_index.is_none()` during `fill_form` to prevent clearing existing choices.
+- **Redact tool now burns content** (`src/commands.rs`, `src/engine.rs`, `src/pdf_engine.rs`, `src/ui_gpui/app_view.rs`): added `PdfCommand::ApplyRedactions` + destructive UI action with confirmation; Save refuses while redaction marks exist.
+- **External link safety** (`src/ui_gpui/app_view.rs`): only `http`/`https`/`mailto` schemes are opened, with a confirmation prompt.
+- **Stale bytes on write** (`src/pdf_engine.rs`): `update_metadata`/`extract_pages_to_new` read from disk; metadata save refreshes the document.
+- **Form scripting** (`src/form_scripting.rs`): fixed byte-slice panic on non-ASCII; rewrote math evaluator with precedence, unary minus, `!=`, depth limit.
+- **Mixed-size pages** (`src/models.rs`, `src/ui_gpui/canvas.rs`, `src/ui_gpui/app_view.rs`): per-page sizes via `OpenResult.page_widths`/`GetPageGeometry`.
+- **Annotation tools** (`src/models.rs`, `src/ui_gpui/canvas.rs`, `src/ui_gpui/app_view.rs`, `src/ui_gpui/dialogs.rs`, `src/ui_gpui/ribbon.rs`, `src/ui_gpui/sidebar.rs`): added Underline/Strikeout, preserved line/arrow direction, per-style colours, canvas previews, note-text dialog.
+- **Page Organizer rotate** (`src/ui_gpui/app_view.rs`): now persists via engine `RotatePages` and refreshes.
+- **Render scale** (`src/ui_gpui/app_view.rs`): cap raised to 6.0; quality from settings.
+- **Capped reads / no Letter fallback** (`src/pdf_engine.rs`, `src/ui_gpui/app_view.rs`): `read_input_capped` in save/redact/load/geometry; missing page boxes now error.
+- **Encrypted PDF passwords** (`src/pdf_engine.rs`, `src/engine.rs`, `src/ui_gpui/dialogs.rs`, `src/ui_gpui/app_view.rs`): password inputs in Security dialog; password prompt flow on open; passwords threaded through page ops.
+- **Tab/path matching** (`src/models.rs`, `src/ui_gpui/app_view.rs`): case- and separator-insensitive `paths_equal`.
+- **Settings persistence** (`src/models.rs`): `AppSettings` `#[serde(default)]`.
+- **Clipboard** (`src/ui_gpui/app_view.rs`): only copies on Pointer tool.
+- **Render staleness** (`src/ui_gpui/app_view.rs`): stale results discarded on zoom/rotation/filter mismatch.
+- **Save-during-edit** (`src/ui_gpui/app_view.rs`): `is_modified` preserved if edited during save.
+- **Watermark/header-footer placement** (`src/pdf_engine.rs`): anchored to page box origin with graphics-state isolation.
+- **Split output dir** (`src/pdf_engine.rs`): created if missing.
+- **Redaction default path** (`src/pdf_engine.rs`): fixed empty-parent case.
+- **Close confirmation** (`src/ui_gpui/app_view.rs`): modified tabs prompt before closing.
+- **Same-file reload** (`src/ui_gpui/app_view.rs`): reopening an already-open path refreshes from disk.
+
 ## [0.19.3] - 2026-10-27
 
 ### Fixed

@@ -283,19 +283,28 @@ fn follow_form(
     if form_depth >= MAX_FORM_DEPTH {
         return;
     }
-    // A form that draws itself would otherwise recurse forever. The same form
-    // legitimately reused twice on one page is still followed, because
-    // `forms_seen` is scoped to this scan and re-inserted never blocks a first
-    // visit.
+    // A form that draws itself would otherwise recurse forever. Cycle
+    // detection operates on the active ancestor stack: inserting prevents
+    // recursive self-inclusion, and removing on exit allows the same form
+    // legitimately reused multiple times on one page to be scanned at its
+    // actual placement CTM.
     if !forms_seen.insert(id) {
         return;
     }
-    let Ok(obj) = file.resolve(id) else { return };
-    let Ok(stream) = obj.as_stream() else { return };
+    let Ok(obj) = file.resolve(id) else {
+        forms_seen.remove(&id);
+        return;
+    };
+    let Ok(stream) = obj.as_stream() else {
+        forms_seen.remove(&id);
+        return;
+    };
     if stream.dict.get_name("Subtype").ok() != Some("Form") {
+        forms_seen.remove(&id);
         return;
     }
     let Ok(bytes) = file.resolve_stream_data(id) else {
+        forms_seen.remove(&id);
         return;
     };
 
@@ -330,6 +339,7 @@ fn follow_form(
     );
     *stack = saved_stack;
     *operands = saved_operands;
+    forms_seen.remove(&id);
 }
 
 /// `cm` takes six numbers, in order `a b c d e f`.
@@ -484,10 +494,18 @@ pub fn rewrite_image(
     let decoded = decode_image(file, id, &stream.dict)?;
     let new_w = ((f64::from(width) * scale).round() as u32).max(1);
     let new_h = ((f64::from(height) * scale).round() as u32).max(1);
-    let resized = resize_nearest(&decoded, new_w, new_h)?;
+    let resized = match filter {
+        "CCITTFaxDecode" | "JBIG2Decode" => resize_nearest(&decoded, new_w, new_h)?,
+        _ => resize_box_filter(&decoded, new_w, new_h)?,
+    };
+
+    let cs_name = match stream.dict.get("ColorSpace") {
+        Some(PdfObject::Name(n)) if matches!(n.as_str(), "DeviceGray" | "G") => Some("DeviceGray"),
+        _ => None,
+    };
 
     let replacement = match filter {
-        "DCTDecode" | "FlateDecode" => encode_jpeg(&resized),
+        "DCTDecode" | "FlateDecode" => encode_jpeg(&resized, cs_name),
         // Bilevel scans. JPEG quality is meaningless here — JBIG2's arithmetic
         // coder is the right tool, and gray JPEG would visibly soften the page.
         "CCITTFaxDecode" | "JBIG2Decode" => encode_jbig2(&resized),
@@ -530,6 +548,31 @@ fn is_rewritable_image(dict: &PdfDict) -> bool {
     }
     if is_indexed_colorspace(dict) {
         return false;
+    }
+    // Re-encoding CMYK or ICCBased images into DeviceRGB JPEG strips the ICC profile
+    // or corrupts CMYK separations, causing visible color shifts.
+    if let Some(cs) = dict.get("ColorSpace") {
+        match cs {
+            PdfObject::Name(n) => {
+                if matches!(
+                    n.as_str(),
+                    "DeviceCMYK" | "CMYK" | "Separation" | "DeviceN" | "Lab"
+                ) {
+                    return false;
+                }
+            }
+            PdfObject::Array(arr)
+                if arr.first().and_then(|o| o.as_name().ok()).is_some_and(|n| {
+                    matches!(
+                        n,
+                        "DeviceCMYK" | "CMYK" | "Separation" | "DeviceN" | "Lab" | "ICCBased"
+                    )
+                }) =>
+            {
+                return false;
+            }
+            _ => {}
+        }
     }
     dict.get("Subtype").and_then(|o| o.as_name().ok()) == Some("Image")
 }
@@ -602,6 +645,82 @@ fn rgba_to_rgb(img: DecodedImage) -> DecodedImage {
         is_image_mask: img.is_image_mask,
         premultiplied: img.premultiplied,
     }
+}
+
+/// Downsamples multi-level images using an area-averaging box filter.
+///
+/// Area averaging eliminates downsampling aliasing and prevents thin strokes,
+/// lines, and text from vanishing at 300 -> 150 dpi. For 1-bit bilevel masks,
+/// nearest-neighbour is preserved.
+fn resize_box_filter(img: &DecodedImage, new_w: u32, new_h: u32) -> Option<DecodedImage> {
+    if img.is_image_mask {
+        return resize_nearest(img, new_w, new_h);
+    }
+    let (w, h) = (img.width, img.height);
+    if w == 0 || h == 0 || new_w == 0 || new_h == 0 {
+        return None;
+    }
+    let channels = channel_count(img);
+    let src = img.data.as_slice();
+    let src_len = (w as usize)
+        .checked_mul(h as usize)?
+        .checked_mul(channels)?;
+    if src.len() != src_len {
+        return None;
+    }
+    let needed = (new_w as usize)
+        .checked_mul(new_h as usize)?
+        .checked_mul(channels)?;
+
+    let mut out = vec![0u8; needed];
+    for y in 0..new_h {
+        let sy0 = (u64::from(y) * u64::from(h) / u64::from(new_h)) as usize;
+        let sy1 = (((u64::from(y + 1) * u64::from(h) + u64::from(new_h) - 1) / u64::from(new_h))
+            as usize)
+            .min(h as usize)
+            .max(sy0 + 1);
+        let drow = y as usize * new_w as usize * channels;
+        for x in 0..new_w {
+            let sx0 = (u64::from(x) * u64::from(w) / u64::from(new_w)) as usize;
+            let sx1 =
+                (((u64::from(x + 1) * u64::from(w) + u64::from(new_w) - 1) / u64::from(new_w))
+                    as usize)
+                    .min(w as usize)
+                    .max(sx0 + 1);
+            let di = drow + x as usize * channels;
+
+            let mut sums = [0u32; 4];
+            let mut count = 0u32;
+            for sy in sy0..sy1 {
+                let row = sy * w as usize * channels;
+                for sx in sx0..sx1 {
+                    let si = row + sx * channels;
+                    for c in 0..channels {
+                        sums[c] += u32::from(src[si + c]);
+                    }
+                    count += 1;
+                }
+            }
+            #[allow(clippy::manual_checked_ops)]
+            if count > 0 {
+                for c in 0..channels {
+                    out[di + c] = (sums[c] / count) as u8;
+                }
+            } else {
+                let si = (sy0 * w as usize + sx0) * channels;
+                out[di..di + channels].copy_from_slice(&src[si..si + channels]);
+            }
+        }
+    }
+
+    Some(DecodedImage {
+        width: new_w,
+        height: new_h,
+        data: out,
+        has_alpha: img.has_alpha,
+        is_image_mask: img.is_image_mask,
+        premultiplied: img.premultiplied,
+    })
 }
 
 /// Nearest-neighbour resample of a decoded image.
@@ -679,35 +798,50 @@ fn channel_count(img: &DecodedImage) -> usize {
 ///
 /// Baseline (not progressive) is required: PDF 32000-1 §7.4.4 restricts
 /// DCTDecode data to baseline sequential JPEG.
-fn encode_jpeg(img: &DecodedImage) -> Option<Replacement> {
+fn encode_jpeg(img: &DecodedImage, cs_override: Option<&str>) -> Option<Replacement> {
     let (w, h) = (img.width as usize, img.height as usize);
     // The underlying encoder takes u16 dimensions.
     if w == 0 || h == 0 || w > usize::from(u16::MAX) || h > usize::from(u16::MAX) {
         return None;
     }
 
-    // JPEG here is 3-channel; a gray buffer is widened by replication. The
-    // alpha-bearing and stencil cases are already excluded upstream.
-    let rgb: Vec<u8> = if img.has_alpha || img.is_image_mask {
-        let mut v = Vec::with_capacity(w * h * 3);
-        for px in img.data.as_chunks::<1>().0 {
-            v.extend_from_slice(&[px[0], px[0], px[0]]);
-        }
-        v
-    } else {
-        img.data.clone()
-    };
-    if rgb.len() != w * h * 3 {
-        return None;
-    }
+    let is_gray = matches!(cs_override, Some("DeviceGray"));
 
-    let options = zune_core::options::EncoderOptions::default().set_quality(JPEG_QUALITY);
-    let mut encoder = zune_image::codecs::jpeg::JpegEncoder::new_with_options(options);
-    let image =
-        zune_image::image::Image::from_u8(&rgb, w, h, zune_core::colorspace::ColorSpace::RGB);
-    let mut buf = Vec::new();
-    zune_image::traits::EncoderTrait::encode(&mut encoder, &image, &mut buf).ok()?;
-    let data = buf;
+    let (data, cs_name) = if is_gray && img.data.len() == w * h {
+        let options = zune_core::options::EncoderOptions::default().set_quality(JPEG_QUALITY);
+        let mut encoder = zune_image::codecs::jpeg::JpegEncoder::new_with_options(options);
+        let image = zune_image::image::Image::from_u8(
+            &img.data,
+            w,
+            h,
+            zune_core::colorspace::ColorSpace::Luma,
+        );
+        let mut buf = Vec::new();
+        zune_image::traits::EncoderTrait::encode(&mut encoder, &image, &mut buf).ok()?;
+        (buf, "DeviceGray")
+    } else {
+        let rgb: Vec<u8> = if img.has_alpha || img.is_image_mask || img.data.len() == w * h {
+            let mut v = Vec::with_capacity(w * h * 3);
+            for px in img.data.as_chunks::<1>().0 {
+                v.extend_from_slice(&[px[0], px[0], px[0]]);
+            }
+            v
+        } else {
+            img.data.clone()
+        };
+        if rgb.len() != w * h * 3 {
+            return None;
+        }
+
+        let options = zune_core::options::EncoderOptions::default().set_quality(JPEG_QUALITY);
+        let mut encoder = zune_image::codecs::jpeg::JpegEncoder::new_with_options(options);
+        let image =
+            zune_image::image::Image::from_u8(&rgb, w, h, zune_core::colorspace::ColorSpace::RGB);
+        let mut buf = Vec::new();
+        zune_image::traits::EncoderTrait::encode(&mut encoder, &image, &mut buf).ok()?;
+        (buf, cs_override.unwrap_or("DeviceRGB"))
+    };
+
     if data.is_empty() {
         return None;
     }
@@ -725,7 +859,7 @@ fn encode_jpeg(img: &DecodedImage) -> Option<Replacement> {
     dict.insert(PdfName::new("Height"), PdfObject::Integer(h as i64));
     dict.insert(
         PdfName::new("ColorSpace"),
-        PdfObject::Name(PdfName::new("DeviceRGB")),
+        PdfObject::Name(PdfName::new(cs_name)),
     );
     dict.insert(PdfName::new("BitsPerComponent"), PdfObject::Integer(8));
     dict.insert(
@@ -1179,7 +1313,7 @@ mod tests {
             is_image_mask: false,
             premultiplied: false,
         };
-        let r = encode_jpeg(&img).expect("encode");
+        let r = encode_jpeg(&img, None).expect("encode");
         assert_eq!(r.filter, "DCTDecode");
         assert!(!r.data.is_empty());
         assert_eq!(r.dict.get_i64("Width").ok(), Some(i64::from(w)));
@@ -1209,10 +1343,16 @@ mod tests {
             is_image_mask: false,
             premultiplied: false,
         };
-        let r = encode_jpeg(&img).expect("encode gray as rgb");
+        let r = encode_jpeg(&img, None).expect("encode gray as rgb");
         assert_eq!(
             r.dict.get("ColorSpace"),
             Some(&PdfObject::Name(PdfName::new("DeviceRGB")))
+        );
+
+        let r_gray = encode_jpeg(&img, Some("DeviceGray")).expect("encode gray as gray");
+        assert_eq!(
+            r_gray.dict.get("ColorSpace"),
+            Some(&PdfObject::Name(PdfName::new("DeviceGray")))
         );
     }
 

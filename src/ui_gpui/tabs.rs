@@ -3,6 +3,7 @@ use gpui_kit::base::StyledExt;
 use gpui_kit::component::ActiveTheme;
 use gpui_kit::component::Icon;
 use gpui_kit::component::button::{Button, ButtonVariants};
+use gpui_kit::component::scroll::ScrollableElement;
 use gpui_kit::prelude::FluentBuilder;
 use gpui_kit::*;
 use std::path::PathBuf;
@@ -166,7 +167,7 @@ impl TabsState {
             .border_b_1()
             .border_color(border)
             .gap_1()
-            .overflow_x_hidden()
+            .overflow_x_scrollbar()
             .children(tab_items)
             .child(div().pb_0p5().child(new_tab_btn))
             .into_any_element()

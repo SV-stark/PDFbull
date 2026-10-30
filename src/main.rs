@@ -114,6 +114,17 @@ fn main() {
 
     let args: Vec<String> = std::env::args().collect();
 
+    if args
+        .iter()
+        .any(|a| a == "--help" || a == "-h" || a == "--version" || a == "-V")
+    {
+        #[cfg(windows)]
+        unsafe {
+            use windows::Win32::System::Console::{ATTACH_PARENT_PROCESS, AttachConsole};
+            let _ = AttachConsole(ATTACH_PARENT_PROCESS);
+        }
+    }
+
     if args.iter().any(|a| a == "--help" || a == "-h") {
         println!(
             "PDFbull {} - A lightweight, high-performance PDF reader",

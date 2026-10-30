@@ -237,3 +237,55 @@ async fn text_layer_for_real_document_is_nonempty_and_coalesces() {
 
     let _ = engine.cmd_tx.send(PdfCommand::Close(doc_id)).await;
 }
+
+#[tokio::test]
+async fn test_hp_pdf_text_extraction() {
+    let hp_path = PathBuf::from("/mnt/e/ebook-rs/hp.pdf");
+    if !hp_path.exists() {
+        return;
+    }
+
+    let engine = spawn_engine_thread(16, 128);
+    let doc_id = next_doc_id();
+    let (open_tx, open_rx) = oneshot::channel();
+    let path_str = hp_path.to_string_lossy().to_string();
+    engine
+        .cmd_tx
+        .send(PdfCommand::Open(path_str, None, doc_id, open_tx))
+        .await
+        .expect("send Open");
+    let open_res = open_rx.await.expect("open rx").expect("open ok");
+    println!(
+        "HP.pdf open: page_count={}, max_w={}, heights={:?}, rotations={:?}",
+        open_res.page_count,
+        open_res.max_width,
+        &open_res.page_heights[..open_res.page_heights.len().min(3)],
+        &open_res.page_rotations[..open_res.page_rotations.len().min(3)]
+    );
+
+    for p in 0..open_res.page_count.min(3) {
+        let (text_tx, text_rx) = oneshot::channel();
+        engine
+            .cmd_tx
+            .send(PdfCommand::GetTextItems(doc_id, p, text_tx))
+            .await
+            .expect("send GetTextItems");
+        let items = text_rx.await.expect("items rx").expect("items ok");
+        println!("HP.pdf page {} text_items count: {}", p, items.len());
+        if !items.is_empty() {
+            println!(
+                "First 5 items on page {}: {:?}",
+                p,
+                &items[..items.len().min(5)]
+            );
+            let joined = join_selected_text_items(&items);
+            println!(
+                "Page {} joined text sample (first 100 chars): {:?}",
+                p,
+                &joined[..joined.len().min(100)]
+            );
+        }
+    }
+
+    let _ = engine.cmd_tx.send(PdfCommand::Close(doc_id)).await;
+}

@@ -1,6 +1,6 @@
 [package]
 name = "pdfbull"
-version = "0.19.3"
+version = "0.19.4"
 description = "A lightweight PDF reader"
 authors = ["SV-stark"]
 edition = "2024"
@@ -27,25 +27,25 @@ license = false
 eula = false
 
 [dependencies]
-gpui-kit = "0.7.1"
+gpui-kit = "0.8.1"
 image = { version = "0.25", default-features = false }
 zpdf = { version = "=0.18.0", features = ["cpu-render"] }
 zpdf-writer = "=0.18.0"
-tokio = { version = "1.0", features = ["rt-multi-thread", "sync", "time", "process", "fs", "io-util", "macros"] }
+tokio = { version = "1.54", features = ["rt-multi-thread", "sync", "time", "process", "fs", "io-util", "macros"] }
 rfd = "0.17"
 zune-image = "0.5"
 zune-core = "0.5"
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 directories = "6"
-rayon = "1.10"
+rayon = "1.12"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 tracing-appender = "0.2"
 open = "5"
 thiserror = "2.0"
 arboard = "3"
-lopdf = "0.44"
+lopdf = "0.46"
 pdf-writer = "0.15"
 # JBIG2 encoder for the bilevel tier of image optimization. `decode` is off: we
 # only ever encode (zpdf already decodes JBIG2 on the read path), and dropping
@@ -63,24 +63,24 @@ zpdf-content = "=0.18.0"
 zpdf-document = "=0.18.0"
 zpdf-image = "=0.18.0"
 zpdf-svg-export = "=0.18.0"
-csscolorparser = "0.8"
+csscolorparser = "0.9"
 timeago = "0.6"
 tempfile = "3"
 oxipng = { version = "10.2", default-features = false, features = ["parallel"] }
-time = { version = "0.3.47", features = ["serde", "formatting", "macros"] }
+time = { version = "0.3.55", features = ["serde", "formatting", "macros"] }
 quick_cache = "0.7"
 mimalloc = "0.1"
 human-panic = "2.0"
 notify-debouncer-full = "0.7"
 interprocess = { version = "2", features = ["tokio"] }
-crossbeam-channel = "0.5.15"
-ocrs = "0.12.2"
-rten = { version = "0.24.0", features = ["mmap", "rten_format"] }
+crossbeam-channel = "0.5.17"
+ocrs = "0.13.1"
+rten = { version = "0.26.0", features = ["mmap", "rten_format"] }
 nucleo-matcher = "0.3"
-zeroize = { version = "1.8", features = ["derive"] }
+zeroize = { version = "1.9", features = ["derive"] }
 
 [target.'cfg(windows)'.dependencies]
-winprint = { version = "0.2.1", default-features = false }
+winprint = { version = "0.3.0", default-features = false }
 windows = { version = "0.62.2", features = [
     "Win32_UI_Shell",
     "Win32_System_Com",
@@ -89,6 +89,7 @@ windows = { version = "0.62.2", features = [
     "Win32_System_Threading",
     "Win32_System_Registry",
     "Win32_Security_Cryptography",
+    "Win32_System_Console",
 ] }
 
 [features]
@@ -98,8 +99,8 @@ cpu-render = ["zpdf/cpu-render"]
 
 
 [dev-dependencies]
-insta = { version = "1.46.3", features = ["redactions"] }
-divan = "0.1.14"
+insta = { version = "1.49.0", features = ["redactions"] }
+divan = "0.1.21"
 
 [build-dependencies]
 winresource = "0.1"

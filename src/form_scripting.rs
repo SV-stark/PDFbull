@@ -331,7 +331,7 @@ impl PdfFormScriptEngine {
                 pos + "getField(".len() + end_quote + 1
             };
 
-            let full_match_start = if pos >= 5 && &expr[pos - 5..pos] == "this." {
+            let full_match_start = if expr[..pos].ends_with("this.") {
                 pos - 5
             } else {
                 pos
@@ -373,13 +373,18 @@ impl PdfFormScriptEngine {
     }
 
     fn eval_single_comparison(&self, comp: &str) -> Result<bool, String> {
-        let clean = comp.trim().trim_matches(|c| c == '(' || c == ')');
+        let clean = comp.trim();
 
         if let Some((left, right)) = clean.split_once(">=") {
             return Ok(self.eval_simple_math(left)? >= self.eval_simple_math(right)?);
         }
         if let Some((left, right)) = clean.split_once("<=") {
             return Ok(self.eval_simple_math(left)? <= self.eval_simple_math(right)?);
+        }
+        if let Some((left, right)) = clean.split_once("!=") {
+            return Ok(
+                (self.eval_simple_math(left)? - self.eval_simple_math(right)?).abs() >= 1e-9,
+            );
         }
         if let Some((left, right)) = clean.split_once("==") {
             return Ok((self.eval_simple_math(left)? - self.eval_simple_math(right)?).abs() < 1e-9);
@@ -391,74 +396,40 @@ impl PdfFormScriptEngine {
             return Ok(self.eval_simple_math(left)? < self.eval_simple_math(right)?);
         }
 
+        // Strip a single balanced pair of outer parentheses, if present.
+        let clean = if clean.starts_with('(') && clean.ends_with(')') {
+            &clean[1..clean.len() - 1]
+        } else {
+            clean
+        };
+
         // Truthy check fallback
         let val = self.eval_simple_math(clean)?;
         Ok(val != 0.0)
     }
 
-    /// Evaluates simple recursive math expression (+, -, *, /)
+    /// Evaluates simple math expression (+, -, *, /) with proper precedence,
+    /// unary minus, parentheses and a recursion depth limit.
     fn eval_simple_math(&self, expr: &str) -> Result<f64, String> {
-        let clean = expr.trim();
-        if clean.is_empty() {
-            return Ok(0.0);
+        let chars: Vec<char> = expr.trim().chars().collect();
+        let mut parser = MathParser {
+            chars,
+            pos: 0,
+            depth: 0,
+        };
+        let val = parser.parse_expr()?;
+        parser.skip_ws();
+        if parser.pos < parser.chars.len() {
+            return Err(format!(
+                "unexpected trailing characters in expression: '{}'",
+                parser.chars[parser.pos..].iter().collect::<String>()
+            ));
         }
-
-        // Handle addition/subtraction at lowest precedence
-        let mut depth = 0;
-        for (i, c) in clean.char_indices().rev() {
-            match c {
-                ')' => depth += 1,
-                '(' => depth -= 1,
-                '+' if depth == 0 && i > 0 => {
-                    let left = self.eval_simple_math(&clean[..i])?;
-                    let right = self.eval_simple_math(&clean[i + 1..])?;
-                    return Ok(left + right);
-                }
-                '-' if depth == 0 && i > 0 => {
-                    let left = self.eval_simple_math(&clean[..i])?;
-                    let right = self.eval_simple_math(&clean[i + 1..])?;
-                    return Ok(left - right);
-                }
-                _ => {}
-            }
-        }
-
-        // Handle multiplication/division
-        depth = 0;
-        for (i, c) in clean.char_indices().rev() {
-            match c {
-                ')' => depth += 1,
-                '(' => depth -= 1,
-                '*' if depth == 0 => {
-                    let left = self.eval_simple_math(&clean[..i])?;
-                    let right = self.eval_simple_math(&clean[i + 1..])?;
-                    return Ok(left * right);
-                }
-                '/' if depth == 0 => {
-                    let left = self.eval_simple_math(&clean[..i])?;
-                    let right = self.eval_simple_math(&clean[i + 1..])?;
-                    if right.abs() < 1e-12 {
-                        return Ok(0.0); // Safe division by zero
-                    }
-                    return Ok(left / right);
-                }
-                _ => {}
-            }
-        }
-
-        // Strip parentheses
-        if clean.starts_with('(') && clean.ends_with(')') {
-            return self.eval_simple_math(&clean[1..clean.len() - 1]);
-        }
-
-        // Parse literal number
-        clean
-            .trim()
-            .parse::<f64>()
-            .map_err(|_| format!("Cannot parse numeric term in expression: '{clean}'"))
+        Ok(val)
     }
 
-    /// Re-evaluates every calculation across a collection of fields.
+    /// Small recursive-descent parser for arithmetic, with a depth limit so an
+    /// untrusted PDF cannot overflow the stack.
     ///
     /// Calculations routinely depend on one another (`Tax = Total * 0.18` while
     /// `Total = Price * Qty`), but `calc_scripts` is a `HashMap`, so a single
@@ -548,5 +519,130 @@ fn write_calculated_value(field: &mut FormField, value: &str) -> bool {
             *selected_index = idx;
             true
         }
+    }
+}
+
+struct MathParser {
+    chars: Vec<char>,
+    pos: usize,
+    depth: usize,
+}
+
+impl MathParser {
+    const MAX_DEPTH: usize = 64;
+
+    fn skip_ws(&mut self) {
+        while self.pos < self.chars.len() && self.chars[self.pos].is_whitespace() {
+            self.pos += 1;
+        }
+    }
+
+    fn parse_expr(&mut self) -> Result<f64, String> {
+        if self.depth > Self::MAX_DEPTH {
+            return Err("expression too deeply nested".to_string());
+        }
+        self.depth += 1;
+        let val = self.parse_add_sub()?;
+        self.depth -= 1;
+        Ok(val)
+    }
+
+    fn parse_add_sub(&mut self) -> Result<f64, String> {
+        let mut val = self.parse_mul_div()?;
+        loop {
+            self.skip_ws();
+            if self.pos >= self.chars.len() {
+                break;
+            }
+            match self.chars[self.pos] {
+                '+' => {
+                    self.pos += 1;
+                    let r = self.parse_mul_div()?;
+                    val += r;
+                }
+                '-' => {
+                    self.pos += 1;
+                    let r = self.parse_mul_div()?;
+                    val -= r;
+                }
+                _ => break,
+            }
+        }
+        Ok(val)
+    }
+
+    fn parse_mul_div(&mut self) -> Result<f64, String> {
+        let mut val = self.parse_unary()?;
+        loop {
+            self.skip_ws();
+            if self.pos >= self.chars.len() {
+                break;
+            }
+            match self.chars[self.pos] {
+                '*' => {
+                    self.pos += 1;
+                    let r = self.parse_unary()?;
+                    val *= r;
+                }
+                '/' => {
+                    self.pos += 1;
+                    let r = self.parse_unary()?;
+                    if r.abs() < 1e-12 {
+                        // Safe division by zero.
+                        val = 0.0;
+                    } else {
+                        val /= r;
+                    }
+                }
+                _ => break,
+            }
+        }
+        Ok(val)
+    }
+
+    fn parse_unary(&mut self) -> Result<f64, String> {
+        self.skip_ws();
+        if self.pos < self.chars.len()
+            && (self.chars[self.pos] == '-' || self.chars[self.pos] == '+')
+        {
+            let neg = self.chars[self.pos] == '-';
+            self.pos += 1;
+            let v = self.parse_unary()?;
+            return Ok(if neg { -v } else { v });
+        }
+        self.parse_primary()
+    }
+
+    fn parse_primary(&mut self) -> Result<f64, String> {
+        self.skip_ws();
+        if self.pos >= self.chars.len() {
+            return Err("unexpected end of expression".to_string());
+        }
+        if self.chars[self.pos] == '(' {
+            self.pos += 1;
+            let val = self.parse_expr()?;
+            self.skip_ws();
+            if self.pos >= self.chars.len() || self.chars[self.pos] != ')' {
+                return Err("missing closing parenthesis".to_string());
+            }
+            self.pos += 1;
+            return Ok(val);
+        }
+        let start = self.pos;
+        while self.pos < self.chars.len()
+            && (self.chars[self.pos].is_ascii_digit() || self.chars[self.pos] == '.')
+        {
+            self.pos += 1;
+        }
+        if self.pos == start {
+            return Err(format!(
+                "cannot parse numeric term in expression at position {}",
+                self.pos
+            ));
+        }
+        let token: String = self.chars[start..self.pos].iter().collect();
+        token
+            .parse::<f64>()
+            .map_err(|_| format!("Cannot parse numeric term in expression: '{token}'"))
     }
 }

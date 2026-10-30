@@ -130,6 +130,136 @@ pub fn rotated_rect_to_overlay_space(
     }
 }
 
+/// Map a single point from unrotated document space into the rendered
+/// (rotated) bitmap's space.
+///
+/// [`overlay_rect_in_rotated_space`] is this transform applied to a whole
+/// rect, but it normalises the corners: a line drawn bottom-left to top-right
+/// and one drawn top-right to bottom-left produce the same rect, so the
+/// direction is lost. Lines and arrows need the endpoints, hence this.
+pub fn overlay_point_in_rotated_space(
+    x: f32,
+    y: f32,
+    page_width: f32,
+    page_height: f32,
+    rotation: i32,
+) -> (f32, f32) {
+    match rotation.rem_euclid(360) {
+        90 => (page_height - y, x),
+        180 => (page_width - x, page_height - y),
+        270 => (y, page_width - x),
+        _ => (x, y),
+    }
+}
+
+/// The inverse of [`overlay_point_in_rotated_space`]: map a single point from
+/// the rendered (rotated) bitmap back into unrotated document space.
+///
+/// Lines and arrows are stored as an origin plus a *signed* width/height, so
+/// the drag endpoints have to be pulled back individually rather than as a
+/// normalised rect — otherwise every line drawn bottom-left to top-right is
+/// saved as its mirror image.
+pub fn rotated_point_to_overlay_space(
+    x: f32,
+    y: f32,
+    page_width: f32,
+    page_height: f32,
+    rotation: i32,
+) -> (f32, f32) {
+    match rotation.rem_euclid(360) {
+        90 => (y, page_height - x),
+        180 => (page_width - x, page_height - y),
+        270 => (page_width - y, x),
+        _ => (x, y),
+    }
+}
+
+/// Paint a straight segment of `thickness` as a quad.
+///
+/// `paint_quad` only draws axis-aligned rectangles, so the old preview of a
+/// line was a horizontal bar at the bottom of its box — visibly not the line
+/// that got saved. Building the quad as a path lets the preview match the
+/// document for any direction.
+fn paint_segment(
+    window: &mut Window,
+    from: Point<Pixels>,
+    to: Point<Pixels>,
+    thickness: f32,
+    color: Hsla,
+) {
+    let (x1, y1) = (f32::from(from.x), f32::from(from.y));
+    let (x2, y2) = (f32::from(to.x), f32::from(to.y));
+    let (dx, dy) = (x2 - x1, y2 - y1);
+    let len = (dx * dx + dy * dy).sqrt();
+    if !len.is_finite() || len < 0.01 {
+        return;
+    }
+    let half = thickness.max(1.0) / 2.0;
+    let (nx, ny) = (-dy / len * half, dx / len * half);
+    let at = |x: f32, y: f32| point(px(x), px(y));
+    let mut path = Path::new(at(x1 + nx, y1 + ny));
+    path.line_to(at(x2 + nx, y2 + ny));
+    path.line_to(at(x2 - nx, y2 - ny));
+    path.line_to(at(x1 - nx, y1 - ny));
+    path.line_to(at(x1 + nx, y1 + ny));
+    window.paint_path(path, color);
+}
+
+/// Paint an ellipse inside `bounds`, filled or as a stroked ring.
+fn paint_ellipse(
+    window: &mut Window,
+    bounds: Bounds<Pixels>,
+    color: Hsla,
+    thickness: f32,
+    fill_it: bool,
+) {
+    const SEGMENTS: usize = 48;
+    let cx = f32::from(bounds.origin.x) + f32::from(bounds.size.width) / 2.0;
+    let cy = f32::from(bounds.origin.y) + f32::from(bounds.size.height) / 2.0;
+    let rx = f32::from(bounds.size.width) / 2.0;
+    let ry = f32::from(bounds.size.height) / 2.0;
+    if rx <= 0.5 || ry <= 0.5 {
+        return;
+    }
+    let point_at = |i: usize| {
+        let theta = i as f32 / SEGMENTS as f32 * std::f32::consts::TAU;
+        point(px(cx + rx * theta.cos()), px(cy + ry * theta.sin()))
+    };
+    if fill_it {
+        let mut path = Path::new(point_at(0));
+        for i in 1..=SEGMENTS {
+            path.line_to(point_at(i));
+        }
+        window.paint_path(path, color);
+    } else {
+        for i in 0..SEGMENTS {
+            paint_segment(window, point_at(i), point_at(i + 1), thickness, color);
+        }
+    }
+}
+
+/// Parse `#RRGGBB` (or `#RGB`) into a GPUI colour, keeping `alpha`.
+fn hex_to_hsla(hex: &str, alpha: f32) -> Hsla {
+    let hex = hex.trim_start_matches('#');
+    let parse = |s: &str| u8::from_str_radix(s, 16).unwrap_or(0);
+    let (r, g, b) = match hex.len() {
+        3 => (
+            parse(&hex[0..1]) * 17,
+            parse(&hex[1..2]) * 17,
+            parse(&hex[2..3]) * 17,
+        ),
+        6 => (parse(&hex[0..2]), parse(&hex[2..4]), parse(&hex[4..6])),
+        _ => (0, 0, 0),
+    };
+    Rgba {
+        r: r as f32 / 255.0,
+        g: g as f32 / 255.0,
+        b: b as f32 / 255.0,
+        a: alpha.clamp(0.0, 1.0),
+    }
+    .into()
+}
+
 /// The pages a two-page spread shows for `cur_page`.
 ///
 /// Returns `(left_page, Option<right_page>)`. Shared between the render
@@ -241,6 +371,14 @@ pub struct DocumentViewport {
     /// *unrotated* document space, while the rendered bitmap already has this
     /// rotation baked in. Painting needs it to map between the two.
     pub page_rotations: std::collections::HashMap<usize, i32>,
+    /// Unrotated size of each page, in points, keyed by page index.
+    ///
+    /// A single `page_width`/`page_height` cannot describe a mixed-size
+    /// document: every card was drawn at the widest page's width and the first
+    /// page's height, so a landscape page in a portrait document was stretched
+    /// and every overlay on it was misplaced. Pages missing from this map fall
+    /// back to the document-wide values.
+    pub page_sizes: std::collections::HashMap<usize, (f32, f32)>,
     /// Vertical wheel delta banked while the view is pinned against a page
     /// edge, so a precision touchpad's sub-threshold notches still add up to a
     /// page turn. Cleared whenever a delta is consumed by real scrolling,
@@ -279,6 +417,7 @@ impl DocumentViewport {
             )),
             highlight_color: None,
             page_rotations: std::collections::HashMap::new(),
+            page_sizes: std::collections::HashMap::new(),
             wheel_residual_y: 0.0,
             annotations: Vec::new(),
             annotations_by_page: std::collections::HashMap::new(),
@@ -310,11 +449,46 @@ impl DocumentViewport {
         self.annotations_by_page.clear();
         self.annotations_arc.clear();
         self.page_rotations.clear();
+        self.page_sizes.clear();
         self.wheel_residual_y = 0.0;
         if let Ok(mut origins) = self.page_origins.write() {
             origins.clear();
         }
         self.scroll_handle.set_offset(Point::default());
+    }
+
+    /// Record each page's own unrotated size, so a mixed-size document is laid
+    /// out page by page instead of being forced to one shape.
+    ///
+    /// `page_width`/`page_height` stay as the fallback for a page with no
+    /// entry (and for the pre-open estimate), but every sizing and overlay
+    /// calculation now asks for the page it is drawing.
+    pub fn set_page_sizes(&mut self, pages: &[crate::models::PageInfo]) {
+        self.page_sizes.clear();
+        let mut max_w: f32 = 0.0;
+        let mut max_h: f32 = 0.0;
+        for (idx, page) in pages.iter().enumerate() {
+            if page.width > 0.0 && page.height > 0.0 {
+                self.page_sizes.insert(idx, (page.width, page.height));
+                max_w = max_w.max(page.width);
+                max_h = max_h.max(page.height);
+            }
+        }
+        if max_w > 0.0 {
+            self.page_width = max_w;
+        }
+        if max_h > 0.0 {
+            self.page_height = max_h;
+        }
+    }
+
+    /// Unrotated size of page `page_idx`, falling back to the document-wide
+    /// values when the engine has not reported that page yet.
+    pub fn page_unrotated_size(&self, page_idx: usize) -> (f32, f32) {
+        self.page_sizes
+            .get(&page_idx)
+            .copied()
+            .unwrap_or((self.page_width, self.page_height))
     }
 
     /// Total rotation applied to page `page_idx`'s rendered bitmap: the
@@ -344,10 +518,14 @@ impl DocumentViewport {
     /// bottom of the strip unreachable, which is exactly what the sidebar's
     /// thumbnail strip did.
     pub fn continuous_item_height(&self) -> Pixels {
-        // Only a page carrying a non-zero `/Rotate` can differ from page 0, so
-        // the scan is over the sparse map rather than every page.
+        // The slot must fit the tallest card in the document. Sizes come from
+        // `page_sizes` (mixed-size documents) and rotations from the sparse
+        // rotation map, so both are scanned.
         let mut card_h = self.page_display_height(0);
         for &page_idx in self.page_rotations.keys() {
+            card_h = card_h.max(self.page_display_height(page_idx));
+        }
+        for &page_idx in self.page_sizes.keys() {
             card_h = card_h.max(self.page_display_height(page_idx));
         }
         px(card_h * self.zoom) + px(CANVAS_PAGE_GAP)
@@ -365,10 +543,11 @@ impl DocumentViewport {
     /// rule used to be written out three times, and the layout, the overlay
     /// transform and the scroll maths each drifted on their own.
     pub fn display_size(&self, page_idx: usize) -> (f32, f32) {
+        let (w, h) = self.page_unrotated_size(page_idx);
         if matches!(self.effective_rotation(page_idx), 90 | 270) {
-            (self.page_height, self.page_width)
+            (h, w)
         } else {
-            (self.page_width, self.page_height)
+            (w, h)
         }
     }
 
@@ -683,8 +862,7 @@ impl DocumentViewport {
         // Overlays are stored unrotated; the bitmap is not. See
         // `overlay_rect_in_rotated_space`.
         let overlay_rotation = page_rotation;
-        let unrotated_w = self.page_width;
-        let unrotated_h = self.page_height;
+        let (unrotated_w, unrotated_h) = self.page_unrotated_size(page_idx);
 
         let selection_overlay = canvas(
             move |bounds, _, _| bounds,
@@ -730,6 +908,69 @@ impl DocumentViewport {
 
                 // 1. Paint saved permanent annotations on this page
                 for ann in page_annotations.iter() {
+                    // Lines and arrows carry their direction in the sign of
+                    // `width`/`height`, so they are transformed as two points
+                    // rather than as a normalised rect.
+                    if let crate::models::AnnotationStyle::Line { color, thickness }
+                    | crate::models::AnnotationStyle::Arrow { color, thickness } = &ann.style
+                    {
+                        let is_arrow =
+                            matches!(ann.style, crate::models::AnnotationStyle::Arrow { .. });
+                        let (x1, y1) = overlay_point_in_rotated_space(
+                            ann.x,
+                            ann.y,
+                            unrotated_w,
+                            unrotated_h,
+                            overlay_rotation,
+                        );
+                        let (x2, y2) = overlay_point_in_rotated_space(
+                            ann.x + ann.width,
+                            ann.y + ann.height,
+                            unrotated_w,
+                            unrotated_h,
+                            overlay_rotation,
+                        );
+                        let from = point(
+                            card_bounds.origin.x + px(x1 * zoom),
+                            card_bounds.origin.y + px(y1 * zoom),
+                        );
+                        let to = point(
+                            card_bounds.origin.x + px(x2 * zoom),
+                            card_bounds.origin.y + px(y2 * zoom),
+                        );
+                        let c = hex_to_hsla(color, 0.95);
+                        paint_segment(window, from, to, *thickness * zoom, c);
+                        if is_arrow {
+                            // Arrowhead: a short triangle at the end point,
+                            // oriented along the segment.
+                            let (fx, fy) = (f32::from(to.x), f32::from(to.y));
+                            let (dx, dy) = (fx - f32::from(from.x), fy - f32::from(from.y));
+                            let len = (dx * dx + dy * dy).sqrt();
+                            if len > 1.0 {
+                                let size = (10.0 * zoom).clamp(4.0, 28.0);
+                                let (ux, uy) = (dx / len, dy / len);
+                                let (px_, py_) = (-uy, ux);
+                                let tip = point(px(fx), px(fy));
+                                let base = point(px(fx - ux * size), px(fy - uy * size));
+                                let left = point(
+                                    px(fx - ux * size + px_ * size * 0.45),
+                                    px(fy - uy * size + py_ * size * 0.45),
+                                );
+                                let right = point(
+                                    px(fx - ux * size - px_ * size * 0.45),
+                                    px(fy - uy * size - py_ * size * 0.45),
+                                );
+                                let mut head = Path::new(tip);
+                                head.line_to(left);
+                                head.line_to(right);
+                                head.line_to(base);
+                                head.line_to(tip);
+                                window.paint_path(head, c);
+                            }
+                        }
+                        continue;
+                    }
+
                     let (ax, ay, aw, ah) = overlay_rect_in_rotated_space(
                         ann.x,
                         ann.y,
@@ -750,148 +991,136 @@ impl DocumentViewport {
                         },
                     };
                     let clipped_ann = ann_quad.intersect(&card_bounds);
-                    if clipped_ann.size.width > px(1.0) && clipped_ann.size.height > px(1.0) {
-                        match &ann.style {
-                            crate::models::AnnotationStyle::Highlight { .. } => {
-                                window.paint_quad(fill(
-                                    clipped_ann,
-                                    hsla(50.0 / 360.0, 1.0, 0.5, 0.45),
-                                ));
-                            }
-                            crate::models::AnnotationStyle::Redact { .. } => {
-                                window.paint_quad(fill(clipped_ann, hsla(0.0, 0.0, 0.05, 0.98)));
-                            }
-                            crate::models::AnnotationStyle::Rectangle { .. } => {
-                                let stroke_c = hsla(215.0 / 360.0, 0.9, 0.5, 0.9);
-                                let t = px(2.0);
-                                window.paint_quad(fill(
-                                    Bounds {
-                                        origin: clipped_ann.origin,
-                                        size: Size {
-                                            width: clipped_ann.size.width,
-                                            height: t,
-                                        },
-                                    },
-                                    stroke_c,
-                                ));
-                                window.paint_quad(fill(
-                                    Bounds {
-                                        origin: Point::new(
-                                            clipped_ann.origin.x,
-                                            clipped_ann.origin.y + clipped_ann.size.height - t,
-                                        ),
-                                        size: Size {
-                                            width: clipped_ann.size.width,
-                                            height: t,
-                                        },
-                                    },
-                                    stroke_c,
-                                ));
-                                window.paint_quad(fill(
-                                    Bounds {
-                                        origin: clipped_ann.origin,
-                                        size: Size {
-                                            width: t,
-                                            height: clipped_ann.size.height,
-                                        },
-                                    },
-                                    stroke_c,
-                                ));
-                                window.paint_quad(fill(
-                                    Bounds {
-                                        origin: Point::new(
-                                            clipped_ann.origin.x + clipped_ann.size.width - t,
-                                            clipped_ann.origin.y,
-                                        ),
-                                        size: Size {
-                                            width: t,
-                                            height: clipped_ann.size.height,
-                                        },
-                                    },
-                                    stroke_c,
-                                ));
-                            }
-                            crate::models::AnnotationStyle::Circle { .. } => {
-                                let stroke_c = hsla(140.0 / 360.0, 0.8, 0.45, 0.9);
-                                let t = px(2.0);
-                                window.paint_quad(fill(
-                                    Bounds {
-                                        origin: clipped_ann.origin,
-                                        size: Size {
-                                            width: clipped_ann.size.width,
-                                            height: t,
-                                        },
-                                    },
-                                    stroke_c,
-                                ));
-                                window.paint_quad(fill(
-                                    Bounds {
-                                        origin: Point::new(
-                                            clipped_ann.origin.x,
-                                            clipped_ann.origin.y + clipped_ann.size.height - t,
-                                        ),
-                                        size: Size {
-                                            width: clipped_ann.size.width,
-                                            height: t,
-                                        },
-                                    },
-                                    stroke_c,
-                                ));
-                                window.paint_quad(fill(
-                                    Bounds {
-                                        origin: clipped_ann.origin,
-                                        size: Size {
-                                            width: t,
-                                            height: clipped_ann.size.height,
-                                        },
-                                    },
-                                    stroke_c,
-                                ));
-                                window.paint_quad(fill(
-                                    Bounds {
-                                        origin: Point::new(
-                                            clipped_ann.origin.x + clipped_ann.size.width - t,
-                                            clipped_ann.origin.y,
-                                        ),
-                                        size: Size {
-                                            width: t,
-                                            height: clipped_ann.size.height,
-                                        },
-                                    },
-                                    stroke_c,
-                                ));
-                            }
-                            crate::models::AnnotationStyle::Line { .. }
-                            | crate::models::AnnotationStyle::Arrow { .. } => {
-                                let line_b = Bounds {
+                    if clipped_ann.size.width <= px(1.0) || clipped_ann.size.height <= px(1.0) {
+                        continue;
+                    }
+                    match &ann.style {
+                        crate::models::AnnotationStyle::Highlight { color } => {
+                            window.paint_quad(fill(clipped_ann, hex_to_hsla(color, 0.45)));
+                        }
+                        crate::models::AnnotationStyle::Underline { color } => {
+                            // A rule along the bottom edge, which is what an
+                            // underline is — not a diagonal line through the box.
+                            let t = (1.5 * zoom).max(1.0);
+                            window.paint_quad(fill(
+                                Bounds {
                                     origin: Point::new(
                                         clipped_ann.origin.x,
-                                        clipped_ann.origin.y + clipped_ann.size.height - px(2.0),
+                                        clipped_ann.origin.y + clipped_ann.size.height - px(t),
                                     ),
                                     size: Size {
                                         width: clipped_ann.size.width,
-                                        height: px(2.0),
+                                        height: px(t),
                                     },
-                                };
-                                window.paint_quad(fill(line_b, hsla(0.0, 0.9, 0.5, 0.9)));
+                                },
+                                hex_to_hsla(color, 0.95),
+                            ));
+                        }
+                        crate::models::AnnotationStyle::Strikeout { color } => {
+                            let t = (1.5 * zoom).max(1.0);
+                            window.paint_quad(fill(
+                                Bounds {
+                                    origin: Point::new(
+                                        clipped_ann.origin.x,
+                                        clipped_ann.origin.y + clipped_ann.size.height / 2.0,
+                                    ),
+                                    size: Size {
+                                        width: clipped_ann.size.width,
+                                        height: px(t),
+                                    },
+                                },
+                                hex_to_hsla(color, 0.95),
+                            ));
+                        }
+                        crate::models::AnnotationStyle::Redact { color } => {
+                            window.paint_quad(fill(clipped_ann, hex_to_hsla(color, 0.98)));
+                        }
+                        crate::models::AnnotationStyle::Rectangle {
+                            color,
+                            thickness,
+                            fill: filled,
+                        } => {
+                            let stroke_c = hex_to_hsla(color, 0.9);
+                            let t = (thickness * zoom).max(1.0);
+                            if *filled {
+                                window.paint_quad(fill(clipped_ann, hex_to_hsla(color, 0.25)));
                             }
-                            crate::models::AnnotationStyle::StickyNote { .. } => {
-                                let note_b = Bounds {
+                            window.paint_quad(fill(
+                                Bounds {
                                     origin: clipped_ann.origin,
                                     size: Size {
-                                        width: px(24.0),
-                                        height: px(24.0),
+                                        width: clipped_ann.size.width,
+                                        height: px(t),
                                     },
-                                };
-                                window.paint_quad(fill(note_b, hsla(48.0 / 360.0, 1.0, 0.6, 0.95)));
-                            }
-                            _ => {
-                                window.paint_quad(fill(
-                                    clipped_ann,
-                                    hsla(215.0 / 360.0, 0.9, 0.55, 0.35),
-                                ));
-                            }
+                                },
+                                stroke_c,
+                            ));
+                            window.paint_quad(fill(
+                                Bounds {
+                                    origin: Point::new(
+                                        clipped_ann.origin.x,
+                                        clipped_ann.origin.y + clipped_ann.size.height - px(t),
+                                    ),
+                                    size: Size {
+                                        width: clipped_ann.size.width,
+                                        height: px(t),
+                                    },
+                                },
+                                stroke_c,
+                            ));
+                            window.paint_quad(fill(
+                                Bounds {
+                                    origin: clipped_ann.origin,
+                                    size: Size {
+                                        width: px(t),
+                                        height: clipped_ann.size.height,
+                                    },
+                                },
+                                stroke_c,
+                            ));
+                            window.paint_quad(fill(
+                                Bounds {
+                                    origin: Point::new(
+                                        clipped_ann.origin.x + clipped_ann.size.width - px(t),
+                                        clipped_ann.origin.y,
+                                    ),
+                                    size: Size {
+                                        width: px(t),
+                                        height: clipped_ann.size.height,
+                                    },
+                                },
+                                stroke_c,
+                            ));
                         }
+                        crate::models::AnnotationStyle::Circle {
+                            color,
+                            thickness,
+                            fill: filled,
+                        } => {
+                            paint_ellipse(
+                                window,
+                                clipped_ann,
+                                hex_to_hsla(color, 0.9),
+                                (*thickness * zoom).max(1.0),
+                                *filled,
+                            );
+                        }
+                        crate::models::AnnotationStyle::StickyNote { color, .. } => {
+                            let note_b = Bounds {
+                                origin: clipped_ann.origin,
+                                size: Size {
+                                    width: px(24.0),
+                                    height: px(24.0),
+                                },
+                            };
+                            window.paint_quad(fill(note_b, hex_to_hsla(color, 0.95)));
+                        }
+                        crate::models::AnnotationStyle::Text { color, .. } => {
+                            window.paint_quad(fill(clipped_ann, hex_to_hsla(color, 0.18)));
+                        }
+                        // Line/Arrow were handled above with their endpoints.
+                        crate::models::AnnotationStyle::Line { .. }
+                        | crate::models::AnnotationStyle::Arrow { .. } => {}
                     }
                 }
 
@@ -1115,15 +1344,13 @@ impl DocumentViewport {
         + 'static
         + Copy,
         on_drag_end: impl Fn(&mut V, usize, &mut Window, &mut Context<V>) + 'static + Copy,
-        on_scroll_wheel: impl Fn(&mut V, &ScrollWheelEvent, &mut Window, &mut Context<V>)
-        + 'static
-        + Copy,
+        on_scroll_wheel: impl Fn(&mut V, &ScrollEvent, &mut Window, &mut Context<V>) + 'static + Copy,
     ) -> AnyElement {
         let muted = cx.theme().muted;
         let cur_page = self.current_page;
         let total = self.total_pages.max(1);
 
-        let scroll_listener = cx.listener(move |v, event: &ScrollWheelEvent, w, cx| {
+        let scroll_listener = cx.listener(move |v, event: &ScrollEvent, w, cx| {
             on_scroll_wheel(v, event, w, cx);
         });
 
@@ -1161,7 +1388,7 @@ impl DocumentViewport {
                     .track_scroll(&self.scroll_handle)
                     .vertical_scrollbar(&self.scroll_handle)
                     .horizontal_scrollbar(&self.scroll_handle)
-                    .on_scroll_wheel(scroll_listener)
+                    .on_scroll(scroll_listener)
                     .on_mouse_move(container_move_listener)
                     .on_mouse_up(MouseButton::Left, container_up_listener)
                     .child(
@@ -1209,7 +1436,7 @@ impl DocumentViewport {
                     .track_scroll(&self.scroll_handle)
                     .vertical_scrollbar(&self.scroll_handle)
                     .horizontal_scrollbar(&self.scroll_handle)
-                    .on_scroll_wheel(scroll_listener)
+                    .on_scroll(scroll_listener)
                     .on_mouse_move(container_move_listener)
                     .on_mouse_up(MouseButton::Left, container_up_listener)
                     .child(
@@ -1275,7 +1502,7 @@ impl DocumentViewport {
                     .track_scroll(&self.scroll_handle)
                     .vertical_scrollbar(&self.scroll_handle)
                     .horizontal_scrollbar(&self.scroll_handle)
-                    .on_scroll_wheel(scroll_listener)
+                    .on_scroll(scroll_listener)
                     .on_mouse_move(container_move_listener)
                     .on_mouse_up(MouseButton::Left, container_up_listener)
                     .items_center()

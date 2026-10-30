@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 
 /// Standard dimension for square rendering tiles (512x512 pixels).
 pub const TILE_DIMENSION: u32 = 512;
@@ -108,6 +108,7 @@ pub struct RenderedTile {
 #[derive(Debug, Default)]
 pub struct TileCache {
     tiles: HashMap<TileCoordinate, RenderedTile>,
+    order: VecDeque<TileCoordinate>,
     max_cached_tiles: usize,
 }
 
@@ -116,6 +117,7 @@ impl TileCache {
     pub fn new(max_cached_tiles: usize) -> Self {
         Self {
             tiles: HashMap::new(),
+            order: VecDeque::new(),
             max_cached_tiles: max_cached_tiles.max(16),
         }
     }
@@ -125,16 +127,113 @@ impl TileCache {
     }
 
     pub fn put(&mut self, tile: RenderedTile) {
-        if self.tiles.len() >= self.max_cached_tiles {
-            // Simple eviction of oldest entries
-            if let Some(first_key) = self.tiles.keys().next().cloned() {
-                self.tiles.remove(&first_key);
+        if !self.tiles.contains_key(&tile.coordinate) {
+            while self.tiles.len() >= self.max_cached_tiles {
+                if let Some(oldest) = self.order.pop_front() {
+                    self.tiles.remove(&oldest);
+                } else {
+                    break;
+                }
             }
+            self.order.push_back(tile.coordinate);
         }
         self.tiles.insert(tile.coordinate, tile);
     }
 
     pub fn clear(&mut self) {
         self.tiles.clear();
+        self.order.clear();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::Arc;
+
+    #[test]
+    fn test_tile_cache_fifo_eviction() {
+        let mut cache = TileCache::new(16);
+        let dummy_data: Arc<[u8]> = Arc::new([0u8; 16]);
+
+        for i in 0..16 {
+            cache.put(RenderedTile {
+                coordinate: TileCoordinate {
+                    page: 0,
+                    col: i as u32,
+                    row: 0,
+                    zoom_level_quantized: 100,
+                },
+                rect: TilePixelRect {
+                    x: 0,
+                    y: 0,
+                    width: 512,
+                    height: 512,
+                },
+                rgba_data: dummy_data.clone(),
+            });
+        }
+
+        // Cache is now full (16 items). The first item is col 0.
+        assert!(
+            cache
+                .get(&TileCoordinate {
+                    page: 0,
+                    col: 0,
+                    row: 0,
+                    zoom_level_quantized: 100
+                })
+                .is_some()
+        );
+
+        // Insert item 17 (col 16)
+        cache.put(RenderedTile {
+            coordinate: TileCoordinate {
+                page: 0,
+                col: 16,
+                row: 0,
+                zoom_level_quantized: 100,
+            },
+            rect: TilePixelRect {
+                x: 0,
+                y: 0,
+                width: 512,
+                height: 512,
+            },
+            rgba_data: dummy_data.clone(),
+        });
+
+        // Oldest item (col 0) should be evicted
+        assert!(
+            cache
+                .get(&TileCoordinate {
+                    page: 0,
+                    col: 0,
+                    row: 0,
+                    zoom_level_quantized: 100
+                })
+                .is_none()
+        );
+        // New item (col 16) and col 1 should be present
+        assert!(
+            cache
+                .get(&TileCoordinate {
+                    page: 0,
+                    col: 1,
+                    row: 0,
+                    zoom_level_quantized: 100
+                })
+                .is_some()
+        );
+        assert!(
+            cache
+                .get(&TileCoordinate {
+                    page: 0,
+                    col: 16,
+                    row: 0,
+                    zoom_level_quantized: 100
+                })
+                .is_some()
+        );
     }
 }

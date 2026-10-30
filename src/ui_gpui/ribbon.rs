@@ -86,6 +86,8 @@ pub enum RibbonAction {
     PageOrganizer,
     /// Edit the document information dictionary.
     Properties,
+    /// Burn every `Redact` box into the file. Destructive and irreversible.
+    ApplyRedactions,
     /// Extract a page range into a new document.
     ExtractPages,
     // Convert & Tables
@@ -97,6 +99,9 @@ pub enum RibbonAction {
     ExtractTablesPlain,
     /// Copy the current page's text in tagged-PDF reading order.
     CopyAccessibleText,
+    // Application
+    Settings,
+    About,
 }
 
 pub struct RibbonState {
@@ -124,6 +129,28 @@ impl RibbonState {
             standalone_cover: false,
             midnight_mode: false,
         }
+    }
+
+    /// The active annotation colour as `#RRGGBB`.
+    ///
+    /// The picker stored RGBA floats but nothing read them for annotations —
+    /// every tool hard-coded its own colour, so choosing a colour changed only
+    /// the selection tint. Converting here is what makes the picker affect what
+    /// gets saved.
+    pub fn active_color_hex(&self) -> String {
+        let to_byte = |v: f32| (v.clamp(0.0, 1.0) * 255.0).round() as u8;
+        format!(
+            "#{:02X}{:02X}{:02X}",
+            to_byte(self.active_color[0]),
+            to_byte(self.active_color[1]),
+            to_byte(self.active_color[2])
+        )
+    }
+
+    /// The active colour as a GPUI colour for on-screen painting.
+    pub fn active_color_hsla(&self) -> gpui_kit::Hsla {
+        let [r, g, b, a] = self.active_color;
+        gpui_kit::Rgba { r, g, b, a }.into()
     }
 
     pub fn render_tabs<V: 'static>(
@@ -667,6 +694,17 @@ fn render_tools_strip<V: 'static>(
                     on_action(v, RibbonAction::DigitalSignatures, w, cx)
                 }))
                 .into_any_element(),
+            Button::new("tool-redact-apply")
+                .label("Apply Redactions")
+                .ghost()
+                .small()
+                .tooltip(
+                    "Permanently remove the content under every Redact box (destructive, cannot be undone)",
+                )
+                .on_click(cx.listener(move |v, _, w, cx| {
+                    on_action(v, RibbonAction::ApplyRedactions, w, cx)
+                }))
+                .into_any_element(),
             Button::new("tool-encrypt")
                 .label("Encrypt")
                 .ghost()
@@ -768,6 +806,31 @@ fn render_tools_strip<V: 'static>(
         muted_fg,
     );
 
+    let app_group = ribbon_group(
+        "Application",
+        vec![
+            Button::new("tool-settings")
+                .label("Settings")
+                .ghost()
+                .small()
+                .icon(IconName::Settings)
+                .tooltip("Configure preferences, theme, and zoom (Ctrl+,)")
+                .on_click(
+                    cx.listener(move |v, _, w, cx| on_action(v, RibbonAction::Settings, w, cx)),
+                )
+                .into_any_element(),
+            Button::new("tool-about")
+                .label("About")
+                .ghost()
+                .small()
+                .icon(IconName::Info)
+                .tooltip("About PDFbull & Architecture (F1)")
+                .on_click(cx.listener(move |v, _, w, cx| on_action(v, RibbonAction::About, w, cx)))
+                .into_any_element(),
+        ],
+        muted_fg,
+    );
+
     div()
         .flex()
         .flex_row()
@@ -778,6 +841,8 @@ fn render_tools_strip<V: 'static>(
         .child(security_group)
         .child(ribbon_divider(border))
         .child(content_group)
+        .child(ribbon_divider(border))
+        .child(app_group)
         .into_any_element()
 }
 

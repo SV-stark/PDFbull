@@ -318,6 +318,7 @@ fn test_dialogs_overlay_state() {
 
     let all_dialogs = [
         ActiveDialog::Settings,
+        ActiveDialog::About,
         ActiveDialog::Password,
         ActiveDialog::Watermark,
         ActiveDialog::HeaderFooter,
@@ -864,6 +865,55 @@ fn test_dialogs_actions_and_options() {
         }
         _ => panic!("Expected ApplySecurity"),
     }
+
+    // Settings actions roundtrip & state verification
+    let theme_act =
+        pdfbull::ui_gpui::dialogs::DialogAction::SetSettingsTheme(pdfbull::models::AppTheme::Dark);
+    assert_eq!(
+        theme_act,
+        pdfbull::ui_gpui::dialogs::DialogAction::SetSettingsTheme(pdfbull::models::AppTheme::Dark)
+    );
+    assert_ne!(
+        theme_act,
+        pdfbull::ui_gpui::dialogs::DialogAction::SetSettingsTheme(pdfbull::models::AppTheme::Light)
+    );
+
+    let zoom_act = pdfbull::ui_gpui::dialogs::DialogAction::SetSettingsZoom(125);
+    assert_eq!(
+        zoom_act,
+        pdfbull::ui_gpui::dialogs::DialogAction::SetSettingsZoom(125)
+    );
+
+    let qual_act = pdfbull::ui_gpui::dialogs::DialogAction::SetSettingsQuality(
+        pdfbull::pdf_engine::RenderQuality::High,
+    );
+    assert_eq!(
+        qual_act,
+        pdfbull::ui_gpui::dialogs::DialogAction::SetSettingsQuality(
+            pdfbull::pdf_engine::RenderQuality::High
+        )
+    );
+
+    let cache_act = pdfbull::ui_gpui::dialogs::DialogAction::SetSettingsCacheMemory(1024);
+    assert_eq!(
+        cache_act,
+        pdfbull::ui_gpui::dialogs::DialogAction::SetSettingsCacheMemory(1024)
+    );
+
+    assert_eq!(
+        pdfbull::ui_gpui::dialogs::DialogAction::ResetSettings,
+        pdfbull::ui_gpui::dialogs::DialogAction::ResetSettings
+    );
+    assert_eq!(
+        pdfbull::ui_gpui::dialogs::DialogAction::OpenGitHub,
+        pdfbull::ui_gpui::dialogs::DialogAction::OpenGitHub
+    );
+
+    // ActiveDialog About and Settings
+    dialogs.active = Some(ActiveDialog::About);
+    assert_eq!(dialogs.active, Some(ActiveDialog::About));
+    dialogs.active = Some(ActiveDialog::Settings);
+    assert_eq!(dialogs.active, Some(ActiveDialog::Settings));
 }
 
 #[test]

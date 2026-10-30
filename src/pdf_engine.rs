@@ -92,7 +92,7 @@ pub const MAX_INPUT_BYTES: u64 = 512 * 1024 * 1024;
 ///
 /// The size is checked via metadata *before* the read, so an oversized file is
 /// rejected without first allocating room for it.
-fn read_input_capped(path: &str) -> PdfResult<Vec<u8>> {
+pub fn read_input_capped(path: &str) -> PdfResult<Vec<u8>> {
     let meta = std::fs::metadata(path)
         .map_err(|e| PdfError::OpenFailed(format!("cannot stat {path}: {e}")))?;
     if meta.len() > MAX_INPUT_BYTES {
@@ -158,24 +158,20 @@ fn effective_page_box(doc: &Document, page_id: ObjectId) -> Option<(f32, f32, f3
     as_box(&inherited(b"CropBox")).or_else(|| as_box(&inherited(b"MediaBox")))
 }
 
-/// Width and height of the box a page's content is drawn into, falling back to
-/// A4 when no usable box can be found.
-///
-/// Used to anchor generated content (headers, footers, watermarks) to the real
-/// page box. A fixed origin silently pushed that content off the page for any
-/// document that is not A4-sized.
-fn media_box_size(doc: &Document, page_id: ObjectId) -> (f32, f32) {
-    const A4: (f32, f32) = (595.0, 842.0);
-    let Some((x0, y0, x1, y1)) = effective_page_box(doc, page_id) else {
-        return A4;
-    };
-    let (w, h) = (x1 - x0, y1 - y0);
-    // A non-positive or non-finite box is unusable for placement; prefer A4.
-    if w.is_finite() && h.is_finite() && w > 1.0 && h > 1.0 {
-        (w, h)
-    } else {
-        A4
+/// The effective rotation of a page in a lopdf Document, taking inheritance into account.
+fn page_rotation_lopdf(doc: &Document, page_id: ObjectId) -> i32 {
+    let mut curr = Some(page_id);
+    while let Some(id) = curr {
+        if let Ok(dict) = doc.get_dictionary(id) {
+            if let Ok(rot) = dict.get(b"Rotate").and_then(Object::as_i64) {
+                return ((rot % 360 + 360) % 360) as i32;
+            }
+            curr = dict.get(b"Parent").and_then(Object::as_reference).ok();
+        } else {
+            break;
+        }
     }
+    0
 }
 
 /// Write generated PDF bytes to `path` without ever truncating the destination
@@ -808,6 +804,9 @@ pub struct DocumentStore {
     /// Aggregate decoded-image budget applied to every interpreter this store
     /// runs, in bytes.
     image_cache_bytes: u64,
+    /// The on-disk revision each loaded document corresponds to. A worker
+    /// reopens the file whenever the shared generation moves past this.
+    loaded_generations: HashMap<DocumentId, u64>,
 }
 
 /// Decoded-image budget per open document.
@@ -896,7 +895,21 @@ impl DocumentStore {
             oc_visibility: HashMap::new(),
             image_caches: HashMap::new(),
             image_cache_bytes: DEFAULT_IMAGE_CACHE_BYTES,
+            loaded_generations: HashMap::new(),
         }
+    }
+
+    /// Which on-disk revision of `doc_id` this worker currently holds.
+    pub fn loaded_generation(&self, doc_id: DocumentId) -> Option<u64> {
+        self.loaded_generations.get(&doc_id).copied()
+    }
+
+    pub fn set_loaded_generation(&mut self, doc_id: DocumentId, generation: u64) {
+        self.loaded_generations.insert(doc_id, generation);
+    }
+
+    pub fn clear_loaded_generation(&mut self, doc_id: DocumentId) {
+        self.loaded_generations.remove(&doc_id);
     }
 
     /// The aggregate decoded-image budget applied to every interpreter this
@@ -918,6 +931,39 @@ impl DocumentStore {
 
     pub fn has_document(&self, doc_id: DocumentId) -> bool {
         self.documents.contains_key(&doc_id)
+    }
+
+    /// Size and `/Rotate` of every page in an already-open document.
+    ///
+    /// Used after a reload so the view can resize its cards to the new file
+    /// (a delete or rotate changes both the page count and the extents) without
+    /// re-running the whole open pipeline.
+    pub fn page_geometry(&self, doc_id: DocumentId) -> PdfResult<Vec<crate::models::PageInfo>> {
+        let doc = self
+            .documents
+            .get(&doc_id)
+            .ok_or(PdfError::EngineError(EngineErrorKind::DocumentNotFound))?;
+        let count = doc.page_count();
+        let mut pages = Vec::with_capacity(count);
+        for i in 0..count {
+            match doc.page(i) {
+                Ok(page) => {
+                    let rect = page.effective_box();
+                    let unit = page.user_unit as f32;
+                    pages.push(crate::models::PageInfo {
+                        width: rect.width() as f32 * unit,
+                        height: rect.height() as f32 * unit,
+                        rotation: normalize_rotation(page.rotate),
+                    });
+                }
+                Err(_) => pages.push(crate::models::PageInfo {
+                    width: 0.0,
+                    height: 0.0,
+                    rotation: 0,
+                }),
+            }
+        }
+        Ok(pages)
     }
 
     pub fn open_document(
@@ -970,6 +1016,7 @@ impl DocumentStore {
 
         let page_count = doc.page_count();
         let mut heights = Vec::with_capacity(page_count);
+        let mut widths = Vec::with_capacity(page_count);
         let mut rotations = Vec::with_capacity(page_count);
         let mut max_width = 0.0;
 
@@ -990,11 +1037,13 @@ impl DocumentStore {
                 let rotated = normalize_rotation(page.rotate);
                 rotations.push(rotated);
                 heights.push(h);
+                widths.push(w);
                 if w > max_width {
                     max_width = w;
                 }
             } else {
                 heights.push(0.0);
+                widths.push(0.0);
                 rotations.push(0);
             }
         }
@@ -1017,8 +1066,8 @@ impl DocumentStore {
         // Page label styles are not publicly exposed by zpdf's PageLabels API.
         // The label() method already returns the formatted string for each page.
         let is_encrypted = doc.is_encrypted();
-        let system_anchors = Self::load_system_trust_anchors();
-        let signatures = Self::extract_signatures_internal(&doc, &system_anchors);
+        let system_anchors = Self::cached_system_trust_anchors();
+        let signatures = Self::extract_signatures_internal(&doc, system_anchors);
 
         let attachments = doc
             .embedded_files()
@@ -1066,6 +1115,7 @@ impl DocumentStore {
             id: doc_id,
             page_count,
             page_heights: heights,
+            page_widths: widths,
             max_width,
             page_rotations: rotations,
             outline,
@@ -1269,8 +1319,8 @@ impl DocumentStore {
             })
             .collect();
         let is_encrypted = doc.is_encrypted();
-        let system_anchors = Self::load_system_trust_anchors();
-        let signatures = Self::extract_signatures_internal(doc, &system_anchors);
+        let system_anchors = Self::cached_system_trust_anchors();
+        let signatures = Self::extract_signatures_internal(doc, system_anchors);
 
         let attachments = doc
             .embedded_files()
@@ -1319,6 +1369,7 @@ impl DocumentStore {
 
     pub fn close_document(&mut self, doc_id: DocumentId) {
         self.documents.remove(&doc_id);
+        self.loaded_generations.remove(&doc_id);
         self.paths.remove(&doc_id);
         self.passwords.remove(&doc_id);
         self.oc_configs.remove(&doc_id);
@@ -1326,6 +1377,12 @@ impl DocumentStore {
         self.oc_visibility.remove(&doc_id);
         self.image_caches.remove(&doc_id);
         self.render_cache.remove_document(doc_id);
+    }
+
+    pub fn cached_system_trust_anchors() -> &'static [zpdf::trust::TrustAnchor] {
+        static ANCHORS: std::sync::OnceLock<Vec<zpdf::trust::TrustAnchor>> =
+            std::sync::OnceLock::new();
+        ANCHORS.get_or_init(Self::load_system_trust_anchors)
     }
 
     /// Load trusted root certificates from the OS (e.g. Windows ROOT & CA stores)
@@ -1557,7 +1614,11 @@ impl DocumentStore {
     /// file.
     #[allow(clippy::many_single_char_names, clippy::similar_names)]
     pub fn load_annotations(&self, path: &str) -> PdfResult<Vec<Annotation>> {
-        let lopdf_doc = Document::load(path)
+        // Capped like every other entry point: `Document::load` read the whole
+        // file with no size limit, so a multi-GB input OOM'd the worker before
+        // any check could refuse it.
+        let data = read_input_capped(path)?;
+        let lopdf_doc = Document::load_mem(&data)
             .map_err(|e| PdfError::OpenFailed(format!("cannot read annotations: {e}")))?;
 
         let mut annotations = Vec::new();
@@ -1697,6 +1758,8 @@ impl DocumentStore {
 
                 let style = match subtype.as_str() {
                     "Highlight" => Some(AnnotationStyle::Highlight { color: color_str }),
+                    "Underline" => Some(AnnotationStyle::Underline { color: color_str }),
+                    "StrikeOut" => Some(AnnotationStyle::Strikeout { color: color_str }),
                     "Square" if has_fill => Some(AnnotationStyle::Rectangle {
                         color: color_str,
                         thickness,
@@ -1772,13 +1835,45 @@ impl DocumentStore {
                 };
 
                 if let Some(style) = style {
+                    // A `Line` annotation also carries `/L [x1 y1 x2 y2]`, which
+                    // keeps the direction the normalised `Rect` throws away.
+                    // Without reading it, a line drawn bottom-left to
+                    // top-right came back as the opposite diagonal.
+                    let is_line = matches!(
+                        style,
+                        AnnotationStyle::Line { .. } | AnnotationStyle::Arrow { .. }
+                    );
+                    let endpoints = is_line
+                        .then(|| {
+                            let arr = dict.get(b"L").ok()?.as_array().ok()?;
+                            let to_f32 = |o: &Object| match o {
+                                Object::Real(v) => Some(*v),
+                                Object::Integer(v) => Some(*v as f32),
+                                _ => None,
+                            };
+                            match arr.as_slice() {
+                                [a, b, c, d] => {
+                                    let (x1, y1) = (to_f32(a)?, to_f32(b)?);
+                                    let (x2, y2) = (to_f32(c)?, to_f32(d)?);
+                                    Some((
+                                        x1 - page_x0,
+                                        page_y1 - y1,
+                                        (x2 - page_x0) - (x1 - page_x0),
+                                        (page_y1 - y2) - (page_y1 - y1),
+                                    ))
+                                }
+                                _ => None,
+                            }
+                        })
+                        .flatten();
+                    let (ann_x, ann_y, ann_w, ann_h) = endpoints.unwrap_or((x, y, w, h));
                     annotations.push(Annotation {
                         id: crate::models::next_annotation_id(),
                         page: page_idx,
-                        x,
-                        y,
-                        width: w,
-                        height: h,
+                        x: ann_x,
+                        y: ann_y,
+                        width: ann_w,
+                        height: ann_h,
                         style,
                     });
                 }
@@ -2214,7 +2309,7 @@ impl DocumentStore {
             .ok_or(PdfError::EngineError(EngineErrorKind::DocumentPathNotFound))?
             .clone();
 
-        let data = std::fs::read(&pdf_path).map_err(|e| PdfError::OpenFailed(e.to_string()))?;
+        let data = read_input_capped(&pdf_path)?;
         let pass = self
             .passwords
             .get(&doc_id)
@@ -2288,17 +2383,21 @@ impl DocumentStore {
             // `load_annotations` exactly. Using the box *height* here (rather
             // than y1) is what made positions drift by `y0` on every
             // open/save cycle for any page whose box does not start at y=0.
+            // No Letter-size fallback: substituting 612x792 for a page whose
+            // real box is unknown puts the annotation in the wrong place, and
+            // for a redaction that means burning the wrong region. Refuse
+            // instead of guessing.
             let page_box = self
                 .documents
                 .get(&doc_id)
                 .and_then(|d| d.page(ann.page).ok())
                 .map(|p| p.effective_box())
-                .unwrap_or(ZpdfRect {
-                    x0: 0.0,
-                    y0: 0.0,
-                    x1: 612.0,
-                    y1: 792.0,
-                });
+                .ok_or_else(|| {
+                    PdfError::EngineError(EngineErrorKind::Generic(format!(
+                        "cannot place annotation: page {} of the document is not loaded",
+                        ann.page + 1
+                    )))
+                })?;
 
             let pdf_x = ann.x as f64 + page_box.x0;
             let pdf_w = ann.width as f64;
@@ -2320,6 +2419,24 @@ impl DocumentStore {
                     let (r, g, b) = hex_to_rgb(color);
                     AnnotationSpec::markup_from_rects(
                         MarkupKind::Highlight,
+                        &[rect],
+                        (r as f64, g as f64, b as f64),
+                        None,
+                    )
+                }
+                AnnotationStyle::Underline { color } => {
+                    let (r, g, b) = hex_to_rgb(color);
+                    AnnotationSpec::markup_from_rects(
+                        MarkupKind::Underline,
+                        &[rect],
+                        (r as f64, g as f64, b as f64),
+                        None,
+                    )
+                }
+                AnnotationStyle::Strikeout { color } => {
+                    let (r, g, b) = hex_to_rgb(color);
+                    AnnotationSpec::markup_from_rects(
+                        MarkupKind::StrikeOut,
                         &[rect],
                         (r as f64, g as f64, b as f64),
                         None,
@@ -2710,11 +2827,6 @@ impl DocumentStore {
     ) -> PdfResult<Vec<u8>> {
         use zpdf_writer::InfoUpdate;
 
-        let doc = self
-            .documents
-            .get(&doc_id)
-            .ok_or(PdfError::EngineError(EngineErrorKind::DocumentNotFound))?;
-
         let info = InfoUpdate {
             title: title.map(|t| Some(t.to_string())),
             author: author.map(|a| Some(a.to_string())),
@@ -2727,10 +2839,28 @@ impl DocumentStore {
             return Ok(Vec::new());
         }
 
-        let file = doc.file();
+        // Build from the file **on disk**, not from `doc.file().data()`.
+        //
+        // The in-memory copy is whatever was loaded at open time, so a save
+        // that happened after that (annotations, a previous metadata edit) is
+        // absent from it. Writing these bytes back over the file therefore
+        // silently discarded every change made since the document was opened —
+        // most visibly, a highlight the user had just saved.
+        let pdf_path = self
+            .paths
+            .get(&doc_id)
+            .cloned()
+            .ok_or(PdfError::EngineError(EngineErrorKind::DocumentPathNotFound))?;
+        let data = read_input_capped(&pdf_path)?;
+        let pass = self
+            .passwords
+            .get(&doc_id)
+            .map(|s| s.as_bytes())
+            .unwrap_or(b"");
+
         let mut buffer = std::io::Cursor::new(Vec::new());
         {
-            let mut writer = IncrementalWriter::new(file.data().to_vec())
+            let mut writer = IncrementalWriter::new_with_password(data, pass)
                 .map_err(|e| PdfError::IoError(format!("metadata update failed: {e}")))?;
             writer
                 .set_info(&info)
@@ -2749,13 +2879,23 @@ impl DocumentStore {
         doc_id: DocumentId,
         page_indices: &[usize],
     ) -> PdfResult<Vec<u8>> {
-        let doc = self
-            .documents
+        // Same staleness as `update_metadata`: extract from the bytes that are
+        // actually on disk so annotations saved after the document was opened
+        // are carried into the extracted file instead of being dropped.
+        let pdf_path = self
+            .paths
             .get(&doc_id)
-            .ok_or(PdfError::EngineError(EngineErrorKind::DocumentNotFound))?;
-
-        let file = doc.file();
-        zpdf_writer::extract_pages(file, page_indices)
+            .cloned()
+            .ok_or(PdfError::EngineError(EngineErrorKind::DocumentPathNotFound))?;
+        let data = read_input_capped(&pdf_path)?;
+        let pass = self
+            .passwords
+            .get(&doc_id)
+            .map(|s| s.as_bytes())
+            .unwrap_or(b"");
+        let file = zpdf::PdfFile::parse_with_password(data, pass)
+            .map_err(|e| PdfError::OpenFailed(e.to_string()))?;
+        zpdf_writer::extract_pages(&file, page_indices)
             .map_err(|e| PdfError::IoError(format!("page extraction failed: {e}")))
     }
 
@@ -3360,16 +3500,18 @@ impl DocumentStore {
             .documents
             .get(&doc_id)
             .ok_or(PdfError::EngineError(EngineErrorKind::DocumentNotFound))?;
-        let anchors = if trust_anchors_bytes.is_empty() {
-            Self::load_system_trust_anchors()
+        let custom_anchors;
+        let anchors: &[zpdf::trust::TrustAnchor] = if trust_anchors_bytes.is_empty() {
+            Self::cached_system_trust_anchors()
         } else {
-            zpdf::trust::parse_trust_anchors(trust_anchors_bytes)
+            custom_anchors = zpdf::trust::parse_trust_anchors(trust_anchors_bytes);
+            &custom_anchors
         };
         let sigs = doc.signatures();
         let mut results = Vec::new();
         for sig in sigs {
             let status = if let Some(ref cms) = sig.cms_blob {
-                let chain_status = zpdf::trust::verify_certificate_chain(cms, &anchors, None);
+                let chain_status = zpdf::trust::verify_certificate_chain(cms, anchors, None);
                 match chain_status {
                     zpdf::trust::ChainStatus::Trusted(cns) => {
                         format!("Trusted: {}", cns.join(" -> "))
@@ -3468,24 +3610,41 @@ impl DocumentStore {
         Self::convert_inner(&doc, mode, format)
     }
 
-    pub fn merge_documents(&self, paths: Vec<String>, output_path: String) -> PdfResult<String> {
-        if paths.is_empty() {
+    /// Merge `documents` (path plus optional open password, in order) into
+    /// `output_path`.
+    ///
+    /// Each document carries its own password: an encrypted input used to be
+    /// unreadable here because the writer was always built with the empty
+    /// password, so "Merge" failed with an opaque parse error on any protected
+    /// file.
+    pub fn merge_documents(
+        &self,
+        documents: Vec<(String, Option<String>)>,
+        output_path: String,
+    ) -> PdfResult<String> {
+        let Some((first_path, first_password)) = documents.first() else {
             return Err(PdfError::IoError("No documents to merge".into()));
-        }
+        };
 
         // Load and use the first document as the base of the IncrementalWriter.
         // Capped like the documents appended below: a bare `std::fs::read` here
         // allocated room for the whole file before any size check, so a
         // multi-GB input OOMs the process instead of being refused.
-        let first_data = read_input_capped(&paths[0])?;
-        let mut writer =
-            IncrementalWriter::new(first_data).map_err(|e| PdfError::OpenFailed(e.to_string()))?;
+        let first_data = read_input_capped(first_path)?;
+        let mut writer = IncrementalWriter::new_with_password(
+            first_data,
+            first_password.as_deref().unwrap_or("").as_bytes(),
+        )
+        .map_err(|e| PdfError::OpenFailed(e.to_string()))?;
 
         // Append remaining documents — this preserves outlines, forms, and OCGs.
-        for path in paths.iter().skip(1) {
+        for (path, password) in documents.iter().skip(1) {
             let data = read_input_capped(path)?;
-            let doc =
-                zpdf::PdfFile::parse(data).map_err(|e| PdfError::OpenFailed(e.to_string()))?;
+            let doc = zpdf::PdfFile::parse_with_password(
+                data,
+                password.as_deref().unwrap_or("").as_bytes(),
+            )
+            .map_err(|e| PdfError::OpenFailed(e.to_string()))?;
             writer
                 .append_document(&doc)
                 .map_err(|e| PdfError::IoError(e.to_string()))?;
@@ -3508,10 +3667,12 @@ impl DocumentStore {
         input_path: &str,
         page_order: &[usize],
         output_path: &str,
+        password: Option<&str>,
     ) -> PdfResult<String> {
         let data = read_input_capped(input_path)?;
         let mut writer =
-            IncrementalWriter::new(data).map_err(|e| PdfError::OpenFailed(e.to_string()))?;
+            IncrementalWriter::new_with_password(data, password.unwrap_or("").as_bytes())
+                .map_err(|e| PdfError::OpenFailed(e.to_string()))?;
 
         writer
             .reorder_pages(page_order)
@@ -3534,10 +3695,12 @@ impl DocumentStore {
         input_path: &str,
         rotations: &[(usize, i32)],
         output_path: &str,
+        password: Option<&str>,
     ) -> PdfResult<String> {
         let data = read_input_capped(input_path)?;
         let mut writer =
-            IncrementalWriter::new(data).map_err(|e| PdfError::OpenFailed(e.to_string()))?;
+            IncrementalWriter::new_with_password(data, password.unwrap_or("").as_bytes())
+                .map_err(|e| PdfError::OpenFailed(e.to_string()))?;
 
         for &(page_idx, degrees) in rotations {
             writer
@@ -3562,10 +3725,12 @@ impl DocumentStore {
         input_path: &str,
         page_indices: &[usize],
         output_path: &str,
+        password: Option<&str>,
     ) -> PdfResult<String> {
         let data = read_input_capped(input_path)?;
         let mut writer =
-            IncrementalWriter::new(data).map_err(|e| PdfError::OpenFailed(e.to_string()))?;
+            IncrementalWriter::new_with_password(data, password.unwrap_or("").as_bytes())
+                .map_err(|e| PdfError::OpenFailed(e.to_string()))?;
 
         writer
             .delete_pages(page_indices)
@@ -3662,6 +3827,10 @@ impl DocumentStore {
 
         let mut created_paths = Vec::new();
 
+        // Ensure the destination directory exists rather than failing on the
+        // first write.
+        let _ = std::fs::create_dir_all(&output_dir);
+
         // Out-of-range indices are collected rather than silently dropped: a
         // caller that cannot tell "split" from "split nothing" reports success
         // for a document it never touched.
@@ -3722,7 +3891,7 @@ impl DocumentStore {
             .get(&doc_id)
             .ok_or(PdfError::EngineError(EngineErrorKind::DocumentPathNotFound))?;
 
-        let data = std::fs::read(pdf_path).map_err(|e| PdfError::OpenFailed(e.to_string()))?;
+        let data = read_input_capped(pdf_path)?;
 
         // `redact_pdf` redacts one page per call and rebuilds the whole file,
         // so feed each call the previous call's output. Pages are visited in
@@ -3737,17 +3906,18 @@ impl DocumentStore {
                 // its own `x0`/`y1` burned the wrong region on every page whose
                 // box does not start at the origin: a `CropBox` with a non-zero
                 // left edge redacted an area shifted by exactly that edge.
+                // A guessed box would burn the wrong region — refuse.
                 let page_box = self
                     .documents
                     .get(&doc_id)
                     .and_then(|d| d.page(ann.page).ok())
                     .map(|p| p.effective_box())
-                    .unwrap_or(ZpdfRect {
-                        x0: 0.0,
-                        y0: 0.0,
-                        x1: 612.0,
-                        y1: 792.0,
-                    });
+                    .ok_or_else(|| {
+                        PdfError::EngineError(EngineErrorKind::Generic(format!(
+                            "cannot redact: page {} of the document is not loaded",
+                            ann.page + 1
+                        )))
+                    })?;
 
                 let pdf_x = ann.x as f64 + page_box.x0;
                 let pdf_y = page_box.y1 - ann.y as f64 - ann.height as f64;
@@ -3793,7 +3963,11 @@ impl DocumentStore {
                 .parent()
                 .map(|p| p.to_string_lossy())
                 .unwrap_or_default();
-            format!("{}/{}_redacted.pdf", dir, stem)
+            if dir.is_empty() {
+                format!("{}_redacted.pdf", stem)
+            } else {
+                format!("{}/{}_redacted.pdf", dir, stem)
+            }
         });
 
         write_pdf_output(&final_path, &out_bytes)?;
@@ -3958,13 +4132,15 @@ impl DocumentStore {
         path: &str,
         updates: Vec<FormField>,
         output_path: String,
+        password: Option<&str>,
     ) -> PdfResult<String> {
         let data = read_input_capped(path).map_err(|e| match e {
             PdfError::OpenFailed(msg) => PdfError::IoError(msg),
             other => other,
         })?;
         let mut writer =
-            IncrementalWriter::new(data).map_err(|e| PdfError::IoError(e.to_string()))?;
+            IncrementalWriter::new_with_password(data, password.unwrap_or("").as_bytes())
+                .map_err(|e| PdfError::IoError(e.to_string()))?;
 
         let total_fields = updates.len();
         let mut failures: Vec<String> = Vec::new();
@@ -4012,7 +4188,8 @@ impl DocumentStore {
                                 .or_else(|| options.get(*idx).cloned())
                                 .unwrap_or_default()
                         } else {
-                            String::new()
+                            // No selection changed; do not overwrite or clear the existing value.
+                            continue;
                         }
                     }
                 };
@@ -4126,14 +4303,28 @@ impl DocumentStore {
             ("BaseFont", Object::Name(b"Helvetica".to_vec())),
         ])));
 
-        let resources_id =
-            doc.add_object(Object::Dictionary(lopdf::Dictionary::from_iter(vec![(
+        let mut gstate = lopdf::Dictionary::new();
+        gstate.set("Type", Object::Name(b"ExtGState".to_vec()));
+        gstate.set("ca", Object::Real(0.35));
+        gstate.set("CA", Object::Real(0.35));
+        let gstate_id = doc.add_object(Object::Dictionary(gstate));
+
+        let resources_id = doc.add_object(Object::Dictionary(lopdf::Dictionary::from_iter(vec![
+            (
                 "Font",
                 Object::Dictionary(lopdf::Dictionary::from_iter(vec![(
                     "F1",
                     Object::Reference(font_ref_id),
                 )])),
-            )])));
+            ),
+            (
+                "ExtGState",
+                Object::Dictionary(lopdf::Dictionary::from_iter(vec![(
+                    "GS_WM",
+                    Object::Reference(gstate_id),
+                )])),
+            ),
+        ])));
 
         // Encode once, outside the per-page loop: the bytes go into every page's
         // content stream, so re-encoding per page only repeated the work.
@@ -4151,22 +4342,47 @@ impl DocumentStore {
         // origin of (200, 400), which put the stamp off the page — or absurdly
         // off-centre — for any page whose MediaBox is not A4-sized.
         for &page_id in &pages {
-            let (page_w, page_h) = media_box_size(&doc, page_id);
+            let (x0, y0, x1, y1) =
+                effective_page_box(&doc, page_id).unwrap_or((0.0, 0.0, 595.0, 842.0));
+            let (page_w, page_h) = (x1 - x0, y1 - y0);
+            let rot = page_rotation_lopdf(&doc, page_id);
 
             let mut content = pdf_writer::Content::new();
+            content.save_state();
+            content.set_parameters(pdf_writer::Name(b"GS_WM"));
             content.begin_text();
             // Helvetica averages ~0.6 em per character; cap the size so a long
             // stamp still fits the page width, then centre the run at
             // mid-height so it reads as a watermark on any page size.
             let font_size = 48.0_f32.min((page_w / 12.0).max(12.0));
             content.set_font(pdf_writer::Name(b"F1"), font_size);
-            content.set_fill_rgb(0.7, 0.7, 0.7);
+            content.set_fill_rgb(0.5, 0.5, 0.5);
             let estimated_w = (text_bytes.len() as f32) * font_size * 0.6;
-            let x = ((page_w - estimated_w) / 2.0).max(10.0);
-            let y = (page_h / 2.0).max(10.0);
-            content.set_text_matrix([1.0, 0.0, 0.0, 1.0, x, y]);
+            match rot {
+                90 => {
+                    let x = (x0 + page_w / 2.0).max(x0 + 10.0);
+                    let y = (y0 + (page_h - estimated_w) / 2.0).max(y0 + 10.0);
+                    content.set_text_matrix([0.0, 1.0, -1.0, 0.0, x, y]);
+                }
+                180 => {
+                    let x = (x0 + (page_w + estimated_w) / 2.0).min(x1 - 10.0);
+                    let y = (y0 + page_h / 2.0).max(y0 + 10.0);
+                    content.set_text_matrix([-1.0, 0.0, 0.0, -1.0, x, y]);
+                }
+                270 => {
+                    let x = (x0 + page_w / 2.0).max(x0 + 10.0);
+                    let y = (y0 + (page_h + estimated_w) / 2.0).min(y1 - 10.0);
+                    content.set_text_matrix([0.0, -1.0, 1.0, 0.0, x, y]);
+                }
+                _ => {
+                    let x = (x0 + (page_w - estimated_w) / 2.0).max(x0 + 10.0);
+                    let y = (y0 + page_h / 2.0).max(y0 + 10.0);
+                    content.set_text_matrix([1.0, 0.0, 0.0, 1.0, x, y]);
+                }
+            }
             content.show(pdf_writer::Str(&text_bytes));
             content.end_text();
+            content.restore_state();
             let watermark_stream =
                 lopdf::Stream::new(lopdf::Dictionary::new(), content.finish().to_vec());
             let watermark_id = doc.add_object(watermark_stream);
@@ -4217,6 +4433,29 @@ impl DocumentStore {
                             )])),
                         );
                     }
+
+                    if let Ok(existing_extgstate) = d.get_mut(b"ExtGState") {
+                        let mut gstate_dict = match existing_extgstate {
+                            Object::Reference(r) => {
+                                doc.objects.get(r).and_then(|o| o.as_dict().ok()).cloned()
+                            }
+                            Object::Dictionary(gd) => Some(gd.clone()),
+                            _ => None,
+                        };
+                        if let Some(ref mut gd) = gstate_dict {
+                            gd.set("GS_WM", Object::Reference(gstate_id));
+                            d.set("ExtGState", Object::Dictionary(gd.clone()));
+                        }
+                    } else {
+                        d.set(
+                            "ExtGState",
+                            Object::Dictionary(lopdf::Dictionary::from_iter(vec![(
+                                "GS_WM",
+                                Object::Reference(gstate_id),
+                            )])),
+                        );
+                    }
+
                     merged_res = Some(doc.add_object(Object::Dictionary(d.clone())));
                 }
             }
@@ -4292,23 +4531,61 @@ impl DocumentStore {
             // Anchor the header and footer to this page's own box instead of a
             // hard-coded 760/30. On any page shorter than 760 pt tall the header
             // landed outside the MediaBox and silently vanished.
-            let (page_w, page_h) = media_box_size(&doc, page_id);
+            let (x0, y0, x1, y1) =
+                effective_page_box(&doc, page_id).unwrap_or((0.0, 0.0, 595.0, 842.0));
+            let (page_w, page_h) = (x1 - x0, y1 - y0);
+            let rot = page_rotation_lopdf(&doc, page_id);
             let margin = 36.0_f32.min(page_w / 8.0);
 
             let mut content = pdf_writer::Content::new();
+            content.save_state();
             content.begin_text();
             content.set_font(pdf_writer::Name(b"F1"), 10.0);
             content.set_fill_rgb(0.2, 0.2, 0.2);
 
             if !header_text.is_empty() {
-                content.set_text_matrix([
-                    1.0,
-                    0.0,
-                    0.0,
-                    1.0,
-                    margin,
-                    (page_h - margin - 10.0).max(10.0),
-                ]);
+                match rot {
+                    90 => {
+                        content.set_text_matrix([
+                            0.0,
+                            1.0,
+                            -1.0,
+                            0.0,
+                            (x1 - margin - 10.0).max(x0 + 10.0),
+                            y0 + margin,
+                        ]);
+                    }
+                    180 => {
+                        content.set_text_matrix([
+                            -1.0,
+                            0.0,
+                            0.0,
+                            -1.0,
+                            x1 - margin,
+                            (y0 + margin + 10.0).min(y1 - 10.0),
+                        ]);
+                    }
+                    270 => {
+                        content.set_text_matrix([
+                            0.0,
+                            -1.0,
+                            1.0,
+                            0.0,
+                            x0 + margin,
+                            (y1 - margin - 10.0).max(y0 + 10.0),
+                        ]);
+                    }
+                    _ => {
+                        content.set_text_matrix([
+                            1.0,
+                            0.0,
+                            0.0,
+                            1.0,
+                            x0 + margin,
+                            (y0 + page_h - margin - 10.0).max(y0 + 10.0),
+                        ]);
+                    }
+                }
                 let (bytes, unmappable) = encode_pdf_text(header_text);
                 if unmappable > 0 {
                     tracing::warn!(
@@ -4320,7 +4597,48 @@ impl DocumentStore {
             }
 
             if !formatted_footer.is_empty() {
-                content.set_text_matrix([1.0, 0.0, 0.0, 1.0, margin, margin.max(10.0)]);
+                match rot {
+                    90 => {
+                        content.set_text_matrix([
+                            0.0,
+                            1.0,
+                            -1.0,
+                            0.0,
+                            (x0 + margin).min(x1 - 10.0),
+                            y0 + margin,
+                        ]);
+                    }
+                    180 => {
+                        content.set_text_matrix([
+                            -1.0,
+                            0.0,
+                            0.0,
+                            -1.0,
+                            x1 - margin,
+                            (y1 - margin - 10.0).max(y0 + 10.0),
+                        ]);
+                    }
+                    270 => {
+                        content.set_text_matrix([
+                            0.0,
+                            -1.0,
+                            1.0,
+                            0.0,
+                            (x1 - margin).max(x0 + 10.0),
+                            (y1 - margin - 10.0).max(y0 + 10.0),
+                        ]);
+                    }
+                    _ => {
+                        content.set_text_matrix([
+                            1.0,
+                            0.0,
+                            0.0,
+                            1.0,
+                            x0 + margin,
+                            (y0 + margin).max(y0 + 10.0),
+                        ]);
+                    }
+                }
                 let (bytes, unmappable) = encode_pdf_text(&formatted_footer);
                 if unmappable > 0 {
                     tracing::warn!(
@@ -4332,6 +4650,7 @@ impl DocumentStore {
             }
 
             content.end_text();
+            content.restore_state();
 
             let hf_stream = lopdf::Stream::new(lopdf::Dictionary::new(), content.finish().to_vec());
             let hf_id = doc.add_object(hf_stream);

@@ -54,6 +54,27 @@ pub enum PdfCommand {
         Vec<Annotation>,
         oneshot::Sender<PdfResult<String>>,
     ),
+    /// Permanently burn the `AnnotationStyle::Redact` boxes into the file.
+    ///
+    /// Destructive and irreversible: `apply_redactions` rewrites the document
+    /// so the original content stream is not recoverable from the output.
+    ApplyRedactions(
+        DocumentId,
+        Vec<Annotation>,
+        oneshot::Sender<PdfResult<String>>,
+    ),
+    /// Tell the engine that the file behind `doc_id` changed on disk, so every
+    /// worker drops its in-memory copy and reopens it on next use.
+    ///
+    /// Handled by the forwarder (it bumps a shared generation counter) rather
+    /// than by a worker, which is what makes it race-free: a worker reloads
+    /// whenever the generation it loaded no longer matches the shared one.
+    Reload(DocumentId),
+    /// Page count, per-page size and `/Rotate`, read after a reload.
+    GetPageGeometry(
+        DocumentId,
+        oneshot::Sender<PdfResult<Vec<crate::models::PageInfo>>>,
+    ),
     LoadAnnotations(
         DocumentId,
         String,
@@ -211,6 +232,9 @@ impl std::fmt::Debug for PdfCommand {
             Self::LoadDocumentMeta(..) => "LoadDocumentMeta",
             Self::Search(..) => "Search",
             Self::SaveAnnotations(..) => "SaveAnnotations",
+            Self::ApplyRedactions(..) => "ApplyRedactions",
+            Self::Reload(_) => "Reload",
+            Self::GetPageGeometry(..) => "GetPageGeometry",
             Self::LoadAnnotations(..) => "LoadAnnotations",
             Self::ExportImage(..) => "ExportImage",
             Self::ExportImages(..) => "ExportImages",

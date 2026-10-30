@@ -233,6 +233,13 @@ pub struct OpenResult {
     pub id: DocumentId,
     pub page_count: usize,
     pub page_heights: Vec<f32>,
+    /// Width of each page, in points, in the same order as `page_heights`.
+    ///
+    /// A single `max_width` cannot describe a mixed-size document: every page
+    /// was laid out (and every overlay placed) at the widest page's width, so a
+    /// portrait page in a landscape document was stretched and its annotations
+    /// landed in the wrong place.
+    pub page_widths: Vec<f32>,
     pub max_width: f32,
     /// `/Rotate` for each page, in degrees (0/90/180/270).
     ///
@@ -255,6 +262,16 @@ pub struct OpenResult {
     pub geo_annotations: Vec<GeoAnnotation>,
     /// Embedded ICC color profile and print output intent summary
     pub color_profile: Option<ColorProfileInfo>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct PageInfo {
+    /// Unrotated width in points.
+    pub width: f32,
+    /// Unrotated height in points.
+    pub height: f32,
+    /// The page's own `/Rotate`, in degrees (0/90/180/270).
+    pub rotation: i32,
 }
 
 #[derive(Debug, Clone)]
@@ -447,6 +464,7 @@ pub enum ReadingMode {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
 pub struct AppSettings {
     pub theme: AppTheme,
     pub cache_size: usize,
@@ -539,7 +557,7 @@ pub struct SearchResultItem {
     pub height: f32,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub enum AnnotationStyle {
     Text {
         text: String,
@@ -547,6 +565,16 @@ pub enum AnnotationStyle {
         font_size: u32,
     },
     Highlight {
+        color: String,
+    },
+    /// A rule under the selected text (`/Underline`), distinct from a line
+    /// annotation: it is horizontal, it spans the drag box, and other readers
+    /// render it as text markup.
+    Underline {
+        color: String,
+    },
+    /// A rule through the middle of the selected text (`/StrikeOut`).
+    Strikeout {
         color: String,
     },
     Rectangle {
@@ -576,7 +604,7 @@ pub enum AnnotationStyle {
     },
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Annotation {
     pub id: u64,
     pub page: usize,
@@ -754,6 +782,21 @@ pub fn next_doc_id() -> DocumentId {
 
 pub fn next_annotation_id() -> u64 {
     NEXT_ANN_ID.fetch_add(1, Ordering::Relaxed)
+}
+
+/// Whether two path strings refer to the same file.
+///
+/// Tab lookup used a raw `==`, so `C:\a.pdf` and `c:\A.pdf` opened twice (and
+/// an output path that differed only in case did not find the tab it was
+/// already showing). Windows paths are case-insensitive; elsewhere they are
+/// not, so only fold case there. Both separators are normalised as well, since
+/// the same file can be spelled with either.
+pub fn paths_equal(a: &str, b: &str) -> bool {
+    let normalise = |s: &str| -> String {
+        let s = s.replace('/', "\\");
+        if cfg!(windows) { s.to_lowercase() } else { s }
+    };
+    normalise(a) == normalise(b)
 }
 
 impl DocumentTab {
@@ -1630,6 +1673,7 @@ mod tests {
             id: DocumentId(1),
             page_count: 10,
             page_heights: vec![100.0; 10],
+            page_widths: vec![600.0; 10],
             max_width: 800.0,
             page_rotations: vec![0; 10],
             outline: vec![],

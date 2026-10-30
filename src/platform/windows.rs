@@ -129,11 +129,14 @@ pub fn ensure_single_instance(args: &[String]) -> Result<bool, Box<dyn std::erro
             let spawned = std::thread::Builder::new()
                 .name("pdfbull-single-instance".to_string())
                 .spawn(move || {
-                    use std::io::{BufRead, BufReader};
+                    use std::io::{BufRead, BufReader, Read};
                     for conn in listener.incoming() {
                         let Ok(stream) = conn else { continue };
                         let mut line = String::new();
-                        if BufReader::new(stream).read_line(&mut line).is_err() {
+                        if BufReader::new(stream.take(64 * 1024))
+                            .read_line(&mut line)
+                            .is_err()
+                        {
                             continue;
                         }
                         match serde_json::from_str::<Vec<String>>(line.trim()) {

@@ -760,6 +760,7 @@ fn test_dialogs_without_configuration_have_no_apply_button() {
     assert!(!dialog_has_apply(&ActiveDialog::Settings));
     assert!(!dialog_has_apply(&ActiveDialog::Signature));
     assert!(!dialog_has_apply(&ActiveDialog::PageOrganizer));
+    assert!(!dialog_has_apply(&ActiveDialog::About));
 }
 
 #[test]

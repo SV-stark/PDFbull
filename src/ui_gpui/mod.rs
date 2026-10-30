@@ -45,7 +45,28 @@ pub fn run_gpui_app() {
                     let view = cx.new(|cx| {
                         let mut v = app_view::PdfbullView::new(window, cx);
                         if let Some(ref path) = initial_file_clone {
-                            v.open_pdf_path(path, cx);
+                            v.open_pdf_path(path, None, cx);
+                        } else if v.dialogs.settings.restore_session {
+                            if let Some(session) = crate::storage::load_session() {
+                                let mut opened = false;
+                                for entry in session.open_tabs {
+                                    let path_buf: std::path::PathBuf = entry.into();
+                                    if path_buf.exists() {
+                                        v.open_pdf_path(&path_buf.to_string_lossy(), None, cx);
+                                        opened = true;
+                                    }
+                                }
+                                if opened && session.active_tab < v.tabs.tabs.len() {
+                                    v.tabs.active_tab_index = session.active_tab;
+                                    v.sync_viewport_to_active_tab(cx);
+                                }
+                            }
+                        } else if v.dialogs.settings.remember_last_file {
+                            for recent in crate::storage::load_recent_files().iter().take(1) {
+                                if std::path::Path::new(&recent.path).exists() {
+                                    v.open_pdf_path(&recent.path, None, cx);
+                                }
+                            }
                         }
                         v
                     });
@@ -86,7 +107,7 @@ pub fn run_gpui_app() {
                             }
                             view.update(cx, |view, cx| {
                                 for path in &paths {
-                                    view.open_pdf_path(path, cx);
+                                    view.open_pdf_path(path, None, cx);
                                 }
                             });
                         }
