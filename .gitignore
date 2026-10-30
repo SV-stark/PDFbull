@@ -55,6 +55,7 @@ nul
 # Antigravity CLI
 .antigravity/
 .antigravitycli/
+.agents/skills/
 Vespetrel/
 Home.png
 reader.png
