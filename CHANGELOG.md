@@ -5,6 +5,22 @@ All notable changes to the PDFbull project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.19.5] - 2026-10-30
+
+### Fixed
+- **Text Drag Selection Line Clustering (`src/ui_gpui/app_view.rs`)**:
+  - Implemented baseline tolerance clustering (`0.5 * line_height`) in `join_selected_text_items` to group glyphs and spans on the same line despite subpixel baseline jitter.
+  - Sorted clustered lines by horizontal `left` position, preventing word and token reordering or scrambling during multi-column and inline text drags.
+- **Per-Page Rotation Geometry (`src/ui_gpui/app_view.rs`)**:
+  - Replaced fallback unrotated document dimensions with per-page unrotated geometry (`viewport.page_unrotated_size(page_idx)`) when mapping mouse selection coordinates and committing annotations on rotated and mixed-orientation pages.
+- **Canvas Drag Continuity & Release Precision (`src/ui_gpui/canvas.rs`)**:
+  - Removed restrictive mouse button filter in `container_move_listener` to ensure continuous drag selection tracking when dragging across card margins or viewport gutters.
+  - Accurately passed event positions from `MouseUpEvent` across both page cards and canvas container listeners, resolving dropped text selection commitments on fast drag-and-release gestures.
+- **Full-Page Selection Bounding (`src/ui_gpui/app_view.rs`)**:
+  - Fixed `Ctrl+A` (Select All) viewport positioning by deriving `selection_start` and `selection_end` from the active page card's origin and display dimensions, ensuring selection quads visually wrap the target page card.
+- **Text Span Advance Resilience (`src/pdf_engine.rs`)**:
+  - Added glyph advance fallback estimation (`0.5 * span.font_size`) when PDF text operators omit or zero out character advances, ensuring every extractable glyph generates a valid bounding box and highlight quad.
+
 ## [0.19.4] - 2026-10-29
 
 ### Fixed
