@@ -98,6 +98,30 @@ fn join_selected_text_items_ignores_empty_input() {
 }
 
 #[test]
+fn join_selected_text_items_handles_baseline_jitter_on_same_line() {
+    // Glyphs or words on the same line frequently have minor floating-point
+    // baseline variance (e.g. 49.9 vs 50.0). Line clustering must keep them
+    // on the same line and sort horizontally by x rather than inverting them.
+    let items = vec![
+        TextItem {
+            text: "World".into(),
+            x: 60.0,
+            y: 49.9,
+            width: 45.0,
+            height: 12.0,
+        },
+        TextItem {
+            text: "Hello".into(),
+            x: 10.0,
+            y: 50.0,
+            width: 40.0,
+            height: 12.0,
+        },
+    ];
+    assert_eq!(join_selected_text_items(&items), "Hello World");
+}
+
+#[test]
 fn text_selection_highlight_coordinate_mapping_matches_items() {
     use pdfbull::ui_gpui::canvas::DocumentViewport;
     let mut viewport = DocumentViewport::new();

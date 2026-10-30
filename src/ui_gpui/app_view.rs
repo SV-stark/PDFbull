@@ -998,16 +998,34 @@ impl PdfbullView {
                         // Stored as an `Arc` so paint closures can share it
                         // instead of deep-copying the whole text layer per card
                         // per frame.
-                        view.viewport
-                            .text_cache
-                            .insert(page_idx, std::sync::Arc::new(items));
+                        let arc_items = std::sync::Arc::new(items);
+                        view.viewport.text_cache.insert(page_idx, arc_items.clone());
                         // If there is an active selection or a completed drag on this page awaiting extraction,
                         // re-run extraction now so that selected_text and clipboard are populated promptly.
-                        if view.viewport.selection_page == Some(page_idx)
-                            && let (Some(start), Some(end)) =
+                        if view.viewport.selection_page == Some(page_idx) {
+                            if let (Some(start), Some(end)) =
                                 (view.viewport.selection_start, view.viewport.selection_end)
-                        {
-                            view.extract_selected_text(page_idx, start, end, cx);
+                            {
+                                view.extract_selected_text(page_idx, start, end, cx);
+                            } else {
+                                let origin = view
+                                    .viewport
+                                    .page_origins
+                                    .read()
+                                    .ok()
+                                    .and_then(|m| m.get(&page_idx).copied())
+                                    .unwrap_or(Point::new(px(0.0), px(0.0)));
+                                let (card_w, card_h) = view.viewport.display_size(page_idx);
+                                let scaled_w = px(card_w * view.viewport.zoom);
+                                let scaled_h = px(card_h * view.viewport.zoom);
+                                view.viewport.selection_start = Some(origin);
+                                view.viewport.selection_end =
+                                    Some(Point::new(origin.x + scaled_w, origin.y + scaled_h));
+                                let combined =
+                                    crate::ui_gpui::canvas::join_selected_text_items(&arc_items);
+                                view.viewport.selected_text = Some(combined.clone());
+                                cx.write_to_clipboard(ClipboardItem::new_string(combined));
+                            }
                         }
                         cx.notify();
                     }
@@ -1100,13 +1118,14 @@ impl PdfbullView {
         // page rotation applied; the text layer is unrotated. Pull the selection
         // back before hit-testing, or on a rotated page the words under the
         // cursor are compared against a transposed box and nothing is selected.
+        let (unrotated_w, unrotated_h) = self.viewport.page_unrotated_size(page_idx);
         let (min_x, min_y, sel_w, sel_h) = super::canvas::rotated_rect_to_overlay_space(
             min_x,
             min_y,
             max_x - min_x,
             max_y - min_y,
-            self.viewport.page_width,
-            self.viewport.page_height,
+            unrotated_w,
+            unrotated_h,
             self.viewport.effective_rotation(page_idx),
         );
         let (min_x, max_x) = (min_x, min_x + sel_w);
@@ -1132,6 +1151,8 @@ impl PdfbullView {
                 "Selected and copied {count} character{} to clipboard",
                 if count == 1 { "" } else { "s" }
             ));
+        } else {
+            self.viewport.selected_text = None;
         }
     }
 
@@ -3516,11 +3537,19 @@ impl PdfbullView {
                             self.viewport.selected_text = Some(combined.clone());
                             cx.write_to_clipboard(ClipboardItem::new_string(combined.clone()));
                             self.viewport.selection_page = Some(page_idx);
-                            self.viewport.selection_start = Some(Point::new(px(0.0), px(0.0)));
-                            self.viewport.selection_end = Some(Point::new(
-                                px(self.viewport.page_width * self.viewport.zoom),
-                                px(self.viewport.page_height * self.viewport.zoom),
-                            ));
+                            let origin = self
+                                .viewport
+                                .page_origins
+                                .read()
+                                .ok()
+                                .and_then(|m| m.get(&page_idx).copied())
+                                .unwrap_or(Point::new(px(0.0), px(0.0)));
+                            let (card_w, card_h) = self.viewport.display_size(page_idx);
+                            let scaled_w = px(card_w * self.viewport.zoom);
+                            let scaled_h = px(card_h * self.viewport.zoom);
+                            self.viewport.selection_start = Some(origin);
+                            self.viewport.selection_end =
+                                Some(Point::new(origin.x + scaled_w, origin.y + scaled_h));
                             self.status_message = Some(format!(
                                 "Selected all text ({} chars) on page {}",
                                 combined.chars().count(),
@@ -3529,6 +3558,7 @@ impl PdfbullView {
                             cx.notify();
                         }
                     } else if let Some(doc_id) = self.active_doc_id {
+                        self.viewport.selection_page = Some(page_idx);
                         self.request_text_items(doc_id, page_idx, cx);
                     }
                 }
@@ -4046,7 +4076,7 @@ impl Render for PdfbullView {
                         cx.notify();
                     }
                 },
-                |this, _page_idx, window, cx| {
+                |this, _page_idx, pos, window, cx| {
                     // Bug 3 fix: gate only on is_selecting; do NOT check selection_page ==
                     // Some(_page_idx).  When mousedown is on page 3 and mouseup fires on
                     // page 4, _page_idx==4 but selection_page==Some(3) — the old guard
@@ -4054,13 +4084,9 @@ impl Render for PdfbullView {
                     // selection_page so text extraction and annotation coordinates are
                     // relative to the correct page origin.
                     if this.viewport.is_selecting {
-                        // Capture the final cursor location from the window, even when
-                        // intermediate mouse-move events never fired (which would leave
-                        // selection_end stuck at the start and turn the drag into a
-                        // click). This is the robust fallback for the "no marquee /
-                        // no selection" case on platforms where per-element move
-                        // events are not delivered during a press-drag.
-                        this.viewport.selection_end = Some(window.mouse_position());
+                        // Capture the final cursor location directly from the release event,
+                        // with window.mouse_position() as fallback if needed.
+                        this.viewport.selection_end = Some(pos);
                         // Always clear is_selecting first so no edge-case can leave the
                         // viewport stuck in selecting mode.
                         this.viewport.is_selecting = false;
@@ -4104,8 +4130,8 @@ impl Render for PdfbullView {
                                     let bx2 = ((end.x - origin.x) / px(1.0)) / zoom;
                                     let by2 = ((end.y - origin.y) / px(1.0)) / zoom;
                                     let rotation = this.viewport.effective_rotation(commit_page);
-                                    let page_w = this.viewport.page_width;
-                                    let page_h = this.viewport.page_height;
+                                    let (page_w, page_h) =
+                                        this.viewport.page_unrotated_size(commit_page);
 
                                     // The drag is measured in the *rotated* bitmap,
                                     // but annotations are stored in unrotated space,

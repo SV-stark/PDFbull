@@ -29,14 +29,17 @@ const MAX_CARD_WINDOW: usize = 48;
 /// `page_width`/`page_height` are the *unrotated* page dimensions; the result
 /// is expressed in the rotated frame, so its extents swap for 90/270.
 /// Join a slice of text items into the text the user actually selected,
-/// mirroring zpdf's `spans_to_text` word-gap heuristic: glyphs on the same
-/// baseline are concatenated directly when the gap between them is small
-/// (inside a word) and separated by a space otherwise. Newlines separate
-/// lines whose baselines differ by more than half a line.
+/// mirroring zpdf's `spans_to_text` word-gap heuristic: items are clustered
+/// into baseline lines using a half-line tolerance and sorted horizontally
+/// by x to prevent floating-point baseline jitter from scrambling word order.
+/// Glyphs on the same baseline are concatenated directly when the gap between
+/// them is small (inside a word) and separated by a space otherwise. Newlines
+/// separate distinct lines.
 pub fn join_selected_text_items(items: &[crate::models::TextItem]) -> String {
     if items.is_empty() {
         return String::new();
     }
+    // 1. Initial sort by y (approximate vertical line order).
     let mut sorted: Vec<&crate::models::TextItem> = items.iter().collect();
     sorted.sort_by(|a, b| {
         a.y.partial_cmp(&b.y)
@@ -44,17 +47,37 @@ pub fn join_selected_text_items(items: &[crate::models::TextItem]) -> String {
             .then(a.x.partial_cmp(&b.x).unwrap_or(std::cmp::Ordering::Equal))
     });
 
-    let mut combined = String::new();
-    let mut current_y: Option<f32> = None;
-    let mut prev_end_x: Option<f32> = None;
+    // 2. Cluster into lines based on baseline tolerance.
+    let mut lines: Vec<Vec<&crate::models::TextItem>> = Vec::new();
     for item in sorted {
-        if let Some(cy) = current_y {
-            let line_tol = item.height * 0.5;
-            if (item.y - cy).abs() > line_tol {
-                if !combined.is_empty() && !combined.ends_with('\n') {
-                    combined.push('\n');
-                }
-            } else if let Some(px) = prev_end_x {
+        let line_tol = item.height * 0.5;
+        let mut added = false;
+        if let Some(last_line) = lines.last_mut().filter(|l| {
+            l.first()
+                .is_some_and(|first| (item.y - first.y).abs() <= line_tol)
+        }) {
+            last_line.push(item);
+            added = true;
+        }
+        if !added {
+            lines.push(vec![item]);
+        }
+    }
+
+    // 3. Within each line, sort strictly by x (horizontal reading order).
+    for line in lines.iter_mut() {
+        line.sort_by(|a, b| a.x.partial_cmp(&b.x).unwrap_or(std::cmp::Ordering::Equal));
+    }
+
+    // 4. Concatenate words with spaces and lines with newlines.
+    let mut combined = String::new();
+    for (line_idx, line) in lines.iter().enumerate() {
+        if line_idx > 0 && !combined.is_empty() && !combined.ends_with('\n') {
+            combined.push('\n');
+        }
+        let mut prev_end_x: Option<f32> = None;
+        for item in line {
+            if let Some(px) = prev_end_x {
                 let gap = item.x - px;
                 let needs_space = gap > item.height * 0.25
                     && !combined.ends_with(char::is_whitespace)
@@ -63,10 +86,9 @@ pub fn join_selected_text_items(items: &[crate::models::TextItem]) -> String {
                     combined.push(' ');
                 }
             }
+            combined.push_str(&item.text);
+            prev_end_x = Some(item.x + item.width);
         }
-        combined.push_str(&item.text);
-        current_y = Some(item.y);
-        prev_end_x = Some(item.x + item.width);
     }
     combined
 }
@@ -811,7 +833,9 @@ impl DocumentViewport {
         on_drag_move: impl Fn(&mut V, usize, Point<Pixels>, &mut Window, &mut Context<V>)
         + 'static
         + Copy,
-        on_drag_end: impl Fn(&mut V, usize, &mut Window, &mut Context<V>) + 'static + Copy,
+        on_drag_end: impl Fn(&mut V, usize, Point<Pixels>, &mut Window, &mut Context<V>)
+        + 'static
+        + Copy,
     ) -> AnyElement {
         let primary = cx.theme().primary;
         let border = cx.theme().border;
@@ -831,8 +855,8 @@ impl DocumentViewport {
         let down_listener = cx.listener(move |v, event: &MouseDownEvent, w, cx| {
             on_drag_start(v, page_idx, event.position, w, cx);
         });
-        let up_listener = cx.listener(move |v, _event: &MouseUpEvent, w, cx| {
-            on_drag_end(v, page_idx, w, cx);
+        let up_listener = cx.listener(move |v, event: &MouseUpEvent, w, cx| {
+            on_drag_end(v, page_idx, event.position, w, cx);
         });
 
         let is_sel_page = self.selection_page == Some(page_idx);
@@ -1343,7 +1367,9 @@ impl DocumentViewport {
         on_drag_move: impl Fn(&mut V, usize, Point<Pixels>, &mut Window, &mut Context<V>)
         + 'static
         + Copy,
-        on_drag_end: impl Fn(&mut V, usize, &mut Window, &mut Context<V>) + 'static + Copy,
+        on_drag_end: impl Fn(&mut V, usize, Point<Pixels>, &mut Window, &mut Context<V>)
+        + 'static
+        + Copy,
         on_scroll_wheel: impl Fn(&mut V, &ScrollEvent, &mut Window, &mut Context<V>) + 'static + Copy,
     ) -> AnyElement {
         let muted = cx.theme().muted;
@@ -1359,12 +1385,10 @@ impl DocumentViewport {
         // onto page M still updates selection_end and commits on release.
         // We pass page_idx=0 as a dummy; both closures ignore _page_idx (Bug 2/3 fixes).
         let container_move_listener = cx.listener(move |v, event: &MouseMoveEvent, w, cx| {
-            if event.pressed_button == Some(MouseButton::Left) {
-                on_drag_move(v, 0, event.position, w, cx);
-            }
+            on_drag_move(v, 0, event.position, w, cx);
         });
-        let container_up_listener = cx.listener(move |v, _event: &MouseUpEvent, w, cx| {
-            on_drag_end(v, 0, w, cx);
+        let container_up_listener = cx.listener(move |v, event: &MouseUpEvent, w, cx| {
+            on_drag_end(v, 0, event.position, w, cx);
         });
 
         match self.layout_mode {

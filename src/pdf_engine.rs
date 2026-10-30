@@ -2177,7 +2177,11 @@ impl DocumentStore {
                 continue;
             }
             let char_count = span.text.chars().count();
-            let total_adv = span.advance.abs() as f32;
+            let total_adv = if span.advance.abs() > 0.01 {
+                span.advance.abs() as f32
+            } else {
+                span.size * 0.5 * char_count.max(1) as f32
+            };
             let char_step = if char_count > 0 {
                 total_adv / char_count as f32
             } else {
