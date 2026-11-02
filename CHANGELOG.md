@@ -5,6 +5,17 @@ All notable changes to the PDFbull project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.20.0] - 2026-11-03
+
+### Changed
+- **Architectural Migration to `gpui-fast` + `gpui-kit` 0.9.0**:
+  - Upgraded `gpui-kit` to `0.9.0` with the `gpui-fast` feature activated.
+  - Adopted `gpui-fast` rendering engine and layout optimizations across the desktop application layer (`gpui-fast-platform` / `gpui-fast-windows`).
+  - Retained single-dependency architecture adhering strictly to GPUI Kit conventions (`use gpui_kit::*`).
+- **Dependency Refresh (`cargo update`)**:
+  - Locked latest compatible versions across the dependency graph including `winprint 0.3.1`, `encoding_rs 0.8.44`, `jiff 0.2.39`, `tokio`, and `cc`.
+  - Added project-local Cargo build configuration in `.cargo/config.toml` ensuring smooth C/C++ compilation with `cc-rs` under Windows MSVC toolchains.
+
 ## [0.19.6] - 2026-10-30
 
 ### Fixed
