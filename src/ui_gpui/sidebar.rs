@@ -273,8 +273,10 @@ impl SidebarState {
     /// recent files) applies the same rule. A directory or a non-PDF produced
     /// a permanent unrenderable tab before this was centralised.
     pub fn is_openable_pdf(path: &std::path::Path) -> bool {
-        path.extension()
+        (path
+            .extension()
             .is_some_and(|e| e.eq_ignore_ascii_case("pdf"))
+            || crate::comic::is_comic_or_image(path))
             && path.is_file()
     }
 

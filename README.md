@@ -85,6 +85,19 @@ Timings measured across diverse document scales on Windows 11:
 - **Developer Log Drawer**: Bottom sliding console with severity log level filters (All, Info, Warn, Error), clipboard copy, and clear tools.
 - **Classic Iced Fallback**: Launch with `pdfbull --iced` at any time to access the legacy Iced UI backend.
 
+### ⌨️ Keyboard-First Reading
+- **Command Palette** (`Ctrl + K`): fuzzy-search and run any command — navigation, zoom, layout, tools, export.
+- **Fit Width / Fit Page**: zoom follows the window as it resizes; status-bar buttons and `Ctrl + 2` / `Ctrl + 3`.
+- **Presentation Mode** (`F5`): full screen, black surround, one page at a time, fitted to the screen.
+- **Distraction-Free Full Screen** (`F11`): hides the ribbon, tabs, sidebar and status bar.
+- **Go To Page, Back & Forward**: jump anywhere with `G`, return with `Alt + ←`.
+- **Vim-style keys**: `J`/`K` scroll, `N`/`P` turn pages, `C` continuous, `B` book view, `Z` cycle zoom.
+
+### 📚 Comic Books & Pictures
+- **Open `.cbz` comics and pictures** (PNG, JPEG, WebP, BMP, QOI) exactly like PDFs — thumbnails, two-page book view, presentation and zoom all work.
+- **Natural page order**: `page2.jpg` comes before `page10.jpg`.
+- **Lossless**: JPEG pages are shown untouched; other formats are stored losslessly. The converted copy is cached, so reopening is instant.
+
 ### 📊 Table Extraction & Data Export (Powered by `zpdf::detect_tables`)
 - **Automatic Grid Detection**: Leverages `zpdf` table structure detection algorithms to locate cell grids, borders, and text spans.
 - **Interactive Bounding Boxes**: Displays interactive vector bounding boxes around detected tables directly on rendered page canvases.
@@ -182,11 +195,26 @@ Timings measured across diverse document scales on Windows 11:
 
 | Action | Shortcut |
 | :--- | :--- |
-| **Document Management** | `Ctrl + O` (Open), `Ctrl + S` (Save), `Ctrl + E` (Export Image) |
-| **View Control** | `Ctrl + B` (Sidebar), `F11` (Fullscreen), `Ctrl + 0` (Reset Zoom) |
-| **Navigation** | `Arrow Keys`, `PgUp/PgDn`, `Home/End`, `Space` |
-| **Speed Dial (Tools)** | `H` (Highlight), `R` (Rectangle), `T` (Text) |
+| **Command Palette** | `Ctrl + K` or `Ctrl + Shift + P` — search every command by name |
+| **Document Management** | `Ctrl + O` (Open), `Ctrl + S` (Save), `Ctrl + P` (Print), `Ctrl + W` (Close tab), `R` (Reload) |
+| **Tabs** | `Ctrl + Tab` / `Ctrl + Shift + Tab`, `Ctrl + PgDn` / `Ctrl + PgUp` |
+| **Navigation** | `J` / `K` or arrows (scroll), `N` / `P`, `Space` / `Shift + Space`, `PgUp/PgDn`, `Home/End` |
+| **Go To Page** | `G` or `Ctrl + G` (type a number, `first` or `last`) |
+| **Back / Forward** | `Alt + ←` / `Alt + →`, `Backspace` |
+| **Zoom** | `Ctrl + 1` / `Ctrl + 0` (100%), `Ctrl + 2` (Fit width), `Ctrl + 3` (Fit page), `Z` (cycle), `+` / `-` |
+| **Layout** | `C` (Continuous ↔ Single page), `B` (Book / two-page view) |
+| **Reading Modes** | `F5` (Presentation), `F11` (Full screen), `Esc` (leave), `I` (Invert colours) |
+| **View Control** | `Ctrl + B` / `F12` (Sidebar), `Ctrl + F` or `/` (Find), `Ctrl + Shift + -` / `+` (Rotate view) |
+| **Speed Dial (Tools)** | `H` (Highlight), `T` (Text) |
 | **History** | `Ctrl + Z` (Undo), `Ctrl + Y` (Redo) |
+
+### Command line
+
+```bash
+pdfbull book.pdf -page 12          # open at page 12
+pdfbull slides.pdf -presentation   # start presenting
+pdfbull comic.cbz -fullscreen      # start in full screen
+```
 
 ---
 

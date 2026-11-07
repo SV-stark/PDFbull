@@ -5,6 +5,26 @@ All notable changes to the PDFbull project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.20.1] - 2026-11-07
+
+### Fixed
+- **First Page Rendering Race Condition (`src/ui_gpui/app_view.rs`)**:
+  - Removed premature synchronous `self.render_needed_pages(cx)` call executed prior to completion of `PdfCommand::Open`.
+  - Prevented secondary worker threads from failing page 0 with `DocumentNotFound` and leaving page 0 stuck in `rendering_pages` or permanently blank.
+  - Added defensive `rendering_pages.clear()` reset on document open and wired up `failed_pages` state tracking.
+- **Startup Crash on GPUI Executor (`src/ui_gpui/app_view.rs`)**:
+  - Replaced `tokio::time::sleep` in the background autosave loop with GPUI's `cx.background_executor().timer(...)`.
+  - Resolved non-unwinding SEH crashes across `CallWindowProcW` caused by missing ambient Tokio 1.x runtime/reactor on GPUI executor threads.
+- **Tolerant Stream Content Decoding (`src/pdf_engine.rs`)**:
+  - Replaced strict `doc.page_content_bytes(&page)` with `doc.page_content_with_diagnostics(&page)`, allowing partial stream recovery on non-fatal stream errors without aborting page rasterization.
+- **Release Build Linker Heap Exhaustion (`Cargo.toml`)**:
+  - Switched release profile from `lto = "fat"` to `lto = "thin"`, preventing LLVM linker out-of-memory errors (`STATUS_STACK_BUFFER_OVERRUN`) on whole-program optimization.
+
+### Added
+- **Keyboard-First Reader & Navigation (`src/ui_gpui/reader.rs`, `src/ui_gpui/app_view.rs`)**:
+  - Integrated command palette (`Ctrl+P` / `Ctrl+Shift+P`), Go to Page dialog (`Ctrl+G`), presentation mode (`F5`), and quick jump history.
+  - Implemented responsive fit modes (`Fit Width`, `Fit Page`, `Fit Height`).
+
 ## [0.20.0] - 2026-11-03
 
 ### Changed

@@ -39,6 +39,7 @@ fn prune_old_logs(config_dir: &std::path::Path) {
 }
 
 fn main() {
+    pdfbull::startup_report::begin();
     let config_dir = pdfbull::storage::get_config_dir();
     let _ = std::fs::create_dir_all(&config_dir);
     let panic_path = config_dir.join("panic_out.log");
@@ -134,6 +135,13 @@ fn main() {
         println!("\nOptions:");
         println!("  -h, --help       Print help information");
         println!("  -V, --version    Print version information");
+        println!("  -page N          Open the file at page N");
+        println!("  -presentation    Start in presentation mode (F5)");
+        println!("  -fullscreen      Start in full screen (F11)");
+        println!(
+            "  --startup-report Time the launch to the first page, print memory use, then exit"
+        );
+        println!("\nFILE may be a PDF, a comic book (.cbz) or a picture (PNG, JPEG, WebP, BMP).");
         return;
     }
     if args.iter().any(|a| a == "--version" || a == "-V") {
@@ -142,7 +150,10 @@ fn main() {
     }
 
     // Feature 10: Deep Windows Integration (Single Instance Mode)
-    if let Ok(is_secondary) = platform::ensure_single_instance(&args)
+    // A `--startup-report` run times its own launch, so it never hands its
+    // file to an already-running window.
+    if !pdfbull::startup_report::requested()
+        && let Ok(is_secondary) = platform::ensure_single_instance(&args)
         && is_secondary
     {
         tracing::info!("Sent arguments to main instance. Exiting.");

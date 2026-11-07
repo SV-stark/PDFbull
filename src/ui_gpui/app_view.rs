@@ -9,6 +9,7 @@ use super::{
     canvas::DocumentViewport,
     dialogs::{ActiveDialog, DialogAction, DialogsState},
     log_console::{LogAction, LogConsoleState},
+    reader::{ReaderCommand, ReaderState, SavedView, ZoomMode},
     ribbon::{PageLayoutMode, RibbonAction, RibbonState},
     sidebar::{SidebarAction, SidebarState},
     tabs::{DocumentTab, TabAction, TabsState},
@@ -73,8 +74,15 @@ pub struct PdfbullView {
     /// document rather than re-read on activation.
     pub doc_geometry: std::collections::HashMap<crate::models::DocumentId, DocGeometry>,
     pub active_search_seq: u64,
+    /// Keyboard-first reading: fit modes, presentation, history, palette.
+    pub reader: ReaderState,
+    /// For tabs opened from a comic book or picture: the user's own file.
+    /// The tab's `path` is the converted PDF copy the engine reads.
+    pub tab_sources: std::collections::HashMap<crate::models::DocumentId, std::path::PathBuf>,
     /// Keeps `sidebar.search_query` in sync with the sidebar's search editor.
     _search_sub: Option<Subscription>,
+    /// Enter in the go-to-page box and the command palette.
+    _reader_subs: Vec<Subscription>,
 }
 
 /// Upper bound on in-document search hits kept in memory and painted.
@@ -145,6 +153,9 @@ impl PdfbullView {
     pub fn set_layout_mode(&mut self, mode: PageLayoutMode, cx: &mut Context<Self>) {
         self.ribbon.layout_mode = mode;
         self.viewport.layout_mode = mode;
+        // A spread is twice as wide as a page, so a fit mode must re-fit.
+        self.reader.last_fit_size = (0.0, 0.0);
+        self.apply_zoom_mode(cx);
         self.render_needed_pages(cx);
         cx.notify();
     }
@@ -201,7 +212,11 @@ impl PdfbullView {
         // periodically flushes modifications of the active document to disk.
         _cx.spawn(async move |this, cx| {
             loop {
-                tokio::time::sleep(std::time::Duration::from_secs(30)).await;
+                // gpui's own timer: there is no Tokio runtime on the UI thread, and
+                // Tokio's sleep panicked here a second after launch.
+                cx.background_executor()
+                    .timer(std::time::Duration::from_secs(30))
+                    .await;
                 let _ = this.update(cx, |view, cx| {
                     if view.dialogs.settings.auto_save {
                         let active_idx = view.tabs.active_tab_index;
@@ -218,6 +233,34 @@ impl PdfbullView {
             }
         })
         .detach();
+
+        let reader = ReaderState::new_in(_window, _cx);
+        let mut _reader_subs = Vec::new();
+        if let Some(input) = reader.goto_input.as_ref() {
+            _reader_subs.push(_cx.subscribe_in(
+                input,
+                _window,
+                |this, _, ev: &InputEvent, window, cx| {
+                    if matches!(ev, InputEvent::PressEnter { .. }) {
+                        this.commit_goto(window, cx);
+                    }
+                },
+            ));
+        }
+        if let Some(input) = reader.palette_input.as_ref() {
+            _reader_subs.push(_cx.subscribe_in(
+                input,
+                _window,
+                |this, _, ev: &InputEvent, window, cx| match ev {
+                    InputEvent::PressEnter { .. } => this.run_selected_palette_entry(window, cx),
+                    InputEvent::Change => {
+                        this.reader.palette_selected = 0;
+                        cx.notify();
+                    }
+                    _ => {}
+                },
+            ));
+        }
 
         Self {
             engine: crate::engine::spawn_engine_thread(64, settings.max_cache_memory as u64),
@@ -238,7 +281,10 @@ impl PdfbullView {
             doc_geometry: std::collections::HashMap::new(),
             annotations_by_doc: std::collections::HashMap::new(),
             active_search_seq: 0,
+            reader,
+            tab_sources: std::collections::HashMap::new(),
             _search_sub,
+            _reader_subs,
         }
     }
 
@@ -252,16 +298,19 @@ impl PdfbullView {
             .tabs
             .iter()
             .filter_map(|t| {
-                t.path.as_ref().map(|p| {
-                    crate::models::SessionTabEntry::Detailed(crate::models::TabSession {
-                        path: p.to_string_lossy().to_string(),
-                        current_page: self.viewport.current_page,
-                        zoom: self.viewport.zoom,
-                        viewport_y: self.viewport.scroll_handle.offset().y.into(),
-                        rotation: self.viewport.rotation as i32,
-                        auto_crop: false,
+                t.doc_id
+                    .and_then(|id| self.tab_sources.get(&id))
+                    .or(t.path.as_ref())
+                    .map(|p| {
+                        crate::models::SessionTabEntry::Detailed(crate::models::TabSession {
+                            path: p.to_string_lossy().to_string(),
+                            current_page: self.viewport.current_page,
+                            zoom: self.viewport.zoom,
+                            viewport_y: self.viewport.scroll_handle.offset().y.into(),
+                            rotation: self.viewport.rotation as i32,
+                            auto_crop: false,
+                        })
                     })
-                })
             })
             .collect();
         crate::storage::save_session(&crate::models::SessionData {
@@ -358,11 +407,80 @@ impl PdfbullView {
         // on the command line) created a tab that could never render and
         // reported nothing but a `tracing::error!` the user never sees.
         if !SidebarState::is_openable_pdf(&path) {
-            self.status_message = Some(format!("Skipped {}: not a PDF file.", path.display()));
-            tracing::warn!("Refusing to open non-PDF path: {}", path.display());
+            self.status_message = Some(format!(
+                "Skipped {}: not a PDF, comic book or picture.",
+                path.display()
+            ));
+            tracing::warn!("Refusing to open unsupported path: {}", path.display());
             cx.notify();
             return;
         }
+        if crate::comic::is_comic_or_image(&path) {
+            self.open_comic_or_image(path, cx);
+            return;
+        }
+        self.open_pdf_path_as(path_str, password, None, cx);
+    }
+
+    /// Open a comic book (`.cbz`) or a picture. The file is converted to an
+    /// image-only PDF on a background thread (once; the copy is cached), and
+    /// that copy is opened under the original file's name.
+    pub fn open_comic_or_image(&mut self, source: std::path::PathBuf, cx: &mut Context<Self>) {
+        if let Some(idx) = self.tabs.tabs.iter().position(|t| {
+            t.doc_id
+                .and_then(|id| self.tab_sources.get(&id))
+                .is_some_and(|p| {
+                    crate::models::paths_equal(&p.to_string_lossy(), &source.to_string_lossy())
+                })
+        }) {
+            self.tabs.active_tab_index = idx;
+            self.sync_viewport_to_active_tab(cx);
+            cx.notify();
+            return;
+        }
+        let name = source
+            .file_name()
+            .map(|n| n.to_string_lossy().to_string())
+            .unwrap_or_default();
+        self.status_message = Some(format!("Opening {name}…"));
+        cx.notify();
+        cx.spawn(async move |this, cx| {
+            let src = source.clone();
+            let result = cx
+                .background_spawn(async move { crate::comic::ensure_converted(&src) })
+                .await;
+            let _ = this.update(cx, |view, cx| {
+                match result {
+                    Ok(pdf_path) => {
+                        view.open_pdf_path_as(
+                            &pdf_path.to_string_lossy(),
+                            None,
+                            Some(source.clone()),
+                            cx,
+                        );
+                        view.status_message = Some(format!("Opened {name}."));
+                    }
+                    Err(e) => {
+                        tracing::error!("Failed to open {}: {e}", source.display());
+                        view.status_message = Some(format!("Could not open {name}: {e}"));
+                    }
+                }
+                cx.notify();
+            });
+        })
+        .detach();
+    }
+
+    /// Open the PDF at `path_str`. `source` is the comic or picture it was
+    /// converted from, if any; the tab and recent-files list then show that.
+    pub fn open_pdf_path_as(
+        &mut self,
+        path_str: &str,
+        password: Option<String>,
+        source: Option<std::path::PathBuf>,
+        cx: &mut Context<Self>,
+    ) {
+        let path = std::path::PathBuf::from(path_str);
 
         // If document is already open in a tab, reload it from disk instead of
         // silently switching to a stale in-memory copy.
@@ -380,7 +498,9 @@ impl PdfbullView {
             return;
         }
 
-        let title = path
+        let title = source
+            .as_deref()
+            .unwrap_or(&path)
             .file_name()
             .and_then(|n| n.to_str())
             .unwrap_or("Document.pdf")
@@ -390,7 +510,7 @@ impl PdfbullView {
         // parsing; the background engine worker updates with exact dimensions upon Open.
         let (page_count, page_width, page_height) = (1, 595.0, 842.0);
 
-        crate::storage::add_recent_file(&path);
+        crate::storage::add_recent_file(source.as_deref().unwrap_or(&path));
         self.welcome.refresh_recent_files();
 
         let doc_id = crate::models::next_doc_id();
@@ -419,6 +539,9 @@ impl PdfbullView {
             is_modified: false,
             page_rotations: std::collections::HashMap::new(),
         });
+        if let Some(source) = source {
+            self.tab_sources.insert(doc_id, source);
+        }
         self.tabs.active_tab_index = new_id;
         // `reset_for_document` drops every scrap of the *previous* document:
         // rendered pages, the zoom map, the text layer, search hits, cached
@@ -468,6 +591,7 @@ impl PdfbullView {
             }
             match rx.await {
                 Ok(Ok(open_res)) => {
+                    crate::startup_report::mark("document opened");
                     let _ = this.update(cx, |view, cx| {
                         // The engine's numbers are authoritative and refine the
                         // initial geometry estimate, so record them in the per-document
@@ -542,7 +666,18 @@ impl PdfbullView {
                                 tab.page_rotations = rotations;
                             }
                             view.dialogs.signatures = open_res.signatures;
+                            view.rendering_pages.clear();
                             view.render_needed_pages(cx);
+                            // Command-line `-page N` / `-presentation`.
+                            if let Some(page) = view.reader.start_page.take() {
+                                view.go_to_page(page, false, cx);
+                            }
+                            if view.reader.start_mode.is_some() {
+                                view.reader.start_ready = true;
+                            }
+                            // A fit mode must re-fit to the new page size.
+                            view.reader.last_fit_size = (0.0, 0.0);
+                            view.apply_zoom_mode(cx);
                             view.persist_session_if_enabled();
                             cx.notify();
                         }
@@ -607,6 +742,11 @@ impl PdfbullView {
                 }
                 Ok(Err(e)) => {
                     tracing::error!("Failed to open PDF in engine worker: {e:?}");
+                    if crate::startup_report::requested() {
+                        crate::startup_report::mark("document failed to open");
+                        crate::startup_report::emit();
+                        let _ = cx.update(|cx| cx.quit());
+                    }
                     let _ = this.update(cx, |view, cx| {
                         if view.active_doc_id == Some(doc_id) {
                             if matches!(e, crate::models::PdfError::PasswordRequired) {
@@ -638,14 +778,18 @@ impl PdfbullView {
             }
         })
         .detach();
-
-        self.render_needed_pages(cx);
     }
 
     pub fn prompt_open_file(&self, cx: &mut Context<Self>) {
         cx.spawn(async move |this, cx| {
+            let mut all_exts = vec!["pdf"];
+            all_exts.extend_from_slice(crate::comic::COMIC_EXTENSIONS);
+            all_exts.extend_from_slice(crate::comic::IMAGE_EXTENSIONS);
             let files = rfd::AsyncFileDialog::new()
+                .add_filter("All supported (PDF, comics, pictures)", &all_exts)
                 .add_filter("PDF Documents (*.pdf)", &["pdf"])
+                .add_filter("Comic books (*.cbz)", crate::comic::COMIC_EXTENSIONS)
+                .add_filter("Pictures", crate::comic::IMAGE_EXTENSIONS)
                 .pick_files()
                 .await;
 
@@ -795,8 +939,17 @@ impl PdfbullView {
             }
         };
 
-        for page_idx in pages_to_render {
+        // The engine's queue is first-come first-served, so the order requests
+        // go out in is the order pages appear. Send the page being looked at
+        // first, then its neighbours nearest-first, and only then the text
+        // layers: text is needed for selection and search, not for the first
+        // paint, and used to sit between the current page and its neighbours.
+        let mut pages_to_render = pages_to_render;
+        pages_to_render.sort_by_key(|&p| (p.abs_diff(cur), p));
+        for &page_idx in &pages_to_render {
             self.request_render_page(doc_id, page_idx, cx);
+        }
+        for page_idx in pages_to_render {
             if !self.viewport.text_cache.contains_key(&page_idx) {
                 self.request_text_items(doc_id, page_idx, cx);
             }
@@ -861,6 +1014,7 @@ impl PdfbullView {
 
             match resp_rx.await {
                 Ok(Ok(render_res)) => {
+                    crate::startup_report::mark("first page rendered");
                     let mut raw_data = render_res.data.to_vec();
                     crate::ui_gpui::canvas::convert_rgba_to_bgra(&mut raw_data);
 
@@ -885,6 +1039,7 @@ impl PdfbullView {
                                     return;
                                 }
                                 view.rendering_pages.remove(&page_idx);
+                                view.viewport.failed_pages.remove(&page_idx);
                                 view.viewport
                                     .rendered_pages
                                     .insert(page_idx, render_image.clone());
@@ -940,9 +1095,11 @@ impl PdfbullView {
                 }
                 Ok(Err(e)) => {
                     tracing::error!("Render page {page_idx} error: {e:?}");
-                    let _ = this.update(cx, |view, _| {
+                    let _ = this.update(cx, |view, cx| {
                         if view.active_doc_id == Some(doc_id) {
                             view.rendering_pages.remove(&page_idx);
+                            view.viewport.failed_pages.insert(page_idx);
+                            cx.notify();
                         }
                     });
                 }
@@ -1308,7 +1465,9 @@ impl PdfbullView {
                 // never falls back to the "Rendering page…" placeholder mid-gesture.
                 cx.notify();
                 cx.spawn(async move |this, cx| {
-                    tokio::time::sleep(std::time::Duration::from_millis(150)).await;
+                    cx.background_executor()
+                        .timer(std::time::Duration::from_millis(150))
+                        .await;
                     let _ = this.update(cx, |view, cx| {
                         view.render_needed_pages(cx);
                         cx.notify();
@@ -1630,6 +1789,28 @@ impl PdfbullView {
                                 .tooltip("Zoom in")
                                 .on_click(zoom_in_click),
                         )
+                        .child(
+                            Button::new("btn-status-fit-width")
+                                .icon(gpui_kit::assets::IconName::MoveHorizontal)
+                                .ghost()
+                                .small()
+                                .selected(self.reader.zoom_mode == ZoomMode::FitWidth)
+                                .tooltip("Fit width (Ctrl+2)")
+                                .on_click(cx.listener(|this, _, _, cx| {
+                                    this.set_zoom_mode(ZoomMode::FitWidth, cx);
+                                })),
+                        )
+                        .child(
+                            Button::new("btn-status-fit-page")
+                                .icon(gpui_kit::assets::IconName::Maximize2)
+                                .ghost()
+                                .small()
+                                .selected(self.reader.zoom_mode == ZoomMode::FitPage)
+                                .tooltip("Fit page (Ctrl+3)")
+                                .on_click(cx.listener(|this, _, _, cx| {
+                                    this.set_zoom_mode(ZoomMode::FitPage, cx);
+                                })),
+                        )
                         // Layout switcher next to the zoom controls: page layout is
                         // a reading-control, and the only other place it lived was
                         // one ribbon tab deep (View). Ghost + selected state so the
@@ -1666,6 +1847,27 @@ impl PdfbullView {
                                 .tooltip("Two-page spread")
                                 .on_click(cx.listener(|this, _, _, cx| {
                                     this.set_layout_mode(PageLayoutMode::TwoPageSpread, cx);
+                                })),
+                        )
+                        .child(div().w_px().h(px(12.0)).bg(border))
+                        .child(
+                            Button::new("btn-status-present")
+                                .icon(gpui_kit::assets::IconName::Presentation)
+                                .ghost()
+                                .small()
+                                .tooltip("Present full screen (F5)")
+                                .on_click(cx.listener(|this, _, window, cx| {
+                                    this.toggle_presentation(window, cx);
+                                })),
+                        )
+                        .child(
+                            Button::new("btn-status-fullscreen")
+                                .icon(gpui_kit::assets::IconName::Expand)
+                                .ghost()
+                                .small()
+                                .tooltip("Full screen reading (F11)")
+                                .on_click(cx.listener(|this, _, window, cx| {
+                                    this.toggle_fullscreen(window, cx);
                                 })),
                         )
                         .child(div().w_px().h(px(12.0)).bg(border))
@@ -3477,7 +3679,784 @@ impl PdfbullView {
         self.open_pdf_path(&path, Some(password.to_string()), cx);
     }
 
-    pub fn handle_key_down(&mut self, event: &gpui::KeyDownEvent, cx: &mut Context<Self>) {
+    /// Run one ribbon command. Shared by the ribbon, the command palette and
+    /// the keyboard, so every entry point behaves the same.
+    pub fn handle_ribbon_action(
+        &mut self,
+        action: RibbonAction,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        match action {
+            RibbonAction::OpenFile => {
+                self.prompt_open_file(cx);
+            }
+            RibbonAction::SaveFile => {
+                self.save_active_document(cx);
+            }
+            RibbonAction::Print => {
+                self.print_active_document(cx);
+            }
+            RibbonAction::ZoomIn => {
+                self.viewport.zoom = (self.viewport.zoom + 0.1).min(5.0);
+                self.render_needed_pages(cx);
+            }
+            RibbonAction::ZoomOut => {
+                self.viewport.zoom = (self.viewport.zoom - 0.1).max(0.25);
+                self.render_needed_pages(cx);
+            }
+            RibbonAction::ZoomReset => {
+                self.viewport.zoom = 1.0;
+                self.render_needed_pages(cx);
+            }
+            RibbonAction::PrevPage => {
+                if self.viewport.current_page > 0 {
+                    self.viewport.scroll_to_page(self.viewport.current_page - 1);
+                    self.render_needed_pages(cx);
+                    cx.notify();
+                }
+            }
+            RibbonAction::NextPage => {
+                if self.viewport.current_page + 1 < self.viewport.total_pages {
+                    self.viewport.scroll_to_page(self.viewport.current_page + 1);
+                    self.render_needed_pages(cx);
+                    cx.notify();
+                }
+            }
+            RibbonAction::SetLayout(mode) => {
+                self.set_layout_mode(mode, cx);
+            }
+            RibbonAction::ToggleCover => {
+                self.ribbon.standalone_cover = !self.ribbon.standalone_cover;
+                self.viewport.standalone_cover = self.ribbon.standalone_cover;
+                // Turning the cover off on page 0 in Two-Page mode reveals
+                // page 1, which was never requested.
+                self.render_needed_pages(cx);
+            }
+            RibbonAction::ToggleMidnight => {
+                self.ribbon.midnight_mode = !self.ribbon.midnight_mode;
+                // The render filter is not part of the zoom map that gates
+                // `request_render_page`, so the zoom map has to be cleared
+                // alongside the images or the toggle would blank every page
+                // permanently.
+                self.viewport.invalidate_rendered_pages();
+                self.rendering_pages.clear();
+                self.render_needed_pages(cx);
+            }
+            RibbonAction::SelectTool(tool) => {
+                self.ribbon.active_tool = tool;
+                self.viewport.highlight_color = match tool {
+                    super::ribbon::AnnotationTool::Highlight => {
+                        Some(hsla(50.0 / 360.0, 1.0, 0.5, 0.45))
+                    }
+                    _ => None,
+                };
+            }
+            RibbonAction::SelectColor(color) => {
+                self.ribbon.active_color = color;
+                self.viewport.highlight_color = Some(hsla(
+                    color[0].clamp(0.0, 1.0),
+                    color[1].clamp(0.0, 1.0),
+                    color[2].clamp(0.0, 1.0),
+                    color[3].clamp(0.0, 1.0),
+                ));
+            }
+            RibbonAction::Watermark => {
+                self.dialogs.active = Some(ActiveDialog::Watermark);
+            }
+            RibbonAction::HeaderFooter => {
+                self.dialogs.active = Some(ActiveDialog::HeaderFooter);
+            }
+            RibbonAction::FormFields => {
+                self.list_form_fields(cx);
+            }
+            RibbonAction::DigitalSignatures => {
+                self.dialogs.active = Some(ActiveDialog::Signature);
+            }
+            RibbonAction::Merge => {
+                self.prompt_merge_files(cx);
+            }
+            RibbonAction::Split => {
+                self.prompt_split_document(cx);
+            }
+            RibbonAction::Flatten => {
+                self.save_as_active_document(cx);
+            }
+            RibbonAction::Encrypt => {
+                self.dialogs.active = Some(ActiveDialog::Security);
+            }
+            RibbonAction::ApplyRedactions => {
+                self.apply_redactions(cx);
+            }
+            RibbonAction::Decrypt => {
+                self.dialogs.active = Some(ActiveDialog::Password);
+            }
+            RibbonAction::Compress => {
+                self.prompt_compress_document(cx);
+            }
+            RibbonAction::Ocr => {
+                self.prompt_ocr_page(cx);
+            }
+            RibbonAction::PageOrganizer => {
+                self.dialogs.active = Some(ActiveDialog::PageOrganizer);
+            }
+            RibbonAction::Properties => {
+                self.open_properties_dialog(window, cx);
+            }
+            RibbonAction::ExtractPages => {
+                self.prompt_extract_pages(cx);
+            }
+            RibbonAction::ExtractTablesPlain => {
+                self.extract_tables_plain_active_page(cx);
+            }
+            RibbonAction::ConvertMarkdown => {
+                self.convert_active_document("md", "Markdown", "Markdown files (*.md)", cx);
+            }
+            RibbonAction::ConvertHtml => {
+                self.convert_active_document("html", "HTML", "HTML files (*.html)", cx);
+            }
+            RibbonAction::ConvertText => {
+                self.convert_active_document("txt", "Text", "Text files (*.txt)", cx);
+            }
+            RibbonAction::CopyAccessibleText => {
+                self.copy_accessible_text(cx);
+            }
+            RibbonAction::ExtractTables => {
+                self.extract_tables_active_page(cx);
+            }
+            RibbonAction::Settings => {
+                self.dialogs.active = Some(ActiveDialog::Settings);
+            }
+            RibbonAction::About => {
+                self.dialogs.active = Some(ActiveDialog::About);
+            }
+        }
+        cx.notify();
+    }
+
+    // ── Keyboard-first reading ──────────────────────────────────────────────
+
+    /// True while the user is typing into a text box, so plain-letter
+    /// shortcuts (j, k, n, p, …) must not fire.
+    fn text_input_focused(&self, window: &Window, cx: &App) -> bool {
+        let focused = |input: &Option<Entity<gpui_kit::component::input::InputState>>| {
+            input
+                .as_ref()
+                .is_some_and(|i| i.read(cx).focus_handle(cx).is_focused(window))
+        };
+        focused(&self.sidebar.search_input)
+            || focused(&self.reader.palette_input)
+            || focused(&self.reader.goto_input)
+    }
+
+    /// Show page `idx`. `record` remembers the page we left, for Back.
+    pub fn go_to_page(&mut self, idx: usize, record: bool, cx: &mut Context<Self>) {
+        let total = self.viewport.total_pages;
+        if total == 0 {
+            return;
+        }
+        let target = idx.min(total - 1);
+        if record {
+            self.reader.record_jump(self.viewport.current_page, target);
+        }
+        self.viewport.scroll_to_page(target);
+        self.sidebar.scroll_thumbnails_to(target, total);
+        self.render_needed_pages(cx);
+        cx.notify();
+    }
+
+    /// Next / previous page, or spread in two-page view.
+    fn step_page(&mut self, forward: bool, cx: &mut Context<Self>) {
+        let total = self.viewport.total_pages;
+        let cur = self.viewport.current_page;
+        let step = if self.viewport.layout_mode == PageLayoutMode::TwoPageSpread {
+            if self.viewport.standalone_cover && cur == 0 {
+                1
+            } else {
+                2
+            }
+        } else {
+            1
+        };
+        let target = if forward {
+            (cur + step).min(total.saturating_sub(1))
+        } else {
+            cur.saturating_sub(step)
+        };
+        if target != cur {
+            self.go_to_page(target, false, cx);
+        }
+    }
+
+    /// Scroll the canvas as if the mouse wheel moved by `dy` pixels
+    /// (negative is down). Turns pages at an edge in single/two-page view.
+    fn scroll_canvas_by(&mut self, dy: f32, cx: &mut Context<Self>) {
+        let ev = ScrollEvent {
+            delta: ScrollDelta::Pixels(Point::new(px(0.0), px(dy))),
+            ..Default::default()
+        };
+        self.handle_canvas_scroll_wheel(&ev, cx);
+    }
+
+    fn set_manual_zoom(&mut self, zoom: f32, cx: &mut Context<Self>) {
+        self.reader.zoom_mode = ZoomMode::Manual;
+        self.viewport.zoom = zoom.clamp(0.25, 5.0);
+        self.render_needed_pages(cx);
+        cx.notify();
+    }
+
+    /// Switch between fit width, fit page and a manual zoom.
+    pub fn set_zoom_mode(&mut self, mode: ZoomMode, cx: &mut Context<Self>) {
+        self.reader.zoom_mode = mode;
+        self.reader.last_fitted_zoom = 0.0;
+        self.reader.last_fit_size = (0.0, 0.0);
+        if mode != ZoomMode::Manual {
+            self.apply_zoom_mode(cx);
+            self.status_message = Some(mode.label().into());
+        }
+        cx.notify();
+    }
+
+    /// Recompute the zoom for the active fit mode from the canvas size.
+    pub fn apply_zoom_mode(&mut self, cx: &mut Context<Self>) {
+        let mode = self.reader.zoom_mode;
+        if mode == ZoomMode::Manual || self.active_doc_id.is_none() {
+            return;
+        }
+        let size = self.viewport.scroll_handle.bounds().size;
+        let (w, h) = (size.width / px(1.0), size.height / px(1.0));
+        let presenting = self.reader.presentation;
+        // Room taken by the canvas padding and the scrollbar.
+        let (pad_x, pad_y) = if presenting { (0.0, 0.0) } else { (40.0, 64.0) };
+        let total = self.viewport.total_pages;
+        let cur = self.viewport.current_page.min(total.saturating_sub(1));
+        let (across, page, gap) = if self.viewport.layout_mode == PageLayoutMode::TwoPageSpread
+            && total > 1
+        {
+            let (l, r) =
+                super::canvas::two_page_spread_pages(cur, total, self.viewport.standalone_cover);
+            let (lw, lh) = self.viewport.display_size(l);
+            let (rw, rh) = r.map_or((lw, lh), |r| self.viewport.display_size(r));
+            (2, (lw.max(rw), lh.max(rh)), 24.0)
+        } else {
+            (1, self.viewport.display_size(cur), 0.0)
+        };
+        let avail = (w - pad_x - gap, h - pad_y);
+        let Some(z) = super::reader::fit_zoom(mode, avail, page, across, 0.0) else {
+            return;
+        };
+        self.reader.last_fit_size = (w, h);
+        self.reader.last_fitted_zoom = z;
+        if (self.viewport.zoom - z).abs() > 0.001 {
+            self.viewport.zoom = z;
+            if self.viewport.layout_mode == PageLayoutMode::Continuous {
+                // Keep the same page on screen at the new scale.
+                self.viewport.scroll_to_page(cur);
+            }
+            self.render_needed_pages(cx);
+            cx.notify();
+        }
+    }
+
+    /// Called after each frame while a fit mode is on: re-fit when the canvas
+    /// changed size, and drop back to manual zoom if the user zoomed by hand.
+    /// Record the first frame and the first frame showing a page for the
+    /// startup stopwatch, and finish a `--startup-report` run once the first
+    /// page has actually been presented.
+    fn note_startup_milestones(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        use crate::startup_report as sr;
+        if sr::reached("first page shown") {
+            return;
+        }
+        sr::mark("first frame drawn");
+        let page_ready = !self.viewport.rendered_pages.is_empty();
+        let nothing_to_open = self.tabs.tabs.is_empty() && self.welcome_only_start();
+        let finished = (page_ready && sr::mark("first page shown")) || nothing_to_open;
+        if finished && sr::requested() {
+            // The callback runs once the frame built now has been put on
+            // screen, so the report covers a page the person could see.
+            cx.on_next_frame(window, |_, _, cx| {
+                sr::mark("first page presented");
+                sr::emit();
+                cx.quit();
+            });
+        }
+    }
+
+    /// `true` when the launch has no document to open, so the start screen is
+    /// the finished first view.
+    fn welcome_only_start(&self) -> bool {
+        !std::env::args()
+            .skip(1)
+            .any(|a| !a.starts_with('-') && std::path::Path::new(&a).exists())
+            && !self.dialogs.settings.restore_session
+            && !self.dialogs.settings.remember_last_file
+    }
+
+    fn refit_if_needed(&mut self, cx: &mut Context<Self>) {
+        if self.reader.zoom_mode == ZoomMode::Manual {
+            return;
+        }
+        if self.reader.last_fitted_zoom > 0.0
+            && (self.viewport.zoom - self.reader.last_fitted_zoom).abs() > 0.001
+        {
+            self.reader.zoom_mode = ZoomMode::Manual;
+            cx.notify();
+            return;
+        }
+        let size = self.viewport.scroll_handle.bounds().size;
+        let (w, h) = (size.width / px(1.0), size.height / px(1.0));
+        let (lw, lh) = self.reader.last_fit_size;
+        if (w - lw).abs() > 1.0 || (h - lh).abs() > 1.0 {
+            self.apply_zoom_mode(cx);
+        }
+    }
+
+    /// F5: full screen, black, one page at a time, fitted to the screen.
+    pub fn toggle_presentation(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.reader.presentation {
+            self.exit_reading_modes(window, cx);
+            return;
+        }
+        if self.active_doc_id.is_none() {
+            self.status_message = Some("Open a document to present it.".into());
+            cx.notify();
+            return;
+        }
+        if self.reader.fullscreen {
+            self.reader.fullscreen = false;
+        } else if !window.is_fullscreen() {
+            window.toggle_fullscreen();
+            self.reader.made_window_fullscreen = true;
+        }
+        self.reader.saved_view = Some(SavedView {
+            layout: self.viewport.layout_mode,
+            zoom: self.viewport.zoom,
+            zoom_mode: self.reader.zoom_mode,
+            sidebar_open: self.sidebar.is_open,
+            log_open: self.log_console.is_open,
+        });
+        self.reader.presentation = true;
+        self.viewport.presentation = true;
+        self.sidebar.is_open = false;
+        self.log_console.is_open = false;
+        self.dialogs.active = None;
+        self.set_layout_mode(PageLayoutMode::SinglePage, cx);
+        self.set_zoom_mode(ZoomMode::FitPage, cx);
+        self.status_message = Some("Presenting — arrows or space turn pages, Esc exits.".into());
+        cx.notify();
+    }
+
+    /// F11: full screen with the toolbars hidden.
+    pub fn toggle_fullscreen(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.reader.chrome_hidden() {
+            self.exit_reading_modes(window, cx);
+            return;
+        }
+        self.reader.fullscreen = true;
+        if !window.is_fullscreen() {
+            window.toggle_fullscreen();
+            self.reader.made_window_fullscreen = true;
+        }
+        self.reader.last_fit_size = (0.0, 0.0);
+        self.status_message = Some("Full screen — press F11 or Esc to leave.".into());
+        cx.notify();
+    }
+
+    /// Leave presentation / full screen and put the previous view back.
+    pub fn exit_reading_modes(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.reader.presentation = false;
+        self.reader.fullscreen = false;
+        self.viewport.presentation = false;
+        if self.reader.made_window_fullscreen && window.is_fullscreen() {
+            window.toggle_fullscreen();
+        }
+        self.reader.made_window_fullscreen = false;
+        if let Some(saved) = self.reader.saved_view.take() {
+            self.sidebar.is_open = saved.sidebar_open;
+            self.log_console.is_open = saved.log_open;
+            self.set_layout_mode(saved.layout, cx);
+            if saved.zoom_mode == ZoomMode::Manual {
+                self.set_manual_zoom(saved.zoom, cx);
+            } else {
+                self.set_zoom_mode(saved.zoom_mode, cx);
+            }
+        } else {
+            self.reader.last_fit_size = (0.0, 0.0);
+        }
+        self.status_message = None;
+        cx.notify();
+    }
+
+    pub fn open_palette(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.reader.goto_open = false;
+        self.reader.palette_open = true;
+        self.reader.palette_selected = 0;
+        if let Some(input) = self.reader.palette_input.clone() {
+            input.update(cx, |s, cx| {
+                s.set_value(String::new(), window, cx);
+                s.focus(window, cx);
+            });
+        }
+        cx.notify();
+    }
+
+    fn close_palette(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.reader.palette_open = false;
+        self.focus_handle.focus(window, cx);
+        cx.notify();
+    }
+
+    fn run_selected_palette_entry(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if !self.reader.palette_open {
+            return;
+        }
+        let matches = self.reader.palette_matches(cx);
+        let Some(&idx) = matches.get(
+            self.reader
+                .palette_selected
+                .min(matches.len().saturating_sub(1)),
+        ) else {
+            return;
+        };
+        let command = self.reader.entries[idx].command;
+        self.close_palette(window, cx);
+        self.run_reader_command(command, window, cx);
+    }
+
+    pub fn open_goto(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.active_doc_id.is_none() {
+            return;
+        }
+        self.reader.palette_open = false;
+        self.reader.goto_open = true;
+        if let Some(input) = self.reader.goto_input.clone() {
+            input.update(cx, |s, cx| {
+                s.set_value(String::new(), window, cx);
+                s.focus(window, cx);
+            });
+        }
+        cx.notify();
+    }
+
+    fn close_goto(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.reader.goto_open = false;
+        self.focus_handle.focus(window, cx);
+        cx.notify();
+    }
+
+    fn commit_goto(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if !self.reader.goto_open {
+            return;
+        }
+        let text = self
+            .reader
+            .goto_input
+            .as_ref()
+            .map(|i| i.read(cx).value().to_string())
+            .unwrap_or_default();
+        let total = self.viewport.total_pages;
+        match super::reader::parse_goto(&text, total) {
+            Some(page) => {
+                self.close_goto(window, cx);
+                self.go_to_page(page, true, cx);
+            }
+            None => {
+                self.status_message = Some(format!("Type a page number from 1 to {total}."));
+                cx.notify();
+            }
+        }
+    }
+
+    fn switch_tab_by(&mut self, delta: isize, cx: &mut Context<Self>) {
+        let n = self.tabs.tabs.len();
+        if n < 2 {
+            return;
+        }
+        let idx = (self.tabs.active_tab_index as isize + delta).rem_euclid(n as isize) as usize;
+        self.tabs.active_tab_index = idx;
+        self.sync_viewport_to_active_tab(cx);
+        self.persist_session_if_enabled();
+        cx.notify();
+    }
+
+    fn rotate_view(&mut self, degrees: i32, cx: &mut Context<Self>) {
+        self.viewport.rotation = (self.viewport.rotation as i32 + degrees).rem_euclid(360) as u16;
+        self.viewport.invalidate_rendered_pages();
+        self.rendering_pages.clear();
+        self.reader.last_fit_size = (0.0, 0.0);
+        self.apply_zoom_mode(cx);
+        self.render_needed_pages(cx);
+        cx.notify();
+    }
+
+    /// Run a reader command from the keyboard, the palette or a button.
+    pub fn run_reader_command(
+        &mut self,
+        command: ReaderCommand,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let has_doc = self.active_doc_id.is_some();
+        match command {
+            ReaderCommand::Ribbon(action) => self.handle_ribbon_action(action, window, cx),
+            ReaderCommand::Presentation => self.toggle_presentation(window, cx),
+            ReaderCommand::Fullscreen => self.toggle_fullscreen(window, cx),
+            ReaderCommand::ToggleSidebar => {
+                self.sidebar.is_open = !self.sidebar.is_open;
+                self.reader.last_fit_size = (0.0, 0.0);
+            }
+            ReaderCommand::ShowThumbnails | ReaderCommand::ShowBookmarks => {
+                self.sidebar.is_open = true;
+                self.sidebar.mode = if command == ReaderCommand::ShowBookmarks {
+                    super::sidebar::SidebarMode::Bookmarks
+                } else {
+                    super::sidebar::SidebarMode::Thumbnails
+                };
+                if let Some(doc_id) = self.active_doc_id {
+                    let cur = self.viewport.current_page;
+                    let last = (cur + 5).min(self.viewport.total_pages.saturating_sub(1));
+                    for p in cur.saturating_sub(5)..=last {
+                        self.request_thumbnail(doc_id, p, cx);
+                    }
+                }
+                self.reader.last_fit_size = (0.0, 0.0);
+            }
+            ReaderCommand::Find => {
+                self.sidebar.is_open = true;
+                self.sidebar.mode = super::sidebar::SidebarMode::Search;
+                if let Some(input) = self.sidebar.search_input.clone() {
+                    input.update(cx, |s, cx| s.focus(window, cx));
+                }
+            }
+            ReaderCommand::NextTab => self.switch_tab_by(1, cx),
+            ReaderCommand::PrevTab => self.switch_tab_by(-1, cx),
+            ReaderCommand::CloseTab => {
+                let idx = self.tabs.active_tab_index;
+                if idx < self.tabs.tabs.len() {
+                    self.close_tab_at(idx, cx);
+                }
+            }
+            ReaderCommand::ToggleLogs => self.log_console.is_open = !self.log_console.is_open,
+            _ if !has_doc => {
+                self.status_message = Some("Open a document first.".into());
+            }
+            ReaderCommand::NextPage => self.step_page(true, cx),
+            ReaderCommand::PrevPage => self.step_page(false, cx),
+            ReaderCommand::FirstPage => self.go_to_page(0, true, cx),
+            ReaderCommand::LastPage => {
+                let last = self.viewport.total_pages.saturating_sub(1);
+                self.go_to_page(last, true, cx);
+            }
+            ReaderCommand::GoToPage => self.open_goto(window, cx),
+            ReaderCommand::Back => {
+                if let Some(p) = self.reader.go_back(self.viewport.current_page) {
+                    self.go_to_page(p, false, cx);
+                }
+            }
+            ReaderCommand::Forward => {
+                if let Some(p) = self.reader.go_forward(self.viewport.current_page) {
+                    self.go_to_page(p, false, cx);
+                }
+            }
+            ReaderCommand::ZoomIn => self.set_manual_zoom(self.viewport.zoom + 0.1, cx),
+            ReaderCommand::ZoomOut => self.set_manual_zoom(self.viewport.zoom - 0.1, cx),
+            ReaderCommand::ActualSize => self.set_manual_zoom(1.0, cx),
+            ReaderCommand::FitWidth => self.set_zoom_mode(ZoomMode::FitWidth, cx),
+            ReaderCommand::FitPage => self.set_zoom_mode(ZoomMode::FitPage, cx),
+            ReaderCommand::CycleZoom => match self.reader.zoom_mode {
+                ZoomMode::Manual => self.set_zoom_mode(ZoomMode::FitPage, cx),
+                ZoomMode::FitPage => self.set_zoom_mode(ZoomMode::FitWidth, cx),
+                ZoomMode::FitWidth => {
+                    self.set_manual_zoom(1.0, cx);
+                    self.status_message = Some("Actual size".into());
+                }
+            },
+            ReaderCommand::Layout(mode) => self.set_layout_mode(mode, cx),
+            ReaderCommand::ToggleContinuous => {
+                let mode = if self.viewport.layout_mode == PageLayoutMode::Continuous {
+                    PageLayoutMode::SinglePage
+                } else {
+                    PageLayoutMode::Continuous
+                };
+                self.set_layout_mode(mode, cx);
+                self.status_message = Some(mode.label().into());
+            }
+            ReaderCommand::ToggleBookView => {
+                let mode = if self.viewport.layout_mode == PageLayoutMode::TwoPageSpread {
+                    PageLayoutMode::Continuous
+                } else {
+                    PageLayoutMode::TwoPageSpread
+                };
+                self.set_layout_mode(mode, cx);
+                self.status_message = Some(mode.label().into());
+            }
+            ReaderCommand::RotateLeft => self.rotate_view(-90, cx),
+            ReaderCommand::RotateRight => self.rotate_view(90, cx),
+            ReaderCommand::Reload => {
+                self.refresh_active_document(cx);
+                self.status_message = Some("Reloaded from disk.".into());
+            }
+            ReaderCommand::CopyPageText => self.select_all_page_text(cx),
+        }
+        cx.notify();
+    }
+
+    /// Every keystroke on the main window. Reader shortcuts follow the
+    /// conventions of keyboard-driven readers (j/k, n/p, space, g, c, b, z,
+    /// F5, F11, Ctrl+K…); anything not handled here falls through to the
+    /// original shortcuts.
+    pub fn handle_key_down(
+        &mut self,
+        event: &gpui::KeyDownEvent,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let key = event.keystroke.key.to_lowercase();
+        let mods = event.keystroke.modifiers;
+        let ctrl = mods.control || mods.platform;
+        let shift = mods.shift;
+        let alt = mods.alt;
+
+        // Overlays own the keyboard while open. Enter is delivered by the
+        // inputs themselves (see the subscriptions in `new`).
+        if self.reader.palette_open {
+            let n = self.reader.palette_matches(cx).len();
+            match key.as_str() {
+                "escape" => self.close_palette(window, cx),
+                "down" if n > 0 => {
+                    self.reader.palette_selected = (self.reader.palette_selected + 1).min(n - 1);
+                    cx.notify();
+                }
+                "up" => {
+                    self.reader.palette_selected = self.reader.palette_selected.saturating_sub(1);
+                    cx.notify();
+                }
+                _ => {}
+            }
+            return;
+        }
+        if self.reader.goto_open {
+            if key == "escape" {
+                self.close_goto(window, cx);
+            }
+            return;
+        }
+
+        let command = if ctrl {
+            match (key.as_str(), shift) {
+                ("k", _) | ("p", true) => {
+                    self.open_palette(window, cx);
+                    return;
+                }
+                ("g", false) => Some(ReaderCommand::GoToPage),
+                ("f", false) => Some(ReaderCommand::Find),
+                ("b", false) => Some(ReaderCommand::ToggleSidebar),
+                ("tab", false) | ("pagedown", _) => Some(ReaderCommand::NextTab),
+                ("tab", true) | ("pageup", _) => Some(ReaderCommand::PrevTab),
+                ("0", _) | ("1", _) => Some(ReaderCommand::ActualSize),
+                ("2", _) => Some(ReaderCommand::FitWidth),
+                ("3", _) => Some(ReaderCommand::FitPage),
+                ("=" | "+", true) => Some(ReaderCommand::RotateRight),
+                ("-" | "_", true) => Some(ReaderCommand::RotateLeft),
+                ("=" | "+", false) => Some(ReaderCommand::ZoomIn),
+                ("-", false) => Some(ReaderCommand::ZoomOut),
+                (",", _) => Some(ReaderCommand::Ribbon(RibbonAction::Settings)),
+                _ => None,
+            }
+        } else if alt {
+            match key.as_str() {
+                "left" => Some(ReaderCommand::Back),
+                "right" => Some(ReaderCommand::Forward),
+                _ => None,
+            }
+        } else {
+            match key.as_str() {
+                "f5" => Some(ReaderCommand::Presentation),
+                "f11" => Some(ReaderCommand::Fullscreen),
+                "f12" => Some(ReaderCommand::ToggleSidebar),
+                _ => None,
+            }
+        };
+        if let Some(command) = command {
+            self.run_reader_command(command, window, cx);
+            return;
+        }
+
+        if !ctrl
+            && !alt
+            && key == "escape"
+            && self.dialogs.active.is_none()
+            && self.reader.chrome_hidden()
+        {
+            self.exit_reading_modes(window, cx);
+            return;
+        }
+
+        // Plain keys, only when a document is open and nothing is being typed.
+        let typing = self.text_input_focused(window, cx);
+        if !ctrl && !alt && !typing && self.dialogs.active.is_none() && self.active_doc_id.is_some()
+        {
+            use super::ribbon::AnnotationTool;
+            let presenting = self.reader.presentation;
+            let command = match key.as_str() {
+                "j" => presenting.then_some(ReaderCommand::NextPage),
+                "k" => presenting.then_some(ReaderCommand::PrevPage),
+                "n" | "pagedown" | "right" if presenting => Some(ReaderCommand::NextPage),
+                "p" | "pageup" | "left" if presenting => Some(ReaderCommand::PrevPage),
+                "n" => Some(ReaderCommand::NextPage),
+                "p" => Some(ReaderCommand::PrevPage),
+                "space" if shift => Some(ReaderCommand::PrevPage),
+                "space" => Some(ReaderCommand::NextPage),
+                "down" | "up" if presenting => Some(if key == "down" {
+                    ReaderCommand::NextPage
+                } else {
+                    ReaderCommand::PrevPage
+                }),
+                "home" => Some(ReaderCommand::FirstPage),
+                "end" => Some(ReaderCommand::LastPage),
+                "g" => Some(ReaderCommand::GoToPage),
+                "backspace" => Some(ReaderCommand::Back),
+                "c" => Some(ReaderCommand::ToggleContinuous),
+                "b" => Some(ReaderCommand::ToggleBookView),
+                "z" => Some(ReaderCommand::CycleZoom),
+                "+" | "=" => Some(ReaderCommand::ZoomIn),
+                "-" => Some(ReaderCommand::ZoomOut),
+                "i" => Some(ReaderCommand::Ribbon(RibbonAction::ToggleMidnight)),
+                "r" => Some(ReaderCommand::Reload),
+                "/" => Some(ReaderCommand::Find),
+                "h" => Some(ReaderCommand::Ribbon(RibbonAction::SelectTool(
+                    AnnotationTool::Highlight,
+                ))),
+                "t" => Some(ReaderCommand::Ribbon(RibbonAction::SelectTool(
+                    AnnotationTool::Text,
+                ))),
+                _ => None,
+            };
+            if let Some(command) = command {
+                self.run_reader_command(command, window, cx);
+                return;
+            }
+            // j / k and the arrow keys scroll by a line, like a wheel notch.
+            match key.as_str() {
+                "j" | "down" => {
+                    self.scroll_canvas_by(-60.0, cx);
+                    return;
+                }
+                "k" | "up" => {
+                    self.scroll_canvas_by(60.0, cx);
+                    return;
+                }
+                _ => {}
+            }
+        }
+
+        self.handle_key_down_legacy(event, cx);
+    }
+
+    /// Shortcuts that predate the reader keymap (save, open, print, close,
+    /// find, copy, select all), plus the plain keys in `handle_plain_key_legacy`.
+    fn handle_key_down_legacy(&mut self, event: &gpui::KeyDownEvent, cx: &mut Context<Self>) {
         let key = event.keystroke.key.to_lowercase();
         let ctrl = event.keystroke.modifiers.control || event.keystroke.modifiers.platform;
 
@@ -3519,7 +4498,19 @@ impl PdfbullView {
                         cx.notify();
                     }
                 }
-                "a" => {
+                "a" => self.select_all_page_text(cx),
+                _ => {}
+            }
+        } else {
+            self.handle_plain_key_legacy(key.as_str(), cx);
+        }
+    }
+
+    /// Select and copy every word on the current page (Ctrl+A).
+    pub fn select_all_page_text(&mut self, cx: &mut Context<Self>) {
+        {
+            {
+                {
                     let page_idx = self.viewport.current_page;
                     if let Some(items) = self.viewport.text_cache.get(&page_idx).cloned() {
                         if !items.is_empty() {
@@ -3552,64 +4543,45 @@ impl PdfbullView {
                         self.request_text_items(doc_id, page_idx, cx);
                     }
                 }
-                "=" | "+" => {
-                    self.viewport.zoom = (self.viewport.zoom + 0.1).min(5.0);
-                    self.render_needed_pages(cx);
-                    cx.notify();
-                }
-                "-" => {
-                    self.viewport.zoom = (self.viewport.zoom - 0.1).max(0.25);
-                    self.render_needed_pages(cx);
-                    cx.notify();
-                }
-                "0" => {
-                    self.viewport.zoom = 1.0;
-                    self.render_needed_pages(cx);
-                    cx.notify();
-                }
-                "," => {
-                    self.dialogs.active = Some(ActiveDialog::Settings);
-                    cx.notify();
-                }
-                _ => {}
             }
-        } else {
-            match key.as_str() {
-                "f1" => {
-                    self.dialogs.active = Some(ActiveDialog::About);
+        }
+    }
+
+    /// Plain (no Ctrl) keys handled before the reader shortcuts existed.
+    fn handle_plain_key_legacy(&mut self, key: &str, cx: &mut Context<Self>) {
+        match key {
+            "f1" => {
+                self.dialogs.active = Some(ActiveDialog::About);
+                cx.notify();
+            }
+            "escape" => {
+                if self.dialogs.active.is_some() {
+                    self.dialogs.active = None;
                     cx.notify();
-                }
-                "escape" => {
-                    if self.dialogs.active.is_some() {
-                        self.dialogs.active = None;
-                        cx.notify();
-                    } else if self.log_console.is_open {
-                        self.log_console.is_open = false;
-                        cx.notify();
-                    } else if self.viewport.selection_page.is_some()
-                        || self.viewport.selected_text.is_some()
-                    {
-                        self.viewport.selection_page = None;
-                        self.viewport.selection_start = None;
-                        self.viewport.selection_end = None;
-                        self.viewport.selected_text = None;
-                        cx.notify();
-                    }
-                }
-                "pageup" | "left" if self.viewport.current_page > 0 => {
-                    self.viewport.scroll_to_page(self.viewport.current_page - 1);
-                    self.render_needed_pages(cx);
+                } else if self.log_console.is_open {
+                    self.log_console.is_open = false;
                     cx.notify();
-                }
-                "pagedown" | "right"
-                    if self.viewport.current_page + 1 < self.viewport.total_pages =>
+                } else if self.viewport.selection_page.is_some()
+                    || self.viewport.selected_text.is_some()
                 {
-                    self.viewport.scroll_to_page(self.viewport.current_page + 1);
-                    self.render_needed_pages(cx);
+                    self.viewport.selection_page = None;
+                    self.viewport.selection_start = None;
+                    self.viewport.selection_end = None;
+                    self.viewport.selected_text = None;
                     cx.notify();
                 }
-                _ => {}
             }
+            "pageup" | "left" if self.viewport.current_page > 0 => {
+                self.viewport.scroll_to_page(self.viewport.current_page - 1);
+                self.render_needed_pages(cx);
+                cx.notify();
+            }
+            "pagedown" | "right" if self.viewport.current_page + 1 < self.viewport.total_pages => {
+                self.viewport.scroll_to_page(self.viewport.current_page + 1);
+                self.render_needed_pages(cx);
+                cx.notify();
+            }
+            _ => {}
         }
     }
 }
@@ -3621,6 +4593,24 @@ impl Render for PdfbullView {
         let border = cx.theme().border;
         let primary = cx.theme().primary;
         let has_tabs = !self.tabs.tabs.is_empty();
+        // Presentation and full screen show nothing but the pages.
+        let chrome = !(self.reader.chrome_hidden() && has_tabs);
+        self.note_startup_milestones(_window, cx);
+        // Fit modes follow the canvas size: check again once this frame has
+        // been laid out (a resize, a sidebar toggle, entering full screen).
+        if self.reader.zoom_mode != ZoomMode::Manual {
+            cx.on_next_frame(_window, |this, _, cx| this.refit_if_needed(cx));
+        }
+        // A command-line `-presentation` / `-fullscreen` waits for the file.
+        if self.reader.start_ready {
+            self.reader.start_ready = false;
+            if let Some(mode) = self.reader.start_mode.take() {
+                cx.on_next_frame(_window, move |this, window, cx| match mode {
+                    super::reader::StartMode::Presentation => this.toggle_presentation(window, cx),
+                    super::reader::StartMode::Fullscreen => this.toggle_fullscreen(window, cx),
+                });
+            }
+        }
 
         let ribbon_tabs = self.ribbon.render_tabs(cx, |this, tab, _, cx| {
             this.ribbon.active_tab = tab;
@@ -3660,6 +4650,17 @@ impl Render for PdfbullView {
                     .items_center()
                     .gap_1()
                     .child(
+                        Button::new("btn-header-palette")
+                            .ghost()
+                            .small()
+                            .icon(gpui_kit::assets::IconName::Command)
+                            .label("Commands")
+                            .tooltip("Search every command (Ctrl+K)")
+                            .on_click(cx.listener(|this, _, window, cx| {
+                                this.open_palette(window, cx);
+                            })),
+                    )
+                    .child(
                         Button::new("btn-header-about")
                             .ghost()
                             .small()
@@ -3685,150 +4686,7 @@ impl Render for PdfbullView {
 
         // Ribbon Action Strip
         let action_strip = self.ribbon.render_strip(cx, |this, action, window, cx| {
-            match action {
-                RibbonAction::OpenFile => {
-                    this.prompt_open_file(cx);
-                }
-                RibbonAction::SaveFile => {
-                    this.save_active_document(cx);
-                }
-                RibbonAction::Print => {
-                    this.print_active_document(cx);
-                }
-                RibbonAction::ZoomIn => {
-                    this.viewport.zoom = (this.viewport.zoom + 0.1).min(5.0);
-                    this.render_needed_pages(cx);
-                }
-                RibbonAction::ZoomOut => {
-                    this.viewport.zoom = (this.viewport.zoom - 0.1).max(0.25);
-                    this.render_needed_pages(cx);
-                }
-                RibbonAction::ZoomReset => {
-                    this.viewport.zoom = 1.0;
-                    this.render_needed_pages(cx);
-                }
-                RibbonAction::PrevPage => {
-                    if this.viewport.current_page > 0 {
-                        this.viewport.scroll_to_page(this.viewport.current_page - 1);
-                        this.render_needed_pages(cx);
-                        cx.notify();
-                    }
-                }
-                RibbonAction::NextPage => {
-                    if this.viewport.current_page + 1 < this.viewport.total_pages {
-                        this.viewport.scroll_to_page(this.viewport.current_page + 1);
-                        this.render_needed_pages(cx);
-                        cx.notify();
-                    }
-                }
-                RibbonAction::SetLayout(mode) => {
-                    this.set_layout_mode(mode, cx);
-                }
-                RibbonAction::ToggleCover => {
-                    this.ribbon.standalone_cover = !this.ribbon.standalone_cover;
-                    this.viewport.standalone_cover = this.ribbon.standalone_cover;
-                    // Turning the cover off on page 0 in Two-Page mode reveals
-                    // page 1, which was never requested.
-                    this.render_needed_pages(cx);
-                }
-                RibbonAction::ToggleMidnight => {
-                    this.ribbon.midnight_mode = !this.ribbon.midnight_mode;
-                    // The render filter is not part of the zoom map that gates
-                    // `request_render_page`, so the zoom map has to be cleared
-                    // alongside the images or the toggle would blank every page
-                    // permanently.
-                    this.viewport.invalidate_rendered_pages();
-                    this.rendering_pages.clear();
-                    this.render_needed_pages(cx);
-                }
-                RibbonAction::SelectTool(tool) => {
-                    this.ribbon.active_tool = tool;
-                    this.viewport.highlight_color = match tool {
-                        super::ribbon::AnnotationTool::Highlight => {
-                            Some(hsla(50.0 / 360.0, 1.0, 0.5, 0.45))
-                        }
-                        _ => None,
-                    };
-                }
-                RibbonAction::SelectColor(color) => {
-                    this.ribbon.active_color = color;
-                    this.viewport.highlight_color = Some(hsla(
-                        color[0].clamp(0.0, 1.0),
-                        color[1].clamp(0.0, 1.0),
-                        color[2].clamp(0.0, 1.0),
-                        color[3].clamp(0.0, 1.0),
-                    ));
-                }
-                RibbonAction::Watermark => {
-                    this.dialogs.active = Some(ActiveDialog::Watermark);
-                }
-                RibbonAction::HeaderFooter => {
-                    this.dialogs.active = Some(ActiveDialog::HeaderFooter);
-                }
-                RibbonAction::FormFields => {
-                    this.list_form_fields(cx);
-                }
-                RibbonAction::DigitalSignatures => {
-                    this.dialogs.active = Some(ActiveDialog::Signature);
-                }
-                RibbonAction::Merge => {
-                    this.prompt_merge_files(cx);
-                }
-                RibbonAction::Split => {
-                    this.prompt_split_document(cx);
-                }
-                RibbonAction::Flatten => {
-                    this.save_as_active_document(cx);
-                }
-                RibbonAction::Encrypt => {
-                    this.dialogs.active = Some(ActiveDialog::Security);
-                }
-                RibbonAction::ApplyRedactions => {
-                    this.apply_redactions(cx);
-                }
-                RibbonAction::Decrypt => {
-                    this.dialogs.active = Some(ActiveDialog::Password);
-                }
-                RibbonAction::Compress => {
-                    this.prompt_compress_document(cx);
-                }
-                RibbonAction::Ocr => {
-                    this.prompt_ocr_page(cx);
-                }
-                RibbonAction::PageOrganizer => {
-                    this.dialogs.active = Some(ActiveDialog::PageOrganizer);
-                }
-                RibbonAction::Properties => {
-                    this.open_properties_dialog(window, cx);
-                }
-                RibbonAction::ExtractPages => {
-                    this.prompt_extract_pages(cx);
-                }
-                RibbonAction::ExtractTablesPlain => {
-                    this.extract_tables_plain_active_page(cx);
-                }
-                RibbonAction::ConvertMarkdown => {
-                    this.convert_active_document("md", "Markdown", "Markdown files (*.md)", cx);
-                }
-                RibbonAction::ConvertHtml => {
-                    this.convert_active_document("html", "HTML", "HTML files (*.html)", cx);
-                }
-                RibbonAction::ConvertText => {
-                    this.convert_active_document("txt", "Text", "Text files (*.txt)", cx);
-                }
-                RibbonAction::CopyAccessibleText => {
-                    this.copy_accessible_text(cx);
-                }
-                RibbonAction::ExtractTables => {
-                    this.extract_tables_active_page(cx);
-                }
-                RibbonAction::Settings => {
-                    this.dialogs.active = Some(ActiveDialog::Settings);
-                }
-                RibbonAction::About => {
-                    this.dialogs.active = Some(ActiveDialog::About);
-                }
-            }
+            this.handle_ribbon_action(action, window, cx);
             cx.notify();
         });
 
@@ -3956,6 +4814,7 @@ impl Render for PdfbullView {
                     match action {
                         SidebarAction::ToggleOpen => {
                             this.sidebar.is_open = !this.sidebar.is_open;
+                            this.reader.last_fit_size = (0.0, 0.0);
                             // When the sidebar becomes visible, lazily pre-load
                             // thumbnails for pages near the current view.
                             if this.sidebar.is_open
@@ -3997,6 +4856,7 @@ impl Render for PdfbullView {
                             this.sidebar.is_searching = false;
                         }
                         SidebarAction::SelectSearchResult(page, ..) => {
+                            this.reader.record_jump(this.viewport.current_page, page);
                             this.viewport.scroll_to_page(page);
                             this.sidebar
                                 .scroll_thumbnails_to(page, this.viewport.total_pages);
@@ -4019,6 +4879,7 @@ impl Render for PdfbullView {
                             }
                         }
                         SidebarAction::SelectBookmark(page) => {
+                            this.reader.record_jump(this.viewport.current_page, page);
                             this.viewport.scroll_to_page(page);
                             this.sidebar
                                 .scroll_thumbnails_to(page, this.viewport.total_pages);
@@ -4037,7 +4898,10 @@ impl Render for PdfbullView {
 
             let canvas = self.viewport.render(
                 cx,
-                |this, page_idx, pos, _, cx| {
+                |this, page_idx, pos, window, cx| {
+                    // Clicking the page hands the keyboard back to the reader
+                    // shortcuts, even if the search box had focus.
+                    this.focus_handle.focus(window, cx);
                     this.viewport.is_selecting = true;
                     this.viewport.selection_page = Some(page_idx);
                     this.viewport.selection_start = Some(pos);
@@ -4309,7 +5173,7 @@ impl Render for PdfbullView {
                 .w_full()
                 .min_h_0()
                 .overflow_hidden()
-                .child(sidebar)
+                .when(chrome, |el| el.child(sidebar))
                 .child(
                     div()
                         .flex()
@@ -4634,12 +5498,27 @@ impl Render for PdfbullView {
             },
         );
 
+        let goto_overlay = self.reader.render_goto(
+            cx,
+            self.viewport.current_page,
+            self.viewport.total_pages,
+            |this, window, cx| this.close_goto(window, cx),
+        );
+        let palette_overlay = self.reader.render_palette(
+            cx,
+            |this, command, window, cx| {
+                this.close_palette(window, cx);
+                this.run_reader_command(command, window, cx);
+            },
+            |this, window, cx| this.close_palette(window, cx),
+        );
+
         // Assemble Top-level View
         div()
             .track_focus(&self.focus_handle)
             .key_context("pdfbull_main")
-            .on_key_down(cx.listener(|this, event: &gpui::KeyDownEvent, _, cx| {
-                this.handle_key_down(event, cx);
+            .on_key_down(cx.listener(|this, event: &gpui::KeyDownEvent, window, cx| {
+                this.handle_key_down(event, window, cx);
             }))
             .flex()
             .flex_col()
@@ -4663,9 +5542,9 @@ impl Render for PdfbullView {
                     cx.notify();
                 }
             }))
-            .child(header_bar)
-            .when(has_tabs, |el| el.child(action_strip))
-            .children(tabs_bar)
+            .when(chrome, |el| el.child(header_bar))
+            .when(has_tabs && chrome, |el| el.child(action_strip))
+            .when(chrome, |el| el.children(tabs_bar))
             .child(
                 div()
                     .flex_1()
@@ -4676,8 +5555,10 @@ impl Render for PdfbullView {
                     .overflow_hidden()
                     .child(center_area),
             )
-            .children(log_drawer)
-            .child(status_bar)
+            .when(chrome, |el| el.children(log_drawer))
+            .when(chrome, |el| el.child(status_bar))
             .children(dialog_overlay)
+            .children(goto_overlay)
+            .children(palette_overlay)
     }
 }

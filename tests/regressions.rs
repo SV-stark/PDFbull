@@ -729,20 +729,32 @@ fn test_pdf_command_debug_does_not_leak_password() {
 }
 
 #[test]
-fn test_only_pdfs_are_accepted_as_documents() {
+fn test_only_supported_documents_are_accepted() {
     // Regression: `open_pdf_path` only checked `exists()`, so dropping a PNG or
     // passing a directory created a permanent unrenderable blank tab.
+    //
+    // Pictures and comic books are now supported (they are converted to an
+    // image-only PDF before a tab is created), so a `.png` is accepted — but a
+    // broken one must fail conversion, which reports an error instead of
+    // opening a blank tab. Unsupported types and directories stay rejected.
     let tmp = std::env::temp_dir().join("pdfbull_input_validation_test");
     std::fs::create_dir_all(&tmp).unwrap();
-    let png = tmp.join("not-a-pdf.png");
+    let png = tmp.join("broken.png");
     std::fs::write(&png, b"\x89PNG\r\n\x1a\n").unwrap();
+    let txt = tmp.join("notes.txt");
+    std::fs::write(&txt, b"hello").unwrap();
     let pdf = tmp.join("looks-like.pdf");
     std::fs::write(&pdf, b"%PDF-1.4\n").unwrap();
 
     let accepts = pdfbull::ui_gpui::sidebar::SidebarState::is_openable_pdf;
 
-    assert!(!accepts(&png), "a .png must be rejected");
     assert!(accepts(&pdf), "a .pdf must be accepted");
+    assert!(accepts(&png), "a picture is opened through conversion");
+    assert!(
+        pdfbull::comic::convert_to_pdf(&png).is_err(),
+        "a broken picture must fail conversion, not open a blank tab"
+    );
+    assert!(!accepts(&txt), "a .txt must be rejected");
     assert!(!accepts(&tmp), "a directory must be rejected");
     assert!(!accepts(std::path::Path::new("/no/such/file.pdf")));
 
@@ -2561,4 +2573,103 @@ fn test_single_instance_forwarding_reaches_the_ui_channel() {
         Some(vec!["pdfbull".to_string(), r"C:\docs\a.pdf".to_string()]),
         "the second instance's command line must arrive at the UI"
     );
+}
+
+#[test]
+fn test_workers_share_one_copy_of_a_documents_bytes() {
+    // Regression: every engine worker read the whole file for its own copy of
+    // the document, so a large PDF ended up resident once per CPU core. All
+    // workers must now parse one shared buffer while the file is unchanged.
+    let manifest = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+    let fixture = manifest.join("tests").join("test_document.pdf");
+    let dir = tempfile::tempdir().expect("temp dir");
+    let path = dir.path().join("shared.pdf");
+    std::fs::copy(&fixture, &path).expect("copy fixture");
+    let p = path.to_string_lossy().to_string();
+
+    let a = pdfbull::pdf_engine::read_document_bytes_shared(&p).expect("read a");
+    let b = pdfbull::pdf_engine::read_document_bytes_shared(&p).expect("read b");
+    assert!(
+        Arc::ptr_eq(&a, &b),
+        "a second reader must reuse the live copy"
+    );
+    assert_eq!(&a[..], &std::fs::read(&fixture).unwrap()[..]);
+
+    // A rewritten file is read afresh, not served from the old copy.
+    std::thread::sleep(std::time::Duration::from_millis(20));
+    let mut changed = std::fs::read(&fixture).unwrap();
+    changed.extend_from_slice(b"\n% appended\n");
+    std::fs::write(&path, &changed).unwrap();
+    let c = pdfbull::pdf_engine::read_document_bytes_shared(&p).expect("read c");
+    assert!(!Arc::ptr_eq(&a, &c));
+    assert_eq!(&c[..], &changed[..]);
+
+    // Once every holder is gone the bytes are freed, not kept by the cache.
+    let weak = Arc::downgrade(&c);
+    drop((a, b, c));
+    assert!(weak.upgrade().is_none());
+}
+
+#[test]
+fn test_fast_open_reports_the_same_page_geometry_as_full_open() {
+    // The viewer opens with `open_document_for_view`, which skips the outline,
+    // links and signatures (they arrive later through `LoadDocumentMeta`). The
+    // page count, sizes and rotations the first paint uses must not change.
+    let manifest = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+    let fixture = manifest.join("tests").join("test_document.pdf");
+    let p = fixture.to_string_lossy().to_string();
+    let cache = pdfbull::pdf_engine::create_render_cache(8, 32 * 1024 * 1024);
+    let mut full_store = DocumentStore::new(cache.clone());
+    let mut fast_store = DocumentStore::new(cache);
+    let full = full_store
+        .open_document(&p, None, next_doc_id())
+        .expect("full");
+    let fast_id = next_doc_id();
+    let fast = fast_store
+        .open_document_for_view(&p, None, fast_id)
+        .expect("fast");
+    assert_eq!(fast.page_count, full.page_count);
+    assert_eq!(fast.page_widths, full.page_widths);
+    assert_eq!(fast.page_heights, full.page_heights);
+    assert_eq!(fast.page_rotations, full.page_rotations);
+    assert_eq!(fast.max_width, full.max_width);
+    // And the fast-opened document is fully usable: it renders.
+    let options = pdfbull::pdf_engine::RenderOptions {
+        scale: 1.0,
+        rotation: 0,
+        filter: pdfbull::pdf_engine::RenderFilter::None,
+        auto_crop: false,
+        quality: pdfbull::pdf_engine::RenderQuality::Medium,
+    };
+    let page = fast_store.render_page(fast_id, 0, options).expect("render");
+    assert!(page.width > 0 && page.height > 0);
+}
+
+#[test]
+fn test_ui_code_does_not_use_tokio_timers() {
+    // Regression: after the move to gpui-fast there is no Tokio runtime on the
+    // UI thread, and the 30-second auto-save loop's `tokio::time::sleep`
+    // panicked ("there is no reactor running") about a second after every
+    // launch. UI tasks must use `cx.background_executor().timer(..)`.
+    let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("src")
+        .join("ui_gpui");
+    for entry in std::fs::read_dir(&dir).expect("ui_gpui dir") {
+        let path = entry.expect("entry").path();
+        if path.extension().is_some_and(|e| e == "rs") {
+            let text = std::fs::read_to_string(&path).expect("read source");
+            for banned in [
+                "tokio::time::",
+                "tokio::spawn",
+                "tokio::fs::",
+                "tokio::task::",
+            ] {
+                assert!(
+                    !text.contains(banned),
+                    "{} uses `{banned}`, which needs a Tokio runtime the UI thread does not have",
+                    path.display()
+                );
+            }
+        }
+    }
 }

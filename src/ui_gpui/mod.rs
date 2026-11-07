@@ -2,6 +2,7 @@ pub mod app_view;
 pub mod canvas;
 pub mod dialogs;
 pub mod log_console;
+pub mod reader;
 pub mod ribbon;
 pub mod sidebar;
 pub mod tabs;
@@ -14,10 +15,17 @@ pub fn run_gpui_app() {
     // Only accept a real PDF file as the startup document. The previous test
     // (`... || Path::new(arg).exists()`) accepted directories and any existing
     // path, and `--version`-style flags were already handled in `main`.
-    let initial_file = std::env::args().skip(1).find(|arg| {
-        !arg.starts_with('-')
-            && sidebar::SidebarState::is_openable_pdf(std::path::Path::new(arg.as_str()))
-    });
+    let all_args: Vec<String> = std::env::args().collect();
+    let initial_file = all_args
+        .iter()
+        .skip(1)
+        .find(|arg| {
+            !arg.starts_with('-')
+                && sidebar::SidebarState::is_openable_pdf(std::path::Path::new(arg.as_str()))
+        })
+        .cloned();
+    // `-page N`, `-presentation`, `-fullscreen`, applied once the file opens.
+    let startup = reader::parse_startup_args(&all_args);
 
     gpui_kit::application()
         // `assets::Assets` embeds only gpui-kit's curated subset (its
@@ -45,6 +53,8 @@ pub fn run_gpui_app() {
                     let view = cx.new(|cx| {
                         let mut v = app_view::PdfbullView::new(window, cx);
                         if let Some(ref path) = initial_file_clone {
+                            v.reader.start_page = startup.page;
+                            v.reader.start_mode = startup.mode;
                             v.open_pdf_path(path, None, cx);
                         } else if v.dialogs.settings.restore_session {
                             if let Some(session) = crate::storage::load_session() {
@@ -76,7 +86,23 @@ pub fn run_gpui_app() {
                         Root::new(view, window, cx).bg(bg)
                     })
                 }) {
-                    Ok(_) => tracing::info!("PDFbull window created."),
+                    Ok(_) => {
+                        crate::startup_report::mark("window created");
+                        tracing::info!("PDFbull window created.");
+                        // A timing run must always finish, even when no page
+                        // ever appears (a broken file, an empty session).
+                        if crate::startup_report::requested() {
+                            cx.spawn(async move |cx| {
+                                cx.background_executor()
+                                    .timer(std::time::Duration::from_secs(30))
+                                    .await;
+                                crate::startup_report::mark("gave up after 30 s");
+                                crate::startup_report::emit();
+                                let _ = cx.update(|cx| cx.quit());
+                            })
+                            .detach();
+                        }
+                    }
                     Err(e) => {
                         tracing::error!("Failed to open the PDFbull window: {e}");
                         eprintln!("PDFbull: failed to open window: {e}");
@@ -92,6 +118,7 @@ pub fn run_gpui_app() {
                 {
                     cx.spawn(async move |cx| {
                         while let Some(args) = forwarded.recv().await {
+                            let startup = reader::parse_startup_args(&args);
                             let paths: Vec<String> = args
                                 .into_iter()
                                 .skip(1)
@@ -106,6 +133,8 @@ pub fn run_gpui_app() {
                                 continue;
                             }
                             view.update(cx, |view, cx| {
+                                view.reader.start_page = startup.page;
+                                view.reader.start_mode = startup.mode;
                                 for path in &paths {
                                     view.open_pdf_path(path, None, cx);
                                 }

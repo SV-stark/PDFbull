@@ -105,6 +105,109 @@ pub fn read_input_capped(path: &str) -> PdfResult<Vec<u8>> {
     std::fs::read(path).map_err(|e| PdfError::OpenFailed(e.to_string()))
 }
 
+/// One live copy of each open document's bytes, shared by every engine worker.
+struct SharedBytesEntry {
+    len: u64,
+    modified: Option<std::time::SystemTime>,
+    bytes: std::sync::Weak<[u8]>,
+}
+
+static SHARED_FILE_BYTES: std::sync::LazyLock<std::sync::Mutex<HashMap<String, SharedBytesEntry>>> =
+    std::sync::LazyLock::new(|| std::sync::Mutex::new(HashMap::new()));
+
+fn shared_bytes_key(path: &str) -> String {
+    let p = path.replace('\\', "/");
+    if cfg!(windows) { p.to_lowercase() } else { p }
+}
+
+/// Read a document's bytes for viewing, sharing one copy between workers.
+///
+/// Each engine worker keeps its own parsed `PdfDocument`, and each used to
+/// `std::fs::read` the file for it. With one worker per CPU core, a 100 MB PDF
+/// scrolled for a while ended up resident once per core — on a 16-thread
+/// machine well over a gigabyte for one tab. zpdf keeps the input as an
+/// `Arc<[u8]>`, so the workers can all parse the same buffer instead.
+///
+/// The cache holds only a `Weak`: the bytes are freed as soon as the last
+/// worker closes the document. An entry is reused only while the file's size
+/// and modification time are unchanged, so a document rewritten on disk (save,
+/// rotate, delete pages…) is read afresh.
+pub fn read_document_bytes_shared(path: &str) -> PdfResult<Arc<[u8]>> {
+    use std::io::Read;
+
+    let mut file =
+        std::fs::File::open(path).map_err(|e| PdfError::OpenFailed(format!("{path}: {e}")))?;
+    let meta = file
+        .metadata()
+        .map_err(|e| PdfError::OpenFailed(format!("cannot stat {path}: {e}")))?;
+    let len = meta.len();
+    if len > MAX_INPUT_BYTES {
+        return Err(PdfError::OpenFailed(format!(
+            "{path} is {:.1} MB, above the {} MB limit for this operation",
+            len as f64 / (1024.0 * 1024.0),
+            MAX_INPUT_BYTES / (1024 * 1024)
+        )));
+    }
+    let modified = meta.modified().ok();
+    let key = shared_bytes_key(path);
+
+    if let Ok(map) = SHARED_FILE_BYTES.lock()
+        && let Some(entry) = map.get(&key)
+        && entry.len == len
+        && entry.modified == modified
+        && let Some(bytes) = entry.bytes.upgrade()
+    {
+        return Ok(bytes);
+    }
+
+    // Read straight into the shared allocation. `Vec<u8>` → `Arc<[u8]>` would
+    // copy, briefly holding the file twice — exactly the peak this avoids.
+    let size = usize::try_from(len).map_err(|_| PdfError::OpenFailed("file too large".into()))?;
+    let mut buf: Arc<[u8]> = Arc::from(vec![0u8; 0]);
+    if size > 0 {
+        let mut uninit = Arc::<[u8]>::new_uninit_slice(size);
+        let slots = Arc::get_mut(&mut uninit).expect("freshly allocated Arc is unique");
+        for slot in slots.iter_mut() {
+            slot.write(0);
+        }
+        // SAFETY: every element was initialised by the loop above.
+        buf = unsafe { uninit.assume_init() };
+        let dst = Arc::get_mut(&mut buf).expect("freshly allocated Arc is unique");
+        file.read_exact(dst)
+            .map_err(|e| PdfError::OpenFailed(format!("{path}: {e}")))?;
+    }
+
+    if let Ok(mut map) = SHARED_FILE_BYTES.lock() {
+        // Drop entries whose documents have all been closed.
+        map.retain(|_, e| e.bytes.strong_count() > 0);
+        map.insert(
+            key,
+            SharedBytesEntry {
+                len,
+                modified,
+                bytes: Arc::downgrade(&buf),
+            },
+        );
+    }
+    Ok(buf)
+}
+
+/// The system-font provider every open document substitutes fonts from.
+///
+/// It used to be created per document *per worker*, so each worker loaded its
+/// own copy of every substitute face it needed. It is internally synchronised
+/// (`RwLock` registry), so one instance serves the whole process.
+fn shared_font_provider() -> Arc<zpdf::FontProvider> {
+    static PROVIDER: std::sync::LazyLock<Arc<zpdf::FontProvider>> =
+        std::sync::LazyLock::new(|| {
+            Arc::new(zpdf::FontProvider::new(
+                true,
+                zpdf::FontProviderLimits::default(),
+            ))
+        });
+    PROVIDER.clone()
+}
+
 /// The box a page's content is actually drawn into, as `(x0, y0, x1, y1)`.
 ///
 /// `/MediaBox` and `/CropBox` are inheritable page attributes: either may be
@@ -993,19 +1096,29 @@ impl DocumentStore {
         Ok(pages)
     }
 
-    pub fn open_document(
+    /// Parse `path` and make it available to this worker, without building the
+    /// sidebar data (outline, links, signatures, layers…) an [`OpenResult`]
+    /// carries.
+    ///
+    /// Every engine worker holds its own `PdfDocument` (zpdf's document type is
+    /// not `Sync`), so a worker that receives its first command for a document
+    /// has to load it. That used to run the whole of [`Self::open_document`] —
+    /// a walk over every page's annotations for links, every signature against
+    /// the OS certificate store, geo and colour-profile scans — only to throw
+    /// the result away, and it did so on the path to the first page. This is
+    /// the part a worker actually needs.
+    ///
+    /// The file's bytes come from [`read_document_bytes_shared`], so all
+    /// workers parse the same single copy instead of reading the file again.
+    ///
+    /// [`OpenResult`]: crate::models::OpenResult
+    pub fn load_document(
         &mut self,
         path: &str,
         password: Option<&str>,
         doc_id: DocumentId,
-    ) -> PdfResult<crate::models::OpenResult> {
-        let metadata = std::fs::metadata(path).map_err(|e| PdfError::OpenFailed(e.to_string()))?;
-        if metadata.len() > 512 * 1024 * 1024 {
-            return Err(PdfError::OpenFailed(
-                "PDF file exceeds 512 MB size limit".into(),
-            ));
-        }
-        let data = read_input_capped(path)?;
+    ) -> PdfResult<()> {
+        let data = read_document_bytes_shared(path)?;
         // Harden against malformed/malicious PDFs by capping stream and object counts.
         let limits = ParseLimits {
             max_stream_bytes: 256 * 1024 * 1024, // 256 MB per stream
@@ -1016,21 +1129,16 @@ impl DocumentStore {
             max_font_cache_bytes: 32 * 1024 * 1024,
             ..ParseLimits::default()
         };
-        // Attach a system-enabled FontProvider so non-embedded fonts can be
-        // substituted and variable/multi-script glyphs resolve against the
-        // installed fonts (zpdf 0.15+). The scan of system fonts is cached
-        // globally inside zpdf, so this is cheap after the first document.
-        let font_provider = std::sync::Arc::new(zpdf::FontProvider::new(
-            true,
-            zpdf::FontProviderLimits::default(),
-        ));
         let doc = match PdfDocument::open_with_password_and_limits(
             data,
             password.unwrap_or("").as_bytes(),
             limits,
         ) {
             Ok(mut doc) => {
-                doc.set_font_provider(font_provider);
+                // Non-embedded fonts are substituted from the installed system
+                // fonts. One provider is shared by every document and worker,
+                // so a substitute face is loaded once per process.
+                doc.set_font_provider(shared_font_provider());
                 doc
             }
             Err(zpdf::Error::WrongPassword | zpdf::Error::PasswordRequired) => {
@@ -1040,6 +1148,117 @@ impl DocumentStore {
                 return Err(PdfError::OpenFailed(e.to_string()));
             }
         };
+
+        let oc_config = doc.oc_config();
+        if let Some(oc) = &oc_config {
+            self.oc_configs.insert(doc_id, oc.clone());
+            // Record the full group set so a later visibility toggle can be
+            // layered over this document's real states instead of replacing
+            // them. Derived from `layers`, which already walks `/OCGs`.
+            let layers = Self::extract_layers_internal(&doc, oc_config.as_ref());
+            self.oc_groups.insert(
+                doc_id,
+                layers
+                    .iter()
+                    .map(|l| zpdf::ObjectId(l.object_id.0, l.object_id.1))
+                    .collect(),
+            );
+        }
+
+        self.documents.insert(doc_id, doc);
+        self.paths.insert(doc_id, path.to_string());
+        if let Some(pw) = password {
+            self.passwords.insert(doc_id, pw.to_string());
+        }
+        self.image_caches.insert(doc_id, ImageCache::new());
+        Ok(())
+    }
+
+    /// Size and `/Rotate` of every page of a loaded document, as
+    /// `(widths, heights, rotations, max_width)`.
+    fn page_extents(doc: &PdfDocument) -> (Vec<f32>, Vec<f32>, Vec<i32>, f32) {
+        let page_count = doc.page_count();
+        let mut heights = Vec::with_capacity(page_count);
+        let mut widths = Vec::with_capacity(page_count);
+        let mut rotations = Vec::with_capacity(page_count);
+        let mut max_width = 0.0;
+        for i in 0..page_count {
+            if let Ok(page) = doc.page(i) {
+                let rect = page.effective_box();
+                let user_unit = page.user_unit as f32;
+                let w = (rect.width() as f32) * user_unit;
+                let h = (rect.height() as f32) * user_unit;
+                // Unrotated extents plus the page's own `/Rotate`; see the
+                // comment in `open_document`.
+                rotations.push(normalize_rotation(page.rotate));
+                heights.push(h);
+                widths.push(w);
+                if w > max_width {
+                    max_width = w;
+                }
+            } else {
+                heights.push(0.0);
+                widths.push(0.0);
+                rotations.push(0);
+            }
+        }
+        (widths, heights, rotations, max_width)
+    }
+
+    /// Open a document for the viewer: load it and report only what the first
+    /// paint needs — page count, page sizes and rotations.
+    ///
+    /// The outline, links, signatures, attachments, layers and metadata are
+    /// left empty here. The viewer asks for them with `LoadDocumentMeta` and
+    /// `GetLinkDestinations` straight after the open, and those run on another
+    /// worker *while* the first page renders, rather than in front of it.
+    /// [`Self::open_document`] still returns everything in one go for callers
+    /// that want it.
+    pub fn open_document_for_view(
+        &mut self,
+        path: &str,
+        password: Option<&str>,
+        doc_id: DocumentId,
+    ) -> PdfResult<crate::models::OpenResult> {
+        self.load_document(path, password, doc_id)?;
+        let doc = self
+            .documents
+            .get(&doc_id)
+            .ok_or(PdfError::EngineError(EngineErrorKind::DocumentNotFound))?;
+        let page_count = doc.page_count();
+        let (widths, heights, rotations, max_width) = Self::page_extents(doc);
+        Ok(crate::models::OpenResult {
+            id: doc_id,
+            page_count,
+            page_heights: heights,
+            page_widths: widths,
+            max_width,
+            page_rotations: rotations,
+            outline: Vec::new(),
+            links: Vec::new(),
+            metadata: crate::models::DocumentMetadata::default(),
+            page_labels: Vec::new(),
+            is_encrypted: doc.is_encrypted(),
+            signatures: Vec::new(),
+            attachments: Vec::new(),
+            layers: Vec::new(),
+            oc_config: self.oc_configs.get(&doc_id).cloned(),
+            geo_annotations: Vec::new(),
+            color_profile: None,
+        })
+    }
+
+    pub fn open_document(
+        &mut self,
+        path: &str,
+        password: Option<&str>,
+        doc_id: DocumentId,
+    ) -> PdfResult<crate::models::OpenResult> {
+        self.load_document(path, password, doc_id)?;
+        let doc = self
+            .documents
+            .get(&doc_id)
+            .ok_or(PdfError::EngineError(EngineErrorKind::DocumentNotFound))?;
 
         let page_count = doc.page_count();
         let mut heights = Vec::with_capacity(page_count);
@@ -1075,8 +1294,8 @@ impl DocumentStore {
             }
         }
 
-        let outline = self.get_outline_internal(&doc);
-        let links = self.extract_links_internal(&doc);
+        let outline = self.get_outline_internal(doc);
+        let links = self.extract_links_internal(doc);
         let info = doc.info();
         let xmp = doc.xmp_metadata();
         let metadata = Self::doc_info_to_metadata(info.as_ref(), xmp.as_ref());
@@ -1093,8 +1312,7 @@ impl DocumentStore {
         // Page label styles are not publicly exposed by zpdf's PageLabels API.
         // The label() method already returns the formatted string for each page.
         let is_encrypted = doc.is_encrypted();
-        let system_anchors = Self::cached_system_trust_anchors();
-        let signatures = Self::extract_signatures_internal(&doc, system_anchors);
+        let signatures = Self::extract_signatures_internal(doc);
 
         let attachments = doc
             .embedded_files()
@@ -1110,33 +1328,12 @@ impl DocumentStore {
             .collect();
 
         let oc_config = doc.oc_config();
-        let layers = Self::extract_layers_internal(&doc, oc_config.as_ref());
-
-        if let Some(oc) = &oc_config {
-            self.oc_configs.insert(doc_id, oc.clone());
-            // Record the full group set so a later visibility toggle can be
-            // layered over this document's real states instead of replacing
-            // them. Derived from `layers`, which already walks `/OCGs`.
-            self.oc_groups.insert(
-                doc_id,
-                layers
-                    .iter()
-                    .map(|l| zpdf::ObjectId(l.object_id.0, l.object_id.1))
-                    .collect(),
-            );
-        }
+        let layers = Self::extract_layers_internal(doc, oc_config.as_ref());
 
         // Feature 4: Extract geospatial annotation metadata
-        let geo_annotations = Self::extract_geo_annotations(&doc);
+        let geo_annotations = Self::extract_geo_annotations(doc);
         // Feature 5: Extract CMYK/ICC color profile info
-        let color_profile = Self::extract_color_profile(&doc);
-
-        self.documents.insert(doc_id, doc);
-        self.paths.insert(doc_id, path.to_string());
-        if let Some(pw) = password {
-            self.passwords.insert(doc_id, pw.to_string());
-        }
-        self.image_caches.insert(doc_id, ImageCache::new());
+        let color_profile = Self::extract_color_profile(doc);
 
         Ok(crate::models::OpenResult {
             id: doc_id,
@@ -1223,8 +1420,8 @@ impl DocumentStore {
             .page(page_num)
             .map_err(|_| PdfError::PageNotFound(page_num))?;
         let mut fonts = doc.load_page_fonts(&page);
-        let content = doc
-            .page_content_bytes(&page)
+        let (content, _) = doc
+            .page_content_with_diagnostics(&page)
             .map_err(|e| PdfError::SearchError(e.to_string()))?;
 
         let mut spans = Vec::new();
@@ -1344,8 +1541,7 @@ impl DocumentStore {
             })
             .collect();
         let is_encrypted = doc.is_encrypted();
-        let system_anchors = Self::cached_system_trust_anchors();
-        let signatures = Self::extract_signatures_internal(doc, system_anchors);
+        let signatures = Self::extract_signatures_internal(doc);
 
         let attachments = doc
             .embedded_files()
@@ -1492,12 +1688,19 @@ impl DocumentStore {
     }
 
     /// Extract signature information and evaluate trust chains
-    fn extract_signatures_internal(
-        doc: &PdfDocument,
-        anchors: &[zpdf::trust::TrustAnchor],
-    ) -> Vec<crate::models::SignatureInfo> {
-        doc.signatures()
-            .into_iter()
+    /// Signatures of `doc`, each checked against the OS trust store.
+    ///
+    /// The trust store (every certificate in the Windows ROOT and CA stores,
+    /// parsed) is only loaded when the document actually carries a signature.
+    /// Loading it unconditionally put that scan on the path of every open,
+    /// for the large majority of files that are not signed.
+    fn extract_signatures_internal(doc: &PdfDocument) -> Vec<crate::models::SignatureInfo> {
+        let sigs = doc.signatures();
+        if sigs.is_empty() {
+            return Vec::new();
+        }
+        let anchors = Self::cached_system_trust_anchors();
+        sigs.into_iter()
             .map(|sig| {
                 let (is_trusted, trust_status, cert_chain) =
                     Self::evaluate_signature_trust(sig.cms_blob.as_deref(), anchors);
@@ -1969,8 +2172,8 @@ impl DocumentStore {
 
         let mut fonts = doc.load_page_fonts(&page);
         let images = self.image_caches.entry(doc_id).or_default();
-        let content = doc
-            .page_content_bytes(&page)
+        let (content, _) = doc
+            .page_content_with_diagnostics(&page)
             .map_err(|e| PdfError::RenderFailed(e.to_string()))?;
         let page_rect = page.effective_box();
 
@@ -2134,8 +2337,8 @@ impl DocumentStore {
             .page(page_num)
             .map_err(|_| PdfError::PageNotFound(page_num))?;
         let mut fonts = doc.load_page_fonts(&page);
-        let content = doc
-            .page_content_bytes(&page)
+        let (content, _) = doc
+            .page_content_with_diagnostics(&page)
             .map_err(|e| PdfError::SearchError(e.to_string()))?;
 
         let mut spans = Vec::new();
@@ -2172,8 +2375,8 @@ impl DocumentStore {
             .page(page_num)
             .map_err(|_| PdfError::PageNotFound(page_num))?;
         let mut fonts = doc.load_page_fonts(&page);
-        let content = doc
-            .page_content_bytes(&page)
+        let (content, _) = doc
+            .page_content_with_diagnostics(&page)
             .map_err(|e| PdfError::SearchError(e.to_string()))?;
 
         let mut spans = Vec::new();
@@ -2274,8 +2477,8 @@ impl DocumentStore {
             .page(page_num)
             .map_err(|_| PdfError::PageNotFound(page_num))?;
         let mut fonts = doc.load_page_fonts(&page);
-        let content = doc
-            .page_content_bytes(&page)
+        let (content, _) = doc
+            .page_content_with_diagnostics(&page)
             .map_err(|e| PdfError::SearchError(e.to_string()))?;
 
         let mut spans = Vec::new();
@@ -2619,8 +2822,8 @@ impl DocumentStore {
         let mut fonts = doc.load_page_fonts(&page);
         let mut images = ImageCache::new();
         let annotations = doc.page_annotations(&page);
-        let content = doc
-            .page_content_bytes(&page)
+        let (content, _) = doc
+            .page_content_with_diagnostics(&page)
             .map_err(|e| PdfError::RenderFailed(e.to_string()))?;
 
         let display_list = ContentInterpreter::new(page.effective_box())
@@ -2776,7 +2979,7 @@ impl DocumentStore {
                 continue;
             };
             let mut fonts = doc.load_page_fonts(&page);
-            let Ok(content) = doc.page_content_bytes(&page) else {
+            let Ok((content, _)) = doc.page_content_with_diagnostics(&page) else {
                 continue;
             };
 
@@ -2929,8 +3132,8 @@ impl DocumentStore {
             .page(page_num)
             .map_err(|_| PdfError::PageNotFound(page_num))?;
         let mut fonts = doc.load_page_fonts(&page);
-        let content = doc
-            .page_content_bytes(&page)
+        let (content, _) = doc
+            .page_content_with_diagnostics(&page)
             .map_err(|e| PdfError::SearchError(e.to_string()))?;
 
         let mut spans = Vec::new();

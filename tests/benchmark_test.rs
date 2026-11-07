@@ -1,4 +1,3 @@
-use pdfbull::models::DocumentId;
 use pdfbull::pdf_engine::{
     DocumentStore, RenderFilter, RenderOptions, RenderQuality, create_render_cache,
 };
@@ -35,16 +34,19 @@ fn benchmark_pdfbull_open_and_render() {
     println!("          PDFbull Engine Benchmark Results              ");
     println!("========================================================");
 
-    let cache = create_render_cache(100, 512);
-
     for (name, path) in test_files {
         if !path.exists() {
             println!("Skipping {name} (path not found)");
             continue;
         }
 
-        let mut store = DocumentStore::new(cache.clone());
-        let doc_id = DocumentId(1);
+        // A fresh render cache and a fresh document id per file. Sharing one
+        // cache and reusing `DocumentId(1)` for every file made "page 1" of
+        // every file after the first a cache hit of the *previous* file's page
+        // (the 0.01 ms results once quoted in the README), not a render.
+        let cache = create_render_cache(100, 512);
+        let mut store = DocumentStore::new(cache);
+        let doc_id = pdfbull::models::next_doc_id();
 
         // Benchmark Document Open + Parsing
         let start_open = Instant::now();

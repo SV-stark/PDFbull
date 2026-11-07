@@ -1,6 +1,6 @@
 [package]
 name = "pdfbull"
-version = "0.20.0"
+version = "0.20.1"
 description = "A lightweight PDF reader"
 authors = ["SV-stark"]
 edition = "2024"
@@ -77,6 +77,8 @@ crossbeam-channel = "0.5.17"
 ocrs = "0.13.1"
 rten = { version = "0.26.0", features = ["mmap", "rten_format"] }
 nucleo-matcher = "0.3"
+# Inflates comic-book (.cbz) archive entries. Already in the tree via lopdf.
+flate2 = "1.1"
 zeroize = { version = "1.9", features = ["derive"] }
 
 [target.'cfg(windows)'.dependencies]
@@ -90,6 +92,7 @@ windows = { version = "0.62.2", features = [
     "Win32_System_Registry",
     "Win32_Security_Cryptography",
     "Win32_System_Console",
+    "Win32_System_ProcessStatus",
 ] }
 
 [features]
@@ -122,7 +125,7 @@ all = { level = "warn", priority = -1 }
 # amount of code size here and keeps that safety net real.
 [profile.release]
 opt-level = 3
-lto = "fat"
+lto = "thin"
 codegen-units = 1
 strip = true
 

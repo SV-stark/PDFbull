@@ -89,9 +89,7 @@ fn reload_if_needed(
     let mut store_ref = std::panic::AssertUnwindSafe(&mut *store);
     let reload_path = path.clone();
     let res = catch_worker_panic("reload_if_needed", move || {
-        store_ref
-            .open_document(&reload_path, pass.as_ref().map(|s| s.as_str()), doc_id)
-            .map(|_| ())
+        store_ref.load_document(&reload_path, pass.as_ref().map(|s| s.as_str()), doc_id)
     });
     match res {
         Ok(()) => store.set_loaded_generation(doc_id, generation),
@@ -282,7 +280,7 @@ pub fn spawn_engine_thread(cache_size: u64, max_memory_mb: u64) -> EngineState {
                                 .as_ref()
                                 .map(|p| zeroize::Zeroizing::new(p.clone()));
                             let res = catch_worker_panic("open", move || {
-                                store_ref.open_document(
+                                store_ref.open_document_for_view(
                                     &path_clone,
                                     pass_for_open.as_ref().map(|z| z.as_str()),
                                     doc_id,

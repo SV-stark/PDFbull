@@ -372,6 +372,7 @@ pub struct DocumentViewport {
     pub text_cache: std::collections::HashMap<usize, std::sync::Arc<Vec<crate::models::TextItem>>>,
     pub rendered_pages: std::collections::HashMap<usize, std::sync::Arc<RenderImage>>,
     pub rendered_zoom: std::collections::HashMap<usize, f32>,
+    pub failed_pages: std::collections::HashSet<usize>,
     pub scroll_handle: ScrollHandle,
     pub page_origins:
         std::sync::Arc<std::sync::RwLock<std::collections::HashMap<usize, Point<Pixels>>>>,
@@ -406,6 +407,8 @@ pub struct DocumentViewport {
     /// page turn. Cleared whenever a delta is consumed by real scrolling,
     /// whenever the page changes, and when a turn is taken.
     pub wheel_residual_y: f32,
+    /// Presentation mode: black surround and no padding around the page.
+    pub presentation: bool,
 }
 
 impl Default for DocumentViewport {
@@ -441,10 +444,12 @@ impl DocumentViewport {
             page_rotations: std::collections::HashMap::new(),
             page_sizes: std::collections::HashMap::new(),
             wheel_residual_y: 0.0,
+            presentation: false,
             annotations: Vec::new(),
             annotations_by_page: std::collections::HashMap::new(),
             annotations_arc: std::collections::HashMap::new(),
             search_highlights: std::collections::HashMap::new(),
+            failed_pages: std::collections::HashSet::new(),
         }
     }
 
@@ -465,6 +470,7 @@ impl DocumentViewport {
         self.selected_text = None;
         self.rendered_pages.clear();
         self.rendered_zoom.clear();
+        self.failed_pages.clear();
         self.text_cache.clear();
         self.search_highlights.clear();
         self.annotations.clear();
@@ -526,6 +532,7 @@ impl DocumentViewport {
     pub fn invalidate_rendered_pages(&mut self) {
         self.rendered_pages.clear();
         self.rendered_zoom.clear();
+        self.failed_pages.clear();
     }
 
     /// Page-slot pitch in Continuous mode: one card height plus the gap that
@@ -1312,7 +1319,13 @@ impl DocumentViewport {
                             // frame rebuilt all 48 page cards, and the app became
                             // unresponsive to input -- including the wheel, so
                             // scrolling appeared dead.
-                            div().text_sm().child("Rendering page…"),
+                            div()
+                                .text_sm()
+                                .child(if self.failed_pages.contains(&page_idx) {
+                                    "Unable to render page"
+                                } else {
+                                    "Rendering page…"
+                                }),
                         )
                         .child(
                             div()
@@ -1372,7 +1385,12 @@ impl DocumentViewport {
         + Copy,
         on_scroll_wheel: impl Fn(&mut V, &ScrollEvent, &mut Window, &mut Context<V>) + 'static + Copy,
     ) -> AnyElement {
-        let muted = cx.theme().muted;
+        let muted = if self.presentation {
+            gpui_kit::black()
+        } else {
+            cx.theme().muted
+        };
+        let presentation = self.presentation;
         let cur_page = self.current_page;
         let total = self.total_pages.max(1);
 
@@ -1422,7 +1440,8 @@ impl DocumentViewport {
                             .items_center()
                             .min_w_full()
                             .min_h_full()
-                            .py_8()
+                            .when(!presentation, |el| el.py_8())
+                            .when(presentation, |el| el.justify_center())
                             .child(card),
                     )
                     .into_any_element()
@@ -1470,7 +1489,8 @@ impl DocumentViewport {
                             .items_center()
                             .min_w_full()
                             .min_h_full()
-                            .py_8()
+                            .when(!presentation, |el| el.py_8())
+                            .when(presentation, |el| el.justify_center())
                             .child(
                                 div()
                                     .flex()
