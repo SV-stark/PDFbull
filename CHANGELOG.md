@@ -5,6 +5,15 @@ All notable changes to the PDFbull project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Fixed
+- **CI after v0.20.1**:
+  - Clippy `let_unit_value`: dropped `let _ =` on two `cx.update(|cx| cx.quit())` calls (`src/ui_gpui/app_view.rs`, `src/ui_gpui/mod.rs`).
+  - cargo-deny: ignored five new "unmaintained" advisories that only reach PDFbull through gpui-kit (`instant`, `rustls-pemfile`, `zbus_names`, `zvariant`, `zvariant_derive`).
+  - Stable Release: the upstream OCR model bucket now returns AccessDenied, so the workflow uses the models committed under `models/` and only downloads a missing one. A Devanagari file that is a byte copy of the Latin model is no longer shipped.
+  - dist Release: `aarch64-apple-darwin` now builds on `macos-15`; GitHub no longer offers the macOS 14 arm64 runner.
+
 ## [0.20.1] - 2026-11-07
 
 ### Fixed

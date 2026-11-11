@@ -9,11 +9,10 @@
   <a href="https://github.com/SV-stark/PDFbull/releases/tag/nightly"><img src="https://github.com/SV-stark/PDFbull/actions/workflows/release.yml/badge.svg" alt="Nightly Release"></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/License-MIT-green.svg" alt="License: MIT"></a>
   <a href="https://github.com/longbridge/gpui-kit"><img src="https://img.shields.io/badge/UI-GPUI--Kit-blueviolet" alt="Built with GPUI-Kit"></a>
-  <a href="https://iced.rs/"><img src="https://img.shields.io/badge/Fallback%20UI-Iced-blue" alt="Iced Fallback"></a>
   <a href="https://www.rust-lang.org/"><img src="https://img.shields.io/badge/Backend-Rust-black?logo=rust" alt="Rust"></a>
 </p>
 
-**PDFbull** is a professional, high-performance PDF reader and editor engineered for efficiency. By combining the power of the **zpdf crate** with the safety of **Rust** and the modern, GPU-accelerated UI framework **GPUI-Kit** (with seamless **Iced** fallback), PDFbull delivers a desktop experience that is significantly faster, smoother, and more resource-efficient than traditional Electron or WebView-based alternatives.
+**PDFbull** is a professional, high-performance PDF reader and editor engineered for efficiency. By combining the power of the **zpdf crate** with the safety of **Rust** and the modern, GPU-accelerated UI framework **GPUI-Kit**, PDFbull delivers a desktop experience that is significantly faster, smoother, and more resource-efficient than traditional Electron or WebView-based alternatives.
 
 > **Engine note:** PDFbull utilizes the pure-Rust **[zpdf](https://crates.io/crates/zpdf)** engine with software rendering powered by **`zpdf-render-cpu`** (via **`tiny-skia`**). This backend eliminates GPU driver-level overhead, adapter initialization delays, and slow texture memory readbacks while pairing seamlessly with GPUI hardware-accelerated canvas surfaces.
 
@@ -25,7 +24,6 @@ PDFbull is built from the ground up for speed, leveraging modern Rust ecosystem 
 
 - **GPU-Accelerated UI with GPUI-Kit**: Next-gen desktop presentation layer delivering buttery-smooth 120Hz/60FPS rendering and instant layout passes with zero web runtime bloat.
 - **Lucide Vector Icons**: Fully resolution-independent vector icons across the ribbon, sidebars, search HUD, and dialogs.
-- **Multi-Engine Dual Compatibility**: Seamless support for both GPUI-Kit (default) and classic Iced UI (`--iced`), ensuring zero regressions across all workflows.
 - **CPU Rasterization via zpdf**: Pages are rasterized directly to system RAM using `zpdf-render-cpu` (powered by `tiny-skia`), avoiding CPU-GPU transfer bottlenecks and starting renders instantly.
 - **Parallel Processing**: Powered by **Rayon**, heavy computational tasks like rendering, filtering, and search are parallelized across all available CPU cores.
 - **Smart Caching**: Powered by **quick_cache**, a lightweight, concurrent cache library with custom weighters, ensuring instant access to recently viewed pages.
@@ -83,13 +81,13 @@ Timings measured across diverse document scales on Windows 11:
   - **Layers (OCG)**: CAD/drawing layer visibility controls.
 - **Comprehensive Modal Overlays**: Clean centered dialogs for Watermarking, Headers/Footers, Passwords, Security/Permissions, Signatures, Page Organizer, and Settings.
 - **Developer Log Drawer**: Bottom sliding console with severity log level filters (All, Info, Warn, Error), clipboard copy, and clear tools.
-- **Classic Iced Fallback**: Launch with `pdfbull --iced` at any time to access the legacy Iced UI backend.
 
 ### ⌨️ Keyboard-First Reading
 - **Command Palette** (`Ctrl + K`): fuzzy-search and run any command — navigation, zoom, layout, tools, export.
 - **Fit Width / Fit Page**: zoom follows the window as it resizes; status-bar buttons and `Ctrl + 2` / `Ctrl + 3`.
 - **Presentation Mode** (`F5`): full screen, black surround, one page at a time, fitted to the screen.
 - **Distraction-Free Full Screen** (`F11`): hides the ribbon, tabs, sidebar and status bar.
+- **Picks Up Where You Left Off**: every file remembers its last page and zoom (up to 500 files), so reopening it, or switching back to its tab, lands on the same spot.
 - **Go To Page, Back & Forward**: jump anywhere with `G`, return with `Alt + ←`.
 - **Vim-style keys**: `J`/`K` scroll, `N`/`P` turn pages, `C` continuous, `B` book view, `Z` cycle zoom.
 
@@ -221,7 +219,6 @@ pdfbull comic.cbz -fullscreen      # start in full screen
 ## 🛰️ Technology Stack
 
 - **Primary UI Toolkit**: [GPUI-Kit](https://github.com/longbridge/gpui-kit) / [GPUI](https://github.com/zed-industries/gpui) (GPU-Accelerated, Native Desktop Framework)
-- **Fallback UI Toolkit**: [Iced](https://iced.rs/) (`--iced` CLI fallback)
 - **Vector Icons**: [Lucide](https://lucide.dev/) (Crisp resolution-independent vector glyphs)
 - **Language**: [Rust](https://www.rust-lang.org/) (2024 Edition)
 - **Concurrency**: [Tokio](https://tokio.rs/) (Async Runtime) & [Rayon](https://github.com/rayon-rs/rayon) (Data Parallelism)
@@ -238,7 +235,7 @@ pdfbull comic.cbz -fullscreen      # start in full screen
 - [x] **High-Performance Rendering Engine** (Tokio + Rayon integration)
 - [x] **Basic Annotation System** (Highlights, Rectangles, Text, Redaction)
 - [x] **Migration to zpdf engine** (replaced pdfium-render with pure-Rust zpdf + CPU rasterizer)
-- [x] **Migration to Iced UI** (Replaced Slint with Iced)
+- [x] **Migration to Iced UI** (Replaced Slint with Iced; later retired)
 - [x] **Modern UI Overhaul with GPUI-Kit** (GPU-accelerated presentation layer, 5-tab ribbon, multi-mode sidebar, modal overlays)
 - [x] **Form Field Detection & Filling**
 - [x] **GPU / WebGPU Rendering** (wire up `zpdf-render-wgpu`)

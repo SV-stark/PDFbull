@@ -56,6 +56,8 @@ nul
 .antigravity/
 .antigravitycli/
 .agents/skills/
+agent-session.jsonl
+rustc-ice-*.txt
 Vespetrel/
 Home.png
 reader.png

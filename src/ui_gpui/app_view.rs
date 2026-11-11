@@ -79,6 +79,14 @@ pub struct PdfbullView {
     /// For tabs opened from a comic book or picture: the user's own file.
     /// The tab's `path` is the converted PDF copy the engine reads.
     pub tab_sources: std::collections::HashMap<crate::models::DocumentId, std::path::PathBuf>,
+    /// Last page and zoom of every file opened, so a file reopens (and a tab
+    /// comes back) where it was left. Persisted to `file_positions.json`.
+    pub file_positions: crate::storage::FilePositions,
+    /// Documents the engine has finished opening.
+    opened_docs: std::collections::HashSet<crate::models::DocumentId>,
+    /// Documents whose saved position has been applied to the viewport, so
+    /// the viewport's page and zoom are really theirs and may be remembered.
+    positioned_docs: std::collections::HashSet<crate::models::DocumentId>,
     /// Keeps `sidebar.search_query` in sync with the sidebar's search editor.
     _search_sub: Option<Subscription>,
     /// Enter in the go-to-page box and the command palette.
@@ -261,6 +269,13 @@ impl PdfbullView {
                 },
             ));
         }
+        // Closing the window or quitting must not lose the page each open
+        // file was on.
+        _reader_subs.push(_cx.on_app_quit(|this, _| {
+            this.save_reading_state();
+            async {}
+        }));
+        _reader_subs.push(_cx.on_release(|this, _| this.save_reading_state()));
 
         Self {
             engine: crate::engine::spawn_engine_thread(64, settings.max_cache_memory as u64),
@@ -283,16 +298,110 @@ impl PdfbullView {
             active_search_seq: 0,
             reader,
             tab_sources: std::collections::HashMap::new(),
+            file_positions: crate::storage::load_file_positions(),
+            opened_docs: std::collections::HashSet::new(),
+            positioned_docs: std::collections::HashSet::new(),
             _search_sub,
             _reader_subs,
         }
     }
 
+    /// The user's own file behind a document: the comic or picture it was
+    /// converted from, otherwise the PDF itself.
+    fn doc_source_path(&self, doc_id: crate::models::DocumentId) -> Option<std::path::PathBuf> {
+        self.tab_sources.get(&doc_id).cloned().or_else(|| {
+            self.tabs
+                .tabs
+                .iter()
+                .find(|t| t.doc_id == Some(doc_id))
+                .and_then(|t| t.path.clone())
+        })
+    }
+
+    /// Note the active document's page and zoom in memory (no disk write).
+    fn remember_active_position(&mut self) {
+        let Some(doc_id) = self.active_doc_id else {
+            return;
+        };
+        if !self.positioned_docs.contains(&doc_id) || self.viewport.total_pages == 0 {
+            return;
+        }
+        let Some(path) = self.doc_source_path(doc_id) else {
+            return;
+        };
+        let fit = match self.reader.zoom_mode {
+            ZoomMode::FitWidth => "width",
+            ZoomMode::FitPage => "page",
+            ZoomMode::Manual => "manual",
+        };
+        self.file_positions.insert(
+            crate::storage::position_key(&path),
+            crate::storage::FilePosition {
+                page: self
+                    .viewport
+                    .current_page
+                    .min(self.viewport.total_pages.saturating_sub(1)),
+                zoom: self.viewport.zoom,
+                fit: fit.into(),
+                last_used: crate::storage::now_unix(),
+            },
+        );
+    }
+
+    /// Remember where the active file is and write every position (and the
+    /// session) to disk.
+    pub fn save_reading_state(&mut self) {
+        self.remember_active_position();
+        crate::storage::prune_file_positions(&mut self.file_positions);
+        crate::storage::save_file_positions(&self.file_positions);
+        self.persist_session_if_enabled();
+    }
+
+    /// Put the active document back on the page and zoom it was left at.
+    /// Does nothing until the engine has opened it (the page count would be
+    /// a placeholder before then); a file seen for the first time starts at
+    /// page 1 with the default zoom.
+    fn restore_active_position(&mut self, cx: &mut Context<Self>) {
+        let Some(doc_id) = self.active_doc_id else {
+            return;
+        };
+        if !self.opened_docs.contains(&doc_id) {
+            return;
+        }
+        self.positioned_docs.insert(doc_id);
+        let saved = self
+            .doc_source_path(doc_id)
+            .and_then(|p| self.file_positions.get(&crate::storage::position_key(&p)))
+            .cloned();
+        let Some(pos) = saved else {
+            self.go_to_page(0, false, cx);
+            return;
+        };
+        match pos.fit.as_str() {
+            "width" => self.reader.zoom_mode = ZoomMode::FitWidth,
+            "page" => self.reader.zoom_mode = ZoomMode::FitPage,
+            _ => {
+                self.reader.zoom_mode = ZoomMode::Manual;
+                if pos.zoom.is_finite() {
+                    self.viewport.zoom = pos.zoom.clamp(0.25, 5.0);
+                }
+            }
+        }
+        self.reader.last_fitted_zoom = 0.0;
+        self.reader.last_fit_size = (0.0, 0.0);
+        self.apply_zoom_mode(cx);
+        self.go_to_page(pos.page, false, cx);
+        if pos.page > 0 {
+            self.status_message = Some(format!("Back on page {}.", pos.page + 1));
+        }
+    }
+
     /// Persist current open tabs and active tab index to session.json when session restore is enabled.
-    pub fn persist_session_if_enabled(&self) {
+    pub fn persist_session_if_enabled(&mut self) {
         if !self.dialogs.settings.restore_session {
             return;
         }
+        self.remember_active_position();
         let open_tabs: Vec<crate::models::SessionTabEntry> = self
             .tabs
             .tabs
@@ -302,10 +411,13 @@ impl PdfbullView {
                     .and_then(|id| self.tab_sources.get(&id))
                     .or(t.path.as_ref())
                     .map(|p| {
+                        // Each tab's own position; this used to write the
+                        // active tab's page and zoom into every entry.
+                        let pos = self.file_positions.get(&crate::storage::position_key(p));
                         crate::models::SessionTabEntry::Detailed(crate::models::TabSession {
                             path: p.to_string_lossy().to_string(),
-                            current_page: self.viewport.current_page,
-                            zoom: self.viewport.zoom,
+                            current_page: pos.map_or(0, |p| p.page),
+                            zoom: pos.map_or(self.viewport.zoom, |p| p.zoom),
                             viewport_y: self.viewport.scroll_handle.offset().y.into(),
                             rotation: self.viewport.rotation as i32,
                             auto_crop: false,
@@ -519,6 +631,7 @@ impl PdfbullView {
         // `sync_viewport_to_active_tab` does this on every tab switch; the open
         // path did not, so opening a file while another document had unsaved
         // annotations discarded them.
+        self.remember_active_position();
         self.stash_active_annotations();
         self.active_doc_id = Some(doc_id);
         self.doc_geometry.insert(
@@ -616,6 +729,7 @@ impl PdfbullView {
                                 page_height,
                             },
                         );
+                        view.opened_docs.insert(doc_id);
                         if view.active_doc_id == Some(doc_id) {
                             view.viewport.total_pages = open_res.page_count;
                             if open_res.max_width > 0.0 {
@@ -668,9 +782,13 @@ impl PdfbullView {
                             view.dialogs.signatures = open_res.signatures;
                             view.rendering_pages.clear();
                             view.render_needed_pages(cx);
-                            // Command-line `-page N` / `-presentation`.
+                            // Command-line `-page N` / `-presentation`; otherwise
+                            // the page and zoom this file was last read at.
                             if let Some(page) = view.reader.start_page.take() {
+                                view.positioned_docs.insert(doc_id);
                                 view.go_to_page(page, false, cx);
+                            } else {
+                                view.restore_active_position(cx);
                             }
                             if view.reader.start_mode.is_some() {
                                 view.reader.start_ready = true;
@@ -745,7 +863,7 @@ impl PdfbullView {
                     if crate::startup_report::requested() {
                         crate::startup_report::mark("document failed to open");
                         crate::startup_report::emit();
-                        let _ = cx.update(|cx| cx.quit());
+                        cx.update(|cx| cx.quit());
                     }
                     let _ = this.update(cx, |view, cx| {
                         if view.active_doc_id == Some(doc_id) {
@@ -824,7 +942,11 @@ impl PdfbullView {
         else {
             return;
         };
-        if self.active_doc_id != doc_id {
+        let switched = self.active_doc_id != doc_id;
+        if switched {
+            // Remember where the outgoing document was, so coming back to
+            // this tab lands on the same page instead of page 1.
+            self.remember_active_position();
             // Keep the outgoing document's annotations before the reset wipes
             // them. Without this, returning to a tab showed an empty canvas and
             // the next Ctrl+S sent an empty list, which deleted every
@@ -901,6 +1023,9 @@ impl PdfbullView {
                 .unwrap_or_default();
         }
         self.render_needed_pages(cx);
+        if switched {
+            self.restore_active_position(cx);
+        }
     }
 
     pub fn render_needed_pages(&mut self, cx: &mut Context<Self>) {
@@ -3602,8 +3727,13 @@ impl PdfbullView {
         if idx >= self.tabs.tabs.len() {
             return;
         }
+        if self.tabs.tabs[idx].doc_id == self.active_doc_id {
+            self.remember_active_position();
+        }
         let removed = self.tabs.tabs.remove(idx);
         if let Some(doc_id) = removed.doc_id {
+            self.opened_docs.remove(&doc_id);
+            self.positioned_docs.remove(&doc_id);
             self.annotations_by_doc.remove(&doc_id);
             self.doc_geometry.remove(&doc_id);
             self.doc_metadata.remove(&doc_id);
@@ -3624,7 +3754,7 @@ impl PdfbullView {
             self.tabs.active_tab_index = 0;
         }
         self.sync_viewport_to_active_tab(cx);
-        self.persist_session_if_enabled();
+        self.save_reading_state();
         cx.notify();
     }
 

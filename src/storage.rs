@@ -363,9 +363,107 @@ pub fn save_session(session: &SessionData) {
     }
 }
 
+/// Where the reader was in one file: the page, the zoom and how the zoom was
+/// chosen. Kept for every file opened, so reopening a file (or switching back
+/// to its tab) returns to the same spot.
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct FilePosition {
+    pub page: usize,
+    pub zoom: f32,
+    /// `"width"`, `"page"` or `"manual"`.
+    #[serde(default)]
+    pub fit: String,
+    #[serde(default)]
+    pub last_used: u64,
+}
+
+/// Oldest entries are dropped beyond this many files.
+pub const MAX_FILE_POSITIONS: usize = 500;
+
+pub type FilePositions = std::collections::HashMap<String, FilePosition>;
+
+/// The map key for a file: separators unified and, on Windows, lower-cased,
+/// matching [`crate::models::paths_equal`].
+pub fn position_key(path: &Path) -> String {
+    let s = path.to_string_lossy().replace('/', "\\");
+    if cfg!(windows) { s.to_lowercase() } else { s }
+}
+
+pub fn now_unix() -> u64 {
+    OffsetDateTime::now_utc().unix_timestamp().max(0) as u64
+}
+
+pub fn load_file_positions() -> FilePositions {
+    let path = get_config_dir().join("file_positions.json");
+    match fs::read_to_string(&path) {
+        Ok(data) => serde_json::from_str(&data).unwrap_or_else(|e| {
+            tracing::warn!("Corrupted file_positions.json: {e}");
+            let _ = fs::rename(&path, path.with_extension("bak"));
+            FilePositions::new()
+        }),
+        Err(_) => FilePositions::new(),
+    }
+}
+
+/// Keep only the [`MAX_FILE_POSITIONS`] most recently used entries.
+pub fn prune_file_positions(positions: &mut FilePositions) {
+    if positions.len() <= MAX_FILE_POSITIONS {
+        return;
+    }
+    let mut stamps: Vec<u64> = positions.values().map(|p| p.last_used).collect();
+    stamps.sort_unstable_by(|a, b| b.cmp(a));
+    let cutoff = stamps[MAX_FILE_POSITIONS - 1];
+    positions.retain(|_, p| p.last_used >= cutoff);
+    // Ties at the cutoff can still leave too many; drop arbitrary extras.
+    while positions.len() > MAX_FILE_POSITIONS {
+        let Some(key) = positions
+            .iter()
+            .min_by_key(|(_, p)| p.last_used)
+            .map(|(k, _)| k.clone())
+        else {
+            break;
+        };
+        positions.remove(&key);
+    }
+}
+
+pub fn save_file_positions(positions: &FilePositions) {
+    if let Ok(json) = serde_json::to_string(positions) {
+        write_json_in_background("file_positions.json", json);
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn file_positions_are_pruned_to_the_newest() {
+        let mut map = FilePositions::new();
+        for i in 0..(MAX_FILE_POSITIONS + 25) {
+            map.insert(
+                format!("f{i}"),
+                FilePosition {
+                    page: i,
+                    zoom: 1.0,
+                    fit: "manual".into(),
+                    last_used: i as u64,
+                },
+            );
+        }
+        prune_file_positions(&mut map);
+        assert_eq!(map.len(), MAX_FILE_POSITIONS);
+        assert!(!map.contains_key("f0"));
+        assert!(map.contains_key(&format!("f{}", MAX_FILE_POSITIONS + 24)));
+    }
+
+    #[test]
+    fn position_key_ignores_separator_style() {
+        assert_eq!(
+            position_key(Path::new("C:/Docs/a.pdf")),
+            position_key(Path::new("C:\\Docs\\a.pdf"))
+        );
+    }
 
     #[test]
     fn test_time_ago_just_now() {

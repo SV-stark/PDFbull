@@ -98,7 +98,7 @@ pub fn run_gpui_app() {
                                     .await;
                                 crate::startup_report::mark("gave up after 30 s");
                                 crate::startup_report::emit();
-                                let _ = cx.update(|cx| cx.quit());
+                                cx.update(|cx| cx.quit());
                             })
                             .detach();
                         }

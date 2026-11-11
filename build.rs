@@ -1,4 +1,10 @@
 fn main() {
+    // Without any `rerun-if-changed` line Cargo reruns this script — and so
+    // recompiles the crate — whenever *any* file in the package changes,
+    // including pdfbull.log and the other files written next to Cargo.toml.
+    // The script only reads these two.
+    println!("cargo:rerun-if-changed=build.rs");
+    println!("cargo:rerun-if-changed=PDFbull.ico");
     if std::env::var("CARGO_CFG_TARGET_OS").unwrap_or_default() == "windows" {
         println!("cargo:rustc-link-arg=/STACK:8388608");
         let mut res = winresource::WindowsResource::new();

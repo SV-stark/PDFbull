@@ -10,6 +10,11 @@ ignore = [
     "RUSTSEC-2026-0206", # rustybuzz is unmaintained (transitive via usvg/iced)
     "RUSTSEC-2026-0192", # ttf-parser is unmaintained (transitive via fontdb/zpdf)
     "RUSTSEC-2024-0436", # paste unmaintained (transitive via wgpu/image)
+    "RUSTSEC-2024-0384", # instant unmaintained (transitive via gpui-kit -> gpui-base)
+    "RUSTSEC-2025-0134", # rustls-pemfile unmaintained (transitive via gpui-kit-assets -> gpui-pre-reqwest)
+    "RUSTSEC-2026-0371", # zbus_names unmaintained (Linux only: gpui-kit -> accesskit_unix -> atspi)
+    "RUSTSEC-2026-0370", # zvariant unmaintained (Linux only: same zbus/atspi chain)
+    "RUSTSEC-2026-0372", # zvariant_derive unmaintained (Linux only: same zbus/atspi chain)
 ]
 
 [licenses]
