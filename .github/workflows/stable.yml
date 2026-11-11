@@ -60,7 +60,7 @@ jobs:
                               break
                           }
                       } catch {
-                          Write-Warning "Failed to download from $url: $_"
+                          Write-Warning "Failed to download from $url - $_"
                       }
                   }
                   if (-not $downloaded) {
