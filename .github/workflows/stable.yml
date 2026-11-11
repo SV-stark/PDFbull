@@ -26,40 +26,57 @@ jobs:
       - name: Rust cache
         uses: swatinem/rust-cache@v2
 
+      - name: Fetch PP-OCRv6 Multilingual Models (.onnx)
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force -Path "models"
+          $models = @(
+              @{
+                  File = "models/PP-OCRv6_small_det.onnx"
+                  Urls = @(
+                      "https://raw.githubusercontent.com/ShareX/ShareX/develop/ShareX.OCR/Models/PP-OCRv6_small_det/inference.onnx",
+                      "https://github.com/SV-stark/PDFbull/releases/download/models/PP-OCRv6_small_det.onnx"
+                  )
+              },
+              @{
+                  File = "models/PP-OCRv6_small_rec.onnx"
+                  Urls = @(
+                      "https://raw.githubusercontent.com/ShareX/ShareX/develop/ShareX.OCR/Models/PP-OCRv6_small_rec/inference.onnx",
+                      "https://github.com/SV-stark/PDFbull/releases/download/models/PP-OCRv6_small_rec.onnx"
+                  )
+              }
+          )
+
+          foreach ($m in $models) {
+              if (-not (Test-Path $m.File) -or (Get-Item $m.File).Length -lt 1000000) {
+                  $downloaded = $false
+                  foreach ($url in $m.Urls) {
+                      try {
+                          Write-Host "Downloading $($m.File) from $url..."
+                          Invoke-WebRequest -Uri $url -OutFile $m.File -ErrorAction Stop
+                          if ((Test-Path $m.File) -and (Get-Item $m.File).Length -gt 1000000) {
+                              $downloaded = $true
+                              Write-Host "Successfully downloaded $($m.File) ($( (Get-Item $m.File).Length ) bytes)."
+                              break
+                          }
+                      } catch {
+                          Write-Warning "Failed to download from $url: $_"
+                      }
+                  }
+                  if (-not $downloaded) {
+                      Write-Error "Failed to obtain $($m.File) from all available sources!"
+                      exit 1
+                  }
+              } else {
+                  Write-Host "$($m.File) already present ($( (Get-Item $m.File).Length ) bytes)."
+              }
+          }
+
       - name: Run Tests
         run: cargo test
 
       - name: Build PDFbull (Release)
         run: cargo build --release
-
-      - name: Fetch OCR Models (.rten)
-        shell: pwsh
-        run: |
-          New-Item -ItemType Directory -Force -Path "models"
-          # The Latin models are committed under models/. The upstream S3
-          # bucket now answers AccessDenied, so it is only a fallback for a
-          # checkout that lacks them.
-          foreach ($name in @("text-detection.rten", "text-recognition.rten")) {
-              if (-not (Test-Path "models/$name")) {
-                  Invoke-WebRequest -Uri "https://ocrs-models.s3-accelerate.amazonaws.com/$name" -OutFile "models/$name"
-              }
-          }
-
-          # The committed devanagari file is a byte copy of the Latin
-          # recognition model, which would make Hindi OCR return Latin
-          # gibberish. Drop it if so, then try the genuine one.
-          $dev = "models/devanagari_PP-OCRv4_rec.rten"
-          if ((Test-Path $dev) -and ((Get-FileHash $dev).Hash -eq (Get-FileHash "models/text-recognition.rten").Hash)) {
-              Remove-Item $dev
-          }
-          if (-not (Test-Path $dev)) {
-              $devUrl = "https://github.com/SV-stark/PDFbull/releases/download/models/devanagari_PP-OCRv4_rec.rten"
-              try {
-                  Invoke-WebRequest -Uri $devUrl -OutFile $dev -ErrorAction Stop
-              } catch {
-                  Write-Warning "Devanagari PP-OCRv4 model not found at $devUrl - skipping inclusion (will not copy mismatched Latin model)."
-              }
-          }
 
       - name: Prepare Release Artifacts
         shell: pwsh

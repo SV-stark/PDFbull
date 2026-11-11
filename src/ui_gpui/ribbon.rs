@@ -58,9 +58,12 @@ impl PageLayoutMode {
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum RibbonAction {
+    NewFile,
     OpenFile,
     SaveFile,
     Print,
+    Undo,
+    Redo,
     ZoomIn,
     ZoomOut,
     ZoomReset,
@@ -303,6 +306,16 @@ fn render_home_strip<V: 'static>(
     let doc_group = ribbon_group(
         "File",
         vec![
+            Button::new("btn-new")
+                .icon(IconName::FilePlus)
+                .label("New")
+                .outline()
+                .small()
+                .tooltip("New blank document (Ctrl+N)")
+                .on_click(
+                    cx.listener(move |v, _, w, cx| on_action(v, RibbonAction::NewFile, w, cx)),
+                )
+                .into_any_element(),
             Button::new("btn-open")
                 .icon(IconName::FolderOpen)
                 .label("Open")
@@ -620,6 +633,25 @@ fn render_annotate_strip<V: 'static>(
         );
     }
 
+    let edit_btns = vec![
+        Button::new("btn-undo")
+            .icon(IconName::Undo)
+            .label("Undo")
+            .ghost()
+            .small()
+            .tooltip("Undo annotation (Ctrl+Z)")
+            .on_click(cx.listener(move |v, _, w, cx| on_action(v, RibbonAction::Undo, w, cx)))
+            .into_any_element(),
+        Button::new("btn-redo")
+            .icon(IconName::Redo)
+            .label("Redo")
+            .ghost()
+            .small()
+            .tooltip("Redo annotation (Ctrl+Y)")
+            .on_click(cx.listener(move |v, _, w, cx| on_action(v, RibbonAction::Redo, w, cx)))
+            .into_any_element(),
+    ];
+
     div()
         .flex()
         .flex_row()
@@ -630,6 +662,8 @@ fn render_annotate_strip<V: 'static>(
         .child(ribbon_group("Shapes", shape_btns, muted_fg))
         .child(ribbon_divider(border))
         .child(ribbon_group("Draw & Notes", draw_btns, muted_fg))
+        .child(ribbon_divider(border))
+        .child(ribbon_group("History", edit_btns, muted_fg))
         .into_any_element()
 }
 

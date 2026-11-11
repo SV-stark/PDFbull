@@ -19,7 +19,7 @@ BrandingText "PDFbull - Pure-Rust PDF & Neural OCR"
 
 ; Welcome Page Customization
 !define MUI_WELCOMEPAGE_TITLE "Welcome to PDFbull Setup"
-!define MUI_WELCOMEPAGE_TEXT "PDFbull is a high-performance PDF reader and workspace powered by pure-Rust rendering (zpdf) and built-in neural OCR (rten).\r\n\r\nThis setup wizard will install PDFbull along with Latin and Devanagari neural OCR models.\r\n\r\nClick Next to continue."
+!define MUI_WELCOMEPAGE_TEXT "PDFbull is a high-performance PDF reader and workspace powered by pure-Rust rendering (zpdf) and built-in neural OCR (rten).\r\n\r\nThis setup wizard will install PDFbull along with PP-OCRv6 multilingual neural OCR models.\r\n\r\nClick Next to continue."
 
 !insertmacro MUI_PAGE_WELCOME
 !insertmacro MUI_PAGE_DIRECTORY

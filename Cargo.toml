@@ -1,13 +1,12 @@
 [package]
 name = "pdfbull"
-version = "0.20.1"
+version = "0.21.0"
 description = "A lightweight PDF reader"
 authors = ["SV-stark"]
 edition = "2024"
 resolver = "3"
 rust-version = "1.90" # edition 2024 + let-chains
 license = "MIT"
-homepage = "https://github.com/SV-stark/PDFbull"
 repository = "https://github.com/SV-stark/PDFbull"
 exclude = [
     "models/*",
@@ -63,7 +62,6 @@ zpdf-content = "=0.18.0"
 zpdf-document = "=0.18.0"
 zpdf-image = "=0.18.0"
 zpdf-svg-export = "=0.18.0"
-csscolorparser = "0.9"
 timeago = "0.6"
 tempfile = "3"
 oxipng = { version = "10.2", default-features = false, features = ["parallel"] }
@@ -71,11 +69,11 @@ time = { version = "0.3.55", features = ["serde", "formatting", "macros"] }
 quick_cache = "0.7"
 mimalloc = "0.1"
 human-panic = "2.0"
-notify-debouncer-full = "0.7"
 interprocess = { version = "2", features = ["tokio"] }
 crossbeam-channel = "0.5.17"
 ocrs = "0.13.1"
-rten = { version = "0.26.0", features = ["mmap", "rten_format"] }
+rten = { version = "0.26.0", features = ["mmap", "rten_format", "onnx_format"] }
+rten-onnx = "0.26.0"
 nucleo-matcher = "0.3"
 # Inflates comic-book (.cbz) archive entries. Already in the tree via lopdf.
 flate2 = "1.1"

@@ -74,36 +74,36 @@ fn test_ocr_multi_line_text_reconstruction() {
 
 #[test]
 fn test_ocr_script_selection() {
+    let multi = OcrScript::Multilingual;
+    assert_eq!(multi.rec_model_filename(), "PP-OCRv6_small_rec.onnx");
+    assert_eq!(multi.det_model_filename(), "PP-OCRv6_small_det.onnx");
+    assert_eq!(multi.dict_filename(), "ppocrv6_dict.txt");
+    assert!(multi.name().contains("Multilingual"));
+
     let latin = OcrScript::Latin;
-    assert_eq!(latin.rec_model_filename(), "text-recognition.rten");
-    assert_eq!(latin.det_model_filename(), "text-detection.rten");
-    assert_eq!(latin.name(), "Latin / English");
+    assert_eq!(latin.rec_model_filename(), "PP-OCRv6_small_rec.onnx");
+    assert_eq!(latin.det_model_filename(), "PP-OCRv6_small_det.onnx");
 
     let devanagari = OcrScript::Devanagari;
-    assert_eq!(
-        devanagari.rec_model_filename(),
-        "devanagari_PP-OCRv4_rec.rten"
-    );
-    assert_eq!(devanagari.det_model_filename(), "text-detection.rten");
-    assert_eq!(devanagari.name(), "Devanagari (Hindi, Marathi, Sanskrit)");
+    assert_eq!(devanagari.rec_model_filename(), "PP-OCRv6_small_rec.onnx");
+    assert_eq!(devanagari.det_model_filename(), "PP-OCRv6_small_det.onnx");
 }
 
 #[test]
 fn test_ocr_script_defaults_and_paths() {
     let default_script = OcrScript::default();
-    assert_eq!(default_script, OcrScript::Latin);
+    assert_eq!(default_script, OcrScript::Multilingual);
 
     let model_dir = OcrScript::resolve_model_dir();
     assert!(model_dir.to_string_lossy().contains("models"));
 
-    let det_path = OcrScript::Latin.resolve_det_model_path();
-    assert!(det_path.ends_with("text-detection.rten"));
+    let det_path = OcrScript::Multilingual.resolve_det_model_path();
+    assert!(det_path.ends_with("PP-OCRv6_small_det.onnx"));
 
-    let latin_rec_path = OcrScript::Latin.resolve_rec_model_path();
-    assert!(latin_rec_path.ends_with("text-recognition.rten"));
+    let rec_path = OcrScript::Multilingual.resolve_rec_model_path();
+    assert!(rec_path.ends_with("PP-OCRv6_small_rec.onnx"));
 
-    let dev_rec_path = OcrScript::Devanagari.resolve_rec_model_path();
-    assert!(dev_rec_path.ends_with("devanagari_PP-OCRv4_rec.rten"));
+    assert!(OcrScript::Multilingual.is_model_available());
 }
 
 #[test]
@@ -165,5 +165,36 @@ fn test_ocr_command_message_payload() {
             assert_eq!(script, OcrScript::Devanagari);
         }
         _ => panic!("Expected PdfCommand::OcrPage variant"),
+    }
+}
+
+#[test]
+fn test_load_static_slice_onnx() {
+    let det_bytes = std::fs::read("models/PP-OCRv6_small_det.onnx").expect("read det");
+    let static_bytes: &'static [u8] = Box::leak(det_bytes.into_boxed_slice());
+    let model = rten::Model::load_static_slice(static_bytes);
+    assert!(model.is_ok(), "load_static_slice failed: {:?}", model.err());
+}
+
+#[test]
+fn test_pp_ocrv6_engine_init() {
+    let det_path = "models/PP-OCRv6_small_det.onnx";
+    let rec_path = "models/PP-OCRv6_small_rec.onnx";
+    let dict_path = "models/ppocrv6_dict.txt";
+    if std::path::Path::new(det_path).exists() && std::path::Path::new(rec_path).exists() {
+        let det_model = rten::Model::load_file(det_path).expect("det model loads");
+        let rec_model = rten::Model::load_file(rec_path).expect("rec model loads");
+        let alphabet = std::fs::read_to_string(dict_path).ok();
+        let engine = ocrs::OcrEngine::new(ocrs::OcrEngineParams {
+            detection_model: Some(det_model),
+            recognition_model: Some(rec_model),
+            alphabet,
+            ..Default::default()
+        });
+        assert!(
+            engine.is_ok(),
+            "ocrs engine initializes with PP-OCRv6 onnx models: {:?}",
+            engine.err()
+        );
     }
 }

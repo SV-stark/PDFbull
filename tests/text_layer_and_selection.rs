@@ -197,6 +197,109 @@ fn text_selection_highlight_coordinate_mapping_matches_items() {
     assert_eq!(viewport.selected_text.as_deref(), Some("Rust Highlighter"));
 }
 
+#[test]
+fn select_text_items_in_range_multi_line_continuous_selection() {
+    use pdfbull::ui_gpui::canvas::select_text_items_in_range;
+
+    let items = vec![
+        TextItem {
+            text: "The".into(),
+            x: 10.0,
+            y: 20.0,
+            width: 25.0,
+            height: 12.0,
+        },
+        TextItem {
+            text: "quick".into(),
+            x: 40.0,
+            y: 20.0,
+            width: 35.0,
+            height: 12.0,
+        },
+        TextItem {
+            text: "brown".into(),
+            x: 80.0,
+            y: 20.0,
+            width: 40.0,
+            height: 12.0,
+        },
+        TextItem {
+            text: "fox".into(),
+            x: 125.0,
+            y: 20.0,
+            width: 25.0,
+            height: 12.0,
+        },
+        // Line 2
+        TextItem {
+            text: "jumps".into(),
+            x: 10.0,
+            y: 40.0,
+            width: 35.0,
+            height: 12.0,
+        },
+        TextItem {
+            text: "over".into(),
+            x: 50.0,
+            y: 40.0,
+            width: 30.0,
+            height: 12.0,
+        },
+        TextItem {
+            text: "the".into(),
+            x: 85.0,
+            y: 40.0,
+            width: 25.0,
+            height: 12.0,
+        },
+        TextItem {
+            text: "lazy".into(),
+            x: 115.0,
+            y: 40.0,
+            width: 30.0,
+            height: 12.0,
+        },
+        // Line 3
+        TextItem {
+            text: "dog".into(),
+            x: 10.0,
+            y: 60.0,
+            width: 25.0,
+            height: 12.0,
+        },
+        TextItem {
+            text: "today".into(),
+            x: 40.0,
+            y: 60.0,
+            width: 35.0,
+            height: 12.0,
+        },
+    ];
+
+    // Drag from "brown" on Line 1 (x: 80, y: 22) down to "over" on Line 2 (x: 75, y: 45)
+    let selected = select_text_items_in_range(&items, 80.0, 22.0, 75.0, 45.0);
+    let texts: Vec<&str> = selected.iter().map(|it| it.text.as_str()).collect();
+    // Line 1 from "brown" onwards: "brown", "fox"
+    // Line 2 up to "over": "jumps", "over"
+    assert_eq!(texts, vec!["brown", "fox", "jumps", "over"]);
+    assert_eq!(join_selected_text_items(&selected), "brown fox\njumps over");
+
+    // Drag backward from "over" on Line 2 back to "brown" on Line 1
+    let backward = select_text_items_in_range(&items, 75.0, 45.0, 80.0, 22.0);
+    let backward_texts: Vec<&str> = backward.iter().map(|it| it.text.as_str()).collect();
+    assert_eq!(backward_texts, vec!["brown", "fox", "jumps", "over"]);
+
+    // Drag across 3 lines: from "quick" on Line 1 down to "dog" on Line 3
+    let three_lines = select_text_items_in_range(&items, 40.0, 20.0, 25.0, 65.0);
+    let three_texts: Vec<&str> = three_lines.iter().map(|it| it.text.as_str()).collect();
+    assert_eq!(
+        three_texts,
+        vec![
+            "quick", "brown", "fox", "jumps", "over", "the", "lazy", "dog"
+        ]
+    );
+}
+
 #[tokio::test]
 async fn text_layer_for_real_document_is_nonempty_and_coalesces() {
     let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));

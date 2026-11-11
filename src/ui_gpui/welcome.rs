@@ -46,6 +46,7 @@ pub struct RecentEntry {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum WelcomeAction {
+    NewFile,
     OpenFile,
     DropFiles(Vec<PathBuf>),
     MergeFiles,
@@ -283,6 +284,15 @@ impl WelcomeState {
                                         .on_click(cx.listener(move |v, _, w, cx| {
                                             cx.stop_propagation();
                                             on_action(v, WelcomeAction::OpenFile, w, cx)
+                                        })),
+                                )
+                                .child(
+                                    Button::new("btn-welcome-new")
+                                        .label("New blank PDF")
+                                        .outline()
+                                        .on_click(cx.listener(move |v, _, w, cx| {
+                                            cx.stop_propagation();
+                                            on_action(v, WelcomeAction::NewFile, w, cx)
                                         })),
                                 )
                                 .child(

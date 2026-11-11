@@ -1276,6 +1276,8 @@ fn test_close_to_right_clamps_an_out_of_range_index() {
             path: None,
             is_modified: false,
             page_rotations: std::collections::HashMap::new(),
+            undo_stack: Vec::new(),
+            redo_stack: Vec::new(),
         });
     }
     assert_eq!(tabs.tabs.len(), 3);
@@ -2236,7 +2238,7 @@ fn pdf_with_offset_mediabox() -> Vec<u8> {
     let _ = write!(out, "xref\n0 {}\n", objects.len() + 1);
     out.push_str("0000000000 65535 f \n");
     for off in &offsets {
-        let _ = write!(out, "{off:010} 00000 n \n");
+        let _ = writeln!(out, "{off:010} 00000 n ");
     }
     let _ = write!(
         out,

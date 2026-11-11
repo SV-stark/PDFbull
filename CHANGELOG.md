@@ -5,14 +5,31 @@ All notable changes to the PDFbull project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [0.21.0] - 2026-11-11
+
+### Added
+- **PP-OCRv6 Multilingual ONNX Support (`src/ocr.rs`, `src/pdf_engine.rs`)**:
+  - Upgraded OCR pipeline to Baidu's state-of-the-art **PP-OCRv6** architecture via pure-Rust `rten-onnx` parser.
+  - Replaced separate script models with a universal multilingual model recognizing **50+/100+ languages simultaneously** (English/Latin, Devanagari, CJK, Cyrillic, Arabic, etc.) without manual language pack switching.
+  - Embedded ONNX fallback models and character dictionary (`ppocrv6_dict.txt`) for instant zero-dependency execution.
+  - Automated download of missing ONNX models during local builds (`build.rs`) and in CI workflows (`.github/workflows/stable.yml`, `ci.yml`).
+- **Reading-Order Multi-Line Text Selection (`src/ui_gpui/canvas.rs`)**:
+  - Implemented `select_text_items_in_range` providing true document-flow text selection across multiple lines.
+  - Properly includes trailing items on start line, all items on intermediate lines, and leading items up to the cursor on the final line, preventing transposed column selection.
+  - Added click-count tracking to support double-click word selection and triple-click line selection.
+- **Annotation History & Undo/Redo (`src/ui_gpui/app_view.rs`, `tabs.rs`, `ribbon.rs`)**:
+  - Added per-tab isolated `undo_stack` and `redo_stack` tracking annotation additions, deletions, and modifications.
+  - Integrated Undo (`Ctrl+Z`) and Redo (`Ctrl+Y`) into the Annotate ribbon strip, Command Palette, and keyboard shortcuts.
+- **New Blank PDF Document Creation (`src/ui_gpui/app_view.rs`, `welcome.rs`)**:
+  - Added `prompt_create_blank_document` (`Ctrl+N`) in the Home ribbon strip, welcome screen, and command palette.
+- **Reading Position Persistence (`src/storage.rs`, `src/ui_gpui/app_view.rs`)**:
+  - Automatically records and restores active page, zoom level, and fit mode for up to 500 recently opened files in `file_positions.json` with LRU pruning.
 
 ### Fixed
-- **CI after v0.20.1**:
-  - Clippy `let_unit_value`: dropped `let _ =` on two `cx.update(|cx| cx.quit())` calls (`src/ui_gpui/app_view.rs`, `src/ui_gpui/mod.rs`).
-  - cargo-deny: ignored five new "unmaintained" advisories that only reach PDFbull through gpui-kit (`instant`, `rustls-pemfile`, `zbus_names`, `zvariant`, `zvariant_derive`).
-  - Stable Release: the upstream OCR model bucket now returns AccessDenied, so the workflow uses the models committed under `models/` and only downloads a missing one. A Devanagari file that is a byte copy of the Latin model is no longer shipped.
-  - dist Release: `aarch64-apple-darwin` now builds on `macos-15`; GitHub no longer offers the macOS 14 arm64 runner.
+- **Build Scripts & CI Reliability**:
+  - `build.rs`: Added `cargo:rerun-if-changed` lines to prevent unnecessary full recompilations caused by root log file modifications.
+  - GitHub Actions: Configured `macos-15` for Apple Silicon runners and fixed Clippy `let_unit_value` warnings.
+  - NSIS Installer: Updated installer definitions to package PP-OCRv6 multilingual models and dictionaries into the setup executable.
 
 ## [0.20.1] - 2026-11-07
 

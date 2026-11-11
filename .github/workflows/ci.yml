@@ -44,6 +44,20 @@ jobs:
       - name: Rust cache
         uses: swatinem/rust-cache@v2
 
+      - name: Fetch PP-OCRv6 Multilingual Models (.onnx)
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force -Path "models"
+          foreach ($m in @(
+              @{ File = "models/PP-OCRv6_small_det.onnx"; Url = "https://raw.githubusercontent.com/ShareX/ShareX/develop/ShareX.OCR/Models/PP-OCRv6_small_det/inference.onnx" },
+              @{ File = "models/PP-OCRv6_small_rec.onnx"; Url = "https://raw.githubusercontent.com/ShareX/ShareX/develop/ShareX.OCR/Models/PP-OCRv6_small_rec/inference.onnx" }
+          )) {
+              if (-not (Test-Path $m.File) -or (Get-Item $m.File).Length -lt 1000000) {
+                  Write-Host "Downloading $($m.File)..."
+                  Invoke-WebRequest -Uri $m.Url -OutFile $m.File
+              }
+          }
+
       - name: Run Clippy
         run: cargo clippy --all-targets -- -D warnings
 
@@ -61,6 +75,20 @@ jobs:
 
       - name: Rust cache
         uses: swatinem/rust-cache@v2
+
+      - name: Fetch PP-OCRv6 Multilingual Models (.onnx)
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force -Path "models"
+          foreach ($m in @(
+              @{ File = "models/PP-OCRv6_small_det.onnx"; Url = "https://raw.githubusercontent.com/ShareX/ShareX/develop/ShareX.OCR/Models/PP-OCRv6_small_det/inference.onnx" },
+              @{ File = "models/PP-OCRv6_small_rec.onnx"; Url = "https://raw.githubusercontent.com/ShareX/ShareX/develop/ShareX.OCR/Models/PP-OCRv6_small_rec/inference.onnx" }
+          )) {
+              if (-not (Test-Path $m.File) -or (Get-Item $m.File).Length -lt 1000000) {
+                  Write-Host "Downloading $($m.File)..."
+                  Invoke-WebRequest -Uri $m.Url -OutFile $m.File
+              }
+          }
 
       - name: Install cargo-nextest
         uses: taiki-e/install-action@nextest

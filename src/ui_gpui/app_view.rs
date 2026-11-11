@@ -651,6 +651,8 @@ impl PdfbullView {
             path: Some(path.clone()),
             is_modified: false,
             page_rotations: std::collections::HashMap::new(),
+            undo_stack: Vec::new(),
+            redo_stack: Vec::new(),
         });
         if let Some(source) = source {
             self.tab_sources.insert(doc_id, source);
@@ -928,6 +930,158 @@ impl PdfbullView {
             }
         })
         .detach();
+    }
+
+    pub fn prompt_create_blank_document(&mut self, cx: &mut Context<Self>) {
+        let cmd_tx = self.engine.cmd_tx.clone();
+        cx.spawn(async move |this, cx| {
+            let save_file = rfd::AsyncFileDialog::new()
+                .add_filter("PDF Documents (*.pdf)", &["pdf"])
+                .set_file_name("Untitled.pdf")
+                .save_file()
+                .await;
+            let Some(file_handle) = save_file else {
+                return;
+            };
+            let path = file_handle.path().to_path_buf();
+            let path_str = path.to_string_lossy().to_string();
+            let (tx, rx) = tokio::sync::oneshot::channel();
+            if let Err(e) = cmd_tx
+                .send(crate::commands::PdfCommand::CreateBlankDocument(
+                    path_str.clone(),
+                    tx,
+                ))
+                .await
+            {
+                tracing::error!("Failed to send CreateBlankDocument command: {e}");
+                return;
+            }
+            match rx.await {
+                Ok(Ok(created_path)) => {
+                    let _ = this.update(cx, |view, cx| {
+                        view.open_pdf_path(&created_path, None, cx);
+                        view.status_message = Some("Created and opened new blank PDF.".into());
+                        cx.notify();
+                    });
+                }
+                Ok(Err(e)) => {
+                    tracing::error!("CreateBlankDocument failed: {e:?}");
+                    let _ = this.update(cx, |view, cx| {
+                        view.status_message = Some(format!("Failed to create document: {e:?}"));
+                        cx.notify();
+                    });
+                }
+                Err(e) => {
+                    tracing::error!("CreateBlankDocument channel dropped: {e}");
+                }
+            }
+        })
+        .detach();
+    }
+
+    pub fn undo_active_tab(&mut self, cx: &mut Context<Self>) {
+        let Some(tab) = self.tabs.tabs.get_mut(self.tabs.active_tab_index) else {
+            return;
+        };
+        let Some(action) = tab.undo_stack.pop() else {
+            self.status_message = Some("Nothing to undo.".into());
+            cx.notify();
+            return;
+        };
+        match action {
+            crate::models::UndoableAction::AddAnnotation(ann) => {
+                if let Some(pos) = self
+                    .viewport
+                    .annotations
+                    .iter()
+                    .position(|a| a.id == ann.id)
+                {
+                    let removed = self.viewport.annotations.remove(pos);
+                    self.viewport.reindex_annotations();
+                    if let Some(tab) = self.tabs.tabs.get_mut(self.tabs.active_tab_index) {
+                        tab.redo_stack
+                            .push(crate::models::UndoableAction::AddAnnotation(removed));
+                        tab.is_modified = true;
+                    }
+                    if let Some(doc_id) = self.active_doc_id {
+                        self.annotations_by_doc
+                            .insert(doc_id, self.viewport.annotations.clone());
+                    }
+                    self.status_message = Some("Undid added annotation.".into());
+                }
+            }
+            crate::models::UndoableAction::DeleteAnnotation(pos, ann) => {
+                let restored = ann.clone();
+                let idx = pos.min(self.viewport.annotations.len());
+                self.viewport.annotations.insert(idx, ann);
+                self.viewport.reindex_annotations();
+                if let Some(tab) = self.tabs.tabs.get_mut(self.tabs.active_tab_index) {
+                    tab.redo_stack
+                        .push(crate::models::UndoableAction::DeleteAnnotation(
+                            idx, restored,
+                        ));
+                    tab.is_modified = true;
+                }
+                if let Some(doc_id) = self.active_doc_id {
+                    self.annotations_by_doc
+                        .insert(doc_id, self.viewport.annotations.clone());
+                }
+                self.status_message = Some("Restored deleted annotation.".into());
+            }
+        }
+        cx.notify();
+    }
+
+    pub fn redo_active_tab(&mut self, cx: &mut Context<Self>) {
+        let Some(tab) = self.tabs.tabs.get_mut(self.tabs.active_tab_index) else {
+            return;
+        };
+        let Some(action) = tab.redo_stack.pop() else {
+            self.status_message = Some("Nothing to redo.".into());
+            cx.notify();
+            return;
+        };
+        match action {
+            crate::models::UndoableAction::AddAnnotation(ann) => {
+                let restored = ann.clone();
+                self.viewport.annotations.push(ann);
+                self.viewport.reindex_annotations();
+                if let Some(tab) = self.tabs.tabs.get_mut(self.tabs.active_tab_index) {
+                    tab.undo_stack
+                        .push(crate::models::UndoableAction::AddAnnotation(restored));
+                    tab.is_modified = true;
+                }
+                if let Some(doc_id) = self.active_doc_id {
+                    self.annotations_by_doc
+                        .insert(doc_id, self.viewport.annotations.clone());
+                }
+                self.status_message = Some("Redid added annotation.".into());
+            }
+            crate::models::UndoableAction::DeleteAnnotation(_, ann) => {
+                if let Some(pos) = self
+                    .viewport
+                    .annotations
+                    .iter()
+                    .position(|a| a.id == ann.id)
+                {
+                    let removed = self.viewport.annotations.remove(pos);
+                    self.viewport.reindex_annotations();
+                    if let Some(tab) = self.tabs.tabs.get_mut(self.tabs.active_tab_index) {
+                        tab.undo_stack
+                            .push(crate::models::UndoableAction::DeleteAnnotation(
+                                pos, removed,
+                            ));
+                        tab.is_modified = true;
+                    }
+                    if let Some(doc_id) = self.active_doc_id {
+                        self.annotations_by_doc
+                            .insert(doc_id, self.viewport.annotations.clone());
+                    }
+                    self.status_message = Some("Redid deleted annotation.".into());
+                }
+            }
+        }
+        cx.notify();
     }
 
     pub fn sync_viewport_to_active_tab(&mut self, cx: &mut Context<Self>) {
@@ -1381,36 +1535,29 @@ impl PdfbullView {
             .and_then(|m| m.get(&page_idx).copied())
             .unwrap_or_default();
 
-        let min_x = ((start.x.min(end.x) - origin.x) / px(1.0)) / zoom;
-        let max_x = ((start.x.max(end.x) - origin.x) / px(1.0)) / zoom;
-        let min_y = ((start.y.min(end.y) - origin.y) / px(1.0)) / zoom;
-        let max_y = ((start.y.max(end.y) - origin.y) / px(1.0)) / zoom;
+        let bx1 = ((start.x - origin.x) / px(1.0)) / zoom;
+        let by1 = ((start.y - origin.y) / px(1.0)) / zoom;
+        let bx2 = ((end.x - origin.x) / px(1.0)) / zoom;
+        let by2 = ((end.y - origin.y) / px(1.0)) / zoom;
 
-        // The drag selects a region of the rendered bitmap, which already has the
-        // page rotation applied; the text layer is unrotated. Pull the selection
-        // back before hit-testing, or on a rotated page the words under the
-        // cursor are compared against a transposed box and nothing is selected.
         let (unrotated_w, unrotated_h) = self.viewport.page_unrotated_size(page_idx);
-        let (min_x, min_y, sel_w, sel_h) = super::canvas::rotated_rect_to_overlay_space(
-            min_x,
-            min_y,
-            max_x - min_x,
-            max_y - min_y,
+        let rotation = self.viewport.effective_rotation(page_idx);
+        let (sx, sy) = super::canvas::rotated_point_to_overlay_space(
+            bx1,
+            by1,
             unrotated_w,
             unrotated_h,
-            self.viewport.effective_rotation(page_idx),
+            rotation,
         );
-        let (min_x, max_x) = (min_x, min_x + sel_w);
-        let (min_y, max_y) = (min_y, min_y + sel_h);
+        let (ex, ey) = super::canvas::rotated_point_to_overlay_space(
+            bx2,
+            by2,
+            unrotated_w,
+            unrotated_h,
+            rotation,
+        );
 
-        let mut matched_items: Vec<crate::models::TextItem> = Vec::new();
-        for item in items.iter() {
-            let ix2 = item.x + item.width;
-            let iy2 = item.y + item.height;
-            if ix2 >= min_x && item.x <= max_x && iy2 >= min_y && item.y <= max_y {
-                matched_items.push((*item).clone());
-            }
-        }
+        let matched_items = super::canvas::select_text_items_in_range(&items, sx, sy, ex, ey);
 
         if !matched_items.is_empty() {
             let combined = crate::ui_gpui::canvas::join_selected_text_items(&matched_items);
@@ -1425,6 +1572,188 @@ impl PdfbullView {
             ));
         } else {
             self.viewport.selected_text = None;
+        }
+    }
+
+    /// Double-click: select the single word under the cursor.
+    pub fn select_word_at_point(
+        &mut self,
+        page_idx: usize,
+        pos: Point<Pixels>,
+        cx: &mut Context<Self>,
+    ) {
+        let items = match self.viewport.text_cache.get(&page_idx) {
+            Some(it) => it.clone(),
+            None => return,
+        };
+        let zoom = if self.viewport.zoom.is_finite() && self.viewport.zoom > 0.01 {
+            self.viewport.zoom
+        } else {
+            1.0
+        };
+        let origin = self
+            .viewport
+            .page_origins
+            .read()
+            .ok()
+            .and_then(|m| m.get(&page_idx).copied())
+            .unwrap_or_default();
+
+        let px_x = ((pos.x - origin.x) / px(1.0)) / zoom;
+        let px_y = ((pos.y - origin.y) / px(1.0)) / zoom;
+        let (unrotated_w, unrotated_h) = self.viewport.page_unrotated_size(page_idx);
+        let rotation = self.viewport.effective_rotation(page_idx);
+        let (unrot_x, unrot_y) = super::canvas::rotated_point_to_overlay_space(
+            px_x,
+            px_y,
+            unrotated_w,
+            unrotated_h,
+            rotation,
+        );
+
+        let mut target_item: Option<&crate::models::TextItem> = None;
+        let mut best_dist = f32::INFINITY;
+        for item in items.iter() {
+            let inside_x = unrot_x >= item.x && unrot_x <= item.x + item.width;
+            let inside_y = unrot_y >= item.y && unrot_y <= item.y + item.height;
+            if inside_x && inside_y {
+                target_item = Some(item);
+                break;
+            }
+            let dx = if unrot_x < item.x {
+                item.x - unrot_x
+            } else if unrot_x > item.x + item.width {
+                unrot_x - (item.x + item.width)
+            } else {
+                0.0
+            };
+            let dy = if unrot_y < item.y {
+                item.y - unrot_y
+            } else if unrot_y > item.y + item.height {
+                unrot_y - (item.y + item.height)
+            } else {
+                0.0
+            };
+            let dist = dx * dx + dy * dy;
+            if dist < best_dist && dist < (item.height * item.height * 2.0) {
+                best_dist = dist;
+                target_item = Some(item);
+            }
+        }
+
+        if let Some(item) = target_item {
+            self.viewport.selected_text = Some(item.text.clone());
+            let (wx, wy, ww, wh) = super::canvas::overlay_rect_in_rotated_space(
+                item.x,
+                item.y,
+                item.width,
+                item.height,
+                unrotated_w,
+                unrotated_h,
+                rotation,
+            );
+            self.viewport.selection_start = Some(Point::new(
+                origin.x + px(wx * zoom),
+                origin.y + px(wy * zoom),
+            ));
+            self.viewport.selection_end = Some(Point::new(
+                origin.x + px((wx + ww) * zoom),
+                origin.y + px((wy + wh) * zoom),
+            ));
+            if self.ribbon.active_tool == super::ribbon::AnnotationTool::Pointer {
+                cx.write_to_clipboard(ClipboardItem::new_string(item.text.clone()));
+            }
+            self.status_message = Some(format!("Selected word: \"{}\"", item.text));
+        }
+    }
+
+    /// Triple-click: select the entire line under the cursor.
+    pub fn select_line_at_point(
+        &mut self,
+        page_idx: usize,
+        pos: Point<Pixels>,
+        cx: &mut Context<Self>,
+    ) {
+        let items = match self.viewport.text_cache.get(&page_idx) {
+            Some(it) => it.clone(),
+            None => return,
+        };
+        let zoom = if self.viewport.zoom.is_finite() && self.viewport.zoom > 0.01 {
+            self.viewport.zoom
+        } else {
+            1.0
+        };
+        let origin = self
+            .viewport
+            .page_origins
+            .read()
+            .ok()
+            .and_then(|m| m.get(&page_idx).copied())
+            .unwrap_or_default();
+
+        let px_x = ((pos.x - origin.x) / px(1.0)) / zoom;
+        let px_y = ((pos.y - origin.y) / px(1.0)) / zoom;
+        let (unrotated_w, unrotated_h) = self.viewport.page_unrotated_size(page_idx);
+        let rotation = self.viewport.effective_rotation(page_idx);
+        let (_unrot_x, unrot_y) = super::canvas::rotated_point_to_overlay_space(
+            px_x,
+            px_y,
+            unrotated_w,
+            unrotated_h,
+            rotation,
+        );
+
+        let avg_height = items.iter().map(|it| it.height).sum::<f32>() / items.len().max(1) as f32;
+        let line_tol = (avg_height * 0.6).max(4.0);
+
+        let mut line_items: Vec<&crate::models::TextItem> = items
+            .iter()
+            .filter(|it| (it.y + it.height * 0.5 - unrot_y).abs() <= line_tol)
+            .collect();
+        line_items.sort_by(|a, b| a.x.partial_cmp(&b.x).unwrap_or(std::cmp::Ordering::Equal));
+
+        if !line_items.is_empty() {
+            let owned_line_items: Vec<crate::models::TextItem> =
+                line_items.iter().map(|it| (*it).clone()).collect();
+            let combined = super::canvas::join_selected_text_items(&owned_line_items);
+            self.viewport.selected_text = Some(combined.clone());
+
+            let first_x = line_items.first().map(|it| it.x).unwrap_or(0.0);
+            let last_item = line_items.last().unwrap();
+            let last_x = last_item.x + last_item.width;
+            let top_y = line_items
+                .iter()
+                .map(|it| it.y)
+                .fold(f32::INFINITY, f32::min);
+            let bot_y = line_items
+                .iter()
+                .map(|it| it.y + it.height)
+                .fold(f32::NEG_INFINITY, f32::max);
+
+            let (wx, wy, ww, wh) = super::canvas::overlay_rect_in_rotated_space(
+                first_x,
+                top_y,
+                last_x - first_x,
+                bot_y - top_y,
+                unrotated_w,
+                unrotated_h,
+                rotation,
+            );
+            self.viewport.selection_start = Some(Point::new(
+                origin.x + px(wx * zoom),
+                origin.y + px(wy * zoom),
+            ));
+            self.viewport.selection_end = Some(Point::new(
+                origin.x + px((wx + ww) * zoom),
+                origin.y + px((wy + wh) * zoom),
+            ));
+            if self.ribbon.active_tool == super::ribbon::AnnotationTool::Pointer {
+                cx.write_to_clipboard(ClipboardItem::new_string(combined.clone()));
+            }
+            self.status_message = Some(format!(
+                "Selected line ({} chars)",
+                combined.chars().count()
+            ));
         }
     }
 
@@ -3045,7 +3374,7 @@ impl PdfbullView {
                 .send(crate::commands::PdfCommand::OcrPage(
                     doc_id,
                     cur_page,
-                    crate::ocr::OcrScript::Latin,
+                    crate::ocr::OcrScript::Multilingual,
                     tx,
                 ))
                 .await;
@@ -3818,6 +4147,9 @@ impl PdfbullView {
         cx: &mut Context<Self>,
     ) {
         match action {
+            RibbonAction::NewFile => {
+                self.prompt_create_blank_document(cx);
+            }
             RibbonAction::OpenFile => {
                 self.prompt_open_file(cx);
             }
@@ -3826,6 +4158,12 @@ impl PdfbullView {
             }
             RibbonAction::Print => {
                 self.print_active_document(cx);
+            }
+            RibbonAction::Undo => {
+                self.undo_active_tab(cx);
+            }
+            RibbonAction::Redo => {
+                self.redo_active_tab(cx);
             }
             RibbonAction::ZoomIn => {
                 self.viewport.zoom = (self.viewport.zoom + 0.1).min(5.0);
@@ -4428,6 +4766,8 @@ impl PdfbullView {
                 self.status_message = Some("Reloaded from disk.".into());
             }
             ReaderCommand::CopyPageText => self.select_all_page_text(cx),
+            ReaderCommand::Undo => self.undo_active_tab(cx),
+            ReaderCommand::Redo => self.redo_active_tab(cx),
         }
         cx.notify();
     }
@@ -4479,9 +4819,20 @@ impl PdfbullView {
                     self.open_palette(window, cx);
                     return;
                 }
+                ("n", false) => Some(ReaderCommand::Ribbon(RibbonAction::NewFile)),
+                ("o", false) => Some(ReaderCommand::Ribbon(RibbonAction::OpenFile)),
+                ("s", false) => Some(ReaderCommand::Ribbon(RibbonAction::SaveFile)),
+                ("w", false) => Some(ReaderCommand::CloseTab),
+                ("z", false) => Some(ReaderCommand::Undo),
+                ("y", false) | ("z", true) => Some(ReaderCommand::Redo),
                 ("g", false) => Some(ReaderCommand::GoToPage),
                 ("f", false) => Some(ReaderCommand::Find),
                 ("b", false) => Some(ReaderCommand::ToggleSidebar),
+                ("c", false) => {
+                    self.copy_selection_to_clipboard(cx);
+                    return;
+                }
+                ("a", false) => Some(ReaderCommand::CopyPageText),
                 ("tab", false) | ("pagedown", _) => Some(ReaderCommand::NextTab),
                 ("tab", true) | ("pageup", _) => Some(ReaderCommand::PrevTab),
                 ("0", _) | ("1", _) => Some(ReaderCommand::ActualSize),
@@ -4618,21 +4969,29 @@ impl PdfbullView {
                     cx.notify();
                 }
                 "c" => {
-                    if let Some(ref text) = self.viewport.selected_text {
-                        cx.write_to_clipboard(ClipboardItem::new_string(text.clone()));
-                        let count = text.chars().count();
-                        self.status_message = Some(format!(
-                            "Copied {count} character{} to clipboard",
-                            if count == 1 { "" } else { "s" }
-                        ));
-                        cx.notify();
-                    }
+                    self.copy_selection_to_clipboard(cx);
                 }
                 "a" => self.select_all_page_text(cx),
                 _ => {}
             }
         } else {
             self.handle_plain_key_legacy(key.as_str(), cx);
+        }
+    }
+
+    /// Copy the current selected text to the system clipboard (Ctrl+C).
+    pub fn copy_selection_to_clipboard(&mut self, cx: &mut Context<Self>) {
+        if let Some(ref text) = self.viewport.selected_text {
+            cx.write_to_clipboard(ClipboardItem::new_string(text.clone()));
+            let count = text.chars().count();
+            self.status_message = Some(format!(
+                "Copied {count} character{} to clipboard",
+                if count == 1 { "" } else { "s" }
+            ));
+            cx.notify();
+        } else {
+            self.status_message = Some("No text selected to copy".to_string());
+            cx.notify();
         }
     }
 
@@ -4999,11 +5358,17 @@ impl Render for PdfbullView {
                             if let Some(pos) =
                                 this.viewport.annotations.iter().position(|a| a.id == id)
                             {
-                                this.viewport.annotations.remove(pos);
+                                let removed = this.viewport.annotations.remove(pos);
                                 this.viewport.reindex_annotations();
                                 if let Some(tab) =
                                     this.tabs.tabs.get_mut(this.tabs.active_tab_index)
                                 {
+                                    tab.undo_stack.push(
+                                        crate::models::UndoableAction::DeleteAnnotation(
+                                            pos, removed,
+                                        ),
+                                    );
+                                    tab.redo_stack.clear();
                                     tab.is_modified = true;
                                 }
                             }
@@ -5028,20 +5393,28 @@ impl Render for PdfbullView {
 
             let canvas = self.viewport.render(
                 cx,
-                |this, page_idx, pos, window, cx| {
+                |this, page_idx, pos, click_count, window, cx| {
                     // Clicking the page hands the keyboard back to the reader
                     // shortcuts, even if the search box had focus.
                     this.focus_handle.focus(window, cx);
-                    this.viewport.is_selecting = true;
                     this.viewport.selection_page = Some(page_idx);
-                    this.viewport.selection_start = Some(pos);
-                    this.viewport.selection_end = Some(pos);
-                    this.viewport.selected_text = None;
                     // Fetch the text layer eagerly so per-word highlights render
                     // while the drag is still in progress instead of only after
                     // the mouse is released.
                     if let Some(doc_id) = this.active_doc_id {
                         this.request_text_items(doc_id, page_idx, cx);
+                    }
+                    if click_count == 2 {
+                        this.viewport.is_selecting = false;
+                        this.select_word_at_point(page_idx, pos, cx);
+                    } else if click_count >= 3 {
+                        this.viewport.is_selecting = false;
+                        this.select_line_at_point(page_idx, pos, cx);
+                    } else {
+                        this.viewport.is_selecting = true;
+                        this.viewport.selection_start = Some(pos);
+                        this.viewport.selection_end = Some(pos);
+                        this.viewport.selected_text = None;
                     }
                     cx.notify();
                 },
@@ -5082,15 +5455,14 @@ impl Render for PdfbullView {
                             let dx = (start.x - end.x).abs();
                             let dy = (start.y - end.y).abs();
                             if dx < px(4.0) && dy < px(4.0) {
-                                // Treat as a click: clear selection state.
-                                this.viewport.selection_start = None;
-                                this.viewport.selection_end = None;
-                                this.viewport.selection_page = None;
-                                this.viewport.selected_text = None;
-                                // Bug 4 (b): fold page-focus into drag_end for the click case
-                                // so on_click becomes redundant and can be removed.
-                                this.viewport.current_page = commit_page;
-                                this.render_needed_pages(cx);
+                                // Treat as a click: clear selection state if no word/line was selected
+                                if this.viewport.selected_text.is_none() {
+                                    this.viewport.selection_start = None;
+                                    this.viewport.selection_end = None;
+                                    this.viewport.selection_page = None;
+                                    this.viewport.current_page = commit_page;
+                                    this.render_needed_pages(cx);
+                                }
                             } else {
                                 // Real drag: extract text against the page where the drag started.
                                 this.extract_selected_text(commit_page, start, end, cx);
@@ -5254,6 +5626,18 @@ impl Render for PdfbullView {
                                         height: ann_h,
                                     });
                                     this.viewport.reindex_annotations();
+                                    if let Some(tab) =
+                                        this.tabs.tabs.get_mut(this.tabs.active_tab_index)
+                                    {
+                                        if let Some(last) =
+                                            this.viewport.annotations.last().cloned()
+                                        {
+                                            tab.undo_stack.push(
+                                                crate::models::UndoableAction::AddAnnotation(last),
+                                            );
+                                            tab.redo_stack.clear();
+                                        }
+                                    }
                                     if matches!(
                                         this.ribbon.active_tool,
                                         super::ribbon::AnnotationTool::Text
@@ -5329,6 +5713,9 @@ impl Render for PdfbullView {
             self.welcome
                 .render(cx, |this, action, _, cx| {
                     match action {
+                        WelcomeAction::NewFile => {
+                            this.prompt_create_blank_document(cx);
+                        }
                         WelcomeAction::OpenFile => {
                             this.prompt_open_file(cx);
                         }

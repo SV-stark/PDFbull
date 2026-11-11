@@ -93,6 +93,147 @@ pub fn join_selected_text_items(items: &[crate::models::TextItem]) -> String {
     combined
 }
 
+/// Select text items in reading order between two points in unrotated page space.
+///
+/// Supports both single-line selection and multi-line continuous text selection.
+/// When dragging across multiple lines, standard linear document selection includes:
+/// - on the starting line: all items from `start_x` to the end of that line,
+/// - on intermediate lines: all items on those lines,
+/// - on the ending line: all items from the start of that line to `end_x`.
+/// If no items match via linear flow (e.g. non-standard layouts or single words),
+/// falls back to a 2D bounding box intersection.
+pub fn select_text_items_in_range(
+    items: &[crate::models::TextItem],
+    start_x: f32,
+    start_y: f32,
+    end_x: f32,
+    end_y: f32,
+) -> Vec<crate::models::TextItem> {
+    if items.is_empty() {
+        return Vec::new();
+    }
+
+    // 1. Initial sort by y, then x
+    let mut sorted: Vec<&crate::models::TextItem> = items.iter().collect();
+    sorted.sort_by(|a, b| {
+        a.y.partial_cmp(&b.y)
+            .unwrap_or(std::cmp::Ordering::Equal)
+            .then(a.x.partial_cmp(&b.x).unwrap_or(std::cmp::Ordering::Equal))
+    });
+
+    // 2. Cluster into lines based on baseline tolerance
+    let avg_height = sorted.iter().map(|it| it.height).sum::<f32>() / sorted.len() as f32;
+    let line_tol = (avg_height * 0.5).max(3.0);
+
+    let mut lines: Vec<Vec<&crate::models::TextItem>> = Vec::new();
+    for item in sorted {
+        let tol = (item.height * 0.5).max(line_tol);
+        let mut added = false;
+        if let Some(last_line) = lines.last_mut().filter(|l| {
+            l.first()
+                .is_some_and(|first| (item.y - first.y).abs() <= tol)
+        }) {
+            last_line.push(item);
+            added = true;
+        }
+        if !added {
+            lines.push(vec![item]);
+        }
+    }
+
+    // 3. Within each line, sort strictly by x
+    for line in lines.iter_mut() {
+        line.sort_by(|a, b| a.x.partial_cmp(&b.x).unwrap_or(std::cmp::Ordering::Equal));
+    }
+
+    // Helper: find the line index closest to a given y position
+    let find_closest_line = |lines: &[Vec<&crate::models::TextItem>], y: f32| -> usize {
+        let mut best_idx = 0;
+        let mut best_dist = f32::INFINITY;
+        for (i, line) in lines.iter().enumerate() {
+            let line_top = line.iter().map(|it| it.y).fold(f32::INFINITY, f32::min);
+            let line_bottom = line
+                .iter()
+                .map(|it| it.y + it.height)
+                .fold(f32::NEG_INFINITY, f32::max);
+            let dist = if y < line_top {
+                line_top - y
+            } else if y > line_bottom {
+                y - line_bottom
+            } else {
+                0.0
+            };
+            if dist < best_dist {
+                best_dist = dist;
+                best_idx = i;
+            }
+        }
+        best_idx
+    };
+
+    let start_line_idx = find_closest_line(&lines, start_y);
+    let end_line_idx = find_closest_line(&lines, end_y);
+
+    let mut matched: Vec<crate::models::TextItem> = Vec::new();
+
+    if start_line_idx == end_line_idx {
+        // Single-line selection: select items between min_x and max_x on this line
+        let min_x = start_x.min(end_x);
+        let max_x = start_x.max(end_x);
+        for item in &lines[start_line_idx] {
+            let ix2 = item.x + item.width;
+            if ix2 >= min_x && item.x <= max_x {
+                matched.push((*item).clone());
+            }
+        }
+    } else {
+        // Multi-line selection: determine top line vs bottom line
+        let (first_line_idx, last_line_idx, first_x, last_x) = if start_line_idx < end_line_idx {
+            (start_line_idx, end_line_idx, start_x, end_x)
+        } else {
+            (end_line_idx, start_line_idx, end_x, start_x)
+        };
+
+        for l_idx in first_line_idx..=last_line_idx {
+            let line = &lines[l_idx];
+            if l_idx == first_line_idx {
+                for item in line {
+                    if item.x + item.width >= first_x {
+                        matched.push((*item).clone());
+                    }
+                }
+            } else if l_idx == last_line_idx {
+                for item in line {
+                    if item.x <= last_x {
+                        matched.push((*item).clone());
+                    }
+                }
+            } else {
+                for item in line {
+                    matched.push((*item).clone());
+                }
+            }
+        }
+    }
+
+    // 4. Fallback to 2D bounding box if no items were matched (e.g. non-standard layout)
+    if matched.is_empty() {
+        let min_x = start_x.min(end_x);
+        let max_x = start_x.max(end_x);
+        let min_y = start_y.min(end_y);
+        let max_y = start_y.max(end_y);
+        for item in items {
+            let ix2 = item.x + item.width;
+            let iy2 = item.y + item.height;
+            if ix2 >= min_x && item.x <= max_x && iy2 >= min_y && item.y <= max_y {
+                matched.push(item.clone());
+            }
+        }
+    }
+
+    matched
+}
+
 /// Map an overlay rect (top-left origin, unrotated document space) into the
 /// coordinates of the *rendered* bitmap, which zpdf rotates by the page's
 /// `/Rotate` plus the view rotation.
@@ -834,7 +975,7 @@ impl DocumentViewport {
         &self,
         cx: &mut Context<V>,
         page_idx: usize,
-        on_drag_start: impl Fn(&mut V, usize, Point<Pixels>, &mut Window, &mut Context<V>)
+        on_drag_start: impl Fn(&mut V, usize, Point<Pixels>, usize, &mut Window, &mut Context<V>)
         + 'static
         + Copy,
         on_drag_move: impl Fn(&mut V, usize, Point<Pixels>, &mut Window, &mut Context<V>)
@@ -860,7 +1001,7 @@ impl DocumentViewport {
         let total = self.total_pages;
 
         let down_listener = cx.listener(move |v, event: &MouseDownEvent, w, cx| {
-            on_drag_start(v, page_idx, event.position, w, cx);
+            on_drag_start(v, page_idx, event.position, event.click_count, w, cx);
         });
         let up_listener = cx.listener(move |v, event: &MouseUpEvent, w, cx| {
             on_drag_end(v, page_idx, event.position, w, cx);
@@ -1157,13 +1298,8 @@ impl DocumentViewport {
 
                 // 2. Paint active selection and word-level text highlighting
                 if is_sel_page && let (Some(start), Some(end)) = (sel_start, sel_end) {
-                    let sel_win_min_x = start.x.min(end.x);
-                    let sel_win_max_x = start.x.max(end.x);
-                    let sel_win_min_y = start.y.min(end.y);
-                    let sel_win_max_y = start.y.max(end.y);
-
                     let sel_bounds = Bounds {
-                        origin: Point::new(sel_win_min_x, sel_win_min_y),
+                        origin: Point::new(start.x.min(end.x), start.y.min(end.y)),
                         size: Size {
                             width: (start.x - end.x).abs(),
                             height: (start.y - end.y).abs(),
@@ -1180,27 +1316,25 @@ impl DocumentViewport {
                     } else {
                         1.0
                     };
-                    let page_min_x = ((sel_win_min_x - card_bounds.origin.x) / px(1.0)) / zoom;
-                    let page_max_x = ((sel_win_max_x - card_bounds.origin.x) / px(1.0)) / zoom;
-                    let page_min_y = ((sel_win_min_y - card_bounds.origin.y) / px(1.0)) / zoom;
-                    let page_max_y = ((sel_win_max_y - card_bounds.origin.y) / px(1.0)) / zoom;
+                    let bx1 = ((start.x - card_bounds.origin.x) / px(1.0)) / zoom;
+                    let by1 = ((start.y - card_bounds.origin.y) / px(1.0)) / zoom;
+                    let bx2 = ((end.x - card_bounds.origin.x) / px(1.0)) / zoom;
+                    let by2 = ((end.y - card_bounds.origin.y) / px(1.0)) / zoom;
 
-                    // The drag selects a region of the *rotated* bitmap, but the
-                    // text layer below is in unrotated space. Pull the selection
-                    // back before hit-testing, or on any rotated page the words
-                    // under the cursor are compared against a transposed box and
-                    // nothing is ever selected.
-                    let (sel_x, sel_y, sel_w, sel_h) = rotated_rect_to_overlay_space(
-                        page_min_x,
-                        page_min_y,
-                        page_max_x - page_min_x,
-                        page_max_y - page_min_y,
+                    let (sx, sy) = rotated_point_to_overlay_space(
+                        bx1,
+                        by1,
                         unrotated_w,
                         unrotated_h,
                         overlay_rotation,
                     );
-                    let (page_min_x, page_max_x) = (sel_x, sel_x + sel_w);
-                    let (page_min_y, page_max_y) = (sel_y, sel_y + sel_h);
+                    let (ex, ey) = rotated_point_to_overlay_space(
+                        bx2,
+                        by2,
+                        unrotated_w,
+                        unrotated_h,
+                        overlay_rotation,
+                    );
 
                     let word_fill = hl_color.unwrap_or_else(|| hsla(215.0 / 360.0, 0.9, 0.55, 0.4));
                     let word_border = hl_color
@@ -1210,15 +1344,10 @@ impl DocumentViewport {
                     let mut matched_any_text = false;
 
                     if let Some(items) = &text_items {
-                        for item in items.iter() {
-                            let ix2 = item.x + item.width;
-                            let iy2 = item.y + item.height;
-                            if ix2 >= page_min_x
-                                && item.x <= page_max_x
-                                && iy2 >= page_min_y
-                                && item.y <= page_max_y
-                            {
-                                matched_any_text = true;
+                        let matched_items = select_text_items_in_range(items, sx, sy, ex, ey);
+                        if !matched_items.is_empty() {
+                            matched_any_text = true;
+                            for item in &matched_items {
                                 let (wx, wy, ww, wh) = overlay_rect_in_rotated_space(
                                     item.x,
                                     item.y,
@@ -1374,7 +1503,7 @@ impl DocumentViewport {
     pub fn render<V: 'static>(
         &self,
         cx: &mut Context<V>,
-        on_drag_start: impl Fn(&mut V, usize, Point<Pixels>, &mut Window, &mut Context<V>)
+        on_drag_start: impl Fn(&mut V, usize, Point<Pixels>, usize, &mut Window, &mut Context<V>)
         + 'static
         + Copy,
         on_drag_move: impl Fn(&mut V, usize, Point<Pixels>, &mut Window, &mut Context<V>)

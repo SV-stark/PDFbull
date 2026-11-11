@@ -935,41 +935,32 @@ const DEFAULT_IMAGE_CACHE_BYTES: u64 = 96 * 1024 * 1024;
 
 // DocumentState wrapper removed as it was a single-field struct.
 
-static OCR_ENGINE_CACHE: std::sync::LazyLock<
-    std::sync::Mutex<HashMap<crate::ocr::OcrScript, Arc<ocrs::OcrEngine>>>,
-> = std::sync::LazyLock::new(|| std::sync::Mutex::new(HashMap::new()));
+static OCR_ENGINE_CACHE: std::sync::LazyLock<std::sync::Mutex<Option<Arc<ocrs::OcrEngine>>>> =
+    std::sync::LazyLock::new(|| std::sync::Mutex::new(None));
 
-fn get_or_load_ocr_engine(script: crate::ocr::OcrScript) -> PdfResult<Arc<ocrs::OcrEngine>> {
+fn get_or_load_ocr_engine(_script: crate::ocr::OcrScript) -> PdfResult<Arc<ocrs::OcrEngine>> {
     if let Ok(guard) = OCR_ENGINE_CACHE.lock()
-        && let Some(engine) = guard.get(&script)
+        && let Some(engine) = guard.as_ref()
     {
         return Ok(engine.clone());
     }
 
-    if !script.is_model_available() {
-        return Err(PdfError::EngineError(EngineErrorKind::Generic(format!(
-            "OCR models for {} not found in {:?}",
-            script.name(),
-            crate::ocr::OcrScript::resolve_model_dir()
-        ))));
-    }
-
-    let det_path = script.resolve_det_model_path();
-    let rec_path = script.resolve_rec_model_path();
-    let detection_model = rten::Model::load_file(&det_path).map_err(|e| {
+    let detection_model = crate::ocr::load_detection_model().map_err(|e| {
         PdfError::EngineError(EngineErrorKind::Generic(format!(
             "Failed to load OCR detection model: {e}"
         )))
     })?;
-    let recognition_model = rten::Model::load_file(&rec_path).map_err(|e| {
+    let recognition_model = crate::ocr::load_recognition_model().map_err(|e| {
         PdfError::EngineError(EngineErrorKind::Generic(format!(
             "Failed to load OCR recognition model: {e}"
         )))
     })?;
+    let alphabet = crate::ocr::load_alphabet();
 
     let engine = ocrs::OcrEngine::new(ocrs::OcrEngineParams {
         detection_model: Some(detection_model),
         recognition_model: Some(recognition_model),
+        alphabet,
         ..Default::default()
     })
     .map_err(|e| {
@@ -980,7 +971,7 @@ fn get_or_load_ocr_engine(script: crate::ocr::OcrScript) -> PdfResult<Arc<ocrs::
 
     let arc_engine = Arc::new(engine);
     if let Ok(mut guard) = OCR_ENGINE_CACHE.lock() {
-        guard.insert(script, arc_engine.clone());
+        *guard = Some(arc_engine.clone());
     }
 
     Ok(arc_engine)

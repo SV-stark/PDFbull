@@ -22,6 +22,8 @@ pub struct DocumentTab {
     /// tab switch; the viewport needs it to map overlays onto the rotated
     /// bitmap.
     pub page_rotations: std::collections::HashMap<usize, i32>,
+    pub undo_stack: Vec<crate::models::UndoableAction>,
+    pub redo_stack: Vec<crate::models::UndoableAction>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

@@ -32,6 +32,8 @@ fn test_tabs_state_management() {
         path: Some(PathBuf::from("doc1.pdf")),
         is_modified: false,
         page_rotations: std::collections::HashMap::new(),
+        undo_stack: Vec::new(),
+        redo_stack: Vec::new(),
     });
     tabs_state.tabs.push(DocumentTab {
         id: 1,
@@ -40,6 +42,8 @@ fn test_tabs_state_management() {
         path: Some(PathBuf::from("doc2.pdf")),
         is_modified: true,
         page_rotations: std::collections::HashMap::new(),
+        undo_stack: Vec::new(),
+        redo_stack: Vec::new(),
     });
     tabs_state.tabs.push(DocumentTab {
         id: 2,
@@ -48,6 +52,8 @@ fn test_tabs_state_management() {
         path: None,
         is_modified: false,
         page_rotations: std::collections::HashMap::new(),
+        undo_stack: Vec::new(),
+        redo_stack: Vec::new(),
     });
 
     assert_eq!(tabs_state.tabs.len(), 3);

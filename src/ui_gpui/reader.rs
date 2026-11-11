@@ -71,6 +71,8 @@ pub enum ReaderCommand {
     CloseTab,
     ToggleLogs,
     CopyPageText,
+    Undo,
+    Redo,
     Ribbon(RibbonAction),
 }
 
@@ -102,9 +104,17 @@ pub fn palette_entries() -> Vec<PaletteEntry> {
     use ReaderCommand as C;
     use RibbonAction as R;
     vec![
+        entry(
+            "New blank PDF",
+            "File",
+            Some("Ctrl+N"),
+            C::Ribbon(R::NewFile),
+        ),
         entry("Open file…", "File", Some("Ctrl+O"), C::Ribbon(R::OpenFile)),
         entry("Save", "File", Some("Ctrl+S"), C::Ribbon(R::SaveFile)),
         entry("Print…", "File", Some("Ctrl+P"), C::Ribbon(R::Print)),
+        entry("Undo", "Edit", Some("Ctrl+Z"), C::Undo),
+        entry("Redo", "Edit", Some("Ctrl+Y"), C::Redo),
         entry("Reload from disk", "File", Some("R"), C::Reload),
         entry("Close tab", "File", Some("Ctrl+W"), C::CloseTab),
         entry("Next tab", "File", Some("Ctrl+Tab"), C::NextTab),

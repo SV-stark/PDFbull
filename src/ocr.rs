@@ -24,10 +24,19 @@ pub struct OcrPageResult {
     pub lines: Vec<OcrLine>,
 }
 
+/// Embedded ONNX models parsed via `rten-onnx` in pure Rust.
+pub static EMBEDDED_DET_MODEL: &[u8] = include_bytes!("../models/PP-OCRv6_small_det.onnx");
+pub static EMBEDDED_REC_MODEL: &[u8] = include_bytes!("../models/PP-OCRv6_small_rec.onnx");
+pub static EMBEDDED_DICT: &str = include_str!("../models/ppocrv6_dict.txt");
+
 /// Target script/language family for OCR recognition.
+///
+/// With PP-OCRv6, a single unified multilingual model supports 50+ languages
+/// simultaneously without requiring separate models per language.
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Hash, Default)]
 pub enum OcrScript {
     #[default]
+    Multilingual,
     Latin,
     Devanagari,
 }
@@ -35,6 +44,7 @@ pub enum OcrScript {
 impl OcrScript {
     pub fn name(&self) -> &'static str {
         match self {
+            Self::Multilingual => "Multilingual (PP-OCRv6: 50+ languages)",
             Self::Latin => "Latin / English",
             Self::Devanagari => "Devanagari (Hindi, Marathi, Sanskrit)",
         }
@@ -42,14 +52,15 @@ impl OcrScript {
 
     /// Model filename for recognition
     pub fn rec_model_filename(&self) -> &'static str {
-        match self {
-            Self::Latin => "text-recognition.rten",
-            Self::Devanagari => "devanagari_PP-OCRv4_rec.rten",
-        }
+        "PP-OCRv6_small_rec.onnx"
     }
 
     pub fn det_model_filename(&self) -> &'static str {
-        "text-detection.rten"
+        "PP-OCRv6_small_det.onnx"
+    }
+
+    pub fn dict_filename(&self) -> &'static str {
+        "ppocrv6_dict.txt"
     }
 
     /// Resolve model directory path from executable location, local workspace, or `AppData` storage
@@ -87,10 +98,67 @@ impl OcrScript {
         Self::resolve_model_dir().join(self.rec_model_filename())
     }
 
-    /// Check if both detection & recognition models exist for this script
+    /// Check if models are available (always true because models are embedded in pure Rust,
+    /// with optional manual override from the models directory).
     pub fn is_model_available(&self) -> bool {
-        self.resolve_det_model_path().exists() && self.resolve_rec_model_path().exists()
+        true
     }
+}
+
+/// Load the detection model: prefers manual models in the app models directory if present,
+/// falling back to the embedded ONNX model parsed via `rten-onnx`.
+pub fn load_detection_model() -> Result<rten::Model, String> {
+    let model_dir = OcrScript::resolve_model_dir();
+    for name in &[
+        "PP-OCRv6_small_det.onnx",
+        "PP-OCRv6_det.onnx",
+        "text-detection.onnx",
+        "text-detection.rten",
+    ] {
+        let path = model_dir.join(name);
+        if path.exists() {
+            if let Ok(m) = rten::Model::load_file(&path) {
+                return Ok(m);
+            }
+        }
+    }
+    rten::Model::load_static_slice(EMBEDDED_DET_MODEL)
+        .map_err(|e| format!("Failed to load embedded detection model: {e}"))
+}
+
+/// Load the recognition model: prefers manual models in the app models directory if present,
+/// falling back to the embedded ONNX model parsed via `rten-onnx`.
+pub fn load_recognition_model() -> Result<rten::Model, String> {
+    let model_dir = OcrScript::resolve_model_dir();
+    for name in &[
+        "PP-OCRv6_small_rec.onnx",
+        "PP-OCRv6_rec.onnx",
+        "text-recognition.onnx",
+        "text-recognition.rten",
+    ] {
+        let path = model_dir.join(name);
+        if path.exists() {
+            if let Ok(m) = rten::Model::load_file(&path) {
+                return Ok(m);
+            }
+        }
+    }
+    rten::Model::load_static_slice(EMBEDDED_REC_MODEL)
+        .map_err(|e| format!("Failed to load embedded recognition model: {e}"))
+}
+
+/// Load the multilingual dictionary / alphabet for text recognition.
+pub fn load_alphabet() -> Option<String> {
+    let model_dir = OcrScript::resolve_model_dir();
+    for name in &["ppocrv6_dict.txt", "ppocr_keys_v1.txt", "dict.txt"] {
+        let path = model_dir.join(name);
+        if path.exists() {
+            if let Ok(content) = std::fs::read_to_string(&path) {
+                return Some(content);
+            }
+        }
+    }
+    Some(EMBEDDED_DICT.to_string())
 }
 
 impl OcrPageResult {
