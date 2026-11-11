@@ -116,10 +116,10 @@ pub fn load_detection_model() -> Result<rten::Model, String> {
         "text-detection.rten",
     ] {
         let path = model_dir.join(name);
-        if path.exists() {
-            if let Ok(m) = rten::Model::load_file(&path) {
-                return Ok(m);
-            }
+        if path.exists()
+            && let Ok(m) = rten::Model::load_file(&path)
+        {
+            return Ok(m);
         }
     }
     rten::Model::load_static_slice(EMBEDDED_DET_MODEL)
@@ -137,10 +137,10 @@ pub fn load_recognition_model() -> Result<rten::Model, String> {
         "text-recognition.rten",
     ] {
         let path = model_dir.join(name);
-        if path.exists() {
-            if let Ok(m) = rten::Model::load_file(&path) {
-                return Ok(m);
-            }
+        if path.exists()
+            && let Ok(m) = rten::Model::load_file(&path)
+        {
+            return Ok(m);
         }
     }
     rten::Model::load_static_slice(EMBEDDED_REC_MODEL)
@@ -152,10 +152,10 @@ pub fn load_alphabet() -> Option<String> {
     let model_dir = OcrScript::resolve_model_dir();
     for name in &["ppocrv6_dict.txt", "ppocr_keys_v1.txt", "dict.txt"] {
         let path = model_dir.join(name);
-        if path.exists() {
-            if let Ok(content) = std::fs::read_to_string(&path) {
-                return Some(content);
-            }
+        if path.exists()
+            && let Ok(content) = std::fs::read_to_string(&path)
+        {
+            return Some(content);
         }
     }
     Some(EMBEDDED_DICT.to_string())

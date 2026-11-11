@@ -5628,15 +5628,13 @@ impl Render for PdfbullView {
                                     this.viewport.reindex_annotations();
                                     if let Some(tab) =
                                         this.tabs.tabs.get_mut(this.tabs.active_tab_index)
-                                    {
-                                        if let Some(last) =
+                                        && let Some(last) =
                                             this.viewport.annotations.last().cloned()
-                                        {
-                                            tab.undo_stack.push(
-                                                crate::models::UndoableAction::AddAnnotation(last),
-                                            );
-                                            tab.redo_stack.clear();
-                                        }
+                                    {
+                                        tab.undo_stack.push(
+                                            crate::models::UndoableAction::AddAnnotation(last),
+                                        );
+                                        tab.redo_stack.clear();
                                     }
                                     if matches!(
                                         this.ribbon.active_tool,

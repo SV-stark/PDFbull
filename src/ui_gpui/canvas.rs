@@ -100,6 +100,7 @@ pub fn join_selected_text_items(items: &[crate::models::TextItem]) -> String {
 /// - on the starting line: all items from `start_x` to the end of that line,
 /// - on intermediate lines: all items on those lines,
 /// - on the ending line: all items from the start of that line to `end_x`.
+///
 /// If no items match via linear flow (e.g. non-standard layouts or single words),
 /// falls back to a 2D bounding box intersection.
 pub fn select_text_items_in_range(
@@ -194,8 +195,12 @@ pub fn select_text_items_in_range(
             (end_line_idx, start_line_idx, end_x, start_x)
         };
 
-        for l_idx in first_line_idx..=last_line_idx {
-            let line = &lines[l_idx];
+        for (l_idx, line) in lines
+            .iter()
+            .enumerate()
+            .take(last_line_idx + 1)
+            .skip(first_line_idx)
+        {
             if l_idx == first_line_idx {
                 for item in line {
                     if item.x + item.width >= first_x {
