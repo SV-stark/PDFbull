@@ -717,10 +717,18 @@ pub fn spawn_engine_thread(cache_size: u64, max_memory_mb: u64) -> EngineState {
                             let _ = tx.send(res);
                         }
                         PdfCommand::LoadAnnotations(doc_id, path, tx) => {
-                            let _ = doc_id;
+                            let pass = paths
+                                .read()
+                                .ok()
+                                .and_then(|guard| {
+                                    guard
+                                        .get(&doc_id)
+                                        .and_then(|e| e.password.as_ref().map(|p| p.to_string()))
+                                })
+                                .or_else(|| password_for_path(&paths, &path));
                             let store_ref = std::panic::AssertUnwindSafe(&store);
                             let res = catch_worker_panic("load_annotations", move || {
-                                store_ref.load_annotations(&path)
+                                store_ref.load_annotations_with_password(&path, pass.as_deref())
                             });
                             let _ = tx.send(res);
                         }

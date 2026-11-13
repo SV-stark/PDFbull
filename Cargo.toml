@@ -1,6 +1,6 @@
 [package]
 name = "pdfbull"
-version = "0.21.0"
+version = "0.21.1"
 description = "A lightweight PDF reader"
 authors = ["SV-stark"]
 edition = "2024"
@@ -44,7 +44,6 @@ tracing-appender = "0.2"
 open = "5"
 thiserror = "2.0"
 arboard = "3"
-lopdf = "0.46"
 pdf-writer = "0.15"
 # JBIG2 encoder for the bilevel tier of image optimization. `decode` is off: we
 # only ever encode (zpdf already decodes JBIG2 on the read path), and dropping
@@ -75,7 +74,7 @@ ocrs = "0.13.1"
 rten = { version = "0.26.0", features = ["mmap", "rten_format", "onnx_format"] }
 rten-onnx = "0.26.0"
 nucleo-matcher = "0.3"
-# Inflates comic-book (.cbz) archive entries. Already in the tree via lopdf.
+# Inflates comic-book (.cbz) archive entries.
 flate2 = "1.1"
 zeroize = { version = "1.9", features = ["derive"] }
 
@@ -118,7 +117,7 @@ all = { level = "warn", priority = -1 }
 # NOTE: `panic` is deliberately left as the default ("unwind"). The engine wraps
 # every command in `catch_worker_panic` (see src/engine.rs) and src/main.rs
 # installs a panic hook that writes a crash report, but `catch_unwind` cannot
-# observe a panic under `panic = "abort"` — a single panic inside zpdf/lopdf
+# observe a panic under `panic = "abort"` — a single panic inside zpdf
 # would take the whole app down with no report. Unwinding costs a negligible
 # amount of code size here and keeps that safety net real.
 [profile.release]

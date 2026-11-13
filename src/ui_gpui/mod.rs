@@ -81,6 +81,44 @@ pub fn run_gpui_app() {
                         v
                     });
                     view_slot = Some(view.clone());
+                    let allow_close = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+                    let view_for_close = view.clone();
+                    window.on_window_should_close(cx, move |window, cx| {
+                        let dirty_count = view_for_close.update(cx, |v, _cx| {
+                            v.save_reading_state();
+                            v.tabs.tabs.iter().filter(|t| t.is_modified).count()
+                        });
+                        if dirty_count == 0
+                            || allow_close.load(std::sync::atomic::Ordering::SeqCst)
+                        {
+                            return true;
+                        }
+                        let allow_close = allow_close.clone();
+                        let window_handle = window.window_handle();
+                        cx.spawn(async move |cx| {
+                            let answer = rfd::AsyncMessageDialog::new()
+                                .set_level(rfd::MessageLevel::Warning)
+                                .set_title("Unsaved changes")
+                                .set_description(format!(
+                                    "Close PDFbull without saving? Unsaved annotations in {dirty_count} tab(s) will be lost."
+                                ))
+                                .set_buttons(rfd::MessageButtons::OkCancel)
+                                .show()
+                                .await;
+                            if matches!(
+                                answer,
+                                rfd::MessageDialogResult::Ok | rfd::MessageDialogResult::Yes
+                            ) {
+                                allow_close.store(true, std::sync::atomic::Ordering::SeqCst);
+                                let _ = cx.update_window(window_handle, |_, window, cx| {
+                                    window.remove_window();
+                                    cx.quit();
+                                });
+                            }
+                        })
+                        .detach();
+                        false
+                    });
                     cx.new(|cx| {
                         let bg = cx.theme().background;
                         Root::new(view, window, cx).bg(bg)

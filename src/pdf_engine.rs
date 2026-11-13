@@ -2,7 +2,6 @@ use crate::models::{
     Annotation, AnnotationStyle, DocumentId, EngineErrorKind, FormField, FormFieldVariant,
     Hyperlink, PdfError, PdfResult, SearchResultItem,
 };
-use lopdf::{Document, Object, ObjectId};
 use ocrs::TextItem;
 use quick_cache::{Weighter, sync::Cache};
 use rayon::prelude::*;
@@ -208,75 +207,6 @@ fn shared_font_provider() -> Arc<zpdf::FontProvider> {
     PROVIDER.clone()
 }
 
-/// The box a page's content is actually drawn into, as `(x0, y0, x1, y1)`.
-///
-/// `/MediaBox` and `/CropBox` are inheritable page attributes: either may be
-/// declared once on the `/Pages` node and be absent from every individual page
-/// dict. Reading the page dict alone therefore fell back to A4 for exactly the
-/// documents that declare their size the standard way.
-///
-/// `/CropBox` takes precedence, because that — not `/MediaBox` — is what the
-/// viewer shows and therefore what generated content must be positioned against.
-fn effective_page_box(doc: &Document, page_id: ObjectId) -> Option<(f32, f32, f32, f32)> {
-    // Walk /Parent for an inherited key. Bounded so a /Parent cycle (which
-    // malformed files do contain) cannot spin forever.
-    let inherited = |key: &[u8]| -> Option<Object> {
-        let mut current = page_id;
-        for _ in 0..64 {
-            let dict = doc.objects.get(&current).and_then(|o| o.as_dict().ok())?;
-            if let Ok(v) = dict.get(key) {
-                return Some(v.clone());
-            }
-            current = match dict.get(b"Parent").ok()? {
-                Object::Reference(r) => *r,
-                _ => return None,
-            };
-        }
-        None
-    };
-
-    let as_box = |obj: &Option<Object>| -> Option<(f32, f32, f32, f32)> {
-        let arr = match obj {
-            Some(Object::Array(a)) if a.len() == 4 => a,
-            Some(Object::Reference(r)) => match doc.objects.get(r) {
-                Some(Object::Array(a)) if a.len() == 4 => a,
-                _ => return None,
-            },
-            _ => return None,
-        };
-        let num = |o: &Object| -> Option<f32> {
-            match o {
-                Object::Real(v) => Some(*v),
-                Object::Integer(v) => Some(*v as f32),
-                _ => None,
-            }
-        };
-        let (x0, y0) = (num(&arr[0])?, num(&arr[1])?);
-        let (x1, y1) = (num(&arr[2])?, num(&arr[3])?);
-        // Normalize so a box given as [top-right, bottom-left] still yields a
-        // positive extent.
-        Some((x0.min(x1), y0.min(y1), x0.max(x1), y0.max(y1)))
-    };
-
-    as_box(&inherited(b"CropBox")).or_else(|| as_box(&inherited(b"MediaBox")))
-}
-
-/// The effective rotation of a page in a lopdf Document, taking inheritance into account.
-fn page_rotation_lopdf(doc: &Document, page_id: ObjectId) -> i32 {
-    let mut curr = Some(page_id);
-    while let Some(id) = curr {
-        if let Ok(dict) = doc.get_dictionary(id) {
-            if let Ok(rot) = dict.get(b"Rotate").and_then(Object::as_i64) {
-                return ((rot % 360 + 360) % 360) as i32;
-            }
-            curr = dict.get(b"Parent").and_then(Object::as_reference).ok();
-        } else {
-            break;
-        }
-    }
-    0
-}
-
 /// Write generated PDF bytes to `path` without ever truncating the destination
 /// before the new content exists.
 ///
@@ -362,6 +292,18 @@ fn encode_pdf_text(text: &str) -> (Vec<u8>, usize) {
 /// overlay transform would fall through to the identity and misplace everything.
 pub fn normalize_rotation(degrees: i32) -> i32 {
     degrees.rem_euclid(360) / 90 * 90
+}
+
+/// Normalize a page's effective box and scale it by `user_unit` to match
+/// `ContentInterpreter::with_page_user_unit` and `PageInfo` dimensions.
+fn scaled_effective_box(rect: zpdf::Rect, user_unit: f64) -> zpdf::Rect {
+    let unit = if user_unit.is_finite() && user_unit > 0.0 && user_unit <= 75_000.0 {
+        user_unit
+    } else {
+        1.0
+    };
+    let raw = rect.normalize();
+    zpdf::Rect::new(raw.x0 * unit, raw.y0 * unit, raw.x1 * unit, raw.y1 * unit)
 }
 
 /// Map a rect measured on a *rendered* page bitmap back into the page's
@@ -452,8 +394,7 @@ pub fn rotated_bitmap_rect_to_page_space(
 /// document's full optional-content group set; a group missing from it cannot
 /// be carried over.
 ///
-/// A config is synthesized through a real `lopdf` catalog rather than
-/// transmuting memory, and parsed back by `zpdf`, so no `unsafe` is involved.
+/// Build a new `OcConfig` with the user's layer toggles applied on top of `base_oc`.
 pub fn apply_oc_overrides(
     base_oc: &zpdf::OcConfig,
     overrides: &std::collections::HashMap<zpdf::ObjectId, bool>,
@@ -466,26 +407,12 @@ pub fn apply_oc_overrides(
         return base_oc.clone();
     }
 
-    let mut doc = lopdf::Document::with_version("1.4");
-    let pages_id = doc.new_object_id();
-    let catalog_id = doc.new_object_id();
-
-    let mut d_dict = lopdf::Dictionary::new();
-    // BaseState ON is correct for a config that enumerates every group
-    // explicitly: nothing is left to the default.
-    d_dict.set("BaseState", lopdf::Object::Name(b"ON".to_vec()));
-
-    // Carry the document's own resolved visibility forward, then apply the
-    // user's toggles on top. Both lists are sorted, so the emitted arrays are
-    // deterministic -- `overrides` is a `HashMap`, and iterating it raw made
-    // the /ON//OFF order vary between runs of the same document.
     let mut on_ids: Vec<zpdf::ObjectId> = Vec::new();
     let mut off_ids: Vec<zpdf::ObjectId> = Vec::new();
 
     for &id in known_groups {
         let visible = match overrides.get(&id) {
             Some(&user_choice) => user_choice,
-            // No user override: keep whatever the document itself declared.
             None => base_oc.group_visible(id),
         };
         if visible {
@@ -498,69 +425,43 @@ pub fn apply_oc_overrides(
     on_ids.sort();
     off_ids.sort();
 
-    d_dict.set(
-        "ON",
-        lopdf::Object::Array(
-            on_ids
-                .into_iter()
-                .map(|id| lopdf::Object::Reference((id.0, id.1)))
-                .collect(),
-        ),
+    let format_refs = |ids: &[zpdf::ObjectId]| -> String {
+        let mut s = String::new();
+        for (i, id) in ids.iter().enumerate() {
+            if i > 0 {
+                s.push(' ');
+            }
+            let _ = write!(s, "{} {} R", id.0, id.1);
+        }
+        s
+    };
+
+    let mut pdf = Vec::with_capacity(512);
+    pdf.extend_from_slice(b"%PDF-1.4\n");
+
+    let off1 = pdf.len();
+    let obj1 = format!(
+        "1 0 obj\n<< /Type /Catalog /Pages 2 0 R /OCProperties << /D << /BaseState /ON /ON [{}] /OFF [{}] >> >> >>\nendobj\n",
+        format_refs(&on_ids),
+        format_refs(&off_ids),
     );
-    d_dict.set(
-        "OFF",
-        lopdf::Object::Array(
-            off_ids
-                .into_iter()
-                .map(|id| lopdf::Object::Reference((id.0, id.1)))
-                .collect(),
-        ),
+    pdf.extend_from_slice(obj1.as_bytes());
+
+    let off2 = pdf.len();
+    pdf.extend_from_slice(b"2 0 obj\n<< /Type /Pages /Kids [3 0 R] /Count 1 >>\nendobj\n");
+
+    let off3 = pdf.len();
+    pdf.extend_from_slice(
+        b"3 0 obj\n<< /Type /Page /Parent 2 0 R /MediaBox [0 0 100 100] >>\nendobj\n",
     );
 
-    let mut ocp_dict = lopdf::Dictionary::new();
-    ocp_dict.set("D", lopdf::Object::Dictionary(d_dict));
-
-    let mut catalog = lopdf::Dictionary::new();
-    catalog.set("Type", lopdf::Object::Name(b"Catalog".to_vec()));
-    catalog.set("Pages", lopdf::Object::Reference(pages_id));
-    catalog.set("OCProperties", lopdf::Object::Dictionary(ocp_dict));
-
-    doc.objects
-        .insert(catalog_id, lopdf::Object::Dictionary(catalog));
-    doc.trailer
-        .set("Root", lopdf::Object::Reference(catalog_id));
-
-    let page_id = doc.new_object_id();
-    let mut page = lopdf::Dictionary::new();
-    page.set("Type", lopdf::Object::Name(b"Page".to_vec()));
-    page.set("Parent", lopdf::Object::Reference(pages_id));
-    page.set(
-        "MediaBox",
-        lopdf::Object::Array(vec![
-            lopdf::Object::Integer(0),
-            lopdf::Object::Integer(0),
-            lopdf::Object::Integer(100),
-            lopdf::Object::Integer(100),
-        ]),
+    let xref_pos = pdf.len();
+    let trailer = format!(
+        "xref\n0 4\n0000000000 65535 f \n{off1:010} 00000 n \n{off2:010} 00000 n \n{off3:010} 00000 n \ntrailer\n<< /Size 4 /Root 1 0 R >>\nstartxref\n{xref_pos}\n%%EOF\n"
     );
-    doc.objects.insert(page_id, lopdf::Object::Dictionary(page));
+    pdf.extend_from_slice(trailer.as_bytes());
 
-    let mut pages = lopdf::Dictionary::new();
-    pages.set("Type", lopdf::Object::Name(b"Pages".to_vec()));
-    pages.set(
-        "Kids",
-        lopdf::Object::Array(vec![lopdf::Object::Reference(page_id)]),
-    );
-    pages.set("Count", lopdf::Object::Integer(1));
-    doc.objects
-        .insert(pages_id, lopdf::Object::Dictionary(pages));
-
-    let mut bytes = Vec::new();
-    if doc.save_to(&mut bytes).is_err() {
-        return base_oc.clone();
-    }
-
-    if let Ok(pdf_doc) = zpdf::PdfDocument::open(bytes)
+    if let Ok(pdf_doc) = zpdf::PdfDocument::open(pdf)
         && let Some(oc) = pdf_doc.oc_config()
     {
         oc
@@ -593,17 +494,6 @@ fn is_pdfbull_annotation(obj: &zpdf::PdfObject) -> bool {
         Some(zpdf::PdfObject::Name(n)) => n.as_str().starts_with(PDFBULL_ANNOT_MARKER),
         _ => false,
     }
-}
-
-/// [`is_pdfbull_annotation`] for a `lopdf` dictionary, used on the read path.
-///
-/// `load_annotations` parses with `lopdf` while `save_annotations` strips with
-/// `zpdf`, so the same marker has to be recognised in both object models.
-fn is_pdfbull_annotation_lopdf(dict: &lopdf::Dictionary) -> bool {
-    dict.get(b"NM")
-        .ok()
-        .and_then(|obj| obj.as_str().ok())
-        .is_some_and(|nm| nm.starts_with(PDFBULL_ANNOT_MARKER.as_bytes()))
 }
 
 #[derive(Hash, Eq, PartialEq, Clone, Debug)]
@@ -1826,156 +1716,89 @@ impl DocumentStore {
     /// Load annotations previously saved with `save_annotations` from the PDF file.
     ///
     /// Returns an empty vec only when the document genuinely has none. A file
-    /// that cannot be parsed is an error, not an empty list: the previous code
-    /// flattened every failure into `Ok(vec![])`, so a password-protected
-    /// document (which `lopdf` cannot open) always looked like "your highlights
-    /// are gone" — and the caller would then save that empty list back over the
-    /// file.
-    #[allow(clippy::many_single_char_names, clippy::similar_names)]
+    /// that cannot be parsed is an error, not an empty list.
     pub fn load_annotations(&self, path: &str) -> PdfResult<Vec<Annotation>> {
-        // Capped like every other entry point: `Document::load` read the whole
-        // file with no size limit, so a multi-GB input OOM'd the worker before
-        // any check could refuse it.
+        self.load_annotations_with_password(path, None)
+    }
+
+    #[allow(clippy::many_single_char_names, clippy::similar_names)]
+    pub fn load_annotations_with_password(
+        &self,
+        path: &str,
+        password: Option<&str>,
+    ) -> PdfResult<Vec<Annotation>> {
         let data = read_input_capped(path)?;
-        let lopdf_doc = Document::load_mem(&data)
+        let doc = PdfDocument::open_with_password(data, password.unwrap_or("").as_bytes())
             .map_err(|e| PdfError::OpenFailed(format!("cannot read annotations: {e}")))?;
+        let file = doc.file();
 
         let mut annotations = Vec::new();
-        let pages = lopdf_doc.get_pages();
+        let to_f32 = |o: &zpdf::PdfObject| -> Option<f32> { o.as_f64().ok().map(|v| v as f32) };
 
-        for (&page_num, &page_id) in &pages {
-            let page_idx = (page_num as usize).saturating_sub(1);
+        for page_idx in 0..doc.page_count() {
+            let Ok(page) = doc.page(page_idx) else {
+                continue;
+            };
+            let eff = page.effective_box();
+            let (page_x0, page_y1) = (eff.x0 as f32, eff.y1 as f32);
 
-            // Convert PDF bottom-left-origin coordinates into the viewport's
-            // top-left-origin space. The correct divisor is the page box's
-            // **y1**, not its height: `y_top = y1 - y_pdf - h`.
-            //
-            // These are different whenever the box does not start at y=0, which
-            // is the norm for scanned pages (`MediaBox [0 100 612 892]`) and for
-            // anything with a `CropBox` (`[50 50 562 742]`, height 692 vs
-            // MediaBox[3] 792). Using height here meant every annotation drifted
-            // further down the page on each open/save cycle, because the write
-            // path in `save_annotations` uses the true height — the two
-            // disagreed, so each round trip added `y0`.
-            let (page_x0, _, _, page_y1) =
-                effective_page_box(&lopdf_doc, page_id).unwrap_or((0.0, 0.0, 612.0, 792.0));
-
-            let annots_array = lopdf_doc
-                .objects
-                .get(&page_id)
-                .and_then(|o| o.as_dict().ok())
-                .and_then(|d| d.get(b"Annots").ok())
-                .and_then(|a| match a {
-                    Object::Reference(r) => {
-                        lopdf_doc.objects.get(r).and_then(|o| o.as_array().ok())
-                    }
-                    Object::Array(arr) => Some(arr),
-                    _ => None,
-                })
-                .cloned()
-                .unwrap_or_default();
-
-            for annot_ref in &annots_array {
-                let annot_obj = match annot_ref {
-                    Object::Reference(r) => lopdf_doc.objects.get(r),
-                    _ => None,
+            for &annot_id in &page.annots {
+                let Ok(annot_obj) = file.resolve(annot_id) else {
+                    continue;
                 };
-                let Some(dict) = annot_obj.and_then(|o| o.as_dict().ok()) else {
+                let Ok(dict) = annot_obj.as_dict() else {
                     continue;
                 };
 
-                let subtype = dict
-                    .get(b"Subtype")
-                    .ok()
-                    .and_then(|o| o.as_name().ok())
-                    .map(|b| String::from_utf8_lossy(b).into_owned())
-                    .unwrap_or_default();
-
-                // Skip Link annotations (those are hyperlinks, not user annotations)
+                let subtype = dict.get_name("Subtype").unwrap_or_default();
                 if subtype == "Link" {
                     continue;
                 }
-
-                // Only this app's own annotations are loaded. A highlight another
-                // reader wrote carries no `/NM` marker, so `save_annotations`
-                // does not strip it — but it *is* in the list handed back to the
-                // UI, and the save path appends that whole list. Loading a
-                // foreign annotation therefore made every Ctrl+S append one more
-                // copy of it. The marker exists precisely to identify this app's
-                // own annotations; honouring it on read as well as on write is
-                // what makes the annotation set round-trip.
-                //
-                // Consequence: annotations written by other applications are no
-                // longer shown in the sidebar, because the app cannot save them
-                // back without duplicating them.
-                if !is_pdfbull_annotation_lopdf(dict) {
+                if !is_pdfbull_annotation(&annot_obj) {
                     continue;
                 }
 
-                // Parse Rect [x0, y0, x1, y1] in PDF coords
-                let rect = dict
-                    .get(b"Rect")
-                    .ok()
-                    .and_then(|o| o.as_array().ok())
-                    .cloned();
-                let (pdf_x0, pdf_y0, pdf_x1, pdf_y1) = match rect.as_deref() {
-                    Some([a, b, c, d]) => {
-                        let to_f32 = |o: &Object| match o {
-                            Object::Real(v) => *v,
-                            Object::Integer(v) => *v as f32,
-                            _ => 0.0_f32,
-                        };
-                        (to_f32(a), to_f32(b), to_f32(c), to_f32(d))
-                    }
+                let Some(rect_arr) = dict.get("Rect").and_then(|o| o.as_array().ok()) else {
+                    continue;
+                };
+                let (pdf_x0, pdf_y0, pdf_x1, pdf_y1) = match rect_arr {
+                    [a, b, c, d] => (
+                        to_f32(a).unwrap_or(0.0),
+                        to_f32(b).unwrap_or(0.0),
+                        to_f32(c).unwrap_or(0.0),
+                        to_f32(d).unwrap_or(0.0),
+                    ),
                     _ => continue,
                 };
 
-                // Convert from PDF bottom-left origin to screen top-left origin.
-                // `x` is taken relative to the box's x0 so a `CropBox` with a
-                // non-zero left edge does not shift every annotation sideways.
                 let x = pdf_x0 - page_x0;
                 let w = (pdf_x1 - pdf_x0).abs();
                 let h = (pdf_y1 - pdf_y0).abs();
                 let y = page_y1 - pdf_y1;
 
-                // Parse color
                 let color_str = dict
-                    .get(b"C")
-                    .ok()
+                    .get("C")
                     .and_then(|o| o.as_array().ok())
-                    .cloned()
-                    .and_then(|arr| {
-                        let to_f32 = |o: &Object| match o {
-                            Object::Real(v) => *v,
-                            Object::Integer(v) => *v as f32,
-                            _ => 0.0_f32,
-                        };
-                        match arr.as_slice() {
-                            [r, g, b] => Some(format!(
-                                "#{:02X}{:02X}{:02X}",
-                                (to_f32(r) * 255.0) as u8,
-                                (to_f32(g) * 255.0) as u8,
-                                (to_f32(b) * 255.0) as u8,
-                            )),
-                            _ => None,
-                        }
+                    .and_then(|arr| match arr {
+                        [r, g, b] => Some(format!(
+                            "#{:02X}{:02X}{:02X}",
+                            (to_f32(r).unwrap_or(0.0) * 255.0) as u8,
+                            (to_f32(g).unwrap_or(0.0) * 255.0) as u8,
+                            (to_f32(b).unwrap_or(0.0) * 255.0) as u8,
+                        )),
+                        _ => None,
                     })
                     .unwrap_or_else(|| "#408cff".to_string());
 
-                let has_fill = dict.get(b"IC").is_ok();
+                let has_fill = dict.get("IC").is_some();
                 let thickness = dict
-                    .get(b"BS")
-                    .ok()
+                    .get("BS")
                     .and_then(|o| o.as_dict().ok())
-                    .and_then(|d| d.get(b"W").ok())
-                    .and_then(|o| match o {
-                        Object::Real(v) => Some(*v),
-                        Object::Integer(v) => Some(*v as f32),
-                        _ => None,
-                    })
+                    .and_then(|d| d.get("W"))
+                    .and_then(to_f32)
                     .unwrap_or(2.0_f32);
 
-                let style = match subtype.as_str() {
+                let style = match subtype {
                     "Highlight" => Some(AnnotationStyle::Highlight { color: color_str }),
                     "Underline" => Some(AnnotationStyle::Underline { color: color_str }),
                     "StrikeOut" => Some(AnnotationStyle::Strikeout { color: color_str }),
@@ -2001,10 +1824,9 @@ impl DocumentStore {
                     }),
                     "FreeText" => {
                         let text = dict
-                            .get(b"Contents")
-                            .ok()
+                            .get("Contents")
                             .and_then(|o| o.as_str().ok())
-                            .map(|b| String::from_utf8_lossy(b).to_string())
+                            .map(|s| String::from_utf8_lossy(&s.0).to_string())
                             .unwrap_or_default();
                         Some(AnnotationStyle::Text {
                             text,
@@ -2014,10 +1836,9 @@ impl DocumentStore {
                     }
                     "Text" => {
                         let comment = dict
-                            .get(b"Contents")
-                            .ok()
+                            .get("Contents")
                             .and_then(|o| o.as_str().ok())
-                            .map(|b| String::from_utf8_lossy(b).to_string())
+                            .map(|s| String::from_utf8_lossy(&s.0).to_string())
                             .unwrap_or_default();
                         Some(AnnotationStyle::StickyNote {
                             comment,
@@ -2026,16 +1847,11 @@ impl DocumentStore {
                     }
                     "Line" => {
                         let is_arrow = dict
-                            .get(b"LE")
-                            .ok()
+                            .get("LE")
                             .and_then(|o| o.as_array().ok())
                             .map(|a| {
-                                a.iter().any(|o| {
-                                    o.as_name()
-                                        .ok()
-                                        .map(|s| String::from_utf8_lossy(s).contains("Arrow"))
-                                        .unwrap_or(false)
-                                })
+                                a.iter()
+                                    .any(|o| o.as_name().is_ok_and(|s| s.contains("Arrow")))
                             })
                             .unwrap_or(false);
                         if is_arrow {
@@ -2054,23 +1870,14 @@ impl DocumentStore {
                 };
 
                 if let Some(style) = style {
-                    // A `Line` annotation also carries `/L [x1 y1 x2 y2]`, which
-                    // keeps the direction the normalised `Rect` throws away.
-                    // Without reading it, a line drawn bottom-left to
-                    // top-right came back as the opposite diagonal.
                     let is_line = matches!(
                         style,
                         AnnotationStyle::Line { .. } | AnnotationStyle::Arrow { .. }
                     );
                     let endpoints = is_line
                         .then(|| {
-                            let arr = dict.get(b"L").ok()?.as_array().ok()?;
-                            let to_f32 = |o: &Object| match o {
-                                Object::Real(v) => Some(*v),
-                                Object::Integer(v) => Some(*v as f32),
-                                _ => None,
-                            };
-                            match arr.as_slice() {
+                            let arr = dict.get("L")?.as_array().ok()?;
+                            match arr {
                                 [a, b, c, d] => {
                                     let (x1, y1) = (to_f32(a)?, to_f32(b)?);
                                     let (x2, y2) = (to_f32(c)?, to_f32(d)?);
@@ -2384,10 +2191,18 @@ impl DocumentStore {
         // *height*, which disagreed whenever the box does not start at y=0. The
         // `.max(0.0)` then clamped every span in the lower half of the page to
         // y=0, collapsing text selection onto the top edge.
-        let eff_box = page.effective_box();
+        // Scale `effective_box` by `user_unit` to stay aligned with `spans`
+        // (which `ContentInterpreter::with_page_user_unit` already scaled) and
+        // with `PageInfo` dimensions.
+        let eff_box = scaled_effective_box(page.effective_box(), page.user_unit);
         let mut text_items = Vec::new();
         for span in spans {
-            if span.text.trim().is_empty() {
+            if span.text.trim().is_empty()
+                || !span.x.is_finite()
+                || !span.y.is_finite()
+                || !span.size.is_finite()
+                || !span.advance.is_finite()
+            {
                 continue;
             }
             let char_count = span.text.chars().count();
@@ -2402,8 +2217,32 @@ impl DocumentStore {
                 0.0
             };
 
-            let base_x = (span.x - eff_box.x0) as f32;
-            let base_y = (eff_box.y1 - span.y - span.size as f64) as f32;
+            let is_neg_adv = span.advance < -0.01;
+            let left_x = if is_neg_adv {
+                span.x + span.advance
+            } else {
+                span.x
+            };
+            let base_x = (left_x - eff_box.x0) as f32;
+            // Align with `zpdf` baseline bounds (`y - 0.2*size .. y + 0.8*size`):
+            // top edge sits at 0.8*size above baseline, bottom edge covers descenders.
+            let base_y = (eff_box.y1 - span.y - (span.size as f64) * 0.8) as f32;
+            let push_word =
+                |out: &mut Vec<crate::models::TextItem>, word: String, start_idx: usize| {
+                    let word_chars = word.chars().count();
+                    let word_x = if is_neg_adv {
+                        (span.x - eff_box.x0) as f32 - char_step * (start_idx + word_chars) as f32
+                    } else {
+                        base_x + char_step * start_idx as f32
+                    };
+                    out.push(crate::models::TextItem {
+                        text: word,
+                        x: word_x,
+                        y: base_y,
+                        width: char_step * word_chars as f32,
+                        height: span.size,
+                    });
+                };
 
             if span.text.contains(char::is_whitespace) {
                 let mut current_word = String::new();
@@ -2411,17 +2250,11 @@ impl DocumentStore {
                 for (idx, ch) in span.text.chars().enumerate() {
                     if ch.is_whitespace() {
                         if !current_word.is_empty() {
-                            let word_chars = current_word.chars().count();
-                            let word_x = base_x + char_step * word_start_idx as f32;
-                            let word_w = char_step * word_chars as f32;
-                            text_items.push(crate::models::TextItem {
-                                text: current_word,
-                                x: word_x,
-                                y: base_y,
-                                width: word_w,
-                                height: span.size,
-                            });
-                            current_word = String::new();
+                            push_word(
+                                &mut text_items,
+                                std::mem::take(&mut current_word),
+                                word_start_idx,
+                            );
                         }
                     } else {
                         if current_word.is_empty() {
@@ -2431,16 +2264,7 @@ impl DocumentStore {
                     }
                 }
                 if !current_word.is_empty() {
-                    let word_chars = current_word.chars().count();
-                    let word_x = base_x + char_step * word_start_idx as f32;
-                    let word_w = char_step * word_chars as f32;
-                    text_items.push(crate::models::TextItem {
-                        text: current_word,
-                        x: word_x,
-                        y: base_y,
-                        width: word_w,
-                        height: span.size,
-                    });
+                    push_word(&mut text_items, current_word, word_start_idx);
                 }
             } else {
                 text_items.push(crate::models::TextItem {
@@ -2975,9 +2799,9 @@ impl DocumentStore {
             };
 
             let mut spans: Vec<zpdf::TextSpan> = Vec::new();
-            let eff_box = page.effective_box();
+            let eff_box = scaled_effective_box(page.effective_box(), page.user_unit);
             {
-                let interp = ContentInterpreter::new(eff_box)
+                let interp = ContentInterpreter::new(page.effective_box())
                     .with_page_user_unit(page.user_unit)
                     .with_fonts(&mut fonts)
                     .with_document(doc.file(), &page.resources)
@@ -4513,48 +4337,138 @@ impl DocumentStore {
         Ok(Vec::new())
     }
 
+    fn add_helvetica_font(writer: &mut IncrementalWriter) -> zpdf::ObjectId {
+        let mut font_dict = zpdf::PdfDict::new();
+        font_dict.insert(
+            zpdf::PdfName::new("Type"),
+            zpdf::PdfObject::Name(zpdf::PdfName::new("Font")),
+        );
+        font_dict.insert(
+            zpdf::PdfName::new("Subtype"),
+            zpdf::PdfObject::Name(zpdf::PdfName::new("Type1")),
+        );
+        font_dict.insert(
+            zpdf::PdfName::new("BaseFont"),
+            zpdf::PdfObject::Name(zpdf::PdfName::new("Helvetica")),
+        );
+        let (obj_num, gen_num) = writer.add_object(&zpdf::PdfObject::Dict(font_dict));
+        zpdf::ObjectId(obj_num, gen_num as u16)
+    }
+
+    fn append_overlay_stream(
+        writer: &mut IncrementalWriter,
+        page_id: zpdf::ObjectId,
+        stream_bytes: &[u8],
+        font_ref_id: zpdf::ObjectId,
+        gstate_ref_id: Option<zpdf::ObjectId>,
+    ) -> PdfResult<()> {
+        let (stream_obj, stream_gen) = writer.add_flate_stream(&zpdf::PdfDict::new(), stream_bytes);
+        let stream_id = zpdf::ObjectId(stream_obj, stream_gen as u16);
+        let page_obj = writer
+            .resolve_current(page_id)
+            .map_err(|e| PdfError::EngineError(e.to_string().into()))?;
+        let mut page_dict = page_obj
+            .as_dict()
+            .map_err(|_| PdfError::EngineError("Invalid page object".into()))?
+            .clone();
+
+        let mut all_contents = match page_dict.get("Contents") {
+            Some(zpdf::PdfObject::Ref(r)) => vec![zpdf::PdfObject::Ref(*r)],
+            Some(zpdf::PdfObject::Array(arr)) => arr.clone(),
+            _ => Vec::new(),
+        };
+        all_contents.push(zpdf::PdfObject::Ref(stream_id));
+
+        let deref_dict = |w: &IncrementalWriter, obj: &zpdf::PdfObject| -> Option<zpdf::PdfDict> {
+            match obj {
+                zpdf::PdfObject::Ref(r) => w
+                    .resolve_current(*r)
+                    .ok()
+                    .and_then(|o| o.as_dict().ok().cloned()),
+                zpdf::PdfObject::Dict(d) => Some(d.clone()),
+                _ => None,
+            }
+        };
+
+        let existing_res = page_dict.get("Resources").cloned();
+        let merged_res_id = match existing_res {
+            Some(ref res_obj) => {
+                let Some(mut res_dict) = deref_dict(writer, res_obj) else {
+                    tracing::warn!(
+                        "Overlay: page {page_id:?} has unresolvable /Resources; leaving it unchanged"
+                    );
+                    return Ok(());
+                };
+                let mut font_dict = res_dict
+                    .get("Font")
+                    .and_then(|f| deref_dict(writer, f))
+                    .unwrap_or_default();
+                font_dict.insert(zpdf::PdfName::new("F1"), zpdf::PdfObject::Ref(font_ref_id));
+                res_dict.insert(zpdf::PdfName::new("Font"), zpdf::PdfObject::Dict(font_dict));
+
+                if let Some(gs_id) = gstate_ref_id {
+                    let mut gs_dict = res_dict
+                        .get("ExtGState")
+                        .and_then(|g| deref_dict(writer, g))
+                        .unwrap_or_default();
+                    gs_dict.insert(zpdf::PdfName::new("GS_WM"), zpdf::PdfObject::Ref(gs_id));
+                    res_dict.insert(
+                        zpdf::PdfName::new("ExtGState"),
+                        zpdf::PdfObject::Dict(gs_dict),
+                    );
+                }
+
+                let (id_num, id_gen) = writer.add_object(&zpdf::PdfObject::Dict(res_dict));
+                zpdf::ObjectId(id_num, id_gen as u16)
+            }
+            None => {
+                let mut res_dict = zpdf::PdfDict::new();
+                let mut font_dict = zpdf::PdfDict::new();
+                font_dict.insert(zpdf::PdfName::new("F1"), zpdf::PdfObject::Ref(font_ref_id));
+                res_dict.insert(zpdf::PdfName::new("Font"), zpdf::PdfObject::Dict(font_dict));
+                if let Some(gs_id) = gstate_ref_id {
+                    let mut gs_dict = zpdf::PdfDict::new();
+                    gs_dict.insert(zpdf::PdfName::new("GS_WM"), zpdf::PdfObject::Ref(gs_id));
+                    res_dict.insert(
+                        zpdf::PdfName::new("ExtGState"),
+                        zpdf::PdfObject::Dict(gs_dict),
+                    );
+                }
+                let (id_num, id_gen) = writer.add_object(&zpdf::PdfObject::Dict(res_dict));
+                zpdf::ObjectId(id_num, id_gen as u16)
+            }
+        };
+
+        page_dict.insert(
+            zpdf::PdfName::new("Contents"),
+            zpdf::PdfObject::Array(all_contents),
+        );
+        page_dict.insert(
+            zpdf::PdfName::new("Resources"),
+            zpdf::PdfObject::Ref(merged_res_id),
+        );
+        writer.overwrite_object(page_id, zpdf::PdfObject::Dict(page_dict));
+        Ok(())
+    }
+
     pub fn add_watermark(input_path: &str, text: &str, output_path: &str) -> PdfResult<String> {
-        // Capped, like every other input path: a bare `Document::load` reads the
-        // whole file with no size check, so a multi-GB input OOMs the process
-        // rather than being rejected up front.
         let input = read_input_capped(input_path)?;
-        let mut doc =
-            Document::load_mem(&input).map_err(|e| PdfError::OpenFailed(e.to_string()))?;
+        let mut writer =
+            IncrementalWriter::new(input).map_err(|e| PdfError::OpenFailed(e.to_string()))?;
 
-        let pages: Vec<ObjectId> = doc.get_pages().into_values().collect();
-        let page_count = pages.len();
+        let page_count = writer.page_count();
+        let font_ref_id = Self::add_helvetica_font(&mut writer);
 
-        let font_ref_id = doc.add_object(Object::Dictionary(lopdf::Dictionary::from_iter(vec![
-            ("Type", Object::Name(b"Font".to_vec())),
-            ("Subtype", Object::Name(b"Type1".to_vec())),
-            ("BaseFont", Object::Name(b"Helvetica".to_vec())),
-        ])));
+        let mut gstate = zpdf::PdfDict::new();
+        gstate.insert(
+            zpdf::PdfName::new("Type"),
+            zpdf::PdfObject::Name(zpdf::PdfName::new("ExtGState")),
+        );
+        gstate.insert(zpdf::PdfName::new("ca"), zpdf::PdfObject::Real(0.35));
+        gstate.insert(zpdf::PdfName::new("CA"), zpdf::PdfObject::Real(0.35));
+        let (gs_obj, gs_gen) = writer.add_object(&zpdf::PdfObject::Dict(gstate));
+        let gstate_id = zpdf::ObjectId(gs_obj, gs_gen as u16);
 
-        let mut gstate = lopdf::Dictionary::new();
-        gstate.set("Type", Object::Name(b"ExtGState".to_vec()));
-        gstate.set("ca", Object::Real(0.35));
-        gstate.set("CA", Object::Real(0.35));
-        let gstate_id = doc.add_object(Object::Dictionary(gstate));
-
-        let resources_id = doc.add_object(Object::Dictionary(lopdf::Dictionary::from_iter(vec![
-            (
-                "Font",
-                Object::Dictionary(lopdf::Dictionary::from_iter(vec![(
-                    "F1",
-                    Object::Reference(font_ref_id),
-                )])),
-            ),
-            (
-                "ExtGState",
-                Object::Dictionary(lopdf::Dictionary::from_iter(vec![(
-                    "GS_WM",
-                    Object::Reference(gstate_id),
-                )])),
-            ),
-        ])));
-
-        // Encode once, outside the per-page loop: the bytes go into every page's
-        // content stream, so re-encoding per page only repeated the work.
         let (text_bytes, unmappable) = encode_pdf_text(text);
         if unmappable > 0 {
             tracing::warn!(
@@ -4564,23 +4478,29 @@ impl DocumentStore {
             );
         }
 
-        // The watermark content stream is built *per page* so its placement can
-        // follow that page's box. It used to be built once with a hard-coded
-        // origin of (200, 400), which put the stamp off the page — or absurdly
-        // off-centre — for any page whose MediaBox is not A4-sized.
-        for &page_id in &pages {
-            let (x0, y0, x1, y1) =
-                effective_page_box(&doc, page_id).unwrap_or((0.0, 0.0, 595.0, 842.0));
+        for page_idx in 0..page_count {
+            let (page_id, x0, y0, x1, y1, rot) = {
+                let page = writer
+                    .document()
+                    .page(page_idx)
+                    .map_err(|e| PdfError::EngineError(e.to_string().into()))?;
+                let eff = page.effective_box();
+                let rot = ((page.rotate % 360) + 360) % 360;
+                (
+                    page.id,
+                    eff.x0 as f32,
+                    eff.y0 as f32,
+                    eff.x1 as f32,
+                    eff.y1 as f32,
+                    rot,
+                )
+            };
             let (page_w, page_h) = (x1 - x0, y1 - y0);
-            let rot = page_rotation_lopdf(&doc, page_id);
 
             let mut content = pdf_writer::Content::new();
             content.save_state();
             content.set_parameters(pdf_writer::Name(b"GS_WM"));
             content.begin_text();
-            // Helvetica averages ~0.6 em per character; cap the size so a long
-            // stamp still fits the page width, then centre the run at
-            // mid-height so it reads as a watermark on any page size.
             let font_size = 48.0_f32.min((page_w / 12.0).max(12.0));
             content.set_font(pdf_writer::Name(b"F1"), font_size);
             content.set_fill_rgb(0.5, 0.5, 0.5);
@@ -4610,110 +4530,19 @@ impl DocumentStore {
             content.show(pdf_writer::Str(&text_bytes));
             content.end_text();
             content.restore_state();
-            let watermark_stream =
-                lopdf::Stream::new(lopdf::Dictionary::new(), content.finish().to_vec());
-            let watermark_id = doc.add_object(watermark_stream);
 
-            let existing_contents = doc
-                .get_page_contents(page_id)
-                .into_iter()
-                .map(Object::Reference)
-                .collect::<Vec<_>>();
-            let mut all_contents = existing_contents;
-            all_contents.push(Object::Reference(watermark_id));
-
-            let existing_res = doc
-                .objects
-                .get(&page_id)
-                .and_then(|o| o.as_dict().ok())
-                .and_then(|d| d.get(b"Resources").ok())
-                .cloned();
-
-            let mut merged_res = None;
-            if let Some(ref res) = existing_res {
-                let mut res_dict = match res {
-                    Object::Reference(r) => {
-                        doc.objects.get(r).and_then(|o| o.as_dict().ok()).cloned()
-                    }
-                    Object::Dictionary(d) => Some(d.clone()),
-                    _ => None,
-                };
-                if let Some(ref mut d) = res_dict {
-                    if let Ok(existing_fonts) = d.get_mut(b"Font") {
-                        let mut fonts_dict = match existing_fonts {
-                            Object::Reference(r) => {
-                                doc.objects.get(r).and_then(|o| o.as_dict().ok()).cloned()
-                            }
-                            Object::Dictionary(fd) => Some(fd.clone()),
-                            _ => None,
-                        };
-                        if let Some(ref mut fd) = fonts_dict {
-                            fd.set("F1", Object::Reference(font_ref_id));
-                            d.set("Font", Object::Dictionary(fd.clone()));
-                        }
-                    } else {
-                        d.set(
-                            "Font",
-                            Object::Dictionary(lopdf::Dictionary::from_iter(vec![(
-                                "F1",
-                                Object::Reference(font_ref_id),
-                            )])),
-                        );
-                    }
-
-                    if let Ok(existing_extgstate) = d.get_mut(b"ExtGState") {
-                        let mut gstate_dict = match existing_extgstate {
-                            Object::Reference(r) => {
-                                doc.objects.get(r).and_then(|o| o.as_dict().ok()).cloned()
-                            }
-                            Object::Dictionary(gd) => Some(gd.clone()),
-                            _ => None,
-                        };
-                        if let Some(ref mut gd) = gstate_dict {
-                            gd.set("GS_WM", Object::Reference(gstate_id));
-                            d.set("ExtGState", Object::Dictionary(gd.clone()));
-                        }
-                    } else {
-                        d.set(
-                            "ExtGState",
-                            Object::Dictionary(lopdf::Dictionary::from_iter(vec![(
-                                "GS_WM",
-                                Object::Reference(gstate_id),
-                            )])),
-                        );
-                    }
-
-                    merged_res = Some(doc.add_object(Object::Dictionary(d.clone())));
-                }
-            }
-
-            let page_dict = doc
-                .objects
-                .get_mut(&page_id)
-                .and_then(|o| o.as_dict_mut().ok())
-                .ok_or_else(|| PdfError::EngineError("Invalid page object".into()))?;
-            page_dict.set("Contents", Object::Array(all_contents));
-            // Only fall back to the shared font-only dictionary when the page
-            // had no `/Resources` at all. `merged_res` stays `None` if the page
-            // *did* have one that could not be resolved to a dictionary, and
-            // assigning `resources_id` in that case replaced the page's real
-            // resources — the same content-destroying outcome as the
-            // header/footer path. Leave those pages untouched instead.
-            match merged_res {
-                Some(res_id) => page_dict.set("Resources", Object::Reference(res_id)),
-                None if existing_res.is_none() => {
-                    page_dict.set("Resources", Object::Reference(resources_id))
-                }
-                None => tracing::warn!(
-                    "Watermark: page {page_id:?} has unresolvable /Resources; leaving it unchanged"
-                ),
-            }
+            Self::append_overlay_stream(
+                &mut writer,
+                page_id,
+                &content.finish(),
+                font_ref_id,
+                Some(gstate_id),
+            )?;
         }
 
-        // Serialize to memory, then write atomically. `doc.save` streams
-        // straight into the destination, truncating it first.
         let mut bytes = Vec::new();
-        doc.save_to(&mut bytes)
+        writer
+            .write(std::io::Cursor::new(&mut bytes))
             .map_err(|e| PdfError::IoError(e.to_string()))?;
         write_pdf_output(output_path, &bytes)?;
 
@@ -4734,34 +4563,36 @@ impl DocumentStore {
         footer_format: &str,
         output_path: &str,
     ) -> PdfResult<String> {
-        // Capped, like every other input path: a bare `Document::load` reads the
-        // whole file with no size check, so a multi-GB input OOMs the process
-        // rather than being rejected up front.
         let input = read_input_capped(input_path)?;
-        let mut doc =
-            Document::load_mem(&input).map_err(|e| PdfError::OpenFailed(e.to_string()))?;
+        let mut writer =
+            IncrementalWriter::new(input).map_err(|e| PdfError::OpenFailed(e.to_string()))?;
 
-        let pages: Vec<ObjectId> = doc.get_pages().into_values().collect();
-        let page_count = pages.len();
+        let page_count = writer.page_count();
+        let font_ref_id = Self::add_helvetica_font(&mut writer);
 
-        let font_ref_id = doc.add_object(Object::Dictionary(lopdf::Dictionary::from_iter(vec![
-            ("Type", Object::Name(b"Font".to_vec())),
-            ("Subtype", Object::Name(b"Type1".to_vec())),
-            ("BaseFont", Object::Name(b"Helvetica".to_vec())),
-        ])));
-
-        for (idx, &page_id) in pages.iter().enumerate() {
-            let page_num = idx + 1;
+        for page_idx in 0..page_count {
+            let page_num = page_idx + 1;
             let formatted_footer = footer_format
                 .replace("{page}", &page_num.to_string())
                 .replace("{pages}", &page_count.to_string());
-            // Anchor the header and footer to this page's own box instead of a
-            // hard-coded 760/30. On any page shorter than 760 pt tall the header
-            // landed outside the MediaBox and silently vanished.
-            let (x0, y0, x1, y1) =
-                effective_page_box(&doc, page_id).unwrap_or((0.0, 0.0, 595.0, 842.0));
+
+            let (page_id, x0, y0, x1, y1, rot) = {
+                let page = writer
+                    .document()
+                    .page(page_idx)
+                    .map_err(|e| PdfError::EngineError(e.to_string().into()))?;
+                let eff = page.effective_box();
+                let rot = ((page.rotate % 360) + 360) % 360;
+                (
+                    page.id,
+                    eff.x0 as f32,
+                    eff.y0 as f32,
+                    eff.x1 as f32,
+                    eff.y1 as f32,
+                    rot,
+                )
+            };
             let (page_w, page_h) = (x1 - x0, y1 - y0);
-            let rot = page_rotation_lopdf(&doc, page_id);
             let margin = 36.0_f32.min(page_w / 8.0);
 
             let mut content = pdf_writer::Content::new();
@@ -4879,87 +4710,18 @@ impl DocumentStore {
             content.end_text();
             content.restore_state();
 
-            let hf_stream = lopdf::Stream::new(lopdf::Dictionary::new(), content.finish().to_vec());
-            let hf_id = doc.add_object(hf_stream);
-
-            let existing_contents = doc
-                .get_page_contents(page_id)
-                .into_iter()
-                .map(Object::Reference)
-                .collect::<Vec<_>>();
-            let mut all_contents = existing_contents;
-            all_contents.push(Object::Reference(hf_id));
-
-            // Register `F1` in the page's *existing* resource dictionary.
-            //
-            // This used to assign a brand-new `/Resources` containing only
-            // `{Font: {F1}}`, discarding whatever the page already had. Every
-            // `/XObject`, `/ExtGState`, `/ColorSpace`, `/Shading` and `/Pattern`
-            // entry was dropped, so all images, soft masks and shadings on every
-            // page became unresolvable and the saved file rendered blank apart
-            // from the header and footer — while the UI reported success. Merge
-            // instead, exactly as `add_watermark` does.
-            //
-            // Computed before the mutable borrow of `doc.objects` below.
-            let existing_res = doc
-                .objects
-                .get(&page_id)
-                .and_then(|o| o.as_dict().ok())
-                .and_then(|d| d.get(b"Resources").ok())
-                .cloned();
-
-            let merged_res = match existing_res {
-                Some(res) => {
-                    let res_dict = match res {
-                        Object::Reference(r) => {
-                            doc.objects.get(&r).and_then(|o| o.as_dict().ok()).cloned()
-                        }
-                        Object::Dictionary(d) => Some(d),
-                        _ => None,
-                    };
-                    // A page whose `/Resources` is present but unresolvable is
-                    // left alone rather than being handed the font-only
-                    // dictionary, which would destroy its real resources.
-                    res_dict.map(|mut d| {
-                        let fonts = match d.get(b"Font") {
-                            Ok(Object::Reference(r)) => {
-                                doc.objects.get(r).and_then(|o| o.as_dict().ok()).cloned()
-                            }
-                            Ok(Object::Dictionary(fd)) => Some(fd.clone()),
-                            _ => None,
-                        };
-                        let mut fd = fonts.unwrap_or_default();
-                        fd.set("F1", Object::Reference(font_ref_id));
-                        d.set("Font", Object::Dictionary(fd));
-                        doc.add_object(Object::Dictionary(d))
-                    })
-                }
-                // No `/Resources` at all: a fresh dictionary is correct here.
-                None => Some(
-                    doc.add_object(Object::Dictionary(lopdf::Dictionary::from_iter(vec![(
-                        "Font",
-                        Object::Dictionary(lopdf::Dictionary::from_iter(vec![(
-                            "F1",
-                            Object::Reference(font_ref_id),
-                        )])),
-                    )]))),
-                ),
-            };
-
-            if let Some(page_obj) = doc.objects.get_mut(&page_id)
-                && let Ok(dict) = page_obj.as_dict_mut()
-            {
-                dict.set("Contents", Object::Array(all_contents));
-                if let Some(res_id) = merged_res {
-                    dict.set("Resources", Object::Reference(res_id));
-                }
-            }
+            Self::append_overlay_stream(
+                &mut writer,
+                page_id,
+                &content.finish(),
+                font_ref_id,
+                None,
+            )?;
         }
 
-        // Serialize to memory, then write atomically. `doc.save` streams
-        // straight into the destination, truncating it first.
         let mut bytes = Vec::new();
-        doc.save_to(&mut bytes)
+        writer
+            .write(std::io::Cursor::new(&mut bytes))
             .map_err(|e| PdfError::IoError(e.to_string()))?;
         write_pdf_output(output_path, &bytes)?;
 

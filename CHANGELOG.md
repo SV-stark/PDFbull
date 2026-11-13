@@ -5,6 +5,23 @@ All notable changes to the PDFbull project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.21.1] - 2026-11-13
+
+### Changed
+- **Eliminated `lopdf` in favour of native `zpdf` / `zpdf-writer` (`0.18.0`)** (`Cargo.toml`, `src/pdf_engine.rs`, `tests/regressions.rs`):
+  - Removed the `lopdf` crate dependency and migrated remaining PDF inspection, metadata, annotation, and rewrite paths natively to `zpdf` and `zpdf_writer`.
+
+### Fixed
+- **Click-and-Drag Text Selection & Text-Layer Accuracy** (`src/ui_gpui/canvas.rs`, `src/ui_gpui/app_view.rs`, `src/pdf_engine.rs`, `tests/text_layer_and_selection.rs`):
+  - Anchored active drag, word, line, and Ctrl+A selections in unrotated page space (`selection_page_range`), kept mid-drag wheel scrolling synchronized (`sync_drag_selection_for_scroll`), and wired root/scroll-container capture (`capture_any_mouse_up`, `on_mouse_up_out`, `pressed_button` checks) so dragging over UI panels or releasing outside the window never stalls or leaves `is_selecting` stuck.
+  - Added `PendingSelectionAction` so cold-cache double-click and triple-click resolve word/line selection cleanly instead of falling back to full-page Select All.
+  - Added multi-column gutter isolation, empty-margin/whitespace guards, and superscript-safe `cluster_text_lines` line clustering across selection, joining, and triple-click.
+  - Aligned `extract_text_items` and `search` with `UserUnit`-scaled effective page boxes (`scaled_effective_box`), handled negative `span.advance` spans cleanly, and adjusted baseline vertical offsets (`0.8 * size`) to match rendered glyphs.
+- **Unsaved Changes Prompt, Password-Protected Annotations, Saving & Build Hygiene** (`src/ui_gpui/mod.rs`, `src/engine.rs`, `src/pdf_engine.rs`, `src/ui_gpui/app_view.rs`, `build.rs`):
+  - Added `on_window_should_close` confirmation when closing with unsaved tab modifications while persisting reading state.
+  - Propagated stored document passwords into `PdfCommand::LoadAnnotations` / `load_annotations_with_password`.
+  - Fixed `save_active_document` / `apply_redactions` handling and avoided `unwrap()` on `dest.to_str()` in `build.rs`.
+
 ## [0.21.0] - 2026-11-11
 
 ### Added

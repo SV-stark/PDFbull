@@ -1426,31 +1426,43 @@ impl PdfbullView {
                         // per frame.
                         let arc_items = std::sync::Arc::new(items);
                         view.viewport.text_cache.insert(page_idx, arc_items.clone());
-                        // If there is an active selection or a completed drag on this page awaiting extraction,
-                        // re-run extraction now so that selected_text and clipboard are populated promptly.
-                        if view.viewport.selection_page == Some(page_idx) {
-                            if let (Some(start), Some(end)) =
+                        // Complete any deferred click/shortcut action that waited for
+                        // this page's text layer, or re-run range extraction for an
+                        // in-flight / completed drag selection.
+                        if let Some(pending) = view.viewport.pending_selection.take() {
+                            match pending {
+                                super::canvas::PendingSelectionAction::SelectAll {
+                                    page_idx: p,
+                                } if p == page_idx => {
+                                    view.commit_select_all_items(page_idx, &arc_items, cx);
+                                }
+                                super::canvas::PendingSelectionAction::SelectWord {
+                                    page_idx: p,
+                                    x,
+                                    y,
+                                } if p == page_idx => {
+                                    view.select_word_at_overlay_point(page_idx, x, y, cx);
+                                }
+                                super::canvas::PendingSelectionAction::SelectLine {
+                                    page_idx: p,
+                                    x,
+                                    y,
+                                } if p == page_idx => {
+                                    view.select_line_at_overlay_point(page_idx, x, y, cx);
+                                }
+                                other => {
+                                    if view.viewport.selection_page != Some(page_idx) {
+                                        view.viewport.pending_selection = Some(other);
+                                    }
+                                }
+                            }
+                        } else if view.viewport.selection_page == Some(page_idx) {
+                            if let Some(((sx, sy), (ex, ey))) = view.viewport.selection_page_range {
+                                view.extract_selected_text_in_overlay(page_idx, sx, sy, ex, ey, cx);
+                            } else if let (Some(start), Some(end)) =
                                 (view.viewport.selection_start, view.viewport.selection_end)
                             {
                                 view.extract_selected_text(page_idx, start, end, cx);
-                            } else {
-                                let origin = view
-                                    .viewport
-                                    .page_origins
-                                    .read()
-                                    .ok()
-                                    .and_then(|m| m.get(&page_idx).copied())
-                                    .unwrap_or(Point::new(px(0.0), px(0.0)));
-                                let (card_w, card_h) = view.viewport.display_size(page_idx);
-                                let scaled_w = px(card_w * view.viewport.zoom);
-                                let scaled_h = px(card_h * view.viewport.zoom);
-                                view.viewport.selection_start = Some(origin);
-                                view.viewport.selection_end =
-                                    Some(Point::new(origin.x + scaled_w, origin.y + scaled_h));
-                                let combined =
-                                    crate::ui_gpui::canvas::join_selected_text_items(&arc_items);
-                                view.viewport.selected_text = Some(combined.clone());
-                                cx.write_to_clipboard(ClipboardItem::new_string(combined));
                             }
                         }
                         cx.notify();
@@ -1512,6 +1524,24 @@ impl PdfbullView {
         .detach();
     }
 
+    /// Map a window position to unrotated PDF points on `page_idx`, falling
+    /// back to a zero page origin before the first paint frame records it.
+    fn window_to_overlay_or_zero(&self, page_idx: usize, pos: Point<Pixels>) -> (f32, f32) {
+        if let Some(pt) = self.viewport.window_point_to_overlay(page_idx, pos) {
+            return pt;
+        }
+        let zoom = if self.viewport.zoom.is_finite() && self.viewport.zoom > 0.01 {
+            self.viewport.zoom
+        } else {
+            1.0
+        };
+        let bx = (pos.x / px(1.0)) / zoom;
+        let by = (pos.y / px(1.0)) / zoom;
+        let (unrotated_w, unrotated_h) = self.viewport.page_unrotated_size(page_idx);
+        let rotation = self.viewport.effective_rotation(page_idx);
+        super::canvas::rotated_point_to_overlay_space(bx, by, unrotated_w, unrotated_h, rotation)
+    }
+
     pub fn extract_selected_text(
         &mut self,
         page_idx: usize,
@@ -1519,43 +1549,33 @@ impl PdfbullView {
         end: Point<Pixels>,
         cx: &mut Context<Self>,
     ) {
-        let zoom = self.viewport.zoom.max(0.1);
+        let (sx, sy, ex, ey) = if self.viewport.selection_page == Some(page_idx)
+            && let Some(((sx, sy), (ex, ey))) = self.viewport.selection_page_range
+        {
+            (sx, sy, ex, ey)
+        } else {
+            let (sx, sy) = self.window_to_overlay_or_zero(page_idx, start);
+            let (ex, ey) = self.window_to_overlay_or_zero(page_idx, end);
+            (sx, sy, ex, ey)
+        };
+        self.extract_selected_text_in_overlay(page_idx, sx, sy, ex, ey, cx);
+    }
+
+    fn extract_selected_text_in_overlay(
+        &mut self,
+        page_idx: usize,
+        sx: f32,
+        sy: f32,
+        ex: f32,
+        ey: f32,
+        cx: &mut Context<Self>,
+    ) {
         let Some(items) = self.viewport.text_cache.get(&page_idx).cloned() else {
             if let Some(doc_id) = self.active_doc_id {
                 self.request_text_items(doc_id, page_idx, cx);
             }
             return;
         };
-
-        let origin = self
-            .viewport
-            .page_origins
-            .read()
-            .ok()
-            .and_then(|m| m.get(&page_idx).copied())
-            .unwrap_or_default();
-
-        let bx1 = ((start.x - origin.x) / px(1.0)) / zoom;
-        let by1 = ((start.y - origin.y) / px(1.0)) / zoom;
-        let bx2 = ((end.x - origin.x) / px(1.0)) / zoom;
-        let by2 = ((end.y - origin.y) / px(1.0)) / zoom;
-
-        let (unrotated_w, unrotated_h) = self.viewport.page_unrotated_size(page_idx);
-        let rotation = self.viewport.effective_rotation(page_idx);
-        let (sx, sy) = super::canvas::rotated_point_to_overlay_space(
-            bx1,
-            by1,
-            unrotated_w,
-            unrotated_h,
-            rotation,
-        );
-        let (ex, ey) = super::canvas::rotated_point_to_overlay_space(
-            bx2,
-            by2,
-            unrotated_w,
-            unrotated_h,
-            rotation,
-        );
 
         let matched_items = super::canvas::select_text_items_in_range(&items, sx, sy, ex, ey);
 
@@ -1572,20 +1592,61 @@ impl PdfbullView {
             ));
         } else {
             self.viewport.selected_text = None;
+            if !self.viewport.is_selecting
+                && !items.is_empty()
+                && self.ribbon.active_tool == super::ribbon::AnnotationTool::Pointer
+            {
+                self.viewport.clear_selection();
+            }
         }
     }
 
-    /// Double-click: select the single word under the cursor.
-    pub fn select_word_at_point(
+    fn commit_select_all_items(
         &mut self,
         page_idx: usize,
-        pos: Point<Pixels>,
+        items: &[crate::models::TextItem],
         cx: &mut Context<Self>,
     ) {
-        let items = match self.viewport.text_cache.get(&page_idx) {
-            Some(it) => it.clone(),
-            None => return,
-        };
+        if items.is_empty() {
+            return;
+        }
+        let combined = crate::ui_gpui::canvas::join_selected_text_items(items);
+        self.viewport.selected_text = Some(combined.clone());
+        cx.write_to_clipboard(ClipboardItem::new_string(combined.clone()));
+        self.viewport.selection_page = Some(page_idx);
+        let (unrotated_w, unrotated_h) = self.viewport.page_unrotated_size(page_idx);
+        self.viewport.selection_page_range = Some(((0.0, 0.0), (unrotated_w, unrotated_h)));
+        let origin = self
+            .viewport
+            .page_origins
+            .read()
+            .ok()
+            .and_then(|m| m.get(&page_idx).copied())
+            .unwrap_or(Point::new(px(0.0), px(0.0)));
+        let (card_w, card_h) = self.viewport.display_size(page_idx);
+        let scaled_w = px(card_w * self.viewport.zoom);
+        let scaled_h = px(card_h * self.viewport.zoom);
+        self.viewport.selection_start = Some(origin);
+        self.viewport.selection_end = Some(Point::new(origin.x + scaled_w, origin.y + scaled_h));
+        self.status_message = Some(format!(
+            "Selected all text ({} chars) on page {}",
+            combined.chars().count(),
+            page_idx + 1
+        ));
+    }
+
+    /// Store both model-space range and window-space endpoints for a single-word
+    /// or single-line selection result on `page_idx`.
+    fn set_selection_bounds_from_overlay_rect(
+        &mut self,
+        page_idx: usize,
+        x0: f32,
+        y0: f32,
+        x1: f32,
+        y1: f32,
+    ) {
+        self.viewport.selection_page = Some(page_idx);
+        self.viewport.selection_page_range = Some(((x0, y0), (x1, y1)));
         let zoom = if self.viewport.zoom.is_finite() && self.viewport.zoom > 0.01 {
             self.viewport.zoom
         } else {
@@ -1598,18 +1659,62 @@ impl PdfbullView {
             .ok()
             .and_then(|m| m.get(&page_idx).copied())
             .unwrap_or_default();
-
-        let px_x = ((pos.x - origin.x) / px(1.0)) / zoom;
-        let px_y = ((pos.y - origin.y) / px(1.0)) / zoom;
         let (unrotated_w, unrotated_h) = self.viewport.page_unrotated_size(page_idx);
         let rotation = self.viewport.effective_rotation(page_idx);
-        let (unrot_x, unrot_y) = super::canvas::rotated_point_to_overlay_space(
-            px_x,
-            px_y,
+        let (wx, wy, ww, wh) = super::canvas::overlay_rect_in_rotated_space(
+            x0,
+            y0,
+            (x1 - x0).max(0.0),
+            (y1 - y0).max(0.0),
             unrotated_w,
             unrotated_h,
             rotation,
         );
+        self.viewport.selection_start = Some(Point::new(
+            origin.x + px(wx * zoom),
+            origin.y + px(wy * zoom),
+        ));
+        self.viewport.selection_end = Some(Point::new(
+            origin.x + px((wx + ww) * zoom),
+            origin.y + px((wy + wh) * zoom),
+        ));
+    }
+
+    /// Double-click: select the single word under the cursor.
+    pub fn select_word_at_point(
+        &mut self,
+        page_idx: usize,
+        pos: Point<Pixels>,
+        cx: &mut Context<Self>,
+    ) {
+        let (unrot_x, unrot_y) = self.window_to_overlay_or_zero(page_idx, pos);
+        self.select_word_at_overlay_point(page_idx, unrot_x, unrot_y, cx);
+    }
+
+    fn select_word_at_overlay_point(
+        &mut self,
+        page_idx: usize,
+        unrot_x: f32,
+        unrot_y: f32,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(items) = self.viewport.text_cache.get(&page_idx).cloned() else {
+            self.viewport.selection_page = Some(page_idx);
+            self.viewport.selection_page_range = None;
+            self.viewport.selection_start = None;
+            self.viewport.selection_end = None;
+            self.viewport.selected_text = None;
+            self.viewport.pending_selection =
+                Some(super::canvas::PendingSelectionAction::SelectWord {
+                    page_idx,
+                    x: unrot_x,
+                    y: unrot_y,
+                });
+            if let Some(doc_id) = self.active_doc_id {
+                self.request_text_items(doc_id, page_idx, cx);
+            }
+            return;
+        };
 
         let mut target_item: Option<&crate::models::TextItem> = None;
         let mut best_dist = f32::INFINITY;
@@ -1643,23 +1748,13 @@ impl PdfbullView {
 
         if let Some(item) = target_item {
             self.viewport.selected_text = Some(item.text.clone());
-            let (wx, wy, ww, wh) = super::canvas::overlay_rect_in_rotated_space(
+            self.set_selection_bounds_from_overlay_rect(
+                page_idx,
                 item.x,
                 item.y,
-                item.width,
-                item.height,
-                unrotated_w,
-                unrotated_h,
-                rotation,
+                item.x + item.width,
+                item.y + item.height,
             );
-            self.viewport.selection_start = Some(Point::new(
-                origin.x + px(wx * zoom),
-                origin.y + px(wy * zoom),
-            ));
-            self.viewport.selection_end = Some(Point::new(
-                origin.x + px((wx + ww) * zoom),
-                origin.y + px((wy + wh) * zoom),
-            ));
             if self.ribbon.active_tool == super::ribbon::AnnotationTool::Pointer {
                 cx.write_to_clipboard(ClipboardItem::new_string(item.text.clone()));
             }
@@ -1674,53 +1769,69 @@ impl PdfbullView {
         pos: Point<Pixels>,
         cx: &mut Context<Self>,
     ) {
-        let items = match self.viewport.text_cache.get(&page_idx) {
-            Some(it) => it.clone(),
-            None => return,
+        let (unrot_x, unrot_y) = self.window_to_overlay_or_zero(page_idx, pos);
+        self.select_line_at_overlay_point(page_idx, unrot_x, unrot_y, cx);
+    }
+
+    fn select_line_at_overlay_point(
+        &mut self,
+        page_idx: usize,
+        _unrot_x: f32,
+        unrot_y: f32,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(items) = self.viewport.text_cache.get(&page_idx).cloned() else {
+            self.viewport.selection_page = Some(page_idx);
+            self.viewport.selection_page_range = None;
+            self.viewport.selection_start = None;
+            self.viewport.selection_end = None;
+            self.viewport.selected_text = None;
+            self.viewport.pending_selection =
+                Some(super::canvas::PendingSelectionAction::SelectLine {
+                    page_idx,
+                    x: _unrot_x,
+                    y: unrot_y,
+                });
+            if let Some(doc_id) = self.active_doc_id {
+                self.request_text_items(doc_id, page_idx, cx);
+            }
+            return;
         };
-        let zoom = if self.viewport.zoom.is_finite() && self.viewport.zoom > 0.01 {
-            self.viewport.zoom
-        } else {
-            1.0
-        };
-        let origin = self
-            .viewport
-            .page_origins
-            .read()
-            .ok()
-            .and_then(|m| m.get(&page_idx).copied())
-            .unwrap_or_default();
 
-        let px_x = ((pos.x - origin.x) / px(1.0)) / zoom;
-        let px_y = ((pos.y - origin.y) / px(1.0)) / zoom;
-        let (unrotated_w, unrotated_h) = self.viewport.page_unrotated_size(page_idx);
-        let rotation = self.viewport.effective_rotation(page_idx);
-        let (_unrot_x, unrot_y) = super::canvas::rotated_point_to_overlay_space(
-            px_x,
-            px_y,
-            unrotated_w,
-            unrotated_h,
-            rotation,
-        );
+        let lines = super::canvas::cluster_text_lines(&items);
+        let best_line = lines.into_iter().min_by(|a, b| {
+            let line_dist = |line: &Vec<&crate::models::TextItem>| -> f32 {
+                let top = line.iter().map(|it| it.y).fold(f32::INFINITY, f32::min);
+                let bot = line
+                    .iter()
+                    .map(|it| it.y + it.height)
+                    .fold(f32::NEG_INFINITY, f32::max);
+                if unrot_y < top {
+                    top - unrot_y
+                } else if unrot_y > bot {
+                    unrot_y - bot
+                } else {
+                    0.0
+                }
+            };
+            line_dist(a)
+                .partial_cmp(&line_dist(b))
+                .unwrap_or(std::cmp::Ordering::Equal)
+        });
 
-        let avg_height = items.iter().map(|it| it.height).sum::<f32>() / items.len().max(1) as f32;
-        let line_tol = (avg_height * 0.6).max(4.0);
-
-        let mut line_items: Vec<&crate::models::TextItem> = items
-            .iter()
-            .filter(|it| (it.y + it.height * 0.5 - unrot_y).abs() <= line_tol)
-            .collect();
-        line_items.sort_by(|a, b| a.x.partial_cmp(&b.x).unwrap_or(std::cmp::Ordering::Equal));
-
-        if !line_items.is_empty() {
+        if let Some(line_items) = best_line
+            && !line_items.is_empty()
+        {
             let owned_line_items: Vec<crate::models::TextItem> =
                 line_items.iter().map(|it| (*it).clone()).collect();
             let combined = super::canvas::join_selected_text_items(&owned_line_items);
             self.viewport.selected_text = Some(combined.clone());
 
             let first_x = line_items.first().map(|it| it.x).unwrap_or(0.0);
-            let last_item = line_items.last().unwrap();
-            let last_x = last_item.x + last_item.width;
+            let last_x = line_items
+                .last()
+                .map(|it| it.x + it.width)
+                .unwrap_or(first_x);
             let top_y = line_items
                 .iter()
                 .map(|it| it.y)
@@ -1730,23 +1841,7 @@ impl PdfbullView {
                 .map(|it| it.y + it.height)
                 .fold(f32::NEG_INFINITY, f32::max);
 
-            let (wx, wy, ww, wh) = super::canvas::overlay_rect_in_rotated_space(
-                first_x,
-                top_y,
-                last_x - first_x,
-                bot_y - top_y,
-                unrotated_w,
-                unrotated_h,
-                rotation,
-            );
-            self.viewport.selection_start = Some(Point::new(
-                origin.x + px(wx * zoom),
-                origin.y + px(wy * zoom),
-            ));
-            self.viewport.selection_end = Some(Point::new(
-                origin.x + px((wx + ww) * zoom),
-                origin.y + px((wy + wh) * zoom),
-            ));
+            self.set_selection_bounds_from_overlay_rect(page_idx, first_x, top_y, last_x, bot_y);
             if self.ribbon.active_tool == super::ribbon::AnnotationTool::Pointer {
                 cx.write_to_clipboard(ClipboardItem::new_string(combined.clone()));
             }
@@ -1894,6 +1989,319 @@ impl PdfbullView {
         }
     }
 
+    fn start_drag_selection(
+        &mut self,
+        page_idx: usize,
+        pos: Point<Pixels>,
+        click_count: usize,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        // Clicking the page hands the keyboard back to the reader shortcuts,
+        // even if the search box had focus.
+        self.focus_handle.focus(window, cx);
+        self.viewport.pending_selection = None;
+        self.viewport.selection_page = Some(page_idx);
+        if click_count == 2 {
+            self.viewport.is_selecting = false;
+            self.select_word_at_point(page_idx, pos, cx);
+        } else if click_count >= 3 {
+            self.viewport.is_selecting = false;
+            self.select_line_at_point(page_idx, pos, cx);
+        } else {
+            // Fetch the text layer eagerly so per-word highlights render while
+            // the drag is still in progress instead of only after release.
+            if let Some(doc_id) = self.active_doc_id {
+                self.request_text_items(doc_id, page_idx, cx);
+            }
+            self.viewport.is_selecting = true;
+            self.viewport.selection_start = Some(pos);
+            self.viewport.selection_end = Some(pos);
+            self.viewport.selection_page_range = self
+                .viewport
+                .window_point_to_overlay(page_idx, pos)
+                .map(|p| (p, p));
+            self.viewport.selected_text = None;
+        }
+        cx.notify();
+    }
+
+    fn update_drag_selection(
+        &mut self,
+        pos: Point<Pixels>,
+        pressed_button: Option<gpui::MouseButton>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.sync_current_page_from_scroll(cx);
+        if !self.viewport.is_selecting {
+            return;
+        }
+        if pressed_button != Some(gpui::MouseButton::Left) {
+            Self::finish_drag_selection(self, pos, window, cx);
+            return;
+        }
+        self.viewport.selection_end = Some(pos);
+        if let Some(sel_page) = self.viewport.selection_page
+            && let Some(end_ov) = self.viewport.window_point_to_overlay(sel_page, pos)
+        {
+            let start_ov = self
+                .viewport
+                .selection_page_range
+                .map(|(s, _)| s)
+                .or_else(|| {
+                    self.viewport
+                        .selection_start
+                        .and_then(|s| self.viewport.window_point_to_overlay(sel_page, s))
+                })
+                .unwrap_or(end_ov);
+            self.viewport.selection_page_range = Some((start_ov, end_ov));
+        }
+        cx.notify();
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn finish_drag_selection(
+        this: &mut Self,
+        pos: Point<Pixels>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if !this.viewport.is_selecting {
+            return;
+        }
+        this.viewport.selection_end = Some(pos);
+        this.viewport.is_selecting = false;
+
+        let commit_page = this
+            .viewport
+            .selection_page
+            .unwrap_or(this.viewport.current_page);
+        if let Some(end_ov) = this.viewport.window_point_to_overlay(commit_page, pos)
+            && let Some((start_ov, _)) = this.viewport.selection_page_range
+        {
+            this.viewport.selection_page_range = Some((start_ov, end_ov));
+        }
+
+        let zoom = if this.viewport.zoom.is_finite() {
+            this.viewport.zoom.clamp(0.01, 100.0)
+        } else {
+            1.0
+        };
+
+        let is_small_click = if let Some(((sx, sy), (ex, ey))) = this.viewport.selection_page_range
+        {
+            (sx - ex).abs() * zoom < 4.0 && (sy - ey).abs() * zoom < 4.0
+        } else if let (Some(start), Some(end)) =
+            (this.viewport.selection_start, this.viewport.selection_end)
+        {
+            (start.x - end.x).abs() < px(4.0) && (start.y - end.y).abs() < px(4.0)
+        } else {
+            true
+        };
+
+        if is_small_click {
+            if this.viewport.selected_text.is_none() {
+                this.viewport.clear_selection();
+                this.viewport.current_page = commit_page;
+                this.render_needed_pages(cx);
+            }
+            cx.notify();
+            return;
+        }
+
+        let ann_coords = if let Some(((sx, sy), (ex, ey))) = this.viewport.selection_page_range {
+            this.extract_selected_text_in_overlay(commit_page, sx, sy, ex, ey, cx);
+            Some((
+                sx.min(ex),
+                sy.min(ey),
+                (sx - ex).abs().max(10.0),
+                (sy - ey).abs().max(10.0),
+                sx,
+                sy,
+                ex - sx,
+                ey - sy,
+            ))
+        } else if let (Some(start), Some(end)) =
+            (this.viewport.selection_start, this.viewport.selection_end)
+        {
+            this.extract_selected_text(commit_page, start, end, cx);
+            let origin = this
+                .viewport
+                .page_origins
+                .read()
+                .ok()
+                .and_then(|m| m.get(&commit_page).copied())
+                .unwrap_or_default();
+            let bx1 = ((start.x - origin.x) / px(1.0)) / zoom;
+            let by1 = ((start.y - origin.y) / px(1.0)) / zoom;
+            let bx2 = ((end.x - origin.x) / px(1.0)) / zoom;
+            let by2 = ((end.y - origin.y) / px(1.0)) / zoom;
+            let rotation = this.viewport.effective_rotation(commit_page);
+            let (page_w, page_h) = this.viewport.page_unrotated_size(commit_page);
+            let (min_x, min_y, w, h) = super::canvas::rotated_rect_to_overlay_space(
+                bx1.min(bx2),
+                by1.min(by2),
+                (bx1 - bx2).abs().max(10.0),
+                (by1 - by2).abs().max(10.0),
+                page_w,
+                page_h,
+                this.viewport.effective_rotation(commit_page),
+            );
+            let (line_x, line_y) =
+                super::canvas::rotated_point_to_overlay_space(bx1, by1, page_w, page_h, rotation);
+            let (line_ex, line_ey) =
+                super::canvas::rotated_point_to_overlay_space(bx2, by2, page_w, page_h, rotation);
+            Some((
+                min_x,
+                min_y,
+                w,
+                h,
+                line_x,
+                line_y,
+                line_ex - line_x,
+                line_ey - line_y,
+            ))
+        } else {
+            None
+        };
+
+        if this.ribbon.active_tool != super::ribbon::AnnotationTool::Pointer
+            && let Some((min_x, min_y, w, h, line_x, line_y, line_w, line_h)) = ann_coords
+        {
+            let ann_id = crate::models::next_annotation_id();
+            let color = this.ribbon.active_color_hex();
+            let style = match this.ribbon.active_tool {
+                super::ribbon::AnnotationTool::Highlight => {
+                    crate::models::AnnotationStyle::Highlight { color }
+                }
+                super::ribbon::AnnotationTool::Underline => {
+                    crate::models::AnnotationStyle::Underline { color }
+                }
+                super::ribbon::AnnotationTool::Strikeout => {
+                    crate::models::AnnotationStyle::Strikeout { color }
+                }
+                super::ribbon::AnnotationTool::Rectangle => {
+                    crate::models::AnnotationStyle::Rectangle {
+                        color,
+                        thickness: 2.0,
+                        fill: false,
+                    }
+                }
+                super::ribbon::AnnotationTool::Circle => crate::models::AnnotationStyle::Circle {
+                    color,
+                    thickness: 2.0,
+                    fill: false,
+                },
+                super::ribbon::AnnotationTool::Line => crate::models::AnnotationStyle::Line {
+                    color,
+                    thickness: 2.0,
+                },
+                super::ribbon::AnnotationTool::Arrow => crate::models::AnnotationStyle::Arrow {
+                    color,
+                    thickness: 2.0,
+                },
+                super::ribbon::AnnotationTool::StickyNote => {
+                    crate::models::AnnotationStyle::StickyNote {
+                        comment: "Note".to_string(),
+                        color: "#FEF08A".to_string(),
+                    }
+                }
+                super::ribbon::AnnotationTool::Redact => crate::models::AnnotationStyle::Redact {
+                    color: "#000000".to_string(),
+                },
+                super::ribbon::AnnotationTool::Text => crate::models::AnnotationStyle::Text {
+                    text: String::new(),
+                    color: "#111827".to_string(),
+                    font_size: 12,
+                },
+                super::ribbon::AnnotationTool::Ink | super::ribbon::AnnotationTool::Pointer => {
+                    this.status_message = Some("Freehand ink is not available yet.".into());
+                    cx.notify();
+                    return;
+                }
+            };
+
+            let is_directional = matches!(
+                style,
+                crate::models::AnnotationStyle::Line { .. }
+                    | crate::models::AnnotationStyle::Arrow { .. }
+            );
+            let (ann_x, ann_y, ann_w, ann_h) = if is_directional {
+                (line_x, line_y, line_w, line_h)
+            } else {
+                (min_x, min_y, w, h)
+            };
+
+            this.viewport.annotations.push(crate::models::Annotation {
+                id: ann_id,
+                page: commit_page,
+                style,
+                x: ann_x,
+                y: ann_y,
+                width: ann_w,
+                height: ann_h,
+            });
+            this.viewport.reindex_annotations();
+            if let Some(tab) = this.tabs.tabs.get_mut(this.tabs.active_tab_index)
+                && let Some(last) = this.viewport.annotations.last().cloned()
+            {
+                tab.undo_stack
+                    .push(crate::models::UndoableAction::AddAnnotation(last));
+                tab.redo_stack.clear();
+            }
+            if matches!(
+                this.ribbon.active_tool,
+                super::ribbon::AnnotationTool::Text | super::ribbon::AnnotationTool::StickyNote
+            ) {
+                this.dialogs.note_annotation_id = Some(ann_id);
+                let initial = if matches!(
+                    this.ribbon.active_tool,
+                    super::ribbon::AnnotationTool::StickyNote
+                ) {
+                    "Note".to_string()
+                } else {
+                    String::new()
+                };
+                if let Some(input) = this.dialogs.note_input.clone() {
+                    input.update(cx, |s, cx| s.set_value(initial, window, cx));
+                }
+                this.dialogs.active = Some(ActiveDialog::NoteContent);
+            }
+            this.viewport.selection_start = None;
+            this.viewport.selection_end = None;
+            this.viewport.selection_page_range = None;
+            this.viewport.selection_page = None;
+            if let Some(tab) = this.tabs.tabs.get_mut(this.tabs.active_tab_index) {
+                tab.is_modified = true;
+            }
+        }
+        cx.notify();
+    }
+
+    /// Keep the active drag selection endpoint aligned when scrolling with the
+    /// mouse wheel mid-drag before the next paint frame refreshes `page_origins`.
+    fn sync_drag_selection_for_scroll(&mut self, dx: Pixels, dy: Pixels) {
+        if !self.viewport.is_selecting || (dx == px(0.0) && dy == px(0.0)) {
+            return;
+        }
+        let Some(sel_page) = self.viewport.selection_page else {
+            return;
+        };
+        if let Ok(mut origins) = self.viewport.page_origins.write()
+            && let Some(orig) = origins.get_mut(&sel_page)
+        {
+            orig.x += dx;
+            orig.y += dy;
+        }
+        if let Some(end_win) = self.viewport.selection_end
+            && let Some(end_ov) = self.viewport.window_point_to_overlay(sel_page, end_win)
+            && let Some((start_ov, _)) = self.viewport.selection_page_range
+        {
+            self.viewport.selection_page_range = Some((start_ov, end_ov));
+        }
+    }
+
     pub fn handle_canvas_scroll_wheel(&mut self, event: &ScrollEvent, cx: &mut Context<Self>) {
         let is_ctrl = event.modifiers.control || event.modifiers.platform;
         if is_ctrl {
@@ -1930,6 +2338,7 @@ impl PdfbullView {
                 .detach();
             }
         } else {
+            let initial_offset = self.viewport.scroll_handle.offset();
             let (mut delta_x, delta_y) = match event.delta {
                 ScrollDelta::Pixels(p) => (p.x, p.y),
                 ScrollDelta::Lines(l) => (px(l.x * 60.0), px(l.y * 60.0)),
@@ -1951,9 +2360,15 @@ impl PdfbullView {
 
             // If Shift was held for horizontal scrolling, do not also scroll vertically
             if event.modifiers.shift && delta_x.abs() > px(0.01) {
+                let final_offset = self.viewport.scroll_handle.offset();
+                self.sync_drag_selection_for_scroll(
+                    final_offset.x - initial_offset.x,
+                    final_offset.y - initial_offset.y,
+                );
                 return;
             }
 
+            let mut flipped_page = false;
             match self.viewport.layout_mode {
                 super::ribbon::PageLayoutMode::SinglePage => {
                     let max_offset_y = self.viewport.scroll_handle.max_offset().y;
@@ -1985,6 +2400,7 @@ impl PdfbullView {
                                 self.viewport.current_page - 1
                             };
                             self.viewport.scroll_to_page(target);
+                            flipped_page = true;
                             self.render_needed_pages(cx);
                             cx.notify();
                         }
@@ -2023,6 +2439,7 @@ impl PdfbullView {
                                 self.viewport.current_page.saturating_sub(step)
                             };
                             self.viewport.scroll_to_page(target);
+                            flipped_page = true;
                             self.render_needed_pages(cx);
                             cx.notify();
                         }
@@ -2049,6 +2466,13 @@ impl PdfbullView {
                         cx.notify();
                     }
                 }
+            }
+            if !flipped_page {
+                let final_offset = self.viewport.scroll_handle.offset();
+                self.sync_drag_selection_for_scroll(
+                    final_offset.x - initial_offset.x,
+                    final_offset.y - initial_offset.y,
+                );
             }
         }
     }
@@ -2478,7 +2902,14 @@ impl PdfbullView {
                         return;
                     }
                 };
-                let edited_during_save = view.viewport.annotations != annotations_before_save;
+                let current_annotations = if view.active_doc_id == Some(doc_id) {
+                    view.viewport.annotations.as_slice()
+                } else {
+                    view.annotations_by_doc
+                        .get(&doc_id)
+                        .map_or(&[][..], Vec::as_slice)
+                };
+                let edited_during_save = current_annotations != annotations_before_save.as_slice();
                 if !edited_during_save {
                     for t in view.tabs.tabs.iter_mut() {
                         if t.doc_id == Some(doc_id) {
@@ -2564,20 +2995,37 @@ impl PdfbullView {
                         // The engine rewrote the file and invalidated its
                         // in-memory copy, so the burned marks are no longer
                         // annotations and every cached render is stale.
-                        view.viewport.annotations.retain(|a| {
-                            !matches!(a.style, crate::models::AnnotationStyle::Redact { .. })
-                        });
-                        view.viewport.reindex_annotations();
-                        view.annotations_by_doc.remove(&doc_id);
-                        view.viewport.invalidate_rendered_pages();
-                        view.rendering_pages.clear();
+                        if view.active_doc_id == Some(doc_id) {
+                            view.viewport.annotations.retain(|a| {
+                                !matches!(a.style, crate::models::AnnotationStyle::Redact { .. })
+                            });
+                            view.viewport.reindex_annotations();
+                            view.annotations_by_doc
+                                .insert(doc_id, view.viewport.annotations.clone());
+                            view.viewport.invalidate_rendered_pages();
+                            view.rendering_pages.clear();
+                        } else if let Some(cached) = view.annotations_by_doc.get_mut(&doc_id) {
+                            cached.retain(|a| {
+                                !matches!(a.style, crate::models::AnnotationStyle::Redact { .. })
+                            });
+                        }
                         if let Some(t) =
                             view.tabs.tabs.iter_mut().find(|t| t.doc_id == Some(doc_id))
                         {
+                            let is_redact = |act: &crate::models::UndoableAction| match act {
+                                crate::models::UndoableAction::AddAnnotation(a)
+                                | crate::models::UndoableAction::DeleteAnnotation(_, a) => {
+                                    matches!(a.style, crate::models::AnnotationStyle::Redact { .. })
+                                }
+                            };
+                            t.undo_stack.retain(|act| !is_redact(act));
+                            t.redo_stack.retain(|act| !is_redact(act));
                             t.is_modified = false;
                         }
                         view.status_message = Some("Redactions applied permanently.".into());
-                        view.render_needed_pages(cx);
+                        if view.active_doc_id == Some(doc_id) {
+                            view.render_needed_pages(cx);
+                        }
                     }
                     Ok(Err(e)) => {
                         view.status_message = Some(format!("Redaction failed: {e}"));
@@ -4997,42 +5445,17 @@ impl PdfbullView {
 
     /// Select and copy every word on the current page (Ctrl+A).
     pub fn select_all_page_text(&mut self, cx: &mut Context<Self>) {
-        {
-            {
-                {
-                    let page_idx = self.viewport.current_page;
-                    if let Some(items) = self.viewport.text_cache.get(&page_idx).cloned() {
-                        if !items.is_empty() {
-                            let combined = crate::ui_gpui::canvas::join_selected_text_items(&items);
-                            self.viewport.selected_text = Some(combined.clone());
-                            cx.write_to_clipboard(ClipboardItem::new_string(combined.clone()));
-                            self.viewport.selection_page = Some(page_idx);
-                            let origin = self
-                                .viewport
-                                .page_origins
-                                .read()
-                                .ok()
-                                .and_then(|m| m.get(&page_idx).copied())
-                                .unwrap_or(Point::new(px(0.0), px(0.0)));
-                            let (card_w, card_h) = self.viewport.display_size(page_idx);
-                            let scaled_w = px(card_w * self.viewport.zoom);
-                            let scaled_h = px(card_h * self.viewport.zoom);
-                            self.viewport.selection_start = Some(origin);
-                            self.viewport.selection_end =
-                                Some(Point::new(origin.x + scaled_w, origin.y + scaled_h));
-                            self.status_message = Some(format!(
-                                "Selected all text ({} chars) on page {}",
-                                combined.chars().count(),
-                                page_idx + 1
-                            ));
-                            cx.notify();
-                        }
-                    } else if let Some(doc_id) = self.active_doc_id {
-                        self.viewport.selection_page = Some(page_idx);
-                        self.request_text_items(doc_id, page_idx, cx);
-                    }
-                }
+        let page_idx = self.viewport.current_page;
+        if let Some(items) = self.viewport.text_cache.get(&page_idx).cloned() {
+            if !items.is_empty() {
+                self.commit_select_all_items(page_idx, &items, cx);
+                cx.notify();
             }
+        } else if let Some(doc_id) = self.active_doc_id {
+            self.viewport.selection_page = Some(page_idx);
+            self.viewport.pending_selection =
+                Some(super::canvas::PendingSelectionAction::SelectAll { page_idx });
+            self.request_text_items(doc_id, page_idx, cx);
         }
     }
 
@@ -5050,13 +5473,11 @@ impl PdfbullView {
                 } else if self.log_console.is_open {
                     self.log_console.is_open = false;
                     cx.notify();
-                } else if self.viewport.selection_page.is_some()
+                } else if self.viewport.is_selecting
+                    || self.viewport.selection_page.is_some()
                     || self.viewport.selected_text.is_some()
                 {
-                    self.viewport.selection_page = None;
-                    self.viewport.selection_start = None;
-                    self.viewport.selection_end = None;
-                    self.viewport.selected_text = None;
+                    self.viewport.clear_selection();
                     cx.notify();
                 }
             }
@@ -5394,284 +5815,13 @@ impl Render for PdfbullView {
             let canvas = self.viewport.render(
                 cx,
                 |this, page_idx, pos, click_count, window, cx| {
-                    // Clicking the page hands the keyboard back to the reader
-                    // shortcuts, even if the search box had focus.
-                    this.focus_handle.focus(window, cx);
-                    this.viewport.selection_page = Some(page_idx);
-                    // Fetch the text layer eagerly so per-word highlights render
-                    // while the drag is still in progress instead of only after
-                    // the mouse is released.
-                    if let Some(doc_id) = this.active_doc_id {
-                        this.request_text_items(doc_id, page_idx, cx);
-                    }
-                    if click_count == 2 {
-                        this.viewport.is_selecting = false;
-                        this.select_word_at_point(page_idx, pos, cx);
-                    } else if click_count >= 3 {
-                        this.viewport.is_selecting = false;
-                        this.select_line_at_point(page_idx, pos, cx);
-                    } else {
-                        this.viewport.is_selecting = true;
-                        this.viewport.selection_start = Some(pos);
-                        this.viewport.selection_end = Some(pos);
-                        this.viewport.selected_text = None;
-                    }
-                    cx.notify();
+                    this.start_drag_selection(page_idx, pos, click_count, window, cx);
                 },
-                |this, _page_idx, pos, _, cx| {
-                    // Bug 2 fix: gate only on is_selecting, not on which card fired.
-                    // In Continuous mode every card has its own listener; ignoring
-                    // _page_idx lets the end-point update when the cursor crosses a
-                    // page boundary. pos is in window space and is authoritative.
-                    // Keep the current-page readout in sync here too: this fires on
-                    // every mouse move over the canvas, which covers scrollbar
-                    // drags (the scrollbar is a child, so its events bubble here)
-                    // now that render no longer writes this field.
-                    this.sync_current_page_from_scroll(cx);
-                    if this.viewport.is_selecting {
-                        this.viewport.selection_end = Some(pos);
-                        cx.notify();
-                    }
+                |this, _page_idx, pos, pressed_button, window, cx| {
+                    this.update_drag_selection(pos, pressed_button, window, cx);
                 },
                 |this, _page_idx, pos, window, cx| {
-                    // Bug 3 fix: gate only on is_selecting; do NOT check selection_page ==
-                    // Some(_page_idx).  When mousedown is on page 3 and mouseup fires on
-                    // page 4, _page_idx==4 but selection_page==Some(3) — the old guard
-                    // silently dropped the commit.  We always resolve against the stored
-                    // selection_page so text extraction and annotation coordinates are
-                    // relative to the correct page origin.
-                    if this.viewport.is_selecting {
-                        // Capture the final cursor location directly from the release event,
-                        // with window.mouse_position() as fallback if needed.
-                        this.viewport.selection_end = Some(pos);
-                        // Always clear is_selecting first so no edge-case can leave the
-                        // viewport stuck in selecting mode.
-                        this.viewport.is_selecting = false;
-                        // Authoritative page: where mousedown happened, not where mouseup did.
-                        let commit_page = this.viewport.selection_page.unwrap_or(_page_idx);
-                        if let (Some(start), Some(end)) =
-                            (this.viewport.selection_start, this.viewport.selection_end)
-                        {
-                            let dx = (start.x - end.x).abs();
-                            let dy = (start.y - end.y).abs();
-                            if dx < px(4.0) && dy < px(4.0) {
-                                // Treat as a click: clear selection state if no word/line was selected
-                                if this.viewport.selected_text.is_none() {
-                                    this.viewport.selection_start = None;
-                                    this.viewport.selection_end = None;
-                                    this.viewport.selection_page = None;
-                                    this.viewport.current_page = commit_page;
-                                    this.render_needed_pages(cx);
-                                }
-                            } else {
-                                // Real drag: extract text against the page where the drag started.
-                                this.extract_selected_text(commit_page, start, end, cx);
-
-                                if this.ribbon.active_tool != super::ribbon::AnnotationTool::Pointer
-                                {
-                                    let origin = this
-                                        .viewport
-                                        .page_origins
-                                        .read()
-                                        .ok()
-                                        .and_then(|m| m.get(&commit_page).copied())
-                                        .unwrap_or_default();
-                                    let zoom = if this.viewport.zoom.is_finite() {
-                                        this.viewport.zoom.clamp(0.01, 100.0)
-                                    } else {
-                                        1.0
-                                    };
-                                    let bx1 = ((start.x - origin.x) / px(1.0)) / zoom;
-                                    let by1 = ((start.y - origin.y) / px(1.0)) / zoom;
-                                    let bx2 = ((end.x - origin.x) / px(1.0)) / zoom;
-                                    let by2 = ((end.y - origin.y) / px(1.0)) / zoom;
-                                    let rotation = this.viewport.effective_rotation(commit_page);
-                                    let (page_w, page_h) =
-                                        this.viewport.page_unrotated_size(commit_page);
-
-                                    // The drag is measured in the *rotated* bitmap,
-                                    // but annotations are stored in unrotated space,
-                                    // exactly like the selection marquee and the text
-                                    // layer. Committing the raw bitmap rect saved the
-                                    // highlight on the wrong part of the page on
-                                    // every document with a non-zero `/Rotate`.
-                                    let rect_min_x = bx1.min(bx2);
-                                    let rect_min_y = by1.min(by2);
-                                    let rect_w = (bx1 - bx2).abs().max(10.0);
-                                    let rect_h = (by1 - by2).abs().max(10.0);
-                                    let (min_x, min_y, w, h) =
-                                        super::canvas::rotated_rect_to_overlay_space(
-                                            rect_min_x,
-                                            rect_min_y,
-                                            rect_w,
-                                            rect_h,
-                                            page_w,
-                                            page_h,
-                                            this.viewport.effective_rotation(commit_page),
-                                        );
-
-                                    // Lines and arrows keep their direction: map the
-                                    // two endpoints separately and store a signed
-                                    // width/height instead of a normalised rect.
-                                    let (line_x, line_y) =
-                                        super::canvas::rotated_point_to_overlay_space(
-                                            bx1, by1, page_w, page_h, rotation,
-                                        );
-                                    let (line_ex, line_ey) =
-                                        super::canvas::rotated_point_to_overlay_space(
-                                            bx2, by2, page_w, page_h, rotation,
-                                        );
-                                    let line_w = line_ex - line_x;
-                                    let line_h = line_ey - line_y;
-
-                                    // Use the global monotonic counter, never
-                                    // `annotations.len() + 1`. `len()` shrinks on
-                                    // delete, so the next annotation reused a live
-                                    // id; the sidebar delete button keys on that id
-                                    // and `retain(|a| a.id != id)` removed *every*
-                                    // match — one click deleted two highlights.
-                                    let ann_id = crate::models::next_annotation_id();
-                                    let color = this.ribbon.active_color_hex();
-                                    let style = match this.ribbon.active_tool {
-                                        super::ribbon::AnnotationTool::Highlight => {
-                                            crate::models::AnnotationStyle::Highlight { color }
-                                        }
-                                        super::ribbon::AnnotationTool::Underline => {
-                                            crate::models::AnnotationStyle::Underline { color }
-                                        }
-                                        super::ribbon::AnnotationTool::Strikeout => {
-                                            crate::models::AnnotationStyle::Strikeout { color }
-                                        }
-                                        super::ribbon::AnnotationTool::Rectangle => {
-                                            crate::models::AnnotationStyle::Rectangle {
-                                                color,
-                                                thickness: 2.0,
-                                                fill: false,
-                                            }
-                                        }
-                                        super::ribbon::AnnotationTool::Circle => {
-                                            crate::models::AnnotationStyle::Circle {
-                                                color,
-                                                thickness: 2.0,
-                                                fill: false,
-                                            }
-                                        }
-                                        super::ribbon::AnnotationTool::Line => {
-                                            crate::models::AnnotationStyle::Line {
-                                                color,
-                                                thickness: 2.0,
-                                            }
-                                        }
-                                        super::ribbon::AnnotationTool::Arrow => {
-                                            crate::models::AnnotationStyle::Arrow {
-                                                color,
-                                                thickness: 2.0,
-                                            }
-                                        }
-                                        super::ribbon::AnnotationTool::StickyNote => {
-                                            crate::models::AnnotationStyle::StickyNote {
-                                                comment: "Note".to_string(),
-                                                color: "#FEF08A".to_string(),
-                                            }
-                                        }
-                                        super::ribbon::AnnotationTool::Redact => {
-                                            crate::models::AnnotationStyle::Redact {
-                                                color: "#000000".to_string(),
-                                            }
-                                        }
-                                        // `Ink` and `Text` used to fall through to
-                                        // this arm, so choosing the pen produced a
-                                        // yellow highlight box labelled "Highlight"
-                                        // in the Notes panel. `Text` now gets its
-                                        // own style; `Ink` has no freehand
-                                        // implementation anywhere in the engine,
-                                        // so the ribbon no longer offers it
-                                        // (`AnnotationTool::Ink` is kept for the
-                                        // public enum, but is not rendered).
-                                        super::ribbon::AnnotationTool::Text => {
-                                            crate::models::AnnotationStyle::Text {
-                                                text: String::new(),
-                                                color: "#111827".to_string(),
-                                                font_size: 12,
-                                            }
-                                        }
-                                        super::ribbon::AnnotationTool::Ink
-                                        | super::ribbon::AnnotationTool::Pointer => {
-                                            this.status_message =
-                                                Some("Freehand ink is not available yet.".into());
-                                            cx.notify();
-                                            return;
-                                        }
-                                    };
-
-                                    let is_directional = matches!(
-                                        style,
-                                        crate::models::AnnotationStyle::Line { .. }
-                                            | crate::models::AnnotationStyle::Arrow { .. }
-                                    );
-                                    let (ann_x, ann_y, ann_w, ann_h) = if is_directional {
-                                        (line_x, line_y, line_w, line_h)
-                                    } else {
-                                        (min_x, min_y, w, h)
-                                    };
-
-                                    // Annotation is stored against commit_page (the drag-start page).
-                                    this.viewport.annotations.push(crate::models::Annotation {
-                                        id: ann_id,
-                                        page: commit_page,
-                                        style,
-                                        x: ann_x,
-                                        y: ann_y,
-                                        width: ann_w,
-                                        height: ann_h,
-                                    });
-                                    this.viewport.reindex_annotations();
-                                    if let Some(tab) =
-                                        this.tabs.tabs.get_mut(this.tabs.active_tab_index)
-                                        && let Some(last) =
-                                            this.viewport.annotations.last().cloned()
-                                    {
-                                        tab.undo_stack.push(
-                                            crate::models::UndoableAction::AddAnnotation(last),
-                                        );
-                                        tab.redo_stack.clear();
-                                    }
-                                    if matches!(
-                                        this.ribbon.active_tool,
-                                        super::ribbon::AnnotationTool::Text
-                                            | super::ribbon::AnnotationTool::StickyNote
-                                    ) {
-                                        this.dialogs.note_annotation_id = Some(ann_id);
-                                        let initial = if matches!(
-                                            this.ribbon.active_tool,
-                                            super::ribbon::AnnotationTool::StickyNote
-                                        ) {
-                                            "Note".to_string()
-                                        } else {
-                                            String::new()
-                                        };
-                                        if let Some(input) = this.dialogs.note_input.clone() {
-                                            input.update(cx, |s, cx| {
-                                                s.set_value(initial, window, cx)
-                                            });
-                                        }
-                                        this.dialogs.active = Some(ActiveDialog::NoteContent);
-                                    }
-                                    // transient selection highlight so the saved markup is
-                                    // what remains on the page.
-                                    this.viewport.selection_start = None;
-                                    this.viewport.selection_end = None;
-                                    this.viewport.selection_page = None;
-                                    if let Some(tab) =
-                                        this.tabs.tabs.get_mut(this.tabs.active_tab_index)
-                                    {
-                                        tab.is_modified = true;
-                                    }
-                                }
-                            }
-                        }
-                        cx.notify();
-                    }
+                    Self::finish_drag_selection(this, pos, window, cx);
                 },
                 |this, event, _, cx| {
                     this.handle_canvas_scroll_wheel(event, cx);
@@ -6029,12 +6179,40 @@ impl Render for PdfbullView {
         );
 
         // Assemble Top-level View
+        let is_selecting = self.viewport.is_selecting;
         div()
             .track_focus(&self.focus_handle)
             .key_context("pdfbull_main")
             .on_key_down(cx.listener(|this, event: &gpui::KeyDownEvent, window, cx| {
                 this.handle_key_down(event, window, cx);
             }))
+            .when(is_selecting, |el| {
+                el.on_mouse_move(
+                    cx.listener(|this, event: &gpui::MouseMoveEvent, window, cx| {
+                        this.update_drag_selection(
+                            event.position,
+                            event.pressed_button,
+                            window,
+                            cx,
+                        );
+                    }),
+                )
+                .capture_any_mouse_up(cx.listener(
+                    |this, event: &gpui::MouseUpEvent, window, cx| {
+                        if event.button == gpui::MouseButton::Left && this.viewport.is_selecting {
+                            Self::finish_drag_selection(this, event.position, window, cx);
+                        }
+                    },
+                ))
+                .on_mouse_up_out(
+                    gpui::MouseButton::Left,
+                    cx.listener(|this, event: &gpui::MouseUpEvent, window, cx| {
+                        if this.viewport.is_selecting {
+                            Self::finish_drag_selection(this, event.position, window, cx);
+                        }
+                    }),
+                )
+            })
             .flex()
             .flex_col()
             .size_full()

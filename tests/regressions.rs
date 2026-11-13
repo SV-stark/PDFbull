@@ -904,62 +904,73 @@ fn test_arrow_annotations_round_trip() {
 /// a `/Font` key behind. Injecting a marker key makes the test fail if anything
 /// other than a merge can pass.
 fn with_marker_resources(path: &std::path::Path, marker: &str) {
-    let mut doc = lopdf::Document::load(path).expect("fixture must parse");
-    for (_, page_id) in doc.get_pages() {
-        let existing = doc
-            .objects
-            .get(&page_id)
-            .and_then(|o| o.as_dict().ok())
-            .and_then(|d| d.get(b"Resources").ok())
-            .cloned();
+    let bytes = std::fs::read(path).expect("fixture must read");
+    let mut writer = zpdf_writer::IncrementalWriter::new(bytes).expect("fixture must parse");
+    let page_count = writer.page_count();
+    for page_idx in 0..page_count {
+        let page_id = writer.document().page(page_idx).unwrap().id;
+        let page_obj = writer.resolve_current(page_id).unwrap();
+        let mut page_dict = page_obj.as_dict().unwrap().clone();
 
-        let mut res = match existing {
-            Some(lopdf::Object::Reference(r)) => doc
-                .objects
-                .get(&r)
-                .and_then(|o| o.as_dict().ok())
-                .cloned()
+        let mut res = match page_dict.get("Resources") {
+            Some(zpdf::PdfObject::Ref(r)) => writer
+                .resolve_current(*r)
+                .ok()
+                .and_then(|o| o.as_dict().ok().cloned())
                 .unwrap_or_default(),
-            Some(lopdf::Object::Dictionary(d)) => d,
-            _ => lopdf::Dictionary::new(),
+            Some(zpdf::PdfObject::Dict(d)) => d.clone(),
+            _ => zpdf::PdfDict::new(),
         };
-        res.set(
-            "ExtGState",
-            lopdf::Object::Dictionary(lopdf::Dictionary::from_iter(vec![(
-                marker,
-                lopdf::Object::Name(b"GS0".to_vec()),
-            )])),
+        let mut gs = zpdf::PdfDict::new();
+        gs.insert(
+            zpdf::PdfName::new(marker),
+            zpdf::PdfObject::Name(zpdf::PdfName::new("GS0")),
         );
+        res.insert(zpdf::PdfName::new("ExtGState"), zpdf::PdfObject::Dict(gs));
 
-        let res_id = doc.add_object(lopdf::Object::Dictionary(res));
-        if let Some(obj) = doc.objects.get_mut(&page_id)
-            && let Ok(dict) = obj.as_dict_mut()
-        {
-            dict.set("Resources", lopdf::Object::Reference(res_id));
-        }
+        let (res_num, res_gen) = writer.add_object(&zpdf::PdfObject::Dict(res));
+        page_dict.insert(
+            zpdf::PdfName::new("Resources"),
+            zpdf::PdfObject::Ref(zpdf::ObjectId(res_num, res_gen as u16)),
+        );
+        writer.overwrite_object(page_id, zpdf::PdfObject::Dict(page_dict));
     }
-    doc.save(path).expect("marked fixture must save");
+    let mut out = Vec::new();
+    writer
+        .write(std::io::Cursor::new(&mut out))
+        .expect("marked fixture must serialize");
+    std::fs::write(path, out).expect("marked fixture must save");
 }
 
 /// Read back the marker injected by [`with_marker_resources`], per page.
 fn marker_survives(path: &std::path::Path, marker: &str) -> Vec<bool> {
-    let doc = lopdf::Document::load(path).expect("output must parse");
-    doc.get_pages()
-        .into_values()
-        .filter_map(|id| doc.objects.get(&id))
-        .filter_map(|o| o.as_dict().ok())
-        .map(|dict| {
-            let res: Option<lopdf::Dictionary> = match dict.get(b"Resources") {
-                Ok(lopdf::Object::Reference(r)) => {
-                    doc.objects.get(r).and_then(|o| o.as_dict().ok()).cloned()
-                }
-                Ok(lopdf::Object::Dictionary(d)) => Some(d.clone()),
+    let bytes = std::fs::read(path).expect("output must read");
+    let doc = zpdf::PdfDocument::open(bytes).expect("output must parse");
+    let file = doc.file();
+    (0..doc.page_count())
+        .map(|i| {
+            let page = doc.page(i).expect("page must parse");
+            let page_obj = file.resolve(page.id).expect("page obj must resolve");
+            let dict = page_obj.as_dict().expect("page must be dict");
+            let res = match dict.get("Resources") {
+                Some(zpdf::PdfObject::Ref(r)) => file
+                    .resolve(*r)
+                    .ok()
+                    .and_then(|o| o.as_dict().ok().cloned()),
+                Some(zpdf::PdfObject::Dict(d)) => Some(d.clone()),
                 _ => None,
             };
             match res {
                 Some(d) => {
-                    let gs = d.get(b"ExtGState").ok().and_then(|e| e.as_dict().ok());
-                    gs.is_some_and(|gs| gs.has(marker.as_bytes()))
+                    let gs = match d.get("ExtGState") {
+                        Some(zpdf::PdfObject::Ref(r)) => file
+                            .resolve(*r)
+                            .ok()
+                            .and_then(|o| o.as_dict().ok().cloned()),
+                        Some(zpdf::PdfObject::Dict(gsd)) => Some(gsd.clone()),
+                        _ => None,
+                    };
+                    gs.is_some_and(|gs| gs.get(marker).is_some())
                 }
                 None => false,
             }
@@ -1011,18 +1022,22 @@ fn test_add_header_footer_preserves_page_resources() {
     }
 
     // The stamp's own font must be registered as well.
-    let stamped = lopdf::Document::load(&out).unwrap();
-    for (_, page_id) in stamped.get_pages() {
-        let dict = stamped.objects.get(&page_id).and_then(|o| o.as_dict().ok());
+    let stamped_bytes = std::fs::read(&out).unwrap();
+    let stamped = zpdf::PdfDocument::open(stamped_bytes).unwrap();
+    let file = stamped.file();
+    for i in 0..stamped.page_count() {
+        let page = stamped.page(i).unwrap();
+        let page_obj = file.resolve(page.id).unwrap();
+        let dict = page_obj.as_dict().unwrap();
         let has_font = dict
-            .and_then(|d| d.get(b"Resources").ok())
+            .get("Resources")
             .map(|r| match r {
-                lopdf::Object::Reference(id) => stamped
-                    .objects
-                    .get(id)
-                    .and_then(|o| o.as_dict().ok())
-                    .is_some_and(|d| d.has(b"Font")),
-                lopdf::Object::Dictionary(d) => d.has(b"Font"),
+                zpdf::PdfObject::Ref(id) => file
+                    .resolve(*id)
+                    .ok()
+                    .and_then(|o| o.as_dict().ok().cloned())
+                    .is_some_and(|d| d.get("Font").is_some()),
+                zpdf::PdfObject::Dict(d) => d.get("Font").is_some(),
                 _ => false,
             })
             .unwrap_or(false);

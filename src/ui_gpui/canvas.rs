@@ -35,41 +35,145 @@ const MAX_CARD_WINDOW: usize = 48;
 /// Glyphs on the same baseline are concatenated directly when the gap between
 /// them is small (inside a word) and separated by a space otherwise. Newlines
 /// separate distinct lines.
-pub fn join_selected_text_items(items: &[crate::models::TextItem]) -> String {
-    if items.is_empty() {
-        return String::new();
+/// Cluster text items into visual baseline lines sorted left-to-right within
+/// each line, keeping sub/superscripts with their parent line without letting
+/// large headings merge adjacent body text lines.
+pub fn cluster_text_lines(items: &[crate::models::TextItem]) -> Vec<Vec<&crate::models::TextItem>> {
+    let mut sorted: Vec<&crate::models::TextItem> = items
+        .iter()
+        .filter(|it| {
+            it.x.is_finite() && it.y.is_finite() && it.width.is_finite() && it.height.is_finite()
+        })
+        .collect();
+    if sorted.is_empty() {
+        return Vec::new();
     }
-    // 1. Initial sort by y (approximate vertical line order).
-    let mut sorted: Vec<&crate::models::TextItem> = items.iter().collect();
     sorted.sort_by(|a, b| {
         a.y.partial_cmp(&b.y)
             .unwrap_or(std::cmp::Ordering::Equal)
             .then(a.x.partial_cmp(&b.x).unwrap_or(std::cmp::Ordering::Equal))
     });
 
-    // 2. Cluster into lines based on baseline tolerance.
     let mut lines: Vec<Vec<&crate::models::TextItem>> = Vec::new();
+    // Track the tallest item per line as anchor so a leading superscript
+    // does not force body words onto separate lines.
+    let mut anchors: Vec<&crate::models::TextItem> = Vec::new();
+
     for item in sorted {
-        let line_tol = item.height * 0.5;
-        let mut added = false;
-        if let Some(last_line) = lines.last_mut().filter(|l| {
-            l.first()
-                .is_some_and(|first| (item.y - first.y).abs() <= line_tol)
-        }) {
-            last_line.push(item);
-            added = true;
+        let mut matched_idx: Option<usize> = None;
+        if let Some(anchor) = anchors.last() {
+            let idx = anchors.len() - 1;
+            let min_h = anchor.height.min(item.height);
+            let max_h = anchor.height.max(item.height);
+            let same_line = if min_h >= max_h * 0.68 {
+                let tol = (min_h * 0.5).max(3.0);
+                (item.y - anchor.y).abs() <= tol
+            } else {
+                // Keep sub/superscripts attached when vertically overlapping a
+                // same-line anchor, while excluding distinct heading/body jumps.
+                let overlap =
+                    (anchor.y + anchor.height).min(item.y + item.height) - anchor.y.max(item.y);
+                let item_cy = item.y + item.height * 0.5;
+                let anchor_cy = anchor.y + anchor.height * 0.5;
+                min_h >= max_h * 0.4 && overlap > 0.0 && (item_cy - anchor_cy).abs() <= max_h * 0.65
+            };
+            if same_line {
+                matched_idx = Some(idx);
+            }
         }
-        if !added {
+        if let Some(idx) = matched_idx {
+            lines[idx].push(item);
+            if item.height > anchors[idx].height {
+                anchors[idx] = item;
+            }
+        } else {
             lines.push(vec![item]);
+            anchors.push(item);
         }
     }
 
-    // 3. Within each line, sort strictly by x (horizontal reading order).
-    for line in lines.iter_mut() {
+    for line in &mut lines {
         line.sort_by(|a, b| a.x.partial_cmp(&b.x).unwrap_or(std::cmp::Ordering::Equal));
     }
+    lines
+}
 
-    // 4. Concatenate words with spaces and lines with newlines.
+/// Detect whether a multi-line drag stays strictly within one side of an
+/// uncrossed vertical column gutter in `lines[first_idx..=last_idx]`, returning
+/// `(min_allowed_center_x, max_allowed_center_x)`.
+fn column_x_bounds_for_drag(
+    lines: &[Vec<&crate::models::TextItem>],
+    first_idx: usize,
+    last_idx: usize,
+    start_x: f32,
+    end_x: f32,
+) -> (f32, f32) {
+    let mut height_sum = 0.0_f32;
+    let mut count = 0_usize;
+    let mut intervals: Vec<(f32, f32)> = Vec::new();
+    for line in &lines[first_idx..=last_idx] {
+        for it in line {
+            height_sum += it.height;
+            count += 1;
+            let x0 = it.x;
+            let x1 = (it.x + it.width).max(it.x);
+            intervals.push((x0, x1));
+        }
+    }
+    if intervals.is_empty() {
+        return (f32::NEG_INFINITY, f32::INFINITY);
+    }
+    let avg_h = height_sum / count.max(1) as f32;
+    let min_col_gap = (avg_h * 1.8).clamp(18.0, 40.0);
+
+    intervals.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(std::cmp::Ordering::Equal));
+    let mut bands: Vec<(f32, f32)> = Vec::with_capacity(4);
+    for (x0, x1) in intervals {
+        if let Some(last) = bands.last_mut()
+            && x0 - last.1 < min_col_gap
+        {
+            last.1 = last.1.max(x1);
+        } else {
+            bands.push((x0, x1));
+        }
+    }
+    if bands.len() <= 1 {
+        return (f32::NEG_INFINITY, f32::INFINITY);
+    }
+
+    let mut lower = f32::NEG_INFINITY;
+    let mut upper = f32::INFINITY;
+    for pair in bands.windows(2) {
+        let mid = (pair[0].1 + pair[1].0) * 0.5;
+        // Require at least two selected rows to populate both sides of `mid`
+        // so a single-line heading or caption does not create a fake column.
+        let two_sided_rows = lines[first_idx..=last_idx]
+            .iter()
+            .filter(|line| {
+                let has_left = line.iter().any(|it| it.x + it.width * 0.5 < mid);
+                let has_right = line.iter().any(|it| it.x + it.width * 0.5 >= mid);
+                has_left && has_right
+            })
+            .count();
+        if two_sided_rows < 2 {
+            continue;
+        }
+        if start_x <= mid && end_x <= mid {
+            upper = upper.min(mid);
+        } else if start_x >= mid && end_x >= mid {
+            lower = lower.max(mid);
+        }
+    }
+    (lower, upper)
+}
+
+pub fn join_selected_text_items(items: &[crate::models::TextItem]) -> String {
+    let lines = cluster_text_lines(items);
+    if lines.is_empty() {
+        return String::new();
+    }
+
+    // Concatenate words with spaces and lines with newlines.
     let mut combined = String::new();
     for (line_idx, line) in lines.iter().enumerate() {
         if line_idx > 0 && !combined.is_empty() && !combined.ends_with('\n') {
@@ -101,8 +205,9 @@ pub fn join_selected_text_items(items: &[crate::models::TextItem]) -> String {
 /// - on intermediate lines: all items on those lines,
 /// - on the ending line: all items from the start of that line to `end_x`.
 ///
-/// If no items match via linear flow (e.g. non-standard layouts or single words),
-/// falls back to a 2D bounding box intersection.
+/// Empty margin drags and same-column drags in multi-column layouts are constrained
+/// so adjacent columns or distant blank space are not swept up. If linear flow
+/// matches nothing within the text band, falls back to a 2D bounding box test.
 pub fn select_text_items_in_range(
     items: &[crate::models::TextItem],
     start_x: f32,
@@ -110,53 +215,48 @@ pub fn select_text_items_in_range(
     end_x: f32,
     end_y: f32,
 ) -> Vec<crate::models::TextItem> {
-    if items.is_empty() {
+    if items.is_empty()
+        || !start_x.is_finite()
+        || !start_y.is_finite()
+        || !end_x.is_finite()
+        || !end_y.is_finite()
+    {
         return Vec::new();
     }
 
-    // 1. Initial sort by y, then x
-    let mut sorted: Vec<&crate::models::TextItem> = items.iter().collect();
-    sorted.sort_by(|a, b| {
-        a.y.partial_cmp(&b.y)
-            .unwrap_or(std::cmp::Ordering::Equal)
-            .then(a.x.partial_cmp(&b.x).unwrap_or(std::cmp::Ordering::Equal))
-    });
-
-    // 2. Cluster into lines based on baseline tolerance
-    let avg_height = sorted.iter().map(|it| it.height).sum::<f32>() / sorted.len() as f32;
-    let line_tol = (avg_height * 0.5).max(3.0);
-
-    let mut lines: Vec<Vec<&crate::models::TextItem>> = Vec::new();
-    for item in sorted {
-        let tol = (item.height * 0.5).max(line_tol);
-        let mut added = false;
-        if let Some(last_line) = lines.last_mut().filter(|l| {
-            l.first()
-                .is_some_and(|first| (item.y - first.y).abs() <= tol)
-        }) {
-            last_line.push(item);
-            added = true;
-        }
-        if !added {
-            lines.push(vec![item]);
-        }
+    let lines = cluster_text_lines(items);
+    if lines.is_empty() {
+        return Vec::new();
     }
 
-    // 3. Within each line, sort strictly by x
-    for line in lines.iter_mut() {
-        line.sort_by(|a, b| a.x.partial_cmp(&b.x).unwrap_or(std::cmp::Ordering::Equal));
-    }
-
-    // Helper: find the line index closest to a given y position
-    let find_closest_line = |lines: &[Vec<&crate::models::TextItem>], y: f32| -> usize {
-        let mut best_idx = 0;
-        let mut best_dist = f32::INFINITY;
-        for (i, line) in lines.iter().enumerate() {
-            let line_top = line.iter().map(|it| it.y).fold(f32::INFINITY, f32::min);
-            let line_bottom = line
+    let line_bounds: Vec<(f32, f32)> = lines
+        .iter()
+        .map(|line| {
+            let top = line.iter().map(|it| it.y).fold(f32::INFINITY, f32::min);
+            let bot = line
                 .iter()
                 .map(|it| it.y + it.height)
                 .fold(f32::NEG_INFINITY, f32::max);
+            (top, bot)
+        })
+        .collect();
+
+    // Do not select across distant text when the entire drag stays in blank
+    // vertical whitespace outside every line's vertical proximity band.
+    let drag_min_y = start_y.min(end_y);
+    let drag_max_y = start_y.max(end_y);
+    let touches_any_line = line_bounds.iter().any(|&(top, bot)| {
+        let pad = ((bot - top) * 0.5).max(4.0);
+        drag_max_y >= top - pad && drag_min_y <= bot + pad
+    });
+    if !touches_any_line {
+        return Vec::new();
+    }
+
+    let find_closest_line = |y: f32| -> usize {
+        let mut best_idx = 0;
+        let mut best_dist = f32::INFINITY;
+        for (i, &(line_top, line_bottom)) in line_bounds.iter().enumerate() {
             let dist = if y < line_top {
                 line_top - y
             } else if y > line_bottom {
@@ -172,8 +272,8 @@ pub fn select_text_items_in_range(
         best_idx
     };
 
-    let start_line_idx = find_closest_line(&lines, start_y);
-    let end_line_idx = find_closest_line(&lines, end_y);
+    let start_line_idx = find_closest_line(start_y);
+    let end_line_idx = find_closest_line(end_y);
 
     let mut matched: Vec<crate::models::TextItem> = Vec::new();
 
@@ -195,6 +295,31 @@ pub fn select_text_items_in_range(
             (end_line_idx, start_line_idx, end_x, start_x)
         };
 
+        let (col_min_x, col_max_x) =
+            column_x_bounds_for_drag(&lines, first_line_idx, last_line_idx, start_x, end_x);
+        let in_col = |it: &crate::models::TextItem| -> bool {
+            let cx = it.x + it.width * 0.5;
+            cx >= col_min_x && cx <= col_max_x
+        };
+
+        // Ensure a drag performed wholly in an empty left or right margin
+        // outside the column's horizontal text block does not select lines.
+        let mut block_min_x = f32::INFINITY;
+        let mut block_max_x = f32::NEG_INFINITY;
+        for line in &lines[first_line_idx..=last_line_idx] {
+            for item in line {
+                if in_col(item) {
+                    block_min_x = block_min_x.min(item.x);
+                    block_max_x = block_max_x.max(item.x + item.width);
+                }
+            }
+        }
+        let drag_min_x = start_x.min(end_x);
+        let drag_max_x = start_x.max(end_x);
+        if !block_min_x.is_finite() || drag_max_x < block_min_x || drag_min_x > block_max_x {
+            return Vec::new();
+        }
+
         for (l_idx, line) in lines
             .iter()
             .enumerate()
@@ -203,34 +328,34 @@ pub fn select_text_items_in_range(
         {
             if l_idx == first_line_idx {
                 for item in line {
-                    if item.x + item.width >= first_x {
+                    if in_col(item) && item.x + item.width >= first_x {
                         matched.push((*item).clone());
                     }
                 }
             } else if l_idx == last_line_idx {
                 for item in line {
-                    if item.x <= last_x {
+                    if in_col(item) && item.x <= last_x {
                         matched.push((*item).clone());
                     }
                 }
             } else {
                 for item in line {
-                    matched.push((*item).clone());
+                    if in_col(item) {
+                        matched.push((*item).clone());
+                    }
                 }
             }
         }
     }
 
-    // 4. Fallback to 2D bounding box if no items were matched (e.g. non-standard layout)
+    // Fallback to 2D bounding box if no items matched linearly
     if matched.is_empty() {
         let min_x = start_x.min(end_x);
         let max_x = start_x.max(end_x);
-        let min_y = start_y.min(end_y);
-        let max_y = start_y.max(end_y);
         for item in items {
             let ix2 = item.x + item.width;
             let iy2 = item.y + item.height;
-            if ix2 >= min_x && item.x <= max_x && iy2 >= min_y && item.y <= max_y {
+            if ix2 >= min_x && item.x <= max_x && iy2 >= drag_min_y && item.y <= drag_max_y {
                 matched.push(item.clone());
             }
         }
@@ -501,6 +626,13 @@ pub fn convert_rgba_to_bgra(data: &mut [u8]) {
     }
 }
 
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum PendingSelectionAction {
+    SelectAll { page_idx: usize },
+    SelectWord { page_idx: usize, x: f32, y: f32 },
+    SelectLine { page_idx: usize, x: f32, y: f32 },
+}
+
 pub struct DocumentViewport {
     pub zoom: f32,
     pub rotation: u16,
@@ -514,6 +646,14 @@ pub struct DocumentViewport {
     pub selection_page: Option<usize>,
     pub selection_start: Option<Point<Pixels>>,
     pub selection_end: Option<Point<Pixels>>,
+    /// Anchor points `(start, end)` of the active/committed selection in
+    /// *unrotated* top-down PDF point coordinates relative to `selection_page`.
+    ///
+    /// Keeping selection endpoints in page space prevents scroll, zoom, and
+    /// rotation changes from shifting highlights off the selected text.
+    pub selection_page_range: Option<((f32, f32), (f32, f32))>,
+    /// Deferred selection request waiting for cold `text_cache` population.
+    pub pending_selection: Option<PendingSelectionAction>,
     pub selected_text: Option<String>,
     pub text_cache: std::collections::HashMap<usize, std::sync::Arc<Vec<crate::models::TextItem>>>,
     pub rendered_pages: std::collections::HashMap<usize, std::sync::Arc<RenderImage>>,
@@ -578,6 +718,8 @@ impl DocumentViewport {
             selection_page: None,
             selection_start: None,
             selection_end: None,
+            selection_page_range: None,
+            pending_selection: None,
             selected_text: None,
             text_cache: std::collections::HashMap::new(),
             rendered_pages: std::collections::HashMap::new(),
@@ -599,6 +741,74 @@ impl DocumentViewport {
         }
     }
 
+    /// Clear active and committed selection state.
+    pub fn clear_selection(&mut self) {
+        self.is_selecting = false;
+        self.selection_page = None;
+        self.selection_start = None;
+        self.selection_end = None;
+        self.selection_page_range = None;
+        self.pending_selection = None;
+        self.selected_text = None;
+    }
+
+    /// Map a window position into unrotated top-down PDF point coordinates
+    /// relative to `page_idx`, or `None` if its painted origin is unknown.
+    pub fn window_point_to_overlay(
+        &self,
+        page_idx: usize,
+        pos: Point<Pixels>,
+    ) -> Option<(f32, f32)> {
+        let origin = self
+            .page_origins
+            .read()
+            .ok()
+            .and_then(|m| m.get(&page_idx).copied())?;
+        let zoom = if self.zoom.is_finite() && self.zoom > 0.01 {
+            self.zoom
+        } else {
+            1.0
+        };
+        let bx = ((pos.x - origin.x) / px(1.0)) / zoom;
+        let by = ((pos.y - origin.y) / px(1.0)) / zoom;
+        let (unrotated_w, unrotated_h) = self.page_unrotated_size(page_idx);
+        let rotation = self.effective_rotation(page_idx);
+        Some(rotated_point_to_overlay_space(
+            bx,
+            by,
+            unrotated_w,
+            unrotated_h,
+            rotation,
+        ))
+    }
+
+    /// Map an unrotated top-down PDF point on `page_idx` back into window
+    /// coordinates using the last painted page origin.
+    pub fn overlay_point_to_window(
+        &self,
+        page_idx: usize,
+        x: f32,
+        y: f32,
+    ) -> Option<Point<Pixels>> {
+        let origin = self
+            .page_origins
+            .read()
+            .ok()
+            .and_then(|m| m.get(&page_idx).copied())?;
+        let zoom = if self.zoom.is_finite() && self.zoom > 0.01 {
+            self.zoom
+        } else {
+            1.0
+        };
+        let (unrotated_w, unrotated_h) = self.page_unrotated_size(page_idx);
+        let rotation = self.effective_rotation(page_idx);
+        let (rx, ry) = overlay_point_in_rotated_space(x, y, unrotated_w, unrotated_h, rotation);
+        Some(Point::new(
+            origin.x + px(rx * zoom),
+            origin.y + px(ry * zoom),
+        ))
+    }
+
     /// Drop every piece of per-document state so a new document never inherits
     /// the previous one's pages, annotations, text layer, search hits, cached
     /// page origins or scroll position.
@@ -609,11 +819,7 @@ impl DocumentViewport {
     /// placeholder.
     pub fn reset_for_document(&mut self) {
         self.current_page = 0;
-        self.is_selecting = false;
-        self.selection_page = None;
-        self.selection_start = None;
-        self.selection_end = None;
-        self.selected_text = None;
+        self.clear_selection();
         self.rendered_pages.clear();
         self.rendered_zoom.clear();
         self.failed_pages.clear();
@@ -983,7 +1189,14 @@ impl DocumentViewport {
         on_drag_start: impl Fn(&mut V, usize, Point<Pixels>, usize, &mut Window, &mut Context<V>)
         + 'static
         + Copy,
-        on_drag_move: impl Fn(&mut V, usize, Point<Pixels>, &mut Window, &mut Context<V>)
+        on_drag_move: impl Fn(
+            &mut V,
+            usize,
+            Point<Pixels>,
+            Option<MouseButton>,
+            &mut Window,
+            &mut Context<V>,
+        )
         + 'static
         + Copy,
         on_drag_end: impl Fn(&mut V, usize, Point<Pixels>, &mut Window, &mut Context<V>)
@@ -1015,6 +1228,7 @@ impl DocumentViewport {
         let is_sel_page = self.selection_page == Some(page_idx);
         let sel_start = self.selection_start;
         let sel_end = self.selection_end;
+        let sel_page_range = self.selection_page_range;
         let is_selecting = self.is_selecting;
         // `Arc`-share the per-page text layer and annotations instead of deep
         // cloning them (every `TextItem` and `AnnotationStyle` owns `String`s).
@@ -1302,16 +1516,9 @@ impl DocumentViewport {
                 }
 
                 // 2. Paint active selection and word-level text highlighting
-                if is_sel_page && let (Some(start), Some(end)) = (sel_start, sel_end) {
-                    let sel_bounds = Bounds {
-                        origin: Point::new(start.x.min(end.x), start.y.min(end.y)),
-                        size: Size {
-                            width: (start.x - end.x).abs(),
-                            height: (start.y - end.y).abs(),
-                        },
-                    };
-                    let clipped = sel_bounds.intersect(&card_bounds);
-
+                let resolved_selection = if !is_sel_page {
+                    None
+                } else {
                     // Convert selection box to page PDF point coordinates.
                     // `zoom` is clamped defensively: `f32::clamp` propagates
                     // NaN, and a NaN here would silently blank every selection
@@ -1321,25 +1528,64 @@ impl DocumentViewport {
                     } else {
                         1.0
                     };
-                    let bx1 = ((start.x - card_bounds.origin.x) / px(1.0)) / zoom;
-                    let by1 = ((start.y - card_bounds.origin.y) / px(1.0)) / zoom;
-                    let bx2 = ((end.x - card_bounds.origin.x) / px(1.0)) / zoom;
-                    let by2 = ((end.y - card_bounds.origin.y) / px(1.0)) / zoom;
+                    if let Some(((sx, sy), (ex, ey))) = sel_page_range {
+                        let (rx1, ry1) = overlay_point_in_rotated_space(
+                            sx,
+                            sy,
+                            unrotated_w,
+                            unrotated_h,
+                            overlay_rotation,
+                        );
+                        let (rx2, ry2) = overlay_point_in_rotated_space(
+                            ex,
+                            ey,
+                            unrotated_w,
+                            unrotated_h,
+                            overlay_rotation,
+                        );
+                        let p1 = Point::new(
+                            card_bounds.origin.x + px(rx1 * zoom),
+                            card_bounds.origin.y + px(ry1 * zoom),
+                        );
+                        let p2 = Point::new(
+                            card_bounds.origin.x + px(rx2 * zoom),
+                            card_bounds.origin.y + px(ry2 * zoom),
+                        );
+                        Some(((sx, sy), (ex, ey), p1, p2, zoom))
+                    } else if let (Some(start), Some(end)) = (sel_start, sel_end) {
+                        let bx1 = ((start.x - card_bounds.origin.x) / px(1.0)) / zoom;
+                        let by1 = ((start.y - card_bounds.origin.y) / px(1.0)) / zoom;
+                        let bx2 = ((end.x - card_bounds.origin.x) / px(1.0)) / zoom;
+                        let by2 = ((end.y - card_bounds.origin.y) / px(1.0)) / zoom;
 
-                    let (sx, sy) = rotated_point_to_overlay_space(
-                        bx1,
-                        by1,
-                        unrotated_w,
-                        unrotated_h,
-                        overlay_rotation,
-                    );
-                    let (ex, ey) = rotated_point_to_overlay_space(
-                        bx2,
-                        by2,
-                        unrotated_w,
-                        unrotated_h,
-                        overlay_rotation,
-                    );
+                        let (sx, sy) = rotated_point_to_overlay_space(
+                            bx1,
+                            by1,
+                            unrotated_w,
+                            unrotated_h,
+                            overlay_rotation,
+                        );
+                        let (ex, ey) = rotated_point_to_overlay_space(
+                            bx2,
+                            by2,
+                            unrotated_w,
+                            unrotated_h,
+                            overlay_rotation,
+                        );
+                        Some(((sx, sy), (ex, ey), start, end, zoom))
+                    } else {
+                        None
+                    }
+                };
+                if let Some(((sx, sy), (ex, ey), start, end, zoom)) = resolved_selection {
+                    let sel_bounds = Bounds {
+                        origin: Point::new(start.x.min(end.x), start.y.min(end.y)),
+                        size: Size {
+                            width: (start.x - end.x).abs(),
+                            height: (start.y - end.y).abs(),
+                        },
+                    };
+                    let clipped = sel_bounds.intersect(&card_bounds);
 
                     let word_fill = hl_color.unwrap_or_else(|| hsla(215.0 / 360.0, 0.9, 0.55, 0.4));
                     let word_border = hl_color
@@ -1497,7 +1743,7 @@ impl DocumentViewport {
             .cursor_text()
             .on_mouse_down(MouseButton::Left, down_listener)
             .on_mouse_move(cx.listener(move |v, event: &MouseMoveEvent, w, cx| {
-                on_drag_move(v, page_idx, event.position, w, cx);
+                on_drag_move(v, page_idx, event.position, event.pressed_button, w, cx);
             }))
             .on_mouse_up(MouseButton::Left, up_listener)
             .child(card_content)
@@ -1511,7 +1757,14 @@ impl DocumentViewport {
         on_drag_start: impl Fn(&mut V, usize, Point<Pixels>, usize, &mut Window, &mut Context<V>)
         + 'static
         + Copy,
-        on_drag_move: impl Fn(&mut V, usize, Point<Pixels>, &mut Window, &mut Context<V>)
+        on_drag_move: impl Fn(
+            &mut V,
+            usize,
+            Point<Pixels>,
+            Option<MouseButton>,
+            &mut Window,
+            &mut Context<V>,
+        )
         + 'static
         + Copy,
         on_drag_end: impl Fn(&mut V, usize, Point<Pixels>, &mut Window, &mut Context<V>)
@@ -1535,11 +1788,15 @@ impl DocumentViewport {
         // Container-level move/up listeners: these fire regardless of which child the
         // cursor is over, so a drag that started on page N and moves into the gap or
         // onto page M still updates selection_end and commits on release.
-        // We pass page_idx=0 as a dummy; both closures ignore _page_idx (Bug 2/3 fixes).
+        // `on_mouse_up_out` catches releases outside the scroll viewport (e.g.
+        // over sidebar, ribbon, status bar, or outside the window).
         let container_move_listener = cx.listener(move |v, event: &MouseMoveEvent, w, cx| {
-            on_drag_move(v, 0, event.position, w, cx);
+            on_drag_move(v, 0, event.position, event.pressed_button, w, cx);
         });
         let container_up_listener = cx.listener(move |v, event: &MouseUpEvent, w, cx| {
+            on_drag_end(v, 0, event.position, w, cx);
+        });
+        let container_up_out_listener = cx.listener(move |v, event: &MouseUpEvent, w, cx| {
             on_drag_end(v, 0, event.position, w, cx);
         });
 
@@ -1567,6 +1824,7 @@ impl DocumentViewport {
                     .on_scroll(scroll_listener)
                     .on_mouse_move(container_move_listener)
                     .on_mouse_up(MouseButton::Left, container_up_listener)
+                    .on_mouse_up_out(MouseButton::Left, container_up_out_listener)
                     .child(
                         div()
                             .flex()
@@ -1616,6 +1874,7 @@ impl DocumentViewport {
                     .on_scroll(scroll_listener)
                     .on_mouse_move(container_move_listener)
                     .on_mouse_up(MouseButton::Left, container_up_listener)
+                    .on_mouse_up_out(MouseButton::Left, container_up_out_listener)
                     .child(
                         div()
                             .flex()
@@ -1683,6 +1942,7 @@ impl DocumentViewport {
                     .on_scroll(scroll_listener)
                     .on_mouse_move(container_move_listener)
                     .on_mouse_up(MouseButton::Left, container_up_listener)
+                    .on_mouse_up_out(MouseButton::Left, container_up_out_listener)
                     .items_center()
                     // No `.py_8()` and no `.gap_6()`: both are already encoded
                     // in the spacers and slots above. Applying them here as well

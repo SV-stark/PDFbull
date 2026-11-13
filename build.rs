@@ -55,7 +55,10 @@ fn ensure_ocr_models() {
             println!("cargo:warning=Downloading missing OCR model '{name}'...");
             let curl_cmd = if cfg!(windows) { "curl.exe" } else { "curl" };
             let status = std::process::Command::new(curl_cmd)
-                .args(["-sSL", "-o", dest.to_str().unwrap(), url])
+                .arg("-sSL")
+                .arg("-o")
+                .arg(&dest)
+                .arg(url)
                 .status();
 
             if let Ok(st) = status {
