@@ -570,6 +570,7 @@ fn test_drag_selection_and_text_extraction() {
             y: 100.0,
             width: 40.0,
             height: 12.0,
+            quad: None,
         },
         pdfbull::models::TextItem {
             text: "World".to_string(),
@@ -577,6 +578,7 @@ fn test_drag_selection_and_text_extraction() {
             y: 100.0,
             width: 45.0,
             height: 12.0,
+            quad: None,
         },
         pdfbull::models::TextItem {
             text: "Unselected".to_string(),
@@ -584,6 +586,7 @@ fn test_drag_selection_and_text_extraction() {
             y: 300.0,
             width: 80.0,
             height: 12.0,
+            quad: None,
         },
     ];
     viewport.text_cache.insert(0, items.clone().into());
@@ -641,6 +644,7 @@ fn test_text_selection_highlight_coordinate_mapping() {
             y: 40.0,
             width: 30.0,
             height: 14.0,
+            quad: None,
         },
         pdfbull::models::TextItem {
             text: "Highlighter".to_string(),
@@ -648,6 +652,7 @@ fn test_text_selection_highlight_coordinate_mapping() {
             y: 40.0,
             width: 70.0,
             height: 14.0,
+            quad: None,
         },
         pdfbull::models::TextItem {
             text: "Ignored".to_string(),
@@ -655,6 +660,7 @@ fn test_text_selection_highlight_coordinate_mapping() {
             y: 200.0,
             width: 50.0,
             height: 14.0,
+            quad: None,
         },
     ];
     viewport.text_cache.insert(0, items.clone().into());
@@ -1333,7 +1339,7 @@ fn test_zpdf_v14_table_detection_with_rules() {
             y: 100.0,
             size: 10.0,
             advance: 35.0,
-            mcid: None,
+            ..Default::default()
         },
         zpdf::TextSpan {
             text: "Header B".to_string(),
@@ -1341,7 +1347,7 @@ fn test_zpdf_v14_table_detection_with_rules() {
             y: 100.0,
             size: 10.0,
             advance: 35.0,
-            mcid: None,
+            ..Default::default()
         },
         zpdf::TextSpan {
             text: "Value 1".to_string(),
@@ -1349,7 +1355,7 @@ fn test_zpdf_v14_table_detection_with_rules() {
             y: 80.0,
             size: 10.0,
             advance: 35.0,
-            mcid: None,
+            ..Default::default()
         },
         zpdf::TextSpan {
             text: "Value 2".to_string(),
@@ -1357,7 +1363,7 @@ fn test_zpdf_v14_table_detection_with_rules() {
             y: 80.0,
             size: 10.0,
             advance: 35.0,
-            mcid: None,
+            ..Default::default()
         },
     ];
 

@@ -1866,6 +1866,31 @@ impl DocumentStore {
                             })
                         }
                     }
+                    "Ink" => {
+                        let strokes = dict
+                            .get("InkList")
+                            .and_then(|o| o.as_array().ok())
+                            .map(|list| {
+                                list.iter()
+                                    .filter_map(|stroke_obj| {
+                                        let coords = stroke_obj.as_array().ok()?;
+                                        let mut pts = Vec::with_capacity(coords.len() / 2);
+                                        for [x_obj, y_obj] in coords.as_chunks::<2>().0 {
+                                            let px = to_f32(x_obj)?;
+                                            let py = to_f32(y_obj)?;
+                                            pts.push((px - page_x0, page_y1 - py));
+                                        }
+                                        (pts.len() >= 2).then_some(pts)
+                                    })
+                                    .collect::<Vec<_>>()
+                            })
+                            .unwrap_or_default();
+                        Some(AnnotationStyle::Ink {
+                            color: color_str,
+                            thickness,
+                            strokes,
+                        })
+                    }
                     _ => None,
                 };
 
@@ -2157,7 +2182,7 @@ impl DocumentStore {
         } else {
             spans_to_text(spans, 2.0)
         };
-        Ok(text)
+        Ok(zpdf_content::text::dehyphenate(&text))
     }
 
     pub fn extract_text_items(
@@ -2183,8 +2208,15 @@ impl DocumentStore {
                 .with_page_user_unit(page.user_unit)
                 .with_fonts(&mut fonts)
                 .with_document(doc.file(), &page.resources)
-                .with_text_sink(&mut spans);
-            let _ = interp.interpret(&content);
+                .with_text_sink(&mut spans)
+                .with_text_geometry(true);
+            let (_, stats) = interp.interpret_with_stats(&content);
+            if stats.text_geometry_omitted {
+                tracing::debug!(
+                    page = page_num,
+                    "zpdf glyph geometry budget reached; falling back to span advance for remaining runs"
+                );
+            }
         }
 
         // `search` already used the box's y1 here; the text layer used the box
@@ -2227,53 +2259,140 @@ impl DocumentStore {
             // Align with `zpdf` baseline bounds (`y - 0.2*size .. y + 0.8*size`):
             // top edge sits at 0.8*size above baseline, bottom edge covers descenders.
             let base_y = (eff_box.y1 - span.y - (span.size as f64) * 0.8) as f32;
-            let push_word =
-                |out: &mut Vec<crate::models::TextItem>, word: String, start_idx: usize| {
-                    let word_chars = word.chars().count();
-                    let word_x = if is_neg_adv {
-                        (span.x - eff_box.x0) as f32 - char_step * (start_idx + word_chars) as f32
-                    } else {
-                        base_x + char_step * start_idx as f32
-                    };
-                    out.push(crate::models::TextItem {
-                        text: word,
-                        x: word_x,
-                        y: base_y,
-                        width: char_step * word_chars as f32,
-                        height: span.size,
-                    });
+
+            // Group positioned glyph cells into UTF-8 byte-range clusters so
+            // multi-glyph clusters (e.g. /ActualText) and ligatures share one
+            // exact page-space bounding box and 4-corner quad.
+            let mut clusters: Vec<(std::ops::Range<usize>, zpdf::Rect, [zpdf::Point; 4])> =
+                Vec::new();
+            for glyph in &span.glyphs {
+                let range = &glyph.text_range;
+                if range.is_empty() || span.text.get(range.clone()).is_none() {
+                    continue;
+                }
+                let b = glyph.bounds().normalize();
+                if !b.x0.is_finite()
+                    || !b.y0.is_finite()
+                    || !b.x1.is_finite()
+                    || !b.y1.is_finite()
+                    || !glyph
+                        .quad
+                        .iter()
+                        .all(|p| p.x.is_finite() && p.y.is_finite())
+                {
+                    continue;
+                }
+                if let Some((_, prev_b, prev_q)) =
+                    clusters.last_mut().filter(|(r, _, _)| r == range)
+                {
+                    prev_b.x0 = prev_b.x0.min(b.x0);
+                    prev_b.y0 = prev_b.y0.min(b.y0);
+                    prev_b.x1 = prev_b.x1.max(b.x1);
+                    prev_b.y1 = prev_b.y1.max(b.y1);
+                    prev_q[1] = glyph.quad[1];
+                    prev_q[2] = glyph.quad[2];
+                } else {
+                    clusters.push((range.clone(), b, glyph.quad));
+                }
+            }
+
+            let push_word = |out: &mut Vec<crate::models::TextItem>,
+                             word: String,
+                             start_char_idx: usize,
+                             byte_start: usize,
+                             byte_end: usize| {
+                let mut matching = clusters
+                    .iter()
+                    .filter(|(r, _, _)| r.start < byte_end && r.end > byte_start);
+                let first_match = matching.next();
+                let mut last_quad = first_match.map(|(_, _, q)| *q);
+                let mut glyph_rect = first_match.map(|(_, b, _)| *b);
+                for (_, b, q) in matching {
+                    last_quad = Some(*q);
+                    if let Some(acc) = &mut glyph_rect {
+                        acc.x0 = acc.x0.min(b.x0);
+                        acc.y0 = acc.y0.min(b.y0);
+                        acc.x1 = acc.x1.max(b.x1);
+                        acc.y1 = acc.y1.max(b.y1);
+                    }
+                }
+                if let Some(r) = glyph_rect {
+                    let width = (r.x1 - r.x0).max(0.0) as f32;
+                    let height = (r.y1 - r.y0).max(0.0) as f32;
+                    if width > 0.0 || height > 0.0 {
+                        let quad = first_match.zip(last_quad).map(|((_, _, fq), lq)| {
+                            let to_top_down = |p: zpdf::Point| {
+                                ((p.x - eff_box.x0) as f32, (eff_box.y1 - p.y) as f32)
+                            };
+                            [
+                                to_top_down(fq[0]),
+                                to_top_down(lq[1]),
+                                to_top_down(lq[2]),
+                                to_top_down(fq[3]),
+                            ]
+                        });
+                        out.push(crate::models::TextItem {
+                            text: word,
+                            x: (r.x0 - eff_box.x0) as f32,
+                            y: (eff_box.y1 - r.y1) as f32,
+                            width,
+                            height,
+                            quad,
+                        });
+                        return;
+                    }
+                }
+                let word_chars = word.chars().count();
+                let word_x = if is_neg_adv {
+                    (span.x - eff_box.x0) as f32 - char_step * (start_char_idx + word_chars) as f32
+                } else {
+                    base_x + char_step * start_char_idx as f32
                 };
+                out.push(crate::models::TextItem {
+                    text: word,
+                    x: word_x,
+                    y: base_y,
+                    width: char_step * word_chars as f32,
+                    height: span.size,
+                    quad: None,
+                });
+            };
 
             if span.text.contains(char::is_whitespace) {
                 let mut current_word = String::new();
-                let mut word_start_idx = 0;
-                for (idx, ch) in span.text.chars().enumerate() {
+                let mut word_start_char = 0;
+                let mut word_start_byte = 0;
+                for (idx, (byte_idx, ch)) in span.text.char_indices().enumerate() {
                     if ch.is_whitespace() {
                         if !current_word.is_empty() {
                             push_word(
                                 &mut text_items,
                                 std::mem::take(&mut current_word),
-                                word_start_idx,
+                                word_start_char,
+                                word_start_byte,
+                                byte_idx,
                             );
                         }
                     } else {
                         if current_word.is_empty() {
-                            word_start_idx = idx;
+                            word_start_char = idx;
+                            word_start_byte = byte_idx;
                         }
                         current_word.push(ch);
                     }
                 }
                 if !current_word.is_empty() {
-                    push_word(&mut text_items, current_word, word_start_idx);
+                    push_word(
+                        &mut text_items,
+                        current_word,
+                        word_start_char,
+                        word_start_byte,
+                        span.text.len(),
+                    );
                 }
             } else {
-                text_items.push(crate::models::TextItem {
-                    text: span.text,
-                    x: base_x,
-                    y: base_y,
-                    width: total_adv,
-                    height: span.size,
-                });
+                let len = span.text.len();
+                push_word(&mut text_items, span.text, 0, 0, len);
             }
         }
         Ok(text_items)
@@ -2348,13 +2467,13 @@ impl DocumentStore {
             .ok_or(PdfError::EngineError(EngineErrorKind::DocumentPathNotFound))?
             .clone();
 
-        let data = read_input_capped(&pdf_path)?;
+        let data = read_document_bytes_shared(&pdf_path)?;
         let pass = self
             .passwords
             .get(&doc_id)
             .map(|s| s.as_bytes())
             .unwrap_or(b"");
-        let mut writer = IncrementalWriter::new_with_password(data, pass)
+        let mut writer = IncrementalWriter::from_shared_with_password(data, pass)
             .map_err(|e| PdfError::OpenFailed(e.to_string()))?;
 
         // Idempotency: drop every annotation a *previous* save wrote before
@@ -2555,6 +2674,45 @@ impl DocumentStore {
                         color: (r as f64, g as f64, b as f64),
                         width: *thickness as f64,
                     }
+                }
+                AnnotationStyle::Ink {
+                    color,
+                    thickness,
+                    strokes,
+                } => {
+                    let (r, g, b) = hex_to_rgb(color);
+                    let mut builder = zpdf::InkAnnotationBuilder::new();
+                    builder.set_color(r as f64, g as f64, b as f64);
+                    builder.set_width(*thickness as f64);
+                    for stroke in strokes {
+                        let pdf_pts: Vec<(f64, f64)> = stroke
+                            .iter()
+                            .map(|&(sx, sy)| (sx as f64 + page_box.x0, page_box.y1 - sy as f64))
+                            .collect();
+                        builder.add_stroke(pdf_pts);
+                    }
+                    if let Some((dict, appearance)) = builder.build() {
+                        writer
+                            .add_ink_annotation_to_page(ann.page, &dict, &appearance)
+                            .map_err(|e| PdfError::IoError(e.to_string()))?;
+                        if let Ok(page_id) = writer.document().page_id(ann.page)
+                            && let Ok(page_obj) = writer.resolve_current(page_id)
+                            && let Ok(page_dict) = page_obj.as_dict()
+                            && let Some(zpdf::PdfObject::Array(annots)) = page_dict.get("Annots")
+                            && let Some(zpdf::PdfObject::Ref(annot_id)) = annots.last()
+                            && let Ok(obj) = writer.resolve_current(*annot_id)
+                            && let Ok(mut adict) = obj.as_dict().cloned()
+                        {
+                            adict.insert(
+                                zpdf::PdfName::new("NM"),
+                                zpdf::PdfObject::String(zpdf::PdfString::new(
+                                    format!("{PDFBULL_ANNOT_MARKER}{}", ann.id).into_bytes(),
+                                )),
+                            );
+                            writer.overwrite_object(*annot_id, zpdf::PdfObject::Dict(adict));
+                        }
+                    }
+                    continue;
                 }
                 AnnotationStyle::Redact { .. } => continue, // filtered above
             };
@@ -2805,7 +2963,8 @@ impl DocumentStore {
                     .with_page_user_unit(page.user_unit)
                     .with_fonts(&mut fonts)
                     .with_document(doc.file(), &page.resources)
-                    .with_text_sink(&mut spans);
+                    .with_text_sink(&mut spans)
+                    .with_text_geometry(true);
                 let _ = interp.interpret(&content);
             }
 
@@ -2821,7 +2980,9 @@ impl DocumentStore {
 
                 // Transform the first rect from PDF user space (y-up) to the
                 // app's top-down page coordinate system.
-                let bounds = hit.bounds();
+                let Some(bounds) = hit.bounds() else {
+                    continue;
+                };
                 let x_left = (bounds.x0 - eff_box.x0) as f32;
                 let y_top_down = (eff_box.y1 - bounds.y1) as f32;
                 let width = (bounds.x1 - bounds.x0) as f32;
@@ -2885,7 +3046,7 @@ impl DocumentStore {
             .get(&doc_id)
             .cloned()
             .ok_or(PdfError::EngineError(EngineErrorKind::DocumentPathNotFound))?;
-        let data = read_input_capped(&pdf_path)?;
+        let data = read_document_bytes_shared(&pdf_path)?;
         let pass = self
             .passwords
             .get(&doc_id)
@@ -2894,7 +3055,7 @@ impl DocumentStore {
 
         let mut buffer = std::io::Cursor::new(Vec::new());
         {
-            let mut writer = IncrementalWriter::new_with_password(data, pass)
+            let mut writer = IncrementalWriter::from_shared_with_password(data, pass)
                 .map_err(|e| PdfError::IoError(format!("metadata update failed: {e}")))?;
             writer
                 .set_info(&info)
@@ -3289,9 +3450,9 @@ impl DocumentStore {
     }
 
     pub fn tag_pdf(&self, input_path: &str, output_path: &str) -> PdfResult<String> {
-        let data = read_input_capped(input_path)?;
+        let data = read_document_bytes_shared(input_path)?;
         let pass = self.password_for_path(input_path);
-        let mut writer = IncrementalWriter::new_with_password(data, pass)
+        let mut writer = IncrementalWriter::from_shared_with_password(data, pass)
             .map_err(|e| PdfError::OpenFailed(e.to_string()))?;
         writer
             .tag_pdf()
@@ -3671,12 +3832,12 @@ impl DocumentStore {
         // Capped like the documents appended below: a bare `std::fs::read` here
         // allocated room for the whole file before any size check, so a
         // multi-GB input OOMs the process instead of being refused.
-        let first_data = read_input_capped(first_path)?;
+        let first_data = read_document_bytes_shared(first_path)?;
         let first_pass = first_password
             .as_deref()
             .map(|p| p.as_bytes())
             .unwrap_or_else(|| self.password_for_path(first_path));
-        let mut writer = IncrementalWriter::new_with_password(first_data, first_pass)
+        let mut writer = IncrementalWriter::from_shared_with_password(first_data, first_pass)
             .map_err(|e| PdfError::OpenFailed(e.to_string()))?;
 
         // Append remaining documents — this preserves outlines, forms, and OCGs.
@@ -3712,11 +3873,11 @@ impl DocumentStore {
         output_path: &str,
         password: Option<&str>,
     ) -> PdfResult<String> {
-        let data = read_input_capped(input_path)?;
+        let data = read_document_bytes_shared(input_path)?;
         let pass = password
             .map(|p| p.as_bytes())
             .unwrap_or_else(|| self.password_for_path(input_path));
-        let mut writer = IncrementalWriter::new_with_password(data, pass)
+        let mut writer = IncrementalWriter::from_shared_with_password(data, pass)
             .map_err(|e| PdfError::OpenFailed(e.to_string()))?;
 
         writer
@@ -3742,11 +3903,11 @@ impl DocumentStore {
         output_path: &str,
         password: Option<&str>,
     ) -> PdfResult<String> {
-        let data = read_input_capped(input_path)?;
+        let data = read_document_bytes_shared(input_path)?;
         let pass = password
             .map(|p| p.as_bytes())
             .unwrap_or_else(|| self.password_for_path(input_path));
-        let mut writer = IncrementalWriter::new_with_password(data, pass)
+        let mut writer = IncrementalWriter::from_shared_with_password(data, pass)
             .map_err(|e| PdfError::OpenFailed(e.to_string()))?;
 
         for &(page_idx, degrees) in rotations {
@@ -3774,11 +3935,11 @@ impl DocumentStore {
         output_path: &str,
         password: Option<&str>,
     ) -> PdfResult<String> {
-        let data = read_input_capped(input_path)?;
+        let data = read_document_bytes_shared(input_path)?;
         let pass = password
             .map(|p| p.as_bytes())
             .unwrap_or_else(|| self.password_for_path(input_path));
-        let mut writer = IncrementalWriter::new_with_password(data, pass)
+        let mut writer = IncrementalWriter::from_shared_with_password(data, pass)
             .map_err(|e| PdfError::OpenFailed(e.to_string()))?;
 
         writer
@@ -4185,12 +4346,12 @@ impl DocumentStore {
         output_path: String,
         password: Option<&str>,
     ) -> PdfResult<String> {
-        let data = read_input_capped(path).map_err(|e| match e {
+        let data = read_document_bytes_shared(path).map_err(|e| match e {
             PdfError::OpenFailed(msg) => PdfError::IoError(msg),
             other => other,
         })?;
         let mut writer =
-            IncrementalWriter::new_with_password(data, password.unwrap_or("").as_bytes())
+            IncrementalWriter::from_shared_with_password(data, password.unwrap_or("").as_bytes())
                 .map_err(|e| PdfError::IoError(e.to_string()))?;
 
         let total_fields = updates.len();
@@ -4337,7 +4498,7 @@ impl DocumentStore {
         Ok(Vec::new())
     }
 
-    fn add_helvetica_font(writer: &mut IncrementalWriter) -> zpdf::ObjectId {
+    fn add_helvetica_font(writer: &mut IncrementalWriter) -> PdfResult<zpdf::ObjectId> {
         let mut font_dict = zpdf::PdfDict::new();
         font_dict.insert(
             zpdf::PdfName::new("Type"),
@@ -4351,8 +4512,10 @@ impl DocumentStore {
             zpdf::PdfName::new("BaseFont"),
             zpdf::PdfObject::Name(zpdf::PdfName::new("Helvetica")),
         );
-        let (obj_num, gen_num) = writer.add_object(&zpdf::PdfObject::Dict(font_dict));
-        zpdf::ObjectId(obj_num, gen_num as u16)
+        let (obj_num, gen_num) = writer
+            .try_add_object(&zpdf::PdfObject::Dict(font_dict))
+            .map_err(|e| PdfError::EngineError(e.to_string().into()))?;
+        Ok(zpdf::ObjectId(obj_num, gen_num as u16))
     }
 
     fn append_overlay_stream(
@@ -4362,7 +4525,9 @@ impl DocumentStore {
         font_ref_id: zpdf::ObjectId,
         gstate_ref_id: Option<zpdf::ObjectId>,
     ) -> PdfResult<()> {
-        let (stream_obj, stream_gen) = writer.add_flate_stream(&zpdf::PdfDict::new(), stream_bytes);
+        let (stream_obj, stream_gen) = writer
+            .try_add_flate_stream(&zpdf::PdfDict::new(), stream_bytes)
+            .map_err(|e| PdfError::EngineError(e.to_string().into()))?;
         let stream_id = zpdf::ObjectId(stream_obj, stream_gen as u16);
         let page_obj = writer
             .resolve_current(page_id)
@@ -4418,7 +4583,9 @@ impl DocumentStore {
                     );
                 }
 
-                let (id_num, id_gen) = writer.add_object(&zpdf::PdfObject::Dict(res_dict));
+                let (id_num, id_gen) = writer
+                    .try_add_object(&zpdf::PdfObject::Dict(res_dict))
+                    .map_err(|e| PdfError::EngineError(e.to_string().into()))?;
                 zpdf::ObjectId(id_num, id_gen as u16)
             }
             None => {
@@ -4434,7 +4601,9 @@ impl DocumentStore {
                         zpdf::PdfObject::Dict(gs_dict),
                     );
                 }
-                let (id_num, id_gen) = writer.add_object(&zpdf::PdfObject::Dict(res_dict));
+                let (id_num, id_gen) = writer
+                    .try_add_object(&zpdf::PdfObject::Dict(res_dict))
+                    .map_err(|e| PdfError::EngineError(e.to_string().into()))?;
                 zpdf::ObjectId(id_num, id_gen as u16)
             }
         };
@@ -4452,12 +4621,12 @@ impl DocumentStore {
     }
 
     pub fn add_watermark(input_path: &str, text: &str, output_path: &str) -> PdfResult<String> {
-        let input = read_input_capped(input_path)?;
-        let mut writer =
-            IncrementalWriter::new(input).map_err(|e| PdfError::OpenFailed(e.to_string()))?;
+        let input = read_document_bytes_shared(input_path)?;
+        let mut writer = IncrementalWriter::from_shared(input)
+            .map_err(|e| PdfError::OpenFailed(e.to_string()))?;
 
         let page_count = writer.page_count();
-        let font_ref_id = Self::add_helvetica_font(&mut writer);
+        let font_ref_id = Self::add_helvetica_font(&mut writer)?;
 
         let mut gstate = zpdf::PdfDict::new();
         gstate.insert(
@@ -4466,7 +4635,9 @@ impl DocumentStore {
         );
         gstate.insert(zpdf::PdfName::new("ca"), zpdf::PdfObject::Real(0.35));
         gstate.insert(zpdf::PdfName::new("CA"), zpdf::PdfObject::Real(0.35));
-        let (gs_obj, gs_gen) = writer.add_object(&zpdf::PdfObject::Dict(gstate));
+        let (gs_obj, gs_gen) = writer
+            .try_add_object(&zpdf::PdfObject::Dict(gstate))
+            .map_err(|e| PdfError::EngineError(e.to_string().into()))?;
         let gstate_id = zpdf::ObjectId(gs_obj, gs_gen as u16);
 
         let (text_bytes, unmappable) = encode_pdf_text(text);
@@ -4563,12 +4734,12 @@ impl DocumentStore {
         footer_format: &str,
         output_path: &str,
     ) -> PdfResult<String> {
-        let input = read_input_capped(input_path)?;
-        let mut writer =
-            IncrementalWriter::new(input).map_err(|e| PdfError::OpenFailed(e.to_string()))?;
+        let input = read_document_bytes_shared(input_path)?;
+        let mut writer = IncrementalWriter::from_shared(input)
+            .map_err(|e| PdfError::OpenFailed(e.to_string()))?;
 
         let page_count = writer.page_count();
-        let font_ref_id = Self::add_helvetica_font(&mut writer);
+        let font_ref_id = Self::add_helvetica_font(&mut writer)?;
 
         for page_idx in 0..page_count {
             let page_num = page_idx + 1;
@@ -4775,7 +4946,7 @@ impl DocumentStore {
             .paths
             .get(&doc_id)
             .ok_or(PdfError::EngineError(EngineErrorKind::DocumentPathNotFound))?;
-        let doc_bytes = read_input_capped(path)?;
+        let doc_bytes = read_document_bytes_shared(path)?;
         // Expect cert_path to be the PKCS#8 private key DER, and
         // cert_path with ".x509" extension to be the DER-encoded X.509 cert.
         let key_bytes = std::fs::read(cert_path).map_err(|e| PdfError::IoError(e.to_string()))?;
@@ -4808,7 +4979,7 @@ impl DocumentStore {
             ..SignatureOptions::default()
         };
         let pass = self.password_for_doc(doc_id);
-        let writer = IncrementalWriter::new_with_password(doc_bytes, pass)
+        let writer = IncrementalWriter::from_shared_with_password(doc_bytes, pass)
             .map_err(|e| PdfError::IoError(e.to_string()))?;
         // sign() consumes the writer and returns the final signed bytes
         let signed_bytes = writer
@@ -4834,7 +5005,7 @@ impl DocumentStore {
             .paths
             .get(&doc_id)
             .ok_or(PdfError::EngineError(EngineErrorKind::DocumentPathNotFound))?;
-        let doc_bytes = read_input_capped(path)?;
+        let doc_bytes = read_document_bytes_shared(path)?;
 
         // Determine stamp colour by label (DeviceRGB, each in 0..1)
         let (r, g, b) = match label {
@@ -4854,7 +5025,7 @@ impl DocumentStore {
             color: (r, g, b),
         };
         let pass = self.password_for_doc(doc_id);
-        let mut writer = IncrementalWriter::new_with_password(doc_bytes, pass)
+        let mut writer = IncrementalWriter::from_shared_with_password(doc_bytes, pass)
             .map_err(|e| PdfError::IoError(e.to_string()))?;
         writer
             .stamp_page(page_num, &[stamp])
@@ -5303,7 +5474,7 @@ mod tests {
             y: 100.0,
             size: 12.0,
             advance: 60.0,
-            mcid: None,
+            ..Default::default()
         }];
         let hits = zpdf::search_spans(&spans, "world", false);
         assert_eq!(hits.len(), 1, "case-insensitive search should find 'world'");
@@ -5320,7 +5491,7 @@ mod tests {
             y: 100.0,
             size: 12.0,
             advance: 50.0,
-            mcid: None,
+            ..Default::default()
         }];
         let hits = zpdf::search_spans(&spans, "", false);
         assert!(hits.is_empty(), "empty query should return no hits");
@@ -5334,7 +5505,7 @@ mod tests {
             y: 100.0,
             size: 12.0,
             advance: 60.0,
-            mcid: None,
+            ..Default::default()
         }];
         let hits = zpdf::search_spans(&spans, "world", true);
         assert!(

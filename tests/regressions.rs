@@ -78,6 +78,7 @@ fn test_reset_for_document_clears_all_per_document_state() {
             y: 0.0,
             width: 1.0,
             height: 1.0,
+            quad: None,
         }]),
     );
     vp.search_highlights
@@ -2436,11 +2437,11 @@ fn test_search_spans_api_exists() {
         y: 100.0,
         size: 12.0,
         advance: 60.0,
-        mcid: None,
+        ..Default::default()
     }];
     let hits = zpdf::search_spans(&spans, "World", false);
     assert!(!hits.is_empty(), "search_spans should find 'World'");
-    let bounds = hits[0].bounds();
+    let bounds = hits[0].bounds().expect("hit should have bounds");
     assert!(bounds.x1 > bounds.x0, "bounds should have positive width");
     assert!(bounds.y1 > bounds.y0, "bounds should have positive height");
 }
@@ -2455,7 +2456,7 @@ fn test_detect_tables_plain_api_exists() {
         y: 100.0,
         size: 12.0,
         advance: 30.0,
-        mcid: None,
+        ..Default::default()
     }];
     let tables = zpdf::detect_tables(&spans);
     // A single span won't form a table, but the API should be callable.

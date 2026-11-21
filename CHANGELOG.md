@@ -5,6 +5,26 @@ All notable changes to the PDFbull project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.21.2] - 2026-11-21
+
+### Changed
+- **Upgraded `zpdf` & sibling crates (`0.18.0` -> `0.21.0`) and `gpui-kit` (`0.9.0` -> `0.10.0`, `gpui-fast` pinned to `0.1.16`)** (`Cargo.toml`, `Cargo.lock`, `src/ui_gpui/dialogs.rs`):
+  - Updated `zpdf`, `zpdf-writer`, `zpdf-content`, `zpdf-document`, `zpdf-image`, and `zpdf-svg-export` to `=0.21.0`.
+  - Updated `gpui-kit` to `0.10.0` with `gpui-fast` and its platform/macro crates locked to `0.1.16`.
+  - Updated the About dialog engine label to `zpdf 0.21.0`.
+- **Zero-Copy `IncrementalWriter::from_shared` & Bounded Writer APIs** (`src/pdf_engine.rs`):
+  - Switched save/edit/watermark/header-footer/sign/stamp/form-fill/merge/page-ops paths to `read_document_bytes_shared` + `IncrementalWriter::from_shared` / `from_shared_with_password`.
+  - Migrated overlay/font/stream writes to `try_add_object` and `try_add_flate_stream`.
+
+### Added
+- **Native Freehand Ink Annotations** (`src/models.rs`, `src/pdf_engine.rs`, `src/ui_gpui/ribbon.rs`, `src/ui_gpui/canvas.rs`, `src/ui_gpui/app_view.rs`, `src/ui_gpui/sidebar.rs`):
+  - Added `AnnotationStyle::Ink` and enabled `AnnotationTool::Ink` in the Annotate ribbon with live stroke drawing, undo/redo, `/InkList` loading, and saving via `zpdf::InkAnnotationBuilder` + `IncrementalWriter::add_ink_annotation_to_page`.
+
+### Fixed
+- **Glyph-Accurate Text Selection & Search Highlights** (`src/pdf_engine.rs`, `src/models.rs`, `src/ui_gpui/canvas.rs`, `tests/text_layer_and_selection.rs`, `tests/regressions.rs`, `tests/ui_test.rs`):
+  - Enabled `.with_text_geometry(true)` on `ContentInterpreter` in `extract_text_items` and `search`, using `TextGlyph::bounds()` and 4-corner `TextGlyph::quad` hit-testing (`quad_contains_point` / `item_intersects_rect`) for accurate rotated/sheared/kerned text selection, plus `stats.text_geometry_omitted` diagnostics and `zpdf_content::text::dehyphenate` in `extract_text`.
+  - Handled `SearchHit::bounds() -> Option<Rect>` cleanly.
+
 ## [0.21.1] - 2026-11-13
 
 ### Changed

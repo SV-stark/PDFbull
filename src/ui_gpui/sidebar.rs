@@ -620,6 +620,7 @@ impl SidebarState {
                             crate::models::AnnotationStyle::Circle { .. } => "Circle",
                             crate::models::AnnotationStyle::Line { .. } => "Line",
                             crate::models::AnnotationStyle::Arrow { .. } => "Arrow",
+                            crate::models::AnnotationStyle::Ink { .. } => "Ink",
                             crate::models::AnnotationStyle::StickyNote { comment, .. } => {
                                 if comment.is_empty() {
                                     "Note"

@@ -289,13 +289,15 @@ pub struct DocumentMeta {
     pub color_profile: Option<ColorProfileInfo>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
 pub struct TextItem {
     pub text: String,
     pub x: f32,
     pub y: f32,
     pub width: f32,
     pub height: f32,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub quad: Option<[(f32, f32); 4]>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -598,6 +600,11 @@ pub enum AnnotationStyle {
     Arrow {
         color: String,
         thickness: f32,
+    },
+    Ink {
+        color: String,
+        thickness: f32,
+        strokes: Vec<Vec<(f32, f32)>>,
     },
     StickyNote {
         comment: String,
@@ -1568,6 +1575,7 @@ mod tests {
             y: 20.0,
             width: 100.0,
             height: 15.0,
+            quad: None,
         };
         let json = serde_json::to_string(&item).unwrap();
         let deserialized: TextItem = serde_json::from_str(&json).unwrap();

@@ -2022,6 +2022,14 @@ impl PdfbullView {
                 .window_point_to_overlay(page_idx, pos)
                 .map(|p| (p, p));
             self.viewport.selected_text = None;
+            if self.ribbon.active_tool == super::ribbon::AnnotationTool::Ink {
+                self.viewport.ink_stroke = self
+                    .viewport
+                    .window_point_to_overlay(page_idx, pos)
+                    .map(|p| (page_idx, vec![p], self.ribbon.active_color_hex()));
+            } else {
+                self.viewport.ink_stroke = None;
+            }
         }
         cx.notify();
     }
@@ -2056,6 +2064,19 @@ impl PdfbullView {
                 })
                 .unwrap_or(end_ov);
             self.viewport.selection_page_range = Some((start_ov, end_ov));
+            if self.ribbon.active_tool == super::ribbon::AnnotationTool::Ink
+                && let Some((ink_page, pts, _)) = &mut self.viewport.ink_stroke
+                && *ink_page == sel_page
+            {
+                let should_push = pts.last().is_none_or(|&(lx, ly)| {
+                    let dx = end_ov.0 - lx;
+                    let dy = end_ov.1 - ly;
+                    dx * dx + dy * dy >= 2.25
+                });
+                if should_push {
+                    pts.push(end_ov);
+                }
+            }
         }
         cx.notify();
     }
@@ -2166,6 +2187,50 @@ impl PdfbullView {
             None
         };
 
+        if this.ribbon.active_tool == super::ribbon::AnnotationTool::Ink {
+            if let Some((ink_page, pts, color)) = this.viewport.ink_stroke.take()
+                && pts.len() >= 2
+            {
+                let mut min_x = f32::INFINITY;
+                let mut min_y = f32::INFINITY;
+                let mut max_x = f32::NEG_INFINITY;
+                let mut max_y = f32::NEG_INFINITY;
+                for &(px_pt, py_pt) in &pts {
+                    min_x = min_x.min(px_pt);
+                    min_y = min_y.min(py_pt);
+                    max_x = max_x.max(px_pt);
+                    max_y = max_y.max(py_pt);
+                }
+                let ann_id = crate::models::next_annotation_id();
+                this.viewport.annotations.push(crate::models::Annotation {
+                    id: ann_id,
+                    page: ink_page,
+                    style: crate::models::AnnotationStyle::Ink {
+                        color,
+                        thickness: 2.0,
+                        strokes: vec![pts],
+                    },
+                    x: min_x,
+                    y: min_y,
+                    width: (max_x - min_x).max(2.0),
+                    height: (max_y - min_y).max(2.0),
+                });
+                this.viewport.reindex_annotations();
+                if let Some(tab) = this.tabs.tabs.get_mut(this.tabs.active_tab_index)
+                    && let Some(last) = this.viewport.annotations.last().cloned()
+                {
+                    tab.undo_stack
+                        .push(crate::models::UndoableAction::AddAnnotation(last));
+                    tab.redo_stack.clear();
+                    tab.is_modified = true;
+                }
+                this.status_message = Some("Added ink annotation".into());
+            }
+            this.viewport.clear_selection();
+            cx.notify();
+            return;
+        }
+
         if this.ribbon.active_tool != super::ribbon::AnnotationTool::Pointer
             && let Some((min_x, min_y, w, h, line_x, line_y, line_w, line_h)) = ann_coords
         {
@@ -2216,8 +2281,6 @@ impl PdfbullView {
                     font_size: 12,
                 },
                 super::ribbon::AnnotationTool::Ink | super::ribbon::AnnotationTool::Pointer => {
-                    this.status_message = Some("Freehand ink is not available yet.".into());
-                    cx.notify();
                     return;
                 }
             };
@@ -2299,6 +2362,19 @@ impl PdfbullView {
             && let Some((start_ov, _)) = self.viewport.selection_page_range
         {
             self.viewport.selection_page_range = Some((start_ov, end_ov));
+            if self.ribbon.active_tool == super::ribbon::AnnotationTool::Ink
+                && let Some((ink_page, pts, _)) = &mut self.viewport.ink_stroke
+                && *ink_page == sel_page
+            {
+                let should_push = pts.last().is_none_or(|&(lx, ly)| {
+                    let dx = end_ov.0 - lx;
+                    let dy = end_ov.1 - ly;
+                    dx * dx + dy * dy >= 2.25
+                });
+                if should_push {
+                    pts.push(end_ov);
+                }
+            }
         }
     }
 

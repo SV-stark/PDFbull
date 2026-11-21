@@ -1175,7 +1175,7 @@ impl DialogsState {
                             )
                             .child(spec_row(
                                 "Core Engine",
-                                "zpdf 0.18.0 (tiny-skia CPU + wgpu GPU)",
+                                "zpdf 0.21.0 (tiny-skia CPU + wgpu GPU)",
                             ))
                             .child(spec_row("Memory Allocator", "mimalloc (High-throughput)"))
                             .child(spec_row(

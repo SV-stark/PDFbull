@@ -602,10 +602,8 @@ fn render_annotate_strip<V: 'static>(
         );
     }
 
-    // `AnnotationTool::Ink` is deliberately absent. Nothing in the engine draws
-    // freehand strokes, and selecting it made a drag produce a yellow
-    // highlight — offering a tool whose only effect is the wrong one.
     let draw_tools = [
+        (AnnotationTool::Ink, "Ink"),
         (AnnotationTool::StickyNote, "Note"),
         (AnnotationTool::Text, "Text"),
         (AnnotationTool::Redact, "Redact"),
@@ -617,6 +615,7 @@ fn render_annotate_strip<V: 'static>(
         let click_listener =
             cx.listener(move |v, _, w, cx| on_action(v, RibbonAction::SelectTool(tool), w, cx));
         let tooltip = match tool {
+            AnnotationTool::Ink => "Draw freehand ink strokes",
             AnnotationTool::StickyNote => "Add a sticky note",
             AnnotationTool::Text => "Add a text annotation",
             AnnotationTool::Redact => "Permanently black out content",

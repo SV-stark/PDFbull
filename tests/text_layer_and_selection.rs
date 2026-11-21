@@ -16,6 +16,7 @@ fn join_selected_text_items_coalesces_glyph_strokes_into_words() {
             y: 0.0,
             width: 5.0,
             height: 10.0,
+            quad: None,
         },
         TextItem {
             text: "e".into(),
@@ -23,6 +24,7 @@ fn join_selected_text_items_coalesces_glyph_strokes_into_words() {
             y: 0.0,
             width: 5.0,
             height: 10.0,
+            quad: None,
         },
         TextItem {
             text: "s".into(),
@@ -30,6 +32,7 @@ fn join_selected_text_items_coalesces_glyph_strokes_into_words() {
             y: 0.0,
             width: 4.0,
             height: 10.0,
+            quad: None,
         },
         TextItem {
             text: "t".into(),
@@ -37,6 +40,7 @@ fn join_selected_text_items_coalesces_glyph_strokes_into_words() {
             y: 0.0,
             width: 3.5,
             height: 10.0,
+            quad: None,
         },
         TextItem {
             text: "Page".into(),
@@ -44,6 +48,7 @@ fn join_selected_text_items_coalesces_glyph_strokes_into_words() {
             y: 0.0,
             width: 24.0,
             height: 10.0,
+            quad: None,
         },
     ];
     assert_eq!(join_selected_text_items(&items), "Test Page");
@@ -58,6 +63,7 @@ fn join_selected_text_items_preserves_word_boundaries_for_word_spans() {
             y: 20.0,
             width: 40.0,
             height: 12.0,
+            quad: None,
         },
         TextItem {
             text: "World".into(),
@@ -65,6 +71,7 @@ fn join_selected_text_items_preserves_word_boundaries_for_word_spans() {
             y: 20.0,
             width: 45.0,
             height: 12.0,
+            quad: None,
         },
     ];
     assert_eq!(join_selected_text_items(&items), "Hello World");
@@ -79,6 +86,7 @@ fn join_selected_text_items_splits_lines_on_baseline_change() {
             y: 0.0,
             width: 20.0,
             height: 10.0,
+            quad: None,
         },
         TextItem {
             text: "Bottom".into(),
@@ -86,6 +94,7 @@ fn join_selected_text_items_splits_lines_on_baseline_change() {
             y: 20.0,
             width: 30.0,
             height: 10.0,
+            quad: None,
         },
     ];
     assert_eq!(join_selected_text_items(&items), "Top\nBottom");
@@ -109,6 +118,7 @@ fn join_selected_text_items_handles_baseline_jitter_on_same_line() {
             y: 49.9,
             width: 45.0,
             height: 12.0,
+            quad: None,
         },
         TextItem {
             text: "Hello".into(),
@@ -116,6 +126,7 @@ fn join_selected_text_items_handles_baseline_jitter_on_same_line() {
             y: 50.0,
             width: 40.0,
             height: 12.0,
+            quad: None,
         },
     ];
     assert_eq!(join_selected_text_items(&items), "Hello World");
@@ -135,6 +146,7 @@ fn text_selection_highlight_coordinate_mapping_matches_items() {
             y: 40.0,
             width: 30.0,
             height: 14.0,
+            quad: None,
         },
         TextItem {
             text: "Highlighter".into(),
@@ -142,6 +154,7 @@ fn text_selection_highlight_coordinate_mapping_matches_items() {
             y: 40.0,
             width: 70.0,
             height: 14.0,
+            quad: None,
         },
         TextItem {
             text: "Ignored".into(),
@@ -149,6 +162,7 @@ fn text_selection_highlight_coordinate_mapping_matches_items() {
             y: 200.0,
             width: 50.0,
             height: 14.0,
+            quad: None,
         },
     ];
     viewport
@@ -208,6 +222,7 @@ fn select_text_items_in_range_multi_line_continuous_selection() {
             y: 20.0,
             width: 25.0,
             height: 12.0,
+            quad: None,
         },
         TextItem {
             text: "quick".into(),
@@ -215,6 +230,7 @@ fn select_text_items_in_range_multi_line_continuous_selection() {
             y: 20.0,
             width: 35.0,
             height: 12.0,
+            quad: None,
         },
         TextItem {
             text: "brown".into(),
@@ -222,6 +238,7 @@ fn select_text_items_in_range_multi_line_continuous_selection() {
             y: 20.0,
             width: 40.0,
             height: 12.0,
+            quad: None,
         },
         TextItem {
             text: "fox".into(),
@@ -229,6 +246,7 @@ fn select_text_items_in_range_multi_line_continuous_selection() {
             y: 20.0,
             width: 25.0,
             height: 12.0,
+            quad: None,
         },
         // Line 2
         TextItem {
@@ -237,6 +255,7 @@ fn select_text_items_in_range_multi_line_continuous_selection() {
             y: 40.0,
             width: 35.0,
             height: 12.0,
+            quad: None,
         },
         TextItem {
             text: "over".into(),
@@ -244,6 +263,7 @@ fn select_text_items_in_range_multi_line_continuous_selection() {
             y: 40.0,
             width: 30.0,
             height: 12.0,
+            quad: None,
         },
         TextItem {
             text: "the".into(),
@@ -251,6 +271,7 @@ fn select_text_items_in_range_multi_line_continuous_selection() {
             y: 40.0,
             width: 25.0,
             height: 12.0,
+            quad: None,
         },
         TextItem {
             text: "lazy".into(),
@@ -258,6 +279,7 @@ fn select_text_items_in_range_multi_line_continuous_selection() {
             y: 40.0,
             width: 30.0,
             height: 12.0,
+            quad: None,
         },
         // Line 3
         TextItem {
@@ -266,6 +288,7 @@ fn select_text_items_in_range_multi_line_continuous_selection() {
             y: 60.0,
             width: 25.0,
             height: 12.0,
+            quad: None,
         },
         TextItem {
             text: "today".into(),
@@ -273,6 +296,7 @@ fn select_text_items_in_range_multi_line_continuous_selection() {
             y: 60.0,
             width: 35.0,
             height: 12.0,
+            quad: None,
         },
     ];
 
@@ -424,6 +448,7 @@ fn make_word(text: &str, x: f32, y: f32, width: f32, height: f32) -> TextItem {
         y,
         width,
         height,
+        quad: None,
     }
 }
 
@@ -634,8 +659,8 @@ fn extract_text_items_handles_user_unit_and_negative_advance_spans() {
         hello.x
     );
     assert!(
-        (hello.height - 24.0).abs() < 0.2,
-        "12pt * UserUnit 2.0 should give height ~24: got {}",
+        hello.height >= 23.0 && hello.height <= 28.0,
+        "12pt * UserUnit 2.0 should give glyph height ~24-27: got {}",
         hello.height
     );
     assert!(

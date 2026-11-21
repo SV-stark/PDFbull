@@ -348,20 +348,78 @@ pub fn select_text_items_in_range(
         }
     }
 
-    // Fallback to 2D bounding box if no items matched linearly
+    // Fallback to 2D bounding box (or transformed 4-corner quad when present)
     if matched.is_empty() {
         let min_x = start_x.min(end_x);
         let max_x = start_x.max(end_x);
         for item in items {
-            let ix2 = item.x + item.width;
-            let iy2 = item.y + item.height;
-            if ix2 >= min_x && item.x <= max_x && iy2 >= drag_min_y && item.y <= drag_max_y {
+            if item_intersects_rect(item, min_x, drag_min_y, max_x, drag_max_y) {
                 matched.push(item.clone());
             }
         }
     }
 
     matched
+}
+
+/// Test whether a point `(px, py)` in unrotated page space lies inside a
+/// transformed 4-corner selection quad `[q0, q1, q2, q3]`, using the same
+/// parallelogram basis test as `zpdf::TextGlyph::contains`.
+fn quad_contains_point(quad: [(f32, f32); 4], px: f32, py: f32) -> bool {
+    if !px.is_finite() || !py.is_finite() {
+        return false;
+    }
+    let p = quad[0];
+    let ux = quad[1].0 - p.0;
+    let uy = quad[1].1 - p.1;
+    let vx = quad[3].0 - p.0;
+    let vy = quad[3].1 - p.1;
+    let det = ux * vy - uy * vx;
+    if !det.is_finite() || det == 0.0 {
+        return false;
+    }
+    let dx = px - p.0;
+    let dy = py - p.1;
+    let a = (dx * vy - dy * vx) / det;
+    let b = (ux * dy - uy * dx) / det;
+    (0.0..=1.0).contains(&a) && (0.0..=1.0).contains(&b)
+}
+
+/// Test whether a `TextItem` (using its exact `quad` when present, or its
+/// axis-aligned rect) intersects `[min_x, min_y, max_x, max_y]`.
+fn item_intersects_rect(
+    item: &crate::models::TextItem,
+    min_x: f32,
+    min_y: f32,
+    max_x: f32,
+    max_y: f32,
+) -> bool {
+    let ix2 = item.x + item.width;
+    let iy2 = item.y + item.height;
+    if ix2 < min_x || item.x > max_x || iy2 < min_y || item.y > max_y {
+        return false;
+    }
+    if let Some(quad) = item.quad {
+        // If any quad corner is inside the rect, or any rect corner is inside the quad,
+        // or the rect center is inside the quad, they intersect.
+        if quad
+            .iter()
+            .any(|&(qx, qy)| qx >= min_x && qx <= max_x && qy >= min_y && qy <= max_y)
+        {
+            return true;
+        }
+        let corners = [
+            (min_x, min_y),
+            (max_x, min_y),
+            (max_x, max_y),
+            (min_x, max_y),
+            ((min_x + max_x) * 0.5, (min_y + max_y) * 0.5),
+        ];
+        return corners
+            .iter()
+            .any(|&(cx, cy)| quad_contains_point(quad, cx, cy));
+    }
+    true
 }
 
 /// Map an overlay rect (top-left origin, unrotated document space) into the
@@ -654,6 +712,9 @@ pub struct DocumentViewport {
     pub selection_page_range: Option<((f32, f32), (f32, f32))>,
     /// Deferred selection request waiting for cold `text_cache` population.
     pub pending_selection: Option<PendingSelectionAction>,
+    /// Active in-progress freehand ink stroke: `(page_idx, unrotated_points, color_hex)`.
+    #[allow(clippy::type_complexity)]
+    pub ink_stroke: Option<(usize, Vec<(f32, f32)>, String)>,
     pub selected_text: Option<String>,
     pub text_cache: std::collections::HashMap<usize, std::sync::Arc<Vec<crate::models::TextItem>>>,
     pub rendered_pages: std::collections::HashMap<usize, std::sync::Arc<RenderImage>>,
@@ -720,6 +781,7 @@ impl DocumentViewport {
             selection_end: None,
             selection_page_range: None,
             pending_selection: None,
+            ink_stroke: None,
             selected_text: None,
             text_cache: std::collections::HashMap::new(),
             rendered_pages: std::collections::HashMap::new(),
@@ -749,6 +811,7 @@ impl DocumentViewport {
         self.selection_end = None;
         self.selection_page_range = None;
         self.pending_selection = None;
+        self.ink_stroke = None;
         self.selected_text = None;
     }
 
@@ -1250,6 +1313,11 @@ impl DocumentViewport {
         let page_origins = self.page_origins.clone();
         let zoom = self.zoom;
         let hl_color = self.highlight_color;
+        let active_ink_stroke: Option<(Vec<(f32, f32)>, String)> = self
+            .ink_stroke
+            .as_ref()
+            .filter(|(p, _, _)| *p == page_idx)
+            .map(|(_, pts, color)| (pts.clone(), color.clone()));
         // Overlays are stored unrotated; the bitmap is not. See
         // `overlay_rect_in_rotated_space`.
         let overlay_rotation = page_rotation;
@@ -1509,9 +1577,75 @@ impl DocumentViewport {
                         crate::models::AnnotationStyle::Text { color, .. } => {
                             window.paint_quad(fill(clipped_ann, hex_to_hsla(color, 0.18)));
                         }
+                        crate::models::AnnotationStyle::Ink {
+                            color,
+                            thickness,
+                            strokes,
+                        } => {
+                            let stroke_c = hex_to_hsla(color, 0.92);
+                            let t = (*thickness * zoom).max(1.0);
+                            for stroke in strokes {
+                                for pair in stroke.windows(2) {
+                                    let (rx1, ry1) = overlay_point_in_rotated_space(
+                                        pair[0].0,
+                                        pair[0].1,
+                                        unrotated_w,
+                                        unrotated_h,
+                                        overlay_rotation,
+                                    );
+                                    let (rx2, ry2) = overlay_point_in_rotated_space(
+                                        pair[1].0,
+                                        pair[1].1,
+                                        unrotated_w,
+                                        unrotated_h,
+                                        overlay_rotation,
+                                    );
+                                    let p1 = Point::new(
+                                        card_bounds.origin.x + px(rx1 * zoom),
+                                        card_bounds.origin.y + px(ry1 * zoom),
+                                    );
+                                    let p2 = Point::new(
+                                        card_bounds.origin.x + px(rx2 * zoom),
+                                        card_bounds.origin.y + px(ry2 * zoom),
+                                    );
+                                    paint_segment(window, p1, p2, t, stroke_c);
+                                }
+                            }
+                        }
                         // Line/Arrow were handled above with their endpoints.
                         crate::models::AnnotationStyle::Line { .. }
                         | crate::models::AnnotationStyle::Arrow { .. } => {}
+                    }
+                }
+
+                // Paint active in-progress freehand ink stroke
+                if let Some((pts, color)) = &active_ink_stroke {
+                    let stroke_c = hex_to_hsla(color, 0.92);
+                    let t = (2.0 * zoom).max(1.0);
+                    for pair in pts.windows(2) {
+                        let (rx1, ry1) = overlay_point_in_rotated_space(
+                            pair[0].0,
+                            pair[0].1,
+                            unrotated_w,
+                            unrotated_h,
+                            overlay_rotation,
+                        );
+                        let (rx2, ry2) = overlay_point_in_rotated_space(
+                            pair[1].0,
+                            pair[1].1,
+                            unrotated_w,
+                            unrotated_h,
+                            overlay_rotation,
+                        );
+                        let p1 = Point::new(
+                            card_bounds.origin.x + px(rx1 * zoom),
+                            card_bounds.origin.y + px(ry1 * zoom),
+                        );
+                        let p2 = Point::new(
+                            card_bounds.origin.x + px(rx2 * zoom),
+                            card_bounds.origin.y + px(ry2 * zoom),
+                        );
+                        paint_segment(window, p1, p2, t, stroke_c);
                     }
                 }
 
