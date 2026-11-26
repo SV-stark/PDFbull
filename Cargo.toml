@@ -9,7 +9,7 @@ rust-version = "1.90" # edition 2024 + let-chains
 license = "MIT"
 repository = "https://github.com/SV-stark/PDFbull"
 exclude = [
-    "models/*",
+    "models/*.onnx",
     "installer_assets/*",
     "docs/*",
     "scorecard.png",
