@@ -24,9 +24,9 @@ pub struct OcrPageResult {
     pub lines: Vec<OcrLine>,
 }
 
-/// Embedded ONNX models parsed via `rten-onnx` in pure Rust.
-pub static EMBEDDED_DET_MODEL: &[u8] = include_bytes!("../models/PP-OCRv6_small_det.onnx");
-pub static EMBEDDED_REC_MODEL: &[u8] = include_bytes!("../models/PP-OCRv6_small_rec.onnx");
+/// Embedded ONNX models parsed via `rten` in pure Rust.
+pub static EMBEDDED_DET_MODEL: &[u8] = include_bytes!(env!("PDFBULL_DET_MODEL"));
+pub static EMBEDDED_REC_MODEL: &[u8] = include_bytes!(env!("PDFBULL_REC_MODEL"));
 pub static EMBEDDED_DICT: &str = include_str!("../models/ppocrv6_dict.txt");
 
 /// Target script/language family for OCR recognition.
