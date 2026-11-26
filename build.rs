@@ -20,6 +20,10 @@ fn main() {
 
         // Ensure you generate a PDFbull.ico file before uncommenting the below line:
         res.set_icon("PDFbull.ico");
+        // Note: `gpui-kit 0.11.0` links `gpui-pre`'s `gpui.lib`, which already
+        // embeds `gpui.manifest.xml` (`PerMonitorV2`, `SegmentHeap`, Common
+        // Controls v6) as `RT_MANIFEST`. Adding a second manifest here causes
+        // `CVTRES : fatal error CVT1100: duplicate resource. type:MANIFEST`.
 
         if let Err(e) = res.compile() {
             println!("cargo:warning=Failed to compile Windows resources: {e}");

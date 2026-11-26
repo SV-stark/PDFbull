@@ -4,6 +4,7 @@ use gpui_kit::component::ActiveTheme;
 use gpui_kit::component::Selectable as _;
 use gpui_kit::component::Sizable;
 use gpui_kit::component::button::{Button, ButtonVariants};
+use gpui_kit::component::color_picker::{ColorPicker, ColorPickerState};
 use gpui_kit::*;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -107,10 +108,12 @@ pub enum RibbonAction {
     About,
 }
 
+#[derive(Clone)]
 pub struct RibbonState {
     pub active_tab: RibbonTab,
     pub active_tool: AnnotationTool,
     pub active_color: [f32; 4],
+    pub color_picker: Option<Entity<ColorPickerState>>,
     pub layout_mode: PageLayoutMode,
     pub standalone_cover: bool,
     pub midnight_mode: bool,
@@ -128,10 +131,19 @@ impl RibbonState {
             active_tab: RibbonTab::Home,
             active_tool: AnnotationTool::Pointer,
             active_color: [1.0, 0.9, 0.2, 0.4],
+            color_picker: None,
             layout_mode: PageLayoutMode::Continuous,
             standalone_cover: false,
             midnight_mode: false,
         }
+    }
+
+    pub fn new_in(window: &mut Window, cx: &mut App) -> Self {
+        let mut s = Self::new();
+        let cp =
+            cx.new(|cx| ColorPickerState::new(window, cx).default_value(s.active_color_hsla()));
+        s.color_picker = Some(cp);
+        s
     }
 
     /// The active annotation colour as `#RRGGBB`.
@@ -242,7 +254,9 @@ impl RibbonState {
                 cx,
                 on_action,
             ),
-            RibbonTab::Annotate => render_annotate_strip(self.active_tool, cx, on_action),
+            RibbonTab::Annotate => {
+                render_annotate_strip(self.active_tool, self.color_picker.as_ref(), cx, on_action)
+            }
             RibbonTab::Tools => render_tools_strip(cx, on_action),
             RibbonTab::Convert => render_convert_strip(cx, on_action),
         };
@@ -533,6 +547,7 @@ fn render_view_strip<V: 'static>(
 #[inline(never)]
 fn render_annotate_strip<V: 'static>(
     cur_tool: AnnotationTool,
+    color_picker: Option<&Entity<ColorPickerState>>,
     cx: &mut Context<V>,
     on_action: impl Fn(&mut V, RibbonAction, &mut Window, &mut Context<V>) + 'static + Copy,
 ) -> AnyElement {
@@ -651,7 +666,7 @@ fn render_annotate_strip<V: 'static>(
             .into_any_element(),
     ];
 
-    div()
+    let mut strip = div()
         .flex()
         .flex_row()
         .items_center()
@@ -662,8 +677,17 @@ fn render_annotate_strip<V: 'static>(
         .child(ribbon_divider(border))
         .child(ribbon_group("Draw & Notes", draw_btns, muted_fg))
         .child(ribbon_divider(border))
-        .child(ribbon_group("History", edit_btns, muted_fg))
-        .into_any_element()
+        .child(ribbon_group("History", edit_btns, muted_fg));
+
+    if let Some(cp) = color_picker {
+        strip = strip.child(ribbon_divider(border)).child(ribbon_group(
+            "Color",
+            vec![ColorPicker::new(cp).small().into_any_element()],
+            muted_fg,
+        ));
+    }
+
+    strip.into_any_element()
 }
 
 #[inline(never)]

@@ -1,6 +1,6 @@
 use gpui_kit::component::ActiveTheme;
 use gpui_kit::component::button::{Button, ButtonVariants};
-use gpui_kit::component::scroll::ScrollableElement;
+use gpui_kit::component::v_virtual_list;
 use gpui_kit::prelude::FluentBuilder;
 use gpui_kit::*;
 
@@ -15,6 +15,7 @@ pub enum LogAction {
 /// Maximum number of log lines kept in the developer console.
 const MAX_LOG_ENTRIES: usize = 1000;
 
+#[derive(Clone)]
 pub struct LogConsoleState {
     pub is_open: bool,
     pub height: f32,
@@ -64,6 +65,22 @@ impl LogConsoleState {
         }
     }
 
+    /// Pull any buffered tracing entries from `crate::logging::recent_logs()`.
+    pub fn sync_from_logging(&mut self) {
+        let logs = crate::logging::recent_logs();
+        self.entries.clear();
+        for entry in logs {
+            let lvl = match entry.level.as_str() {
+                "ERROR" => "error",
+                "WARN" => "warn",
+                "DEBUG" | "TRACE" => "debug",
+                _ => "info",
+            };
+            let formatted = format!("[{}] [{}] {}", entry.time, entry.level, entry.message);
+            self.log(formatted, lvl);
+        }
+    }
+
     /// Plain-text dump of the buffer, for the clipboard.
     pub fn as_text(&self) -> String {
         self.entries
@@ -73,7 +90,7 @@ impl LogConsoleState {
             .join("\n")
     }
 
-    pub fn render<V: 'static>(
+    pub fn render<V: Render + 'static>(
         &self,
         cx: &mut Context<V>,
         on_action: impl Fn(&mut V, LogAction, &mut Window, &mut Context<V>) + 'static + Copy,
@@ -89,30 +106,43 @@ impl LogConsoleState {
         let muted_fg = cx.theme().muted_foreground;
         let cur_filter = self.filter_level.unwrap_or("all");
 
-        let filtered_entries: Vec<AnyElement> = self
-            .entries
-            .iter()
-            .filter(|(_, _, lvl)| {
-                if cur_filter == "all" {
-                    true
-                } else {
-                    lvl == &cur_filter
-                }
-            })
-            .map(|(seq, msg, lvl)| {
-                let (prefix, color) = match *lvl {
-                    "error" => ("[ERROR]", gpui_kit::red()),
-                    "warn" => ("[WARN]", gpui_kit::yellow()),
-                    _ => ("[INFO]", muted_fg),
-                };
-                div()
-                    .id(SharedString::from(format!("log-entry-{}", seq)))
-                    .text_xs()
-                    .text_color(color)
-                    .child(format!("{} {}", prefix, msg))
-                    .into_any_element()
-            })
-            .collect();
+        let filtered_entries: std::rc::Rc<Vec<(u64, String, &'static str)>> = std::rc::Rc::new(
+            self.entries
+                .iter()
+                .filter(|(_, _, lvl)| cur_filter == "all" || lvl == &cur_filter)
+                .cloned()
+                .collect(),
+        );
+        let item_sizes = std::rc::Rc::new(vec![
+            gpui_kit::size(px(1600.0), px(18.0));
+            filtered_entries.len()
+        ]);
+        let entries_for_list = filtered_entries.clone();
+        let vlist = v_virtual_list(
+            cx.entity().clone(),
+            "log-vlist",
+            item_sizes,
+            move |_view, range, _window, _cx| {
+                range
+                    .map(|idx| {
+                        let (seq, ref msg, lvl) = entries_for_list[idx];
+                        let (prefix, color) = match lvl {
+                            "error" => ("[ERROR]", gpui_kit::red()),
+                            "warn" => ("[WARN]", gpui_kit::yellow()),
+                            _ => ("[INFO]", muted_fg),
+                        };
+                        div()
+                            .id(SharedString::from(format!("log-entry-{}", seq)))
+                            .h(px(18.0))
+                            .text_xs()
+                            .text_color(color)
+                            .whitespace_nowrap()
+                            .child(format!("{} {}", prefix, msg))
+                            .into_any_element()
+                    })
+                    .collect()
+            },
+        );
 
         Some(
             div()
@@ -211,11 +241,7 @@ impl LogConsoleState {
                         .min_h_0()
                         .size_full()
                         .p_3()
-                        .overflow_y_scrollbar()
-                        .flex()
-                        .flex_col()
-                        .gap_1()
-                        .children(filtered_entries),
+                        .child(vlist),
                 )
                 .into_any_element(),
         )

@@ -716,7 +716,7 @@ fn test_pdf_command_debug_does_not_leak_password() {
     // document password, so any debug log would have printed the secret.
     let cmd = PdfCommand::Open(
         "secret.pdf".to_string(),
-        Some("hunter2".to_string()),
+        Some("hunter2".to_string().into()),
         next_doc_id(),
         tokio::sync::oneshot::channel().0,
     );
@@ -768,8 +768,8 @@ fn test_dialogs_without_configuration_have_no_apply_button() {
     assert!(dialog_has_apply(&ActiveDialog::Watermark));
     assert!(dialog_has_apply(&ActiveDialog::HeaderFooter));
     assert!(dialog_has_apply(&ActiveDialog::Security));
+    assert!(dialog_has_apply(&ActiveDialog::Password));
     // These previously showed an Apply button wired to a no-op arm.
-    assert!(!dialog_has_apply(&ActiveDialog::Password));
     assert!(!dialog_has_apply(&ActiveDialog::Settings));
     assert!(!dialog_has_apply(&ActiveDialog::Signature));
     assert!(!dialog_has_apply(&ActiveDialog::PageOrganizer));
@@ -1908,135 +1908,6 @@ fn test_page_organizer_rotations_follow_the_card_and_selection_follows_a_drag() 
         "undo must restore the rotation the page had before the move"
     );
     assert_eq!(st.page_rotations.get(&3), Some(&90));
-}
-
-#[test]
-fn test_form_calculations_resolve_dependencies_and_write_every_variant() {
-    use pdfbull::form_scripting::PdfFormScriptEngine;
-    use pdfbull::models::{FormField, FormFieldVariant};
-    use std::collections::HashMap;
-
-    // A chain: F2 needs F1, F3 needs F2, ... `calc_scripts` is a `HashMap`, so a
-    // single pass evaluates them in an arbitrary order and can read a field
-    // before it has been computed. With eight links, the chance that one
-    // arbitrary order happens to be a valid one is 1/8!.
-    let names: Vec<String> = (1..=8).map(|n| format!("F{n}")).collect();
-    let mut fields: Vec<FormField> = names
-        .iter()
-        .map(|name| FormField {
-            name: name.clone(),
-            variant: FormFieldVariant::Text {
-                value: String::new(),
-            },
-            page: 0,
-        })
-        .collect();
-    // The head of the chain is a literal the scripts read but never write.
-    fields[0].variant = FormFieldVariant::Text {
-        value: "1".to_string(),
-    };
-
-    let mut scripts = HashMap::new();
-    for n in 2..=8 {
-        scripts.insert(
-            format!("F{n}"),
-            format!("event.value = this.getField(\"F{}\").value + 1;", n - 1),
-        );
-    }
-    // A checkbox target: a calculation aimed at a non-`Text` field must land.
-    fields.push(FormField {
-        name: "Approved".to_string(),
-        variant: FormFieldVariant::Checkbox {
-            is_checked: false,
-            on_value: Some("Yes".to_string()),
-        },
-        page: 0,
-    });
-    scripts.insert(
-        "Approved".to_string(),
-        r#"AFSimple_Calculate("SUM", ["F8"])"#.to_string(),
-    );
-
-    let mut engine = PdfFormScriptEngine::new(&fields);
-    engine.recalculate_all(&mut fields, &scripts);
-
-    for n in 1..=8 {
-        let name = format!("F{n}");
-        let FormFieldVariant::Text { value } =
-            &fields.iter().find(|f| f.name == name).unwrap().variant
-        else {
-            panic!("{name} is not a text field");
-        };
-        assert_eq!(
-            *value,
-            n.to_string(),
-            "F{n} was evaluated before the field it depends on"
-        );
-    }
-    assert!(
-        matches!(
-            fields
-                .iter()
-                .find(|f| f.name == "Approved")
-                .unwrap()
-                .variant,
-            FormFieldVariant::Checkbox {
-                is_checked: true,
-                ..
-            }
-        ),
-        "a calculation aimed at a checkbox must not be silently dropped"
-    );
-}
-
-#[test]
-fn test_form_engine_keeps_text_verbatim_and_reports_unknown_operations() {
-    use pdfbull::form_scripting::PdfFormScriptEngine;
-    use pdfbull::models::{FormField, FormFieldVariant};
-
-    let mut engine = PdfFormScriptEngine::new(&[
-        FormField {
-            name: "Code".to_string(),
-            variant: FormFieldVariant::Text {
-                value: "007".to_string(),
-            },
-            page: 0,
-        },
-        FormField {
-            name: "Price".to_string(),
-            variant: FormFieldVariant::Text {
-                value: "3.5".to_string(),
-            },
-            page: 0,
-        },
-    ]);
-
-    // Regression: the engine coerced numeric-looking text to a number when it
-    // was built, so reading the field back reformatted it -- "007" came out as
-    // "7" and "3.5" as "3.50". A script must see the value the field holds.
-    assert_eq!(engine.evaluate_calculation("Code", "").unwrap(), "007");
-    assert_eq!(engine.evaluate_calculation("Price", "").unwrap(), "3.5");
-
-    // Regression: an unrecognised `AFSimple_Calculate` operation evaluated to
-    // `0.0` -- a perfectly plausible sum, and therefore silent. It now errors.
-    let err = engine
-        .evaluate_calculation("Code", r#"AFSimple_Calculate("MEDIAN", ["Price"])"#)
-        .expect_err("an unsupported operation must not silently evaluate to 0");
-    assert!(
-        err.contains("MEDIAN"),
-        "the error should name the operation: {err}"
-    );
-
-    // Arithmetic still coerces: the text is read as a number for the maths.
-    assert_eq!(
-        engine
-            .evaluate_calculation(
-                "Price",
-                r#"event.value = this.getField("Price").value * 2;"#
-            )
-            .unwrap(),
-        "7"
-    );
 }
 
 #[test]

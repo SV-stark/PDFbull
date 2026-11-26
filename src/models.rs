@@ -1,6 +1,5 @@
 use crate::pdf_engine::RenderFilter;
 use serde::{Deserialize, Serialize};
-use std::path::PathBuf;
 use std::sync::Arc;
 use thiserror::Error;
 
@@ -504,6 +503,25 @@ impl Default for AppSettings {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct EncryptionPermissions {
+    pub print: bool,
+    pub modify: bool,
+    pub copy: bool,
+    pub annotate: bool,
+}
+
+impl Default for EncryptionPermissions {
+    fn default() -> Self {
+        Self {
+            print: true,
+            modify: true,
+            copy: true,
+            annotate: true,
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RecentFile {
     pub path: String,
@@ -688,95 +706,12 @@ pub struct AnnotationDrag {
     pub kind: PendingAnnotationKind,
 }
 
-pub const PAGE_SPACING: f32 = 20.0;
-pub const PAGE_PADDING: f32 = 30.0;
-pub const THUMBNAIL_HEIGHT: f32 = 60.0;
-pub const VIEWPORT_BUFFER: usize = 3;
-
-pub struct TabViewState {
-    pub rendered_pages: std::collections::HashMap<usize, (f32, Arc<[u8]>)>,
-    pub thumbnails: std::collections::HashMap<usize, Arc<[u8]>>,
-    pub text_layers: std::collections::HashMap<usize, Vec<TextItem>>,
-    pub detected_tables: std::collections::HashMap<usize, Vec<DetectedTable>>,
-    pub viewport_y: f32,
-    pub viewport_width: f32,
-    pub viewport_height: f32,
-    pub sidebar_viewport_y: f32,
-    pub last_cleanup_time: std::time::Instant,
-    pub visible_range: (usize, usize),
-    pub is_loading: bool,
-}
-
-impl Default for TabViewState {
-    fn default() -> Self {
-        Self {
-            rendered_pages: std::collections::HashMap::new(),
-            thumbnails: std::collections::HashMap::new(),
-            text_layers: std::collections::HashMap::new(),
-            detected_tables: std::collections::HashMap::new(),
-            viewport_y: 0.0,
-            viewport_width: 1000.0,
-            viewport_height: 800.0,
-            sidebar_viewport_y: 0.0,
-            last_cleanup_time: std::time::Instant::now()
-                .checked_sub(std::time::Duration::from_secs(10))
-                .unwrap_or_else(std::time::Instant::now),
-            visible_range: (0, 1),
-            is_loading: false,
-        }
-    }
-}
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
 pub enum PageLayoutMode {
     #[default]
     SingleContinuous,
     SinglePage,
     TwoPageSpread,
-}
-
-pub struct DocumentTab {
-    pub id: DocumentId,
-    pub path: PathBuf,
-    pub name: String,
-    pub total_pages: usize,
-    pub current_page: usize,
-    pub zoom: f32,
-    pub rotation: i32,
-    pub render_filter: RenderFilter,
-    pub auto_crop: bool,
-    pub layout_mode: PageLayoutMode,
-    pub two_page_cover: bool,
-    pub page_heights: Vec<f32>,
-    pub page_width: f32,
-    pub search_results: Vec<SearchResult>,
-    pub current_search_index: usize,
-    pub undo_stack: Vec<UndoableAction>,
-    pub redo_stack: Vec<UndoableAction>,
-    pub outline: Vec<crate::pdf_engine::Bookmark>,
-    pub bookmarks: Vec<PageBookmark>,
-    pub annotations: Vec<Annotation>,
-    pub links: Vec<Hyperlink>,
-    pub metadata: DocumentMetadata,
-    pub view_state: TabViewState,
-    pub pending_session: Option<TabSession>,
-    pub page_mapping: Vec<usize>,
-    pub page_rotations: std::collections::HashMap<usize, i32>,
-    #[allow(clippy::type_complexity)]
-    pub selection_drag: Option<(usize, (f32, f32), (f32, f32))>,
-    pub selected_text: Option<String>,
-    pub selected_boxes: Vec<(usize, f32, f32, f32, f32)>,
-    pub annotations_dirty: bool,
-    pub page_labels: Vec<String>,
-    pub is_encrypted: bool,
-    pub signatures: Vec<SignatureInfo>,
-    pub attachments: Vec<AttachmentInfo>,
-    pub layers: Vec<LayerInfo>,
-    pub oc_config: Option<zpdf::OcConfig>,
-    /// Geospatial annotation data from /Measure dictionaries (`GeoPDF`)
-    pub geo_annotations: Vec<GeoAnnotation>,
-    /// CMYK/ICC color profile and output intent summary
-    pub color_profile: Option<ColorProfileInfo>,
 }
 
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -805,186 +740,6 @@ pub fn paths_equal(a: &str, b: &str) -> bool {
         if cfg!(windows) { s.to_lowercase() } else { s }
     };
     normalise(a) == normalise(b)
-}
-
-impl DocumentTab {
-    pub fn new(path: PathBuf) -> Self {
-        Self {
-            id: next_doc_id(),
-            name: path
-                .file_name()
-                .map(|n| n.to_string_lossy().to_string())
-                .unwrap_or_else(|| "Unknown".to_string()),
-            path,
-            total_pages: 0,
-            current_page: 0,
-            zoom: 1.0,
-            rotation: 0,
-            render_filter: RenderFilter::None,
-            auto_crop: false,
-            layout_mode: PageLayoutMode::SingleContinuous,
-            two_page_cover: true,
-            page_heights: Vec::new(),
-            page_width: 0.0,
-            search_results: Vec::new(),
-            current_search_index: 0,
-            undo_stack: Vec::new(),
-            redo_stack: Vec::new(),
-            outline: Vec::new(),
-            bookmarks: Vec::new(),
-            annotations: Vec::new(),
-            links: Vec::new(),
-            metadata: DocumentMetadata::default(),
-            view_state: TabViewState::default(),
-            pending_session: None,
-            page_mapping: Vec::new(),
-            page_rotations: std::collections::HashMap::new(),
-            selection_drag: None,
-            selected_text: None,
-            selected_boxes: Vec::new(),
-            annotations_dirty: false,
-            page_labels: Vec::new(),
-            is_encrypted: false,
-            signatures: Vec::new(),
-            attachments: Vec::new(),
-            layers: Vec::new(),
-            oc_config: None,
-            geo_annotations: Vec::new(),
-            color_profile: None,
-        }
-    }
-
-    pub fn update_visible_range(&mut self) {
-        if self.page_heights.is_empty() {
-            self.view_state.visible_range = (0, 0);
-            self.current_page = 0;
-            return;
-        }
-
-        match self.layout_mode {
-            PageLayoutMode::SinglePage => {
-                let p = self.current_page.min(self.total_pages.saturating_sub(1));
-                self.view_state.visible_range = (p, p + 1);
-                return;
-            }
-            PageLayoutMode::TwoPageSpread => {
-                let cur = self.current_page.min(self.total_pages.saturating_sub(1));
-                let (start, end) = if self.two_page_cover {
-                    if cur == 0 {
-                        (0, 1)
-                    } else {
-                        let offset = cur - 1;
-                        let pair_start = 1 + (offset / 2) * 2;
-                        let pair_end = (pair_start + 2).min(self.total_pages);
-                        (pair_start, pair_end)
-                    }
-                } else {
-                    let pair_start = (cur / 2) * 2;
-                    let pair_end = (pair_start + 2).min(self.total_pages);
-                    (pair_start, pair_end)
-                };
-                self.view_state.visible_range = (start, end);
-                return;
-            }
-            PageLayoutMode::SingleContinuous => {}
-        }
-
-        let scaled_spacing = PAGE_SPACING * self.zoom;
-        let scaled_padding = PAGE_PADDING * self.zoom;
-        let mut y = scaled_padding;
-
-        let v_height = if self.view_state.viewport_height > 0.0 {
-            self.view_state.viewport_height
-        } else {
-            2000.0
-        };
-
-        let margin = v_height * 0.5;
-        let viewport_top = (self.view_state.viewport_y - margin).max(0.0);
-        let viewport_bottom = self.view_state.viewport_y + v_height + margin;
-
-        let focus_y = self.view_state.viewport_y + (v_height * 0.3);
-        let mut primary_page = 0;
-
-        let mut start = 0;
-        let mut end = 0;
-        let mut found_start = false;
-
-        for (idx, height) in self.page_heights.iter().enumerate() {
-            let scaled_height = height * self.zoom;
-            let page_bottom = y + scaled_height;
-
-            if focus_y >= y && focus_y <= page_bottom {
-                primary_page = idx;
-            }
-
-            if !found_start && page_bottom >= viewport_top {
-                start = idx;
-                found_start = true;
-            }
-
-            if page_bottom >= viewport_top && y <= viewport_bottom {
-                end = idx;
-            } else if found_start && y > viewport_bottom {
-                break;
-            }
-
-            y = page_bottom + scaled_spacing;
-        }
-
-        if found_start {
-            self.view_state.visible_range = (start, end + 1);
-            if self.total_pages > 0 {
-                self.current_page = primary_page.min(self.total_pages - 1);
-            }
-        } else {
-            self.view_state.visible_range = (0, 0);
-        }
-    }
-
-    pub fn get_visible_pages(&self) -> std::ops::Range<usize> {
-        self.view_state.visible_range.0..self.view_state.visible_range.1
-    }
-
-    pub fn get_visible_thumbnails(&self) -> std::ops::Range<usize> {
-        let start_idx = (self.view_state.sidebar_viewport_y / THUMBNAIL_HEIGHT).max(0.0) as usize;
-
-        let v_height = if self.view_state.viewport_height > 0.0 {
-            self.view_state.viewport_height
-        } else {
-            1000.0
-        };
-        let visible_count = (v_height / THUMBNAIL_HEIGHT).ceil() as usize + 5;
-        let end_idx = (start_idx + visible_count).min(self.total_pages);
-
-        start_idx..end_idx
-    }
-
-    pub fn cleanup_distant_pages(&mut self) {
-        let (start, end) = self.view_state.visible_range;
-        let buffer = VIEWPORT_BUFFER;
-        let keep_start = start.saturating_sub(buffer);
-        let keep_end = (end + buffer).min(self.total_pages);
-
-        self.view_state
-            .rendered_pages
-            .retain(|&p, _| p >= keep_start && p < keep_end);
-
-        let thumb_start_idx =
-            (self.view_state.sidebar_viewport_y / THUMBNAIL_HEIGHT).max(0.0) as usize;
-        let thumb_keep_start = thumb_start_idx.saturating_sub(15);
-        let thumb_keep_end = thumb_start_idx.saturating_add(45).min(self.total_pages);
-
-        self.view_state
-            .thumbnails
-            .retain(|&p, _| p >= thumb_keep_start && p < thumb_keep_end);
-
-        self.view_state.last_cleanup_time = std::time::Instant::now();
-    }
-
-    pub fn needs_periodic_cleanup(&self) -> bool {
-        self.view_state.last_cleanup_time.elapsed().as_secs() >= 5
-    }
 }
 
 pub fn rotate_coords(
@@ -1125,7 +880,6 @@ pub fn filter_palette_items(query: &str, items: &[PaletteItem]) -> Vec<PaletteIt
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::path::PathBuf;
 
     #[test]
     fn test_document_id_new_increments() {
@@ -1210,222 +964,6 @@ mod tests {
         let session = SessionData::default();
         assert!(session.open_tabs.is_empty());
         assert_eq!(session.active_tab, 0);
-    }
-
-    #[test]
-    fn test_document_tab_new() {
-        let path = PathBuf::from("/test/document.pdf");
-        let tab = DocumentTab::new(path.clone());
-        assert_eq!(tab.path, path);
-        assert_eq!(tab.name, "document.pdf");
-        assert_eq!(tab.total_pages, 0);
-        assert_eq!(tab.current_page, 0);
-        assert_eq!(tab.zoom, 1.0);
-        assert_eq!(tab.rotation, 0);
-        assert_eq!(tab.render_filter, RenderFilter::None);
-        assert!(!tab.auto_crop);
-        assert!(tab.page_heights.is_empty());
-        assert!(tab.search_results.is_empty());
-        assert_eq!(tab.current_search_index, 0);
-        assert!(tab.undo_stack.is_empty());
-        assert!(tab.redo_stack.is_empty());
-        assert!(tab.bookmarks.is_empty());
-        assert!(tab.annotations.is_empty());
-    }
-
-    #[test]
-    fn test_document_tab_new_unknown_path() {
-        let tab = DocumentTab::new(PathBuf::new());
-        assert_eq!(tab.name, "Unknown");
-    }
-
-    #[test]
-    fn test_tab_view_state_default() {
-        let state = TabViewState::default();
-        assert_eq!(state.viewport_y, 0.0);
-        assert_eq!(state.viewport_height, 800.0);
-        assert_eq!(state.sidebar_viewport_y, 0.0);
-        assert_eq!(state.visible_range, (0, 1));
-        assert!(!state.is_loading);
-    }
-
-    #[test]
-    fn test_update_visible_range_empty_pages() {
-        let mut tab = DocumentTab::new(PathBuf::from("/test/doc.pdf"));
-        tab.page_heights = vec![];
-        tab.update_visible_range();
-        assert_eq!(tab.view_state.visible_range, (0, 0));
-    }
-
-    #[test]
-    fn test_update_visible_range_single_page() {
-        let mut tab = DocumentTab::new(PathBuf::from("/test/doc.pdf"));
-        tab.page_heights = vec![1000.0];
-        tab.view_state.viewport_height = 800.0;
-        tab.view_state.viewport_y = 0.0;
-        tab.zoom = 1.0;
-        tab.update_visible_range();
-        assert_eq!(tab.view_state.visible_range, (0, 1));
-    }
-
-    #[test]
-    fn test_update_visible_range_with_zoom() {
-        let mut tab = DocumentTab::new(PathBuf::from("/test/doc.pdf"));
-        tab.page_heights = vec![1000.0, 1000.0, 1000.0];
-        tab.view_state.viewport_height = 800.0;
-        tab.view_state.viewport_y = 0.0;
-        tab.zoom = 2.0;
-        tab.update_visible_range();
-        assert!(tab.view_state.visible_range.1 >= 1);
-    }
-
-    #[test]
-    fn test_update_visible_range_single_page_mode() {
-        let mut tab = DocumentTab::new(PathBuf::from("/test/doc.pdf"));
-        tab.page_heights = vec![1000.0; 10];
-        tab.total_pages = 10;
-        tab.layout_mode = PageLayoutMode::SinglePage;
-        tab.current_page = 4;
-        tab.update_visible_range();
-        assert_eq!(tab.view_state.visible_range, (4, 5));
-    }
-
-    #[test]
-    fn test_update_visible_range_two_page_spread_with_cover() {
-        let mut tab = DocumentTab::new(PathBuf::from("/test/doc.pdf"));
-        tab.page_heights = vec![1000.0; 10];
-        tab.total_pages = 10;
-        tab.layout_mode = PageLayoutMode::TwoPageSpread;
-        tab.two_page_cover = true;
-
-        // Page 0 (Cover alone)
-        tab.current_page = 0;
-        tab.update_visible_range();
-        assert_eq!(tab.view_state.visible_range, (0, 1));
-
-        // Page 1 or 2 (Pair 1..3)
-        tab.current_page = 1;
-        tab.update_visible_range();
-        assert_eq!(tab.view_state.visible_range, (1, 3));
-
-        tab.current_page = 2;
-        tab.update_visible_range();
-        assert_eq!(tab.view_state.visible_range, (1, 3));
-
-        // Page 3 or 4 (Pair 3..5)
-        tab.current_page = 3;
-        tab.update_visible_range();
-        assert_eq!(tab.view_state.visible_range, (3, 5));
-    }
-
-    #[test]
-    fn test_update_visible_range_two_page_spread_without_cover() {
-        let mut tab = DocumentTab::new(PathBuf::from("/test/doc.pdf"));
-        tab.page_heights = vec![1000.0; 10];
-        tab.total_pages = 10;
-        tab.layout_mode = PageLayoutMode::TwoPageSpread;
-        tab.two_page_cover = false;
-
-        // Page 0 or 1 (Pair 0..2)
-        tab.current_page = 0;
-        tab.update_visible_range();
-        assert_eq!(tab.view_state.visible_range, (0, 2));
-
-        tab.current_page = 1;
-        tab.update_visible_range();
-        assert_eq!(tab.view_state.visible_range, (0, 2));
-
-        // Page 2 or 3 (Pair 2..4)
-        tab.current_page = 2;
-        tab.update_visible_range();
-        assert_eq!(tab.view_state.visible_range, (2, 4));
-    }
-
-    #[test]
-    fn test_get_visible_pages() {
-        let mut tab = DocumentTab::new(PathBuf::from("/test/doc.pdf"));
-        tab.page_heights = vec![100.0; 10];
-        tab.view_state.visible_range = (2, 5);
-        let visible = tab.get_visible_pages();
-        assert!(visible.contains(&2));
-        assert!(visible.contains(&3));
-        assert!(visible.contains(&4));
-        assert!(!visible.contains(&1));
-        assert!(!visible.contains(&5));
-    }
-
-    #[test]
-    fn test_get_visible_pages_empty_range() {
-        let mut tab = DocumentTab::new(PathBuf::from("/test/doc.pdf"));
-        tab.page_heights = vec![100.0; 10];
-        tab.view_state.visible_range = (5, 5);
-        let visible = tab.get_visible_pages();
-        assert!(visible.is_empty());
-    }
-
-    #[test]
-    fn test_cleanup_distant_pages_removes_distant() {
-        let mut tab = DocumentTab::new(PathBuf::from("/test/doc.pdf"));
-        tab.total_pages = 20;
-        tab.page_heights = vec![100.0; 20];
-        tab.view_state.visible_range = (5, 8);
-        tab.view_state.rendered_pages = std::collections::HashMap::new();
-        tab.view_state.thumbnails = std::collections::HashMap::new();
-
-        for i in 0..20 {
-            tab.view_state
-                .rendered_pages
-                .insert(i, (1.0, Arc::from([])));
-        }
-
-        tab.zoom = 1.0;
-        tab.cleanup_distant_pages();
-
-        for i in 0..20 {
-            if (3..=9).contains(&i) {
-                assert!(
-                    tab.view_state.rendered_pages.contains_key(&i),
-                    "Page {} should be kept",
-                    i
-                );
-            }
-        }
-    }
-
-    #[test]
-    fn test_cleanup_distant_pages_removes_zoom_mismatch() {
-        let mut tab = DocumentTab::new(PathBuf::from("/test/doc.pdf"));
-        tab.total_pages = 10;
-        tab.page_heights = vec![100.0; 10];
-        tab.view_state.visible_range = (5, 7);
-        tab.view_state.rendered_pages = std::collections::HashMap::new();
-        tab.view_state.thumbnails = std::collections::HashMap::new();
-
-        tab.view_state
-            .rendered_pages
-            .insert(5, (2.0, Arc::from([])));
-        tab.view_state
-            .rendered_pages
-            .insert(6, (1.0, Arc::from([])));
-        tab.view_state
-            .rendered_pages
-            .insert(1, (1.0, Arc::from([])));
-
-        tab.zoom = 1.0;
-        tab.cleanup_distant_pages();
-
-        // 6 is kept (correct scale, inside active range)
-        assert!(tab.view_state.rendered_pages.contains_key(&6));
-        // 5 is kept (mismatched scale but inside active range for smooth zooming)
-        assert!(tab.view_state.rendered_pages.contains_key(&5));
-        // 1 is removed (outside active range)
-        assert!(!tab.view_state.rendered_pages.contains_key(&1));
-    }
-
-    #[test]
-    fn test_needs_periodic_cleanup_immediate() {
-        let tab = DocumentTab::new(PathBuf::from("/test/doc.pdf"));
-        assert!(tab.needs_periodic_cleanup());
     }
 
     #[test]

@@ -1528,3 +1528,41 @@ fn test_signature_trust_badges_and_evaluation() {
         "Windows system anchors should load successfully"
     );
 }
+
+#[gpui_kit::test]
+fn test_gpui_kit_ribbon_color_picker_and_root_init(cx: &mut gpui_kit::TestAppContext) {
+    use gpui_kit::AppContext as _;
+    use gpui_kit::component::Root;
+    use pdfbull::ui_gpui::app_view::PdfbullView;
+
+    let window = cx.update(|cx| {
+        gpui_kit::init(cx);
+        cx.open_window(gpui_kit::WindowOptions::default(), |window, cx| {
+            let view = cx.new(|cx| PdfbullView::new(window, cx));
+            cx.new(|cx| Root::new(view, window, cx))
+        })
+        .expect("headless GPUI test window must open")
+    });
+    cx.run_until_parked();
+
+    window
+        .update(cx, |root, window, cx| {
+            let view = root
+                .view()
+                .clone()
+                .downcast::<PdfbullView>()
+                .expect("Root child must be PdfbullView");
+            view.read_with(cx, |v, cx| {
+                assert!(
+                    v.focus_handle.is_focused(window),
+                    "PdfbullView must be focused at startup so keyboard shortcuts work immediately"
+                );
+                assert!(
+                    v.ribbon.color_picker.is_some(),
+                    "Annotate ribbon ColorPickerState must be initialized"
+                );
+                let _ = cx;
+            });
+        })
+        .unwrap();
+}

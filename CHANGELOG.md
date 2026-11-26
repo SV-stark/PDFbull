@@ -5,6 +5,63 @@ All notable changes to the PDFbull project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.22.0] - 2026-11-26
+
+### Added
+- **PDF Decryption Save Action** (`src/commands.rs`, `src/engine.rs`, `src/pdf_engine.rs`, `src/ui_gpui/app_view.rs`):
+  - Wired `RibbonAction::Decrypt` to `PdfCommand::DecryptPdf` / `DocumentStore::decrypt_pdf`, prompting for an output path and writing an unencrypted copy via `zpdf_writer::rewrite_pdf` using the unlocked session password.
+- **`gpui-kit`, `gpui-fast`, `winprint`, & `jbig2enc-rust` Upgrades** (`Cargo.toml`, `src/pdf_engine.rs`, `src/image_optimizer.rs`, `src/ui_gpui/`, `tests/ui_test.rs`):
+  - Enabled `jbig2enc-rust` `"symboldict"` + `"parallel"` features and embedded `/DecodeParms /JBIG2Globals` in `apply_image_replacements`.
+  - Added `PrintJobOptions`, `PrinterCapabilitiesInfo`, `DocumentStore::get_printer_capabilities` (`winprint::ticket::PrintCapabilities`), and `DocumentStore::print_document_with_options` (`PrintTicketBuilder`) for copies, duplex, orientation, and media size.
+  - Integrated `gpui_kit::component::color_picker::ColorPicker` in the Annotate ribbon, `v_virtual_list` in `LogConsoleState` and sidebar search results, `Kbd` badges in the command palette, `PopupMenu` (`ContextMenuExt`) tab context menus (`Close Tab`, `Close Others`, `Close Tabs to the Right`), `FocusTrapElement` on modal dialogs, `Notification` toasts on save/print, `Theme::sync_system_appearance` + `observe_window_appearance`, `WindowBackgroundAppearance::Blurred` (Windows 11 Acrylic), `cx.add_recent_document` (Windows Jump List), `gpui_fast` `DynamicTexture` for GPU page surfaces, hierarchical `Tree` bookmarks (`Bookmark::depth` + external `uri` links + non-navigable header items), `h_resizable`/`v_resizable` sidebar & log console panels, `Slider` watermark opacity control, `AlertDialog` unsaved-changes close prompt, and a headless `#[gpui_kit::test]` integration test.
+- **Engine & Asset Optimizations** (`Cargo.toml`, `src/comic.rs`, `src/ocr.rs`, `src/pdf_engine.rs`, `src/ui_gpui/mod.rs`):
+  - Enabled `oxipng` `"zopfli"` feature (`DocumentStore::optimize_png_lossless` + `ExportImageWithOptions` command palette action), `zpdf-writer` `"timestamp"` (`UreqTimestampRequester` + visible `AppearanceSpec` signatures with TSA URL and visible-stamp UI controls in `ActiveDialog::Signature`), `PdfaConvertConfig` (`ConvertToPdfa`), `ConversionMode::Rich` image extraction (`ExtractAllImages`), PDF 2.0 `associated_files` / `page_associated_files` merging, `DisplayList` + `FontCache` caching across smooth zoom levels, in-place `update_annotation_{rect,color,contents}`, granular `EncryptionPermissions` in the Security dialog, script-keyed `OCR_ENGINE_CACHE` (`load_recognition_model_for`), `"Copy page as image"` via `arboard`, `gpui_kit::component::setting::Settings` categorized preferences (`Appearance`, `Rendering & Cache`, `Workspace`) with a `NumberInput` cache memory stepper, `observe_window_bounds` resize handling, child `Entity` views (`RibbonStripView`, `SidebarView`, `CanvasView`, `LogConsoleView`) for `gpui-fast` retained subtree caching, `.set_parent(...)` (`parent_file_dialog` / `parent_msg_dialog`) across all `rfd` dialogs, JPEG EXIF orientation normalization in `comic::prepare_image`, and `gpui_kit::assets::Assets` + `icon_assets!(PdfbullIcons, [...])` replacing `AllAssets`.
+
+### Removed
+- **Dead Code & Unreferenced Assets** (`Cargo.toml`, `src/assets/`, `src/tiled_render.rs`, `src/read_mode.rs`, `src/form_scripting.rs`, `src/models.rs`):
+  - Removed `pdf-writer = "0.15"` (migrated `comic::images_to_pdf` to `zpdf_writer::builder::DocumentBuilder`) and `open = "5"` (replaced with `cx.open_url`).
+  - Removed ~2.62 MB of unused legacy font/icon assets (`src/assets/`) and ~1,300 lines of unreferenced modules/types (`tiled_render`, `read_mode`, `form_scripting`, and legacy `models::DocumentTab` / `TabViewState`).
+
+### Changed
+- **Dependency & Build Hygiene** (`Cargo.toml`, `src/ocr.rs`, `build.rs`):
+  - Removed unused `rten-onnx` dependency and disabled unused default features on `gpui-kit` (`x11`), `ocrs` (`export-wasm`), `tokio` (`process`/`fs`/`io-util`), and `interprocess` (`tokio`).
+  - Switched disk-backed OCR detection/recognition model loading in `src/ocr.rs` to `rten::Model::load_mmap` with `load_file` fallback.
+  - Replaced scalar `pdf-writer` stream building in `add_watermark` and `add_header_footer` with direct isolated Form XObject streams.
+### Fixed
+- **Security & UI Bug Fixes** (`src/commands.rs`, `src/engine.rs`, `src/pdf_engine.rs`, `src/ui_gpui/`):
+  - Wrapped `PdfCommand::{Open, EncryptPdf}` password fields in `zeroize::Zeroizing<String>`.
+  - Fixed `flatten_outline` to preserve external `uri` items and `Option<usize>` `page_index` instead of falling back to page 1 (`0`).
+  - Routed non-WinAnsi Unicode watermarks and headers/footers across all pages (including rotated pages) through `IncrementalWriter::stamp_page` + `FontProvider`.
+  - Wired canvas scrollbar thumb drag and sidebar thumbnail scroll sync via `cx.on_next_frame`, persisted `nucleo_matcher::Matcher` across command palette frames, aligned `SinglePage` / `TwoPageSpread` canvas padding/gap to `px(CANVAS_PADDING_Y)` / `px(CANVAS_PAGE_GAP)`, fixed `close_tab_at` to track stable `tab.id` across async prompts and added unsaved-changes prompts for `CloseOthers` / `CloseToRight`, allowed clearing Header/Footer inputs to empty, respected `remember_last_file` / cleared stale session on `restore_session == false`, and updated the OS window title on tab switches.
+- **Background RGBA→BGRA Conversion & `RenderCache` Canonicalization** (`src/pdf_engine.rs`, `src/ui_gpui/app_view.rs`):
+  - Moved `convert_rgba_to_bgra` and `RenderImage` construction off the main UI thread onto `cx.background_executor()`.
+  - Canonicalized `RenderKey` (`filter: RenderFilter::None`, `quality: RenderQuality::Low`) so theme/filter switches (`Midnight` mode, `Sepia`, etc.) reuse the cached unfiltered bitmap without re-rasterizing pages.
+  - Reused a shared `zpdf::IccCache` and `output_intent_cmyk_profile` on `DocumentStore`, enabled `.with_clip_elision_scale(scale)`, and gated `.with_stage_timing(...)` on `tracing::enabled!(Level::DEBUG)`.
+- **`zpdf` Watermark, Header/Footer, Foreign Annotations, Encryption, & Coordinate Bugs** (`src/pdf_engine.rs`, `src/engine.rs`, `src/image_optimizer.rs`):
+  - Wrapped `add_watermark` / `add_header_footer` overlays in isolated Form XObjects (`/PDFBullOverlay{N}`) inside a `q`/`Q` sandwich and passed unlocked document passwords via `add_watermark_with_password` / `add_header_footer_with_password` so existing page `/Resources /Font /F1` and graphics state are never corrupted.
+  - Passed non-`PDFBULL:` page annotations to `.with_annotations(...)` in `render_page_internal` so filled AcroForm widgets, visual signatures, and third-party annotations render on the canvas.
+  - Preserved AES-256 encryption in `optimize_pdf` and `apply_redactions` when rewriting encrypted source PDFs, and honored `AnnotationStyle::Redact { color }` in `RedactOptions`.
+  - Applied consistent `page.user_unit` scaling across links, annotations, tables, redactions, and `image_optimizer::scan_page_dpi`, resolved indirect Form XObject `/Resources` in `image_optimizer::follow_form`, and added `.with_shared_fonts`, `.with_optional_content`, and `.with_skip_images(true).with_skip_type3_painting(true)` to text/search/table interpreters (plus single-pass `doc.struct_tree()` in `extract_accessible_text`).
+- **`gpui-kit` & `gpui-fast` UI, Focus, Memory Leak, & Window Fixes** (`src/ui_gpui/mod.rs`, `src/ui_gpui/dialogs.rs`, `src/ui_gpui/app_view.rs`, `src/ui_gpui/sidebar.rs`, `src/ui_gpui/log_console.rs`):
+  - Fixed the encrypted-PDF `ActiveDialog::Password` dialog (enabled `Apply`, `PressEnter` submission, and `.masked(true)` + `.mask_toggle()` on all password inputs).
+  - Fixed the Direct3D 11 GPU VRAM leak by calling `cx.drop_image(...)` whenever `rendered_pages` or `sidebar.thumbnails` entries are replaced, evicted, or cleared.
+  - Set `TitlebarOptions { title: Some("PDFbull") }` so Win32 single-instance `FindWindowW` succeeds, removed the hardcoded `.bg(bg)` on `Root` so Light/Dark theme switching updates the window background, added a re-entrancy guard on `on_window_should_close`, and opened all CLI file arguments instead of only the first.
+  - Focused `PdfbullView` at startup, checked `window.has_focused_input(cx)` (covering dialog inputs) and modal/palette guards before `handle_key_down_legacy`, stopped unconditional `cx.on_next_frame` refit wakeups, reset `active_doc_id`/`total_pages` when closing the last tab, fixed RGB->HSLA color conversion in `SelectColor`, wired `LogConsoleState::sync_from_logging()` to `logging::recent_logs()`, and disambiguated colliding sidebar `ElementId`s.
+- **Core, Printing, Cache, & Zeroization Fixes** (`src/pdf_engine.rs`, `src/comic.rs`, `src/engine.rs`):
+  - Fixed `DocumentStore::print_document` to select `PrinterDevice::user_default()` instead of `PrinterDevice::all()?.next()`.
+  - Added `prune_converted_cache` (256 MB cap) to `comic::ensure_converted` to bound `%APPDATA%\...\converted\` disk growth.
+  - Stored worker passwords in `zeroize::Zeroizing<String>` inside `DocumentStore::passwords` and `engine::password_for_path`.
+
+## [0.21.3] - 2026-11-26
+
+### Changed
+- **Upgraded `zpdf` & sibling crates (`0.21.0` -> `0.23.0`) and `gpui-kit` (`0.10.0` -> `0.11.0`, `gpui-fast` `0.1.16` -> `0.1.19`)** (`Cargo.toml`, `Cargo.lock`, `src/ui_gpui/canvas.rs`, `src/ui_gpui/dialogs.rs`):
+  - Updated `zpdf`, `zpdf-writer`, `zpdf-content`, `zpdf-document`, `zpdf-image`, and `zpdf-svg-export` to `=0.23.0`.
+  - Updated `gpui-kit` to `0.11.0`, which brings `gpui-fast` `0.1.19` and `gpui-pre` `0.3.14`.
+  - Updated the About dialog engine label to `zpdf 0.23.0`.
+- **Path painting migrated to `PathBuilder`** (`src/ui_gpui/canvas.rs`):
+  - `Path` is no longer generic and `Path::new` was removed upstream; `paint_segment`, `paint_ellipse`, and the arrowhead preview now build outlines with `PathBuilder::fill()` + `move_to`/`line_to` and skip painting if `build()` rejects a non-finite path.
+
 ## [0.21.2] - 2026-11-21
 
 ### Changed

@@ -116,14 +116,33 @@ pub fn load_detection_model() -> Result<rten::Model, String> {
         "text-detection.rten",
     ] {
         let path = model_dir.join(name);
-        if path.exists()
-            && let Ok(m) = rten::Model::load_file(&path)
-        {
-            return Ok(m);
+        if path.exists() {
+            // SAFETY: The model file is read-only during inference; fall back to
+            // `load_file` if memory-mapping is rejected by the filesystem.
+            if let Ok(m) =
+                unsafe { rten::Model::load_mmap(&path) }.or_else(|_| rten::Model::load_file(&path))
+            {
+                return Ok(m);
+            }
         }
     }
     rten::Model::load_static_slice(EMBEDDED_DET_MODEL)
         .map_err(|e| format!("Failed to load embedded detection model: {e}"))
+}
+
+/// Load the recognition model for a specific `OcrScript`, preferring a
+/// script-matched model file in the app models directory before falling back
+/// to the embedded recognition model.
+pub fn load_recognition_model_for(script: OcrScript) -> Result<rten::Model, String> {
+    let model_dir = OcrScript::resolve_model_dir();
+    let script_path = model_dir.join(script.rec_model_filename());
+    if script_path.exists()
+        && let Ok(m) = unsafe { rten::Model::load_mmap(&script_path) }
+            .or_else(|_| rten::Model::load_file(&script_path))
+    {
+        return Ok(m);
+    }
+    load_recognition_model()
 }
 
 /// Load the recognition model: prefers manual models in the app models directory if present,
@@ -137,10 +156,14 @@ pub fn load_recognition_model() -> Result<rten::Model, String> {
         "text-recognition.rten",
     ] {
         let path = model_dir.join(name);
-        if path.exists()
-            && let Ok(m) = rten::Model::load_file(&path)
-        {
-            return Ok(m);
+        if path.exists() {
+            // SAFETY: The model file is read-only during inference; fall back to
+            // `load_file` if memory-mapping is rejected by the filesystem.
+            if let Ok(m) =
+                unsafe { rten::Model::load_mmap(&path) }.or_else(|_| rten::Model::load_file(&path))
+            {
+                return Ok(m);
+            }
         }
     }
     rten::Model::load_static_slice(EMBEDDED_REC_MODEL)

@@ -5,8 +5,10 @@ use gpui_kit::component::Icon;
 use gpui_kit::component::Selectable as _;
 use gpui_kit::component::Sizable as _;
 use gpui_kit::component::button::{Button, ButtonVariants};
-use gpui_kit::component::input::{Input, InputState};
+use gpui_kit::component::input::{Input, InputState, NumberInput};
 use gpui_kit::component::scroll::ScrollableElement;
+use gpui_kit::component::setting::{SettingGroup, SettingItem, SettingPage, Settings};
+use gpui_kit::component::slider::{Slider, SliderState, SliderValue};
 use gpui_kit::prelude::FluentBuilder;
 use gpui_kit::*;
 
@@ -57,6 +59,9 @@ pub enum DialogAction {
     },
     /// Replace the text/comment of the annotation currently being edited.
     SetNoteContent(String),
+    ToggleSecurityPerm(&'static str),
+    ToggleSignatureVisible,
+    SignDocument,
     // Settings & Preferences actions
     SetSettingsTheme(crate::models::AppTheme),
     SetSettingsZoom(u32),
@@ -80,6 +85,7 @@ pub fn dialog_has_apply(active: &ActiveDialog) -> bool {
             | ActiveDialog::Security
             | ActiveDialog::Properties
             | ActiveDialog::NoteContent
+            | ActiveDialog::Password
     )
 }
 
@@ -118,6 +124,9 @@ pub struct DialogsState {
     pub owner_password_input: Option<Entity<InputState>>,
     pub user_password: String,
     pub owner_password: String,
+    pub security_permissions: crate::models::EncryptionPermissions,
+    pub sig_tsa_input: Option<Entity<InputState>>,
+    pub sig_visible: bool,
     /// Editors for the Properties dialog's metadata fields, in the order
     /// `[title, author, subject, keywords, creator]`. `None` (or a `None`
     /// element) when built without a window — the dialog then shows the
@@ -134,6 +143,9 @@ pub struct DialogsState {
     /// than a Text annotation.
     pub note_is_sticky: bool,
     pub settings: crate::models::AppSettings,
+    pub watermark_opacity_slider: Option<Entity<SliderState>>,
+    pub cache_memory_input: Option<Entity<InputState>>,
+    pub focus_handle: Option<FocusHandle>,
 }
 
 impl Default for DialogsState {
@@ -168,12 +180,38 @@ impl DialogsState {
         }
         // Note editor.
         let note_input = owner.new(|cx| InputState::new(window, cx).placeholder("Note text"));
-        let password_input_state =
-            owner.new(|cx| InputState::new(window, cx).placeholder("Password"));
-        let user_pw_input =
-            owner.new(|cx| InputState::new(window, cx).placeholder("User password (open)"));
-        let owner_pw_input =
-            owner.new(|cx| InputState::new(window, cx).placeholder("Owner password (permissions)"));
+        let password_input_state = owner.new(|cx| {
+            InputState::new(window, cx)
+                .masked(true)
+                .placeholder("Password")
+        });
+        let user_pw_input = owner.new(|cx| {
+            InputState::new(window, cx)
+                .masked(true)
+                .placeholder("User password (open)")
+        });
+        let owner_pw_input = owner.new(|cx| {
+            InputState::new(window, cx)
+                .masked(true)
+                .placeholder("Owner password (permissions)")
+        });
+        let watermark_opacity_slider = owner.new(|_| {
+            SliderState::new()
+                .min(0.05)
+                .max(1.0)
+                .step(0.05)
+                .default_value(SliderValue::Single(0.35))
+        });
+        let initial_cache = crate::storage::load_settings().max_cache_memory;
+        let cache_memory_input = owner.new(|cx| {
+            InputState::new(window, cx)
+                .placeholder("MB")
+                .default_value(initial_cache.to_string())
+        });
+        let sig_tsa_input = owner.new(|cx| {
+            InputState::new(window, cx)
+                .placeholder("Optional RFC 3161 TSA URL (e.g. http://timestamp.digicert.com)")
+        });
         Self {
             header_input: Some(header_input),
             footer_input: Some(footer_input),
@@ -182,6 +220,10 @@ impl DialogsState {
             password_input_state: Some(password_input_state),
             user_password_input: Some(user_pw_input),
             owner_password_input: Some(owner_pw_input),
+            watermark_opacity_slider: Some(watermark_opacity_slider),
+            cache_memory_input: Some(cache_memory_input),
+            sig_tsa_input: Some(sig_tsa_input),
+            focus_handle: Some(owner.focus_handle()),
             ..Self::new()
         }
     }
@@ -213,7 +255,13 @@ impl DialogsState {
             owner_password_input: None,
             user_password: String::new(),
             owner_password: String::new(),
+            security_permissions: crate::models::EncryptionPermissions::default(),
+            sig_tsa_input: None,
+            sig_visible: true,
             settings: crate::storage::load_settings(),
+            watermark_opacity_slider: None,
+            cache_memory_input: None,
+            focus_handle: None,
         }
     }
 
@@ -311,6 +359,12 @@ impl DialogsState {
                     );
                 }
 
+                let opacity_pct = self
+                    .watermark_opacity_slider
+                    .as_ref()
+                    .map(|s| (s.read(cx).value().end() * 100.0).round() as u32)
+                    .unwrap_or(35);
+
                 div()
                     .flex()
                     .flex_col()
@@ -322,6 +376,21 @@ impl DialogsState {
                             .child("Select watermark text stamp:"),
                     )
                     .child(div().flex().flex_row().flex_wrap().gap_2().children(chips))
+                    .when_some(self.watermark_opacity_slider.as_ref(), |el, slider| {
+                        el.child(
+                            div()
+                                .flex()
+                                .flex_col()
+                                .gap_1()
+                                .child(
+                                    div()
+                                        .text_xs()
+                                        .text_color(muted_fg)
+                                        .child(format!("Opacity: {}%", opacity_pct)),
+                                )
+                                .child(Slider::new(slider)),
+                        )
+                    })
                     .into_any_element()
             }
 
@@ -414,11 +483,11 @@ impl DialogsState {
                 let user_pw_input = self
                     .user_password_input
                     .as_ref()
-                    .map(|i| Input::new(i).id("dlg-user-pw").w_full());
+                    .map(|i| Input::new(i).id("dlg-user-pw").mask_toggle().w_full());
                 let owner_pw_input = self
                     .owner_password_input
                     .as_ref()
-                    .map(|i| Input::new(i).id("dlg-owner-pw").w_full());
+                    .map(|i| Input::new(i).id("dlg-owner-pw").mask_toggle().w_full());
                 div()
                     .flex()
                     .flex_col()
@@ -455,6 +524,75 @@ impl DialogsState {
                                     .child("Owner password (permissions)"),
                             )
                             .when_some(owner_pw_input, |el, i| el.child(i)),
+                    )
+                    .child(
+                        div()
+                            .text_xs()
+                            .text_color(muted_fg)
+                            .child("Permissions (owner restrictions)"),
+                    )
+                    .child(
+                        div()
+                            .flex()
+                            .flex_row()
+                            .flex_wrap()
+                            .gap_2()
+                            .child(
+                                Button::new("sec-perm-print")
+                                    .label("Allow Print")
+                                    .small()
+                                    .selected(self.security_permissions.print)
+                                    .on_click(cx.listener(move |v, _, w, cx| {
+                                        on_action(
+                                            v,
+                                            DialogAction::ToggleSecurityPerm("print"),
+                                            w,
+                                            cx,
+                                        )
+                                    })),
+                            )
+                            .child(
+                                Button::new("sec-perm-modify")
+                                    .label("Allow Modify")
+                                    .small()
+                                    .selected(self.security_permissions.modify)
+                                    .on_click(cx.listener(move |v, _, w, cx| {
+                                        on_action(
+                                            v,
+                                            DialogAction::ToggleSecurityPerm("modify"),
+                                            w,
+                                            cx,
+                                        )
+                                    })),
+                            )
+                            .child(
+                                Button::new("sec-perm-copy")
+                                    .label("Allow Copy")
+                                    .small()
+                                    .selected(self.security_permissions.copy)
+                                    .on_click(cx.listener(move |v, _, w, cx| {
+                                        on_action(
+                                            v,
+                                            DialogAction::ToggleSecurityPerm("copy"),
+                                            w,
+                                            cx,
+                                        )
+                                    })),
+                            )
+                            .child(
+                                Button::new("sec-perm-annotate")
+                                    .label("Allow Annotate")
+                                    .small()
+                                    .selected(self.security_permissions.annotate)
+                                    .on_click(cx.listener(move |v, _, w, cx| {
+                                        on_action(
+                                            v,
+                                            DialogAction::ToggleSecurityPerm("annotate"),
+                                            w,
+                                            cx,
+                                        )
+                                    })),
+                            ),
                     )
                     .child(
                         div().text_xs().text_color(muted_fg).child(
@@ -587,34 +725,92 @@ impl DialogsState {
 
             ActiveDialog::Signature => {
                 let sigs = self.signatures.clone();
+                let tsa_input = self
+                    .sig_tsa_input
+                    .as_ref()
+                    .map(|i| Input::new(i).id("dlg-sig-tsa").w_full());
+                let sign_controls = div()
+                    .flex()
+                    .flex_col()
+                    .gap_2()
+                    .p_3()
+                    .bg(muted)
+                    .rounded_md()
+                    .border_1()
+                    .border_color(border)
+                    .child(
+                        div()
+                            .text_xs()
+                            .font_semibold()
+                            .text_color(fg)
+                            .child("Sign Document (PKCS#8 + X.509)"),
+                    )
+                    .when_some(tsa_input, |el, i| el.child(i))
+                    .child(
+                        div()
+                            .flex()
+                            .flex_row()
+                            .items_center()
+                            .justify_between()
+                            .gap_2()
+                            .child(
+                                Button::new("sig-visible-toggle")
+                                    .label(if self.sig_visible {
+                                        "Visible Stamp: On"
+                                    } else {
+                                        "Visible Stamp: Off"
+                                    })
+                                    .small()
+                                    .selected(self.sig_visible)
+                                    .on_click(cx.listener(move |v, _, w, cx| {
+                                        on_action(v, DialogAction::ToggleSignatureVisible, w, cx)
+                                    })),
+                            )
+                            .child(
+                                Button::new("sig-sign-now")
+                                    .label("Sign PDF…")
+                                    .small()
+                                    .primary()
+                                    .on_click(cx.listener(move |v, _, w, cx| {
+                                        on_action(v, DialogAction::SignDocument, w, cx)
+                                    })),
+                            ),
+                    );
                 if sigs.is_empty() {
                     div()
                         .flex()
                         .flex_col()
-                        .items_center()
-                        .justify_center()
-                        .p_6()
-                        .gap_2()
-                        .bg(muted)
-                        .rounded_md()
-                        .border_1()
-                        .border_color(border)
+                        .gap_3()
                         .child(
                             div()
-                                .text_sm()
-                                .font_bold()
-                                .text_color(fg)
-                                .child("No Digital Signatures Found"),
-                        )
-                        .child(
-                            div()
-                                .text_xs()
-                                .text_color(muted_fg)
-                                .text_center()
+                                .flex()
+                                .flex_col()
+                                .items_center()
+                                .justify_center()
+                                .p_6()
+                                .gap_2()
+                                .bg(muted)
+                                .rounded_md()
+                                .border_1()
+                                .border_color(border)
                                 .child(
-                                    "This document does not contain cryptographic signature fields or CMS signatures.",
+                                    div()
+                                        .text_sm()
+                                        .font_bold()
+                                        .text_color(fg)
+                                        .child("No Digital Signatures Found"),
+                                )
+                                .child(
+                                    div()
+                                        .text_xs()
+                                        .text_color(muted_fg)
+                                        .text_center()
+                                        .child(
+                                            "This document does not contain cryptographic signature fields or CMS signatures.",
+                                        ),
                                 ),
                         )
+                        .child(sign_controls)
                         .into_any_element()
                 } else {
                     let mut cards = Vec::new();
@@ -744,13 +940,20 @@ impl DialogsState {
                     }
 
                     div()
-                        .id("dialog-signatures-scroll")
                         .flex()
                         .flex_col()
                         .gap_3()
-                        .max_h(px(320.0))
-                        .overflow_y_scrollbar()
-                        .children(cards)
+                        .child(
+                            div()
+                                .id("dialog-signatures-scroll")
+                                .flex()
+                                .flex_col()
+                                .gap_3()
+                                .max_h(px(260.0))
+                                .overflow_y_scrollbar()
+                                .children(cards),
+                        )
+                        .child(sign_controls)
                         .into_any_element()
                 }
             }
@@ -764,7 +967,7 @@ impl DialogsState {
                 let pw_input = self
                     .password_input_state
                     .as_ref()
-                    .map(|i| Input::new(i).id("dlg-pw-input").w_full());
+                    .map(|i| Input::new(i).id("dlg-pw-input").mask_toggle().w_full());
                 div()
                     .flex()
                     .flex_col()
@@ -796,245 +999,254 @@ impl DialogsState {
                 let remember_last = settings.remember_last_file;
                 let auto_save = settings.auto_save;
                 let show_logs = settings.show_logs_on_start;
+                let cache_input = self.cache_memory_input.clone();
+                let vw = cx.entity().downgrade();
 
-                let theme_options = [
-                    (crate::models::AppTheme::System, "System", IconName::Monitor),
-                    (crate::models::AppTheme::Light, "Light", IconName::Sun),
-                    (crate::models::AppTheme::Dark, "Dark", IconName::Moon),
-                ];
-                let mut theme_chips = Vec::new();
-                for (th, label, icon) in theme_options {
-                    let is_sel = cur_theme == th;
-                    let th_clone = th.clone();
-                    theme_chips.push(
-                        Button::new(format!("setting-theme-{}", label))
-                            .label(label)
-                            .small()
-                            .icon(icon)
-                            .when(is_sel, |b| b.primary())
-                            .when(!is_sel, |b| b.ghost())
-                            .on_click(cx.listener(move |v, _, w, cx| {
-                                on_action(
-                                    v,
-                                    DialogAction::SetSettingsTheme(th_clone.clone()),
-                                    w,
-                                    cx,
-                                )
-                            })),
+                let vw_theme = vw.clone();
+                let cur_theme_c = cur_theme.clone();
+                let appearance_page = SettingPage::new("Appearance")
+                    .default_open(true)
+                    .group(
+                        SettingGroup::new().title("Theme Mode").item(
+                            SettingItem::render(move |_, _, _| {
+                                let theme_options = [
+                                    (crate::models::AppTheme::System, "System", IconName::Monitor),
+                                    (crate::models::AppTheme::Light, "Light", IconName::Sun),
+                                    (crate::models::AppTheme::Dark, "Dark", IconName::Moon),
+                                ];
+                                let mut chips = Vec::new();
+                                for (th, label, icon) in theme_options {
+                                    let is_sel = cur_theme_c == th;
+                                    let th_clone = th.clone();
+                                    let vw_btn = vw_theme.clone();
+                                    chips.push(
+                                        Button::new(format!("setting-theme-{}", label))
+                                            .label(label)
+                                            .small()
+                                            .icon(icon)
+                                            .when(is_sel, |b| b.primary())
+                                            .when(!is_sel, |b| b.ghost())
+                                            .on_click(move |_, w, app| {
+                                                let _ = vw_btn.update(app, |v, cx| {
+                                                    on_action(
+                                                        v,
+                                                        DialogAction::SetSettingsTheme(
+                                                            th_clone.clone(),
+                                                        ),
+                                                        w,
+                                                        cx,
+                                                    )
+                                                });
+                                            }),
+                                    );
+                                }
+                                div().flex().flex_row().gap_2().children(chips)
+                            })
+                            .keywords(["theme", "dark", "light", "system"]),
+                        ),
+                    )
+                    .group(SettingGroup::new().title("Default Startup Zoom").item({
+                        let vw_zoom = vw.clone();
+                        SettingItem::render(move |_, _, _| {
+                            let mut chips = Vec::new();
+                            for z in [75, 100, 125, 150, 200] {
+                                let is_sel = cur_zoom == z;
+                                let vw_btn = vw_zoom.clone();
+                                chips.push(
+                                    Button::new(format!("setting-zoom-{}", z))
+                                        .label(format!("{}%", z))
+                                        .small()
+                                        .when(is_sel, |b| b.primary())
+                                        .when(!is_sel, |b| b.ghost())
+                                        .on_click(move |_, w, app| {
+                                            let _ = vw_btn.update(app, |v, cx| {
+                                                on_action(
+                                                    v,
+                                                    DialogAction::SetSettingsZoom(z),
+                                                    w,
+                                                    cx,
+                                                )
+                                            });
+                                        }),
+                                );
+                            }
+                            div().flex().flex_row().gap_2().children(chips)
+                        })
+                        .keywords(["zoom", "scale"])
+                    }));
+
+                let vw_qual = vw.clone();
+                let vw_cache = vw.clone();
+                let rendering_page = SettingPage::new("Rendering & Cache")
+                    .group(
+                        SettingGroup::new().title("Tile Rendering Quality").item(
+                            SettingItem::render(move |_, _, _| {
+                                let quality_options = [
+                                    (crate::pdf_engine::RenderQuality::Low, "Low (Fast)"),
+                                    (
+                                        crate::pdf_engine::RenderQuality::Medium,
+                                        "Medium (Balanced)",
+                                    ),
+                                    (crate::pdf_engine::RenderQuality::High, "High (Sharp)"),
+                                ];
+                                let mut chips = Vec::new();
+                                for (q, label) in quality_options {
+                                    let is_sel = cur_quality == q;
+                                    let vw_btn = vw_qual.clone();
+                                    chips.push(
+                                        Button::new(format!("setting-quality-{:?}", q))
+                                            .label(label)
+                                            .small()
+                                            .when(is_sel, |b| b.primary())
+                                            .when(!is_sel, |b| b.ghost())
+                                            .on_click(move |_, w, app| {
+                                                let _ = vw_btn.update(app, |v, cx| {
+                                                    on_action(
+                                                        v,
+                                                        DialogAction::SetSettingsQuality(q),
+                                                        w,
+                                                        cx,
+                                                    )
+                                                });
+                                            }),
+                                    );
+                                }
+                                div().flex().flex_row().flex_wrap().gap_2().children(chips)
+                            })
+                            .keywords(["quality", "render", "dpi"]),
+                        ),
+                    )
+                    .group(
+                        SettingGroup::new().title("Raster Cache Memory Limit").item(
+                            SettingItem::render(move |_, _, _| {
+                                let cache_options = [
+                                    (256, "256 MB"),
+                                    (512, "512 MB (Default)"),
+                                    (1024, "1024 MB (1 GB)"),
+                                ];
+                                let mut chips = Vec::new();
+                                for (mem, label) in cache_options {
+                                    let is_sel = cur_cache == mem;
+                                    let vw_btn = vw_cache.clone();
+                                    chips.push(
+                                        Button::new(format!("setting-cache-{}", mem))
+                                            .label(label)
+                                            .small()
+                                            .when(is_sel, |b| b.primary())
+                                            .when(!is_sel, |b| b.ghost())
+                                            .on_click(move |_, w, app| {
+                                                let _ = vw_btn.update(app, |v, cx| {
+                                                    on_action(
+                                                        v,
+                                                        DialogAction::SetSettingsCacheMemory(mem),
+                                                        w,
+                                                        cx,
+                                                    )
+                                                });
+                                            }),
+                                    );
+                                }
+                                div()
+                                    .flex()
+                                    .flex_row()
+                                    .flex_wrap()
+                                    .items_center()
+                                    .gap_2()
+                                    .children(chips)
+                                    .when_some(cache_input.as_ref(), |el, ci| {
+                                        el.child(NumberInput::new(ci).small().w(px(140.0)))
+                                    })
+                            })
+                            .keywords(["cache", "memory", "ram"]),
+                        ),
                     );
-                }
 
-                let zoom_options = [75, 100, 125, 150, 200];
-                let mut zoom_chips = Vec::new();
-                for z in zoom_options {
-                    let is_sel = cur_zoom == z;
-                    zoom_chips.push(
-                        Button::new(format!("setting-zoom-{}", z))
-                            .label(format!("{}%", z))
-                            .small()
-                            .when(is_sel, |b| b.primary())
-                            .when(!is_sel, |b| b.ghost())
-                            .on_click(cx.listener(move |v, _, w, cx| {
-                                on_action(v, DialogAction::SetSettingsZoom(z), w, cx)
-                            })),
-                    );
-                }
-
-                let quality_options = [
-                    (crate::pdf_engine::RenderQuality::Low, "Low (Fast)"),
-                    (
-                        crate::pdf_engine::RenderQuality::Medium,
-                        "Medium (Balanced)",
-                    ),
-                    (crate::pdf_engine::RenderQuality::High, "High (Sharp)"),
-                ];
-                let mut quality_chips = Vec::new();
-                for (q, label) in quality_options {
-                    let is_sel = cur_quality == q;
-                    quality_chips.push(
-                        Button::new(format!("setting-quality-{:?}", q))
-                            .label(label)
-                            .small()
-                            .when(is_sel, |b| b.primary())
-                            .when(!is_sel, |b| b.ghost())
-                            .on_click(cx.listener(move |v, _, w, cx| {
-                                on_action(v, DialogAction::SetSettingsQuality(q), w, cx)
-                            })),
-                    );
-                }
-
-                let cache_options = [
-                    (256, "256 MB"),
-                    (512, "512 MB (Default)"),
-                    (1024, "1024 MB (1 GB)"),
-                ];
-                let mut cache_chips = Vec::new();
-                for (mem, label) in cache_options {
-                    let is_sel = cur_cache == mem;
-                    cache_chips.push(
-                        Button::new(format!("setting-cache-{}", mem))
-                            .label(label)
-                            .small()
-                            .when(is_sel, |b| b.primary())
-                            .when(!is_sel, |b| b.ghost())
-                            .on_click(cx.listener(move |v, _, w, cx| {
-                                on_action(v, DialogAction::SetSettingsCacheMemory(mem), w, cx)
-                            })),
-                    );
-                }
-
-                let toggle_row = |id: &'static str,
-                                  label: &'static str,
-                                  desc: &'static str,
-                                  active: bool,
-                                  act: DialogAction| {
-                    div()
-                        .flex()
-                        .flex_row()
-                        .items_center()
-                        .justify_between()
-                        .py_1p5()
-                        .child(
-                            div()
-                                .flex()
-                                .flex_col()
-                                .gap_0p5()
-                                .child(div().text_sm().font_medium().text_color(fg).child(label))
-                                .child(div().text_xs().text_color(muted_fg).child(desc)),
-                        )
-                        .child(
-                            Button::new(id)
-                                .label(if active { "Enabled" } else { "Disabled" })
-                                .small()
-                                .when(active, |b| b.primary())
-                                .when(!active, |b| b.outline())
-                                .on_click(
-                                    cx.listener(move |v, _, w, cx| {
-                                        on_action(v, act.clone(), w, cx)
+                let mk_toggle = |id: &'static str,
+                                 label: &'static str,
+                                 desc: &'static str,
+                                 active: bool,
+                                 act: DialogAction| {
+                    let vw_t = vw.clone();
+                    SettingItem::render(move |_, _, _| {
+                        let vw_btn = vw_t.clone();
+                        let act_c = act.clone();
+                        div()
+                            .flex()
+                            .flex_row()
+                            .items_center()
+                            .justify_between()
+                            .w_full()
+                            .py_1()
+                            .child(
+                                div()
+                                    .flex()
+                                    .flex_col()
+                                    .gap_0p5()
+                                    .child(
+                                        div().text_sm().font_medium().text_color(fg).child(label),
+                                    )
+                                    .child(div().text_xs().text_color(muted_fg).child(desc)),
+                            )
+                            .child(
+                                Button::new(id)
+                                    .label(if active { "Enabled" } else { "Disabled" })
+                                    .small()
+                                    .when(active, |b| b.primary())
+                                    .when(!active, |b| b.outline())
+                                    .on_click(move |_, w, app| {
+                                        let _ = vw_btn.update(app, |v, cx| {
+                                            on_action(v, act_c.clone(), w, cx)
+                                        });
                                     }),
-                                ),
-                        )
+                            )
+                    })
                 };
+
+                let workspace_page = SettingPage::new("Workspace").group(
+                    SettingGroup::new()
+                        .title("Session & Startup")
+                        .item(mk_toggle(
+                            "setting-toggle-restore",
+                            "Restore Open Tabs",
+                            "Re-open previous documents when PDFbull launches",
+                            restore_session,
+                            DialogAction::ToggleRestoreSession,
+                        ))
+                        .item(mk_toggle(
+                            "setting-toggle-remember",
+                            "Remember Recent Files",
+                            "Keep history of opened files in Welcome dashboard and Jump List",
+                            remember_last,
+                            DialogAction::ToggleRememberLastFile,
+                        ))
+                        .item(mk_toggle(
+                            "setting-toggle-autosave",
+                            "Auto-save Annotations",
+                            "Save highlights and notes back to the document automatically",
+                            auto_save,
+                            DialogAction::ToggleAutoSave,
+                        ))
+                        .item(mk_toggle(
+                            "setting-toggle-logs",
+                            "Diagnostic Console on Startup",
+                            "Automatically open bottom debug logs when starting up",
+                            show_logs,
+                            DialogAction::ToggleShowLogsOnStart,
+                        )),
+                );
 
                 div()
                     .flex()
                     .flex_col()
-                    .gap_3()
-                    .max_h(px(400.0))
-                    .overflow_y_scrollbar()
+                    .gap_2()
                     .child(
-                        div()
-                            .flex()
-                            .flex_col()
-                            .gap_1p5()
-                            .child(
-                                div()
-                                    .text_xs()
-                                    .font_semibold()
-                                    .text_color(fg)
-                                    .child("Theme Mode"),
-                            )
-                            .child(div().flex().flex_row().gap_2().children(theme_chips)),
-                    )
-                    .child(
-                        div()
-                            .flex()
-                            .flex_col()
-                            .gap_1p5()
-                            .child(
-                                div()
-                                    .text_xs()
-                                    .font_semibold()
-                                    .text_color(fg)
-                                    .child("Default Startup Zoom"),
-                            )
-                            .child(div().flex().flex_row().gap_2().children(zoom_chips)),
-                    )
-                    .child(
-                        div()
-                            .flex()
-                            .flex_col()
-                            .gap_1p5()
-                            .child(
-                                div()
-                                    .text_xs()
-                                    .font_semibold()
-                                    .text_color(fg)
-                                    .child("Tile Rendering Quality"),
-                            )
-                            .child(
-                                div()
-                                    .flex()
-                                    .flex_row()
-                                    .flex_wrap()
-                                    .gap_2()
-                                    .children(quality_chips),
-                            ),
-                    )
-                    .child(
-                        div()
-                            .flex()
-                            .flex_col()
-                            .gap_1p5()
-                            .child(
-                                div()
-                                    .text_xs()
-                                    .font_semibold()
-                                    .text_color(fg)
-                                    .child("Raster Cache Memory Limit"),
-                            )
-                            .child(
-                                div()
-                                    .flex()
-                                    .flex_row()
-                                    .flex_wrap()
-                                    .gap_2()
-                                    .children(cache_chips),
-                            ),
-                    )
-                    .child(
-                        div()
-                            .flex()
-                            .flex_col()
-                            .gap_1()
-                            .border_t_1()
-                            .border_color(border)
-                            .pt_2()
-                            .child(
-                                div()
-                                    .text_xs()
-                                    .font_semibold()
-                                    .text_color(fg)
-                                    .child("Behavior & Workspace"),
-                            )
-                            .child(toggle_row(
-                                "setting-toggle-restore",
-                                "Restore Open Tabs",
-                                "Re-open previous documents when PDFbull launches",
-                                restore_session,
-                                DialogAction::ToggleRestoreSession,
-                            ))
-                            .child(toggle_row(
-                                "setting-toggle-remember",
-                                "Remember Recent Files",
-                                "Keep history of opened files in Welcome dashboard and Jump List",
-                                remember_last,
-                                DialogAction::ToggleRememberLastFile,
-                            ))
-                            .child(toggle_row(
-                                "setting-toggle-autosave",
-                                "Auto-save Annotations",
-                                "Save highlights and notes back to the document automatically",
-                                auto_save,
-                                DialogAction::ToggleAutoSave,
-                            ))
-                            .child(toggle_row(
-                                "setting-toggle-logs",
-                                "Diagnostic Console on Startup",
-                                "Automatically open bottom debug logs when starting up",
-                                show_logs,
-                                DialogAction::ToggleShowLogsOnStart,
-                            )),
+                        div().h(px(360.0)).child(
+                            Settings::new("pdfbull-settings")
+                                .sidebar_width(px(160.0))
+                                .page(appearance_page)
+                                .page(rendering_page)
+                                .page(workspace_page),
+                        ),
                     )
                     .child(
                         div()
@@ -1175,7 +1387,7 @@ impl DialogsState {
                             )
                             .child(spec_row(
                                 "Core Engine",
-                                "zpdf 0.21.0 (tiny-skia CPU + wgpu GPU)",
+                                "zpdf 0.23.0 (tiny-skia CPU + wgpu GPU)",
                             ))
                             .child(spec_row("Memory Allocator", "mimalloc (High-throughput)"))
                             .child(spec_row(
@@ -1254,9 +1466,11 @@ impl DialogsState {
             }
         };
 
-        let dialog_width = if matches!(active, ActiveDialog::Signature) {
+        let dialog_width = if matches!(active, ActiveDialog::Settings) {
+            px(680.0)
+        } else if matches!(active, ActiveDialog::Signature) {
             px(560.0)
-        } else if matches!(active, ActiveDialog::Settings | ActiveDialog::About) {
+        } else if matches!(active, ActiveDialog::About) {
             px(520.0)
         } else {
             px(480.0)
@@ -1385,6 +1599,14 @@ impl DialogsState {
             }));
 
         // Render full screen backdrop with centered modal
+        use gpui_kit::component::FocusTrapElement as _;
+        let dialog_panel = if let Some(fh) = self.focus_handle.as_ref() {
+            dialog_el
+                .focus_trap("dialog-focus-trap", fh)
+                .into_any_element()
+        } else {
+            dialog_el.into_any_element()
+        };
         Some(
             div()
                 .id("dialog-backdrop")
@@ -1396,7 +1618,7 @@ impl DialogsState {
                 .items_center()
                 .justify_center()
                 .on_click(cx.listener(move |v, _, w, cx| on_close(v, w, cx)))
-                .child(dialog_el)
+                .child(dialog_panel)
                 .into_any_element(),
         )
     }

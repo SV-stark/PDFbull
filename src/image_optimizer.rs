@@ -88,6 +88,8 @@ pub struct Replacement {
     pub filter: &'static str,
     pub dict: PdfDict,
     pub data: Vec<u8>,
+    /// Optional shared JBIG2 symbol dictionary stream (`/DecodeParms /JBIG2Globals`).
+    pub global_data: Option<Vec<u8>>,
 }
 
 /// Outcome of an optimization run, for logging and the UI summary.
@@ -145,7 +147,19 @@ pub fn collect_placed_dpi(file: &PdfFile) -> PlacedDpi {
 /// Form XObjects are followed recursively, since a scanned page is routinely a
 /// form wrapping the image.
 fn scan_page_dpi(file: &PdfFile, page: &zpdf::PdfPage, content: &[u8], out: &mut PlacedDpi) {
-    let mut ctm = Matrix::identity();
+    let uu = if page.user_unit.is_finite() && page.user_unit > 0.0 {
+        page.user_unit
+    } else {
+        1.0
+    };
+    let mut ctm = Matrix {
+        a: uu,
+        b: 0.0,
+        c: 0.0,
+        d: uu,
+        e: 0.0,
+        f: 0.0,
+    };
     let mut stack: Vec<Matrix> = Vec::new();
     let mut operands: Vec<PdfObject> = Vec::new();
     let mut forms_seen: HashSet<ObjectId> = HashSet::new();
@@ -248,11 +262,24 @@ fn record_placement(file: &PdfFile, id: ObjectId, ctm: &Matrix, out: &mut Placed
     if width <= 0 {
         return;
     }
-    let placed_pt = placed_width_pt(ctm);
-    if !(placed_pt.is_finite() && placed_pt > 0.0) {
+    let placed_w_pt = placed_width_pt(ctm);
+    if !(placed_w_pt.is_finite() && placed_w_pt > 0.0) {
         return;
     }
-    let dpi = (width as f64) / (placed_pt / 72.0);
+    let dpi_x = (width as f64) / (placed_w_pt / 72.0);
+    let dpi = if let Ok(height) = stream.dict.get_i64("Height")
+        && height > 0
+    {
+        let placed_h_pt = ctm.c.hypot(ctm.d);
+        if placed_h_pt.is_finite() && placed_h_pt > 0.0 {
+            let dpi_y = (height as f64) / (placed_h_pt / 72.0);
+            dpi_x.min(dpi_y)
+        } else {
+            dpi_x
+        }
+    } else {
+        dpi_x
+    };
     if !(dpi.is_finite() && dpi > 0.0) {
         return;
     }
@@ -320,6 +347,11 @@ fn follow_form(
     // falls back to inherited rather than dropping the image entirely.
     let parsed_res = match stream.dict.get("Resources") {
         Some(PdfObject::Dict(d)) => parse_resource_dict(d, file).ok(),
+        Some(PdfObject::Ref(r)) => file.resolve(*r).ok().and_then(|o| {
+            o.as_dict()
+                .ok()
+                .and_then(|d| parse_resource_dict(d, file).ok())
+        }),
         _ => None,
     };
     let resources = parsed_res.as_ref().unwrap_or(parent_resources);
@@ -871,6 +903,7 @@ fn encode_jpeg(img: &DecodedImage, cs_override: Option<&str>) -> Option<Replacem
         filter: "DCTDecode",
         dict,
         data,
+        global_data: None,
     })
 }
 
@@ -912,6 +945,7 @@ fn encode_jbig2(img: &DecodedImage) -> Option<Replacement> {
     if data.is_empty() {
         return None;
     }
+    let global_data = result.global_data.filter(|g| !g.is_empty());
 
     let mut dict = PdfDict::new();
     dict.insert(
@@ -937,6 +971,7 @@ fn encode_jbig2(img: &DecodedImage) -> Option<Replacement> {
         filter: "JBIG2Decode",
         dict,
         data,
+        global_data,
     })
 }
 

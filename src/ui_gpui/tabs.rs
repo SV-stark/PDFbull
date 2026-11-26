@@ -3,6 +3,7 @@ use gpui_kit::base::StyledExt;
 use gpui_kit::component::ActiveTheme;
 use gpui_kit::component::Icon;
 use gpui_kit::component::button::{Button, ButtonVariants};
+use gpui_kit::component::menu::{ContextMenuExt as _, PopupMenuItem};
 use gpui_kit::component::scroll::ScrollableElement;
 use gpui_kit::prelude::FluentBuilder;
 use gpui_kit::*;
@@ -78,6 +79,7 @@ impl TabsState {
         let muted_fg = cx.theme().muted_foreground;
         let active_idx = self.active_tab_index;
 
+        let tab_count = self.tabs.len();
         let mut tab_items = Vec::new();
         for (idx, tab) in self.tabs.iter().enumerate() {
             let is_active = idx == active_idx;
@@ -86,6 +88,7 @@ impl TabsState {
             // inserted, which handed one tab's retained focus/hover state to a
             // different document.
             let tab_id = tab.id;
+            let view_for_ctx = cx.entity().downgrade();
 
             let tab_el = div()
                 .id(SharedString::from(format!("tab-item-{}", tab_id)))
@@ -148,7 +151,34 @@ impl TabsState {
                             cx.stop_propagation();
                             on_action(v, TabAction::CloseTab(idx), w, cx);
                         })),
-                );
+                )
+                .context_menu(move |menu, _window, _cx| {
+                    let v1 = view_for_ctx.clone();
+                    let v2 = view_for_ctx.clone();
+                    let v3 = view_for_ctx.clone();
+                    menu.item(PopupMenuItem::new("Close Tab").on_click(move |_, w, app| {
+                        let _ =
+                            v1.update(app, |v, cx| on_action(v, TabAction::CloseTab(idx), w, cx));
+                    }))
+                    .item(
+                        PopupMenuItem::new("Close Others")
+                            .disabled(tab_count <= 1)
+                            .on_click(move |_, w, app| {
+                                let _ = v2.update(app, |v, cx| {
+                                    on_action(v, TabAction::CloseOthers(idx), w, cx)
+                                });
+                            }),
+                    )
+                    .item(
+                        PopupMenuItem::new("Close Tabs to the Right")
+                            .disabled(idx + 1 >= tab_count)
+                            .on_click(move |_, w, app| {
+                                let _ = v3.update(app, |v, cx| {
+                                    on_action(v, TabAction::CloseToRight(idx), w, cx)
+                                });
+                            }),
+                    )
+                });
             tab_items.push(tab_el);
         }
 

@@ -8,42 +8,114 @@ pub mod sidebar;
 pub mod tabs;
 pub mod welcome;
 
-use gpui_kit::component::{ActiveTheme, Root};
+use gpui_kit::assets::{Assets, icon_assets};
+use gpui_kit::component::Root;
 use gpui_kit::*;
+
+icon_assets!(
+    PdfbullIcons,
+    [
+        ArrowRight,
+        BookOpen,
+        ChevronDown,
+        ChevronLeft,
+        ChevronRight,
+        CircleCheck,
+        CircleX,
+        Close,
+        Command,
+        Delete,
+        Expand,
+        ExternalLink,
+        FilePlus,
+        FileText,
+        Folder,
+        FolderOpen,
+        Frame,
+        GalleryVerticalEnd,
+        Hash,
+        Inbox,
+        Info,
+        Loader,
+        Maximize2,
+        Merge,
+        Minus,
+        Monitor,
+        Moon,
+        MoveHorizontal,
+        PanelLeft,
+        PencilRuler,
+        Plus,
+        Presentation,
+        Redo,
+        RotateCw,
+        Search,
+        Settings,
+        ShieldLock,
+        Signature,
+        Square,
+        SquareTerminal,
+        Sun,
+        TriangleAlert,
+        Undo,
+    ]
+);
+
+/// Combines `gpui_kit::assets::Assets` (component defaults) with the
+/// application's explicit `PdfbullIcons` subset instead of embedding `AllAssets`.
+struct PdfbullAssetSource;
+
+impl AssetSource for PdfbullAssetSource {
+    fn load(&self, path: &str) -> gpui_kit::Result<Option<std::borrow::Cow<'static, [u8]>>> {
+        if let Some(bytes) = PdfbullIcons.load(path)? {
+            return Ok(Some(bytes));
+        }
+        Assets.load(path)
+    }
+
+    fn list(&self, path: &str) -> gpui_kit::Result<Vec<SharedString>> {
+        let mut items = PdfbullIcons.list(path)?;
+        items.extend(Assets.list(path)?);
+        items.sort();
+        items.dedup();
+        Ok(items)
+    }
+}
 
 pub fn run_gpui_app() {
     // Only accept a real PDF file as the startup document. The previous test
     // (`... || Path::new(arg).exists()`) accepted directories and any existing
     // path, and `--version`-style flags were already handled in `main`.
     let all_args: Vec<String> = std::env::args().collect();
-    let initial_file = all_args
+    let initial_files: Vec<String> = all_args
         .iter()
         .skip(1)
-        .find(|arg| {
+        .filter(|arg| {
             !arg.starts_with('-')
                 && sidebar::SidebarState::is_openable_pdf(std::path::Path::new(arg.as_str()))
         })
-        .cloned();
+        .cloned()
+        .collect();
     // `-page N`, `-presentation`, `-fullscreen`, applied once the file opens.
     let startup = reader::parse_startup_args(&all_args);
 
     gpui_kit::application()
-        // `assets::Assets` embeds only gpui-kit's curated subset (its
-        // `default-icons.txt`); the reader's icon set (House, PanelTopClose,
-        // Rows2, Columns2, Merge, Signature, …) reaches past that subset, and
-        // every missing glyph is a guaranteed panic at first paint. `AllAssets`
-        // ships the full Lucide set instead.
-        .with_assets(gpui_kit::assets::AllAssets)
+        .with_assets(PdfbullAssetSource)
         .run(move |cx| {
             gpui_kit::init(cx);
 
-            let initial_file_clone = initial_file.clone();
+            let initial_files_clone = initial_files.clone();
             cx.spawn(async move |cx| {
                 // Do not `expect` here: this runs inside a detached task, and a
                 // panic in a detached task is swallowed rather than surfaced.
                 // Report the failure and exit cleanly instead.
                 let window_options = WindowOptions {
                     window_min_size: Some(gpui_kit::size(px(800.0), px(600.0))),
+                    window_background: WindowBackgroundAppearance::Blurred,
+                    titlebar: Some(TitlebarOptions {
+                        title: Some("PDFbull".into()),
+                        ..Default::default()
+                    }),
                     ..WindowOptions::default()
                 };
                 // The view is needed after the window exists, to hand it the
@@ -52,10 +124,12 @@ pub fn run_gpui_app() {
                 match cx.open_window(window_options, |window, cx| {
                     let view = cx.new(|cx| {
                         let mut v = app_view::PdfbullView::new(window, cx);
-                        if let Some(ref path) = initial_file_clone {
+                        if !initial_files_clone.is_empty() {
                             v.reader.start_page = startup.page;
                             v.reader.start_mode = startup.mode;
-                            v.open_pdf_path(path, None, cx);
+                            for path in &initial_files_clone {
+                                v.open_pdf_path(path, None, cx);
+                            }
                         } else if v.dialogs.settings.restore_session {
                             if let Some(session) = crate::storage::load_session() {
                                 let mut opened = false;
@@ -82,6 +156,8 @@ pub fn run_gpui_app() {
                     });
                     view_slot = Some(view.clone());
                     let allow_close = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+                    let confirming_close =
+                        std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
                     let view_for_close = view.clone();
                     window.on_window_should_close(cx, move |window, cx| {
                         let dirty_count = view_for_close.update(cx, |v, _cx| {
@@ -93,36 +169,46 @@ pub fn run_gpui_app() {
                         {
                             return true;
                         }
+                        if confirming_close
+                            .compare_exchange(
+                                false,
+                                true,
+                                std::sync::atomic::Ordering::SeqCst,
+                                std::sync::atomic::Ordering::SeqCst,
+                            )
+                            .is_err()
+                        {
+                            return false;
+                        }
                         let allow_close = allow_close.clone();
-                        let window_handle = window.window_handle();
-                        cx.spawn(async move |cx| {
-                            let answer = rfd::AsyncMessageDialog::new()
-                                .set_level(rfd::MessageLevel::Warning)
-                                .set_title("Unsaved changes")
-                                .set_description(format!(
+                        let confirming_close = confirming_close.clone();
+                        let confirming_cancel = confirming_close.clone();
+                        use gpui_kit::component::WindowExt as _;
+                        window.open_alert_dialog(cx, move |alert, _, _| {
+                            let allow_close = allow_close.clone();
+                            let confirming_ok = confirming_close.clone();
+                            let confirming_cancel = confirming_cancel.clone();
+                            alert
+                                .title("Unsaved changes")
+                                .description(format!(
                                     "Close PDFbull without saving? Unsaved annotations in {dirty_count} tab(s) will be lost."
                                 ))
-                                .set_buttons(rfd::MessageButtons::OkCancel)
-                                .show()
-                                .await;
-                            if matches!(
-                                answer,
-                                rfd::MessageDialogResult::Ok | rfd::MessageDialogResult::Yes
-                            ) {
-                                allow_close.store(true, std::sync::atomic::Ordering::SeqCst);
-                                let _ = cx.update_window(window_handle, |_, window, cx| {
+                                .on_ok(move |_, window, cx| {
+                                    confirming_ok.store(false, std::sync::atomic::Ordering::SeqCst);
+                                    allow_close.store(true, std::sync::atomic::Ordering::SeqCst);
                                     window.remove_window();
                                     cx.quit();
-                                });
-                            }
-                        })
-                        .detach();
+                                    true
+                                })
+                                .on_cancel(move |_, _, _| {
+                                    confirming_cancel
+                                        .store(false, std::sync::atomic::Ordering::SeqCst);
+                                    true
+                                })
+                        });
                         false
                     });
-                    cx.new(|cx| {
-                        let bg = cx.theme().background;
-                        Root::new(view, window, cx).bg(bg)
-                    })
+                    cx.new(|cx| Root::new(view, window, cx))
                 }) {
                     Ok(_) => {
                         crate::startup_report::mark("window created");

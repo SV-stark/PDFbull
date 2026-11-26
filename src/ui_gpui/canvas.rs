@@ -548,12 +548,15 @@ fn paint_segment(
     let half = thickness.max(1.0) / 2.0;
     let (nx, ny) = (-dy / len * half, dx / len * half);
     let at = |x: f32, y: f32| point(px(x), px(y));
-    let mut path = Path::new(at(x1 + nx, y1 + ny));
+    let mut path = PathBuilder::fill();
+    path.move_to(at(x1 + nx, y1 + ny));
     path.line_to(at(x2 + nx, y2 + ny));
     path.line_to(at(x2 - nx, y2 - ny));
     path.line_to(at(x1 - nx, y1 - ny));
     path.line_to(at(x1 + nx, y1 + ny));
-    window.paint_path(path, color);
+    if let Ok(path) = path.build() {
+        window.paint_path(path, color);
+    }
 }
 
 /// Paint an ellipse inside `bounds`, filled or as a stroked ring.
@@ -577,11 +580,14 @@ fn paint_ellipse(
         point(px(cx + rx * theta.cos()), px(cy + ry * theta.sin()))
     };
     if fill_it {
-        let mut path = Path::new(point_at(0));
+        let mut path = PathBuilder::fill();
+        path.move_to(point_at(0));
         for i in 1..=SEGMENTS {
             path.line_to(point_at(i));
         }
-        window.paint_path(path, color);
+        if let Ok(path) = path.build() {
+            window.paint_path(path, color);
+        }
     } else {
         for i in 0..SEGMENTS {
             paint_segment(window, point_at(i), point_at(i + 1), thickness, color);
@@ -669,6 +675,18 @@ pub struct ContinuousStripGeometry {
     pub slot_height: Pixels,
 }
 
+/// Owned GPU dynamic texture for a rendered PDF page, freed deterministically
+/// from Direct3D 11 VRAM when dropped.
+pub struct PageTexture {
+    pub tex: gpui_kit::DynamicTexture,
+}
+
+impl Drop for PageTexture {
+    fn drop(&mut self) {
+        self.tex.remove();
+    }
+}
+
 /// Converts an RGBA pixel buffer (potentially with tiny-skia premultiplied alpha)
 /// to BGRA format as expected by GPUI Direct3D 11 textures.
 pub fn convert_rgba_to_bgra(data: &mut [u8]) {
@@ -691,6 +709,7 @@ pub enum PendingSelectionAction {
     SelectLine { page_idx: usize, x: f32, y: f32 },
 }
 
+#[derive(Clone)]
 pub struct DocumentViewport {
     pub zoom: f32,
     pub rotation: u16,
@@ -718,6 +737,7 @@ pub struct DocumentViewport {
     pub selected_text: Option<String>,
     pub text_cache: std::collections::HashMap<usize, std::sync::Arc<Vec<crate::models::TextItem>>>,
     pub rendered_pages: std::collections::HashMap<usize, std::sync::Arc<RenderImage>>,
+    pub dynamic_pages: std::collections::HashMap<usize, std::sync::Arc<PageTexture>>,
     pub rendered_zoom: std::collections::HashMap<usize, f32>,
     pub failed_pages: std::collections::HashSet<usize>,
     pub scroll_handle: ScrollHandle,
@@ -785,6 +805,7 @@ impl DocumentViewport {
             selected_text: None,
             text_cache: std::collections::HashMap::new(),
             rendered_pages: std::collections::HashMap::new(),
+            dynamic_pages: std::collections::HashMap::new(),
             rendered_zoom: std::collections::HashMap::new(),
             scroll_handle: ScrollHandle::new(),
             page_origins: std::sync::Arc::new(std::sync::RwLock::new(
@@ -884,6 +905,7 @@ impl DocumentViewport {
         self.current_page = 0;
         self.clear_selection();
         self.rendered_pages.clear();
+        self.dynamic_pages.clear();
         self.rendered_zoom.clear();
         self.failed_pages.clear();
         self.text_cache.clear();
@@ -946,6 +968,7 @@ impl DocumentViewport {
     /// the next `request_render_page` actually issues a command.
     pub fn invalidate_rendered_pages(&mut self) {
         self.rendered_pages.clear();
+        self.dynamic_pages.clear();
         self.rendered_zoom.clear();
         self.failed_pages.clear();
     }
@@ -1419,12 +1442,15 @@ impl DocumentViewport {
                                     px(fx - ux * size - px_ * size * 0.45),
                                     px(fy - uy * size - py_ * size * 0.45),
                                 );
-                                let mut head = Path::new(tip);
+                                let mut head = PathBuilder::fill();
+                                head.move_to(tip);
                                 head.line_to(left);
                                 head.line_to(right);
                                 head.line_to(base);
                                 head.line_to(tip);
-                                window.paint_path(head, c);
+                                if let Ok(head) = head.build() {
+                                    window.paint_path(head, c);
+                                }
                             }
                         }
                         continue;
@@ -1787,7 +1813,17 @@ impl DocumentViewport {
         .absolute()
         .size_full();
 
-        let card_content = if let Some(render_image) = self.rendered_pages.get(&page_idx) {
+        let card_content = if let Some(page_tex) = self.dynamic_pages.get(&page_idx).cloned() {
+            gpui_kit::canvas(
+                |_, _, _| (),
+                move |bounds, _, window, _cx| {
+                    let _ = window.paint_dynamic_texture(bounds, page_tex.tex);
+                },
+            )
+            .w_full()
+            .h_full()
+            .into_any_element()
+        } else if let Some(render_image) = self.rendered_pages.get(&page_idx) {
             img(render_image.clone())
                 .w_full()
                 .h_full()
@@ -1966,7 +2002,7 @@ impl DocumentViewport {
                             .items_center()
                             .min_w_full()
                             .min_h_full()
-                            .when(!presentation, |el| el.py_8())
+                            .when(!presentation, |el| el.py(px(CANVAS_PADDING_Y)))
                             .when(presentation, |el| el.justify_center())
                             .child(card),
                     )
@@ -2016,14 +2052,14 @@ impl DocumentViewport {
                             .items_center()
                             .min_w_full()
                             .min_h_full()
-                            .when(!presentation, |el| el.py_8())
+                            .when(!presentation, |el| el.py(px(CANVAS_PADDING_Y)))
                             .when(presentation, |el| el.justify_center())
                             .child(
                                 div()
                                     .flex()
                                     .flex_row()
                                     .justify_center()
-                                    .gap_6()
+                                    .gap(px(CANVAS_PAGE_GAP))
                                     .child(left_card)
                                     .children(right_card),
                             ),

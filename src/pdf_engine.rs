@@ -51,8 +51,7 @@ impl crate::models::DestinationView {
 }
 use zpdf_writer::{
     builder::DocumentBuilder,
-    redact::RedactOptions,
-    sign::{SignatureOptions, SigningKey},
+    sign::{AppearanceSpec, SignatureOptions, SigningKey, UreqTimestampRequester},
     stamp::StampItem,
 };
 use zune_image::codecs::ImageFormat;
@@ -772,7 +771,7 @@ pub struct RenderOptions {
 pub struct DocumentStore {
     documents: HashMap<DocumentId, PdfDocument>,
     paths: HashMap<DocumentId, String>,
-    passwords: HashMap<DocumentId, String>,
+    passwords: HashMap<DocumentId, zeroize::Zeroizing<String>>,
     render_cache: SharedRenderCache,
     /// Base `OcConfig` as decoded from the document (read-only after load).
     oc_configs: HashMap<DocumentId, zpdf::OcConfig>,
@@ -794,12 +793,27 @@ pub struct DocumentStore {
     /// [`DEFAULT_IMAGE_CACHE_BYTES`] for why an unbounded cache is not usable
     /// here.
     image_caches: HashMap<DocumentId, ImageCache>,
+    /// Shared ICC color-transform cache across draws and pages.
+    icc_cache: zpdf::IccCache,
     /// Aggregate decoded-image budget applied to every interpreter this store
     /// runs, in bytes.
     image_cache_bytes: u64,
     /// The on-disk revision each loaded document corresponds to. A worker
     /// reopens the file whenever the shared generation moves past this.
     loaded_generations: HashMap<DocumentId, u64>,
+    /// Bounded cache of recent `DisplayList` + `FontCache` entries so smooth
+    /// zoom re-rasterizes directly without re-interpreting content streams.
+    display_list_cache: Vec<DisplayListCacheEntry>,
+}
+
+struct DisplayListCacheEntry {
+    doc_id: DocumentId,
+    page_num: usize,
+    rotation: i32,
+    oc_hash: u64,
+    interpreted_scale: f32,
+    display_list: zpdf::DisplayList,
+    fonts: zpdf::FontCache,
 }
 
 /// Decoded-image budget per open document.
@@ -825,12 +839,15 @@ const DEFAULT_IMAGE_CACHE_BYTES: u64 = 96 * 1024 * 1024;
 
 // DocumentState wrapper removed as it was a single-field struct.
 
-static OCR_ENGINE_CACHE: std::sync::LazyLock<std::sync::Mutex<Option<Arc<ocrs::OcrEngine>>>> =
+type OcrEngineCache = std::sync::Mutex<Option<(crate::ocr::OcrScript, Arc<ocrs::OcrEngine>)>>;
+
+static OCR_ENGINE_CACHE: std::sync::LazyLock<OcrEngineCache> =
     std::sync::LazyLock::new(|| std::sync::Mutex::new(None));
 
-fn get_or_load_ocr_engine(_script: crate::ocr::OcrScript) -> PdfResult<Arc<ocrs::OcrEngine>> {
+fn get_or_load_ocr_engine(script: crate::ocr::OcrScript) -> PdfResult<Arc<ocrs::OcrEngine>> {
     if let Ok(guard) = OCR_ENGINE_CACHE.lock()
-        && let Some(engine) = guard.as_ref()
+        && let Some((cached_script, engine)) = guard.as_ref()
+        && *cached_script == script
     {
         return Ok(engine.clone());
     }
@@ -840,7 +857,7 @@ fn get_or_load_ocr_engine(_script: crate::ocr::OcrScript) -> PdfResult<Arc<ocrs:
             "Failed to load OCR detection model: {e}"
         )))
     })?;
-    let recognition_model = crate::ocr::load_recognition_model().map_err(|e| {
+    let recognition_model = crate::ocr::load_recognition_model_for(script).map_err(|e| {
         PdfError::EngineError(EngineErrorKind::Generic(format!(
             "Failed to load OCR recognition model: {e}"
         )))
@@ -861,10 +878,105 @@ fn get_or_load_ocr_engine(_script: crate::ocr::OcrScript) -> PdfResult<Arc<ocrs:
 
     let arc_engine = Arc::new(engine);
     if let Ok(mut guard) = OCR_ENGINE_CACHE.lock() {
-        *guard = Some(arc_engine.clone());
+        *guard = Some((script, arc_engine.clone()));
     }
 
     Ok(arc_engine)
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct PrintJobOptions {
+    pub copies: Option<u16>,
+    pub duplex: Option<String>,
+    pub orientation: Option<String>,
+    pub media_size: Option<String>,
+}
+
+impl PrintJobOptions {
+    fn is_default(&self) -> bool {
+        self.copies.is_none()
+            && self.duplex.is_none()
+            && self.orientation.is_none()
+            && self.media_size.is_none()
+    }
+
+    #[cfg(windows)]
+    fn to_print_ticket_xml(&self) -> String {
+        if self.is_default() {
+            return String::new();
+        }
+        let mut body = String::new();
+        if let Some(copies) = self.copies {
+            let n = copies.max(1);
+            body.push_str(&format!(
+                "<psf:ParameterInit name=\"psk:JobCopiesAllDocuments\">\
+                 <psf:Value xsi:type=\"xsd:integer\">{n}</psf:Value>\
+                 </psf:ParameterInit>"
+            ));
+        }
+        if let Some(ref duplex) = self.duplex {
+            body.push_str(&format!(
+                "<psf:Feature name=\"psk:JobDuplexAllDocumentsContiguously\">\
+                 <psf:Option name=\"psk:{duplex}\" />\
+                 </psf:Feature>"
+            ));
+        }
+        if let Some(ref orient) = self.orientation {
+            body.push_str(&format!(
+                "<psf:Feature name=\"psk:PageOrientation\">\
+                 <psf:Option name=\"psk:{orient}\" />\
+                 </psf:Feature>"
+            ));
+        }
+        if let Some(ref media) = self.media_size {
+            body.push_str(&format!(
+                "<psf:Feature name=\"psk:PageMediaSize\">\
+                 <psf:Option name=\"psk:{media}\" />\
+                 </psf:Feature>"
+            ));
+        }
+        format!(
+            "<psf:PrintTicket \
+             xmlns:psf=\"http://schemas.microsoft.com/windows/2003/08/printing/printschemaframework\" \
+             xmlns:xsi=\"http://www.w3.org/2001/XMLSchema-instance\" \
+             xmlns:xsd=\"http://www.w3.org/2001/XMLSchema\" \
+             version=\"1\" \
+             xmlns:psk=\"http://schemas.microsoft.com/windows/2003/08/printing/printschemakeywords\">\
+             {body}</psf:PrintTicket>"
+        )
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PrinterCapabilitiesInfo {
+    pub printer_name: String,
+    pub max_copies: u16,
+    pub duplex_options: Vec<String>,
+    pub media_sizes: Vec<String>,
+    pub orientations: Vec<String>,
+}
+
+#[cfg(windows)]
+fn resolve_printer_device(
+    printer_name: Option<&str>,
+) -> PdfResult<winprint::printer::PrinterDevice> {
+    use winprint::printer::PrinterDevice;
+    if let Some(name) = printer_name {
+        PrinterDevice::all()
+            .map_err(|e| PdfError::IoError(format!("Failed to list printers: {e}")))?
+            .into_iter()
+            .find(|d| d.name() == name)
+            .ok_or_else(|| PdfError::IoError(format!("Printer '{name}' not found")))
+    } else {
+        match PrinterDevice::user_default() {
+            Ok(Some(default_dev)) => Ok(default_dev),
+            _ => PrinterDevice::all()
+                .map_err(|e| PdfError::IoError(format!("Failed to list printers: {e}")))?
+                .into_iter()
+                .next()
+                .ok_or_else(|| PdfError::IoError("No printers found".into())),
+        }
+    }
 }
 
 impl DocumentStore {
@@ -878,8 +990,10 @@ impl DocumentStore {
             oc_groups: HashMap::new(),
             oc_visibility: HashMap::new(),
             image_caches: HashMap::new(),
+            icc_cache: zpdf::IccCache::new(),
             image_cache_bytes: DEFAULT_IMAGE_CACHE_BYTES,
             loaded_generations: HashMap::new(),
+            display_list_cache: Vec::new(),
         }
     }
 
@@ -1049,7 +1163,8 @@ impl DocumentStore {
         self.documents.insert(doc_id, doc);
         self.paths.insert(doc_id, path.to_string());
         if let Some(pw) = password {
-            self.passwords.insert(doc_id, pw.to_string());
+            self.passwords
+                .insert(doc_id, zeroize::Zeroizing::new(pw.to_string()));
         }
         self.image_caches.insert(doc_id, ImageCache::new());
         Ok(())
@@ -1195,18 +1310,7 @@ impl DocumentStore {
         let is_encrypted = doc.is_encrypted();
         let signatures = Self::extract_signatures_internal(doc);
 
-        let attachments = doc
-            .embedded_files()
-            .into_iter()
-            .map(|ef| crate::models::AttachmentInfo {
-                name: ef.name,
-                description: ef.description,
-                size: ef.size,
-                creation_date: ef.creation_date,
-                mod_date: ef.mod_date,
-                object_id: ef.stream.map(|id| (id.0, id.1)),
-            })
-            .collect();
+        let attachments = Self::collect_attachments(doc);
 
         let oc_config = doc.oc_config();
         let layers = Self::extract_layers_internal(doc, oc_config.as_ref());
@@ -1255,7 +1359,13 @@ impl DocumentStore {
 
         for i in 0..page_count {
             if let Ok(page) = doc.page(i) {
-                let eff_box = page.effective_box().normalize();
+                let uu = if page.user_unit.is_finite() && page.user_unit > 0.0 {
+                    page.user_unit
+                } else {
+                    1.0
+                };
+                let eff_box =
+                    scaled_effective_box(page.effective_box(), page.user_unit).normalize();
                 let annots = doc.page_annotations(&page);
                 for annot in annots {
                     if annot.subtype == "Link" {
@@ -1266,10 +1376,10 @@ impl DocumentStore {
                             all_links.push(Hyperlink {
                                 page: i,
                                 bounds: (
-                                    (rect.x0 - eff_box.x0) as f32,
-                                    (eff_box.y1 - rect.y1) as f32,
-                                    rect.width() as f32,
-                                    rect.height() as f32,
+                                    (rect.x0 * uu - eff_box.x0) as f32,
+                                    (eff_box.y1 - rect.y1 * uu) as f32,
+                                    (rect.width() * uu) as f32,
+                                    (rect.height() * uu) as f32,
                                 ),
                                 url,
                                 destination_page: dest,
@@ -1307,18 +1417,25 @@ impl DocumentStore {
 
         let mut spans = Vec::new();
         {
-            let interp = ContentInterpreter::new(page.effective_box())
+            let mut interp = ContentInterpreter::new(page.effective_box())
                 .with_page_user_unit(page.user_unit)
                 .with_fonts(&mut fonts)
+                .with_shared_fonts(doc)
                 .with_document(doc.file(), &page.resources)
+                .with_skip_images(true)
+                .with_skip_type3_painting(true)
                 .with_text_sink(&mut spans);
+            if let Some(oc) = self.oc_configs.get(&doc_id) {
+                interp = interp.with_optional_content(oc);
+            }
             let _ = interp.interpret(&content);
         }
 
         // Try struct_ordered_text first (uses /MCID for tagged-PDF reading order).
         // Fall back to plain spans_to_text for untagged documents.
-        let reading_order_applied = doc.struct_tree().is_some();
-        let text = if let Some(ref tree) = doc.struct_tree() {
+        let tree = doc.struct_tree();
+        let reading_order_applied = tree.is_some();
+        let text = if let Some(ref tree) = tree {
             struct_ordered_text(&spans, page_num, tree)
         } else {
             spans_to_text(spans, 2.0)
@@ -1348,7 +1465,12 @@ impl DocumentStore {
             let Ok(page) = doc.page(page_idx) else {
                 continue;
             };
-            let eff_box = page.effective_box().normalize();
+            let uu = if page.user_unit.is_finite() && page.user_unit > 0.0 {
+                page.user_unit
+            } else {
+                1.0
+            };
+            let eff_box = scaled_effective_box(page.effective_box(), page.user_unit).normalize();
             let annots = doc.page_annotations(&page);
             for annot in annots {
                 if annot.subtype != "Link" {
@@ -1356,10 +1478,10 @@ impl DocumentStore {
                 }
                 let rect = annot.rect.normalize();
                 let bounds = (
-                    (rect.x0 - eff_box.x0) as f32,
-                    (eff_box.y1 - rect.y1) as f32,
-                    rect.width() as f32,
-                    rect.height() as f32,
+                    (rect.x0 * uu - eff_box.x0) as f32,
+                    (eff_box.y1 - rect.y1 * uu) as f32,
+                    (rect.width() * uu) as f32,
+                    (rect.height() * uu) as f32,
                 );
                 match annot.uri.clone() {
                     Some(url) => results.push(crate::models::LinkDestinationInfo {
@@ -1424,18 +1546,7 @@ impl DocumentStore {
         let is_encrypted = doc.is_encrypted();
         let signatures = Self::extract_signatures_internal(doc);
 
-        let attachments = doc
-            .embedded_files()
-            .into_iter()
-            .map(|ef| crate::models::AttachmentInfo {
-                name: ef.name,
-                description: ef.description,
-                size: ef.size,
-                creation_date: ef.creation_date,
-                mod_date: ef.mod_date,
-                object_id: ef.stream.map(|id| (id.0, id.1)),
-            })
-            .collect();
+        let attachments = Self::collect_attachments(doc);
 
         let oc_config = doc.oc_config();
         let layers = Self::extract_layers_internal(doc, oc_config.as_ref());
@@ -1478,6 +1589,7 @@ impl DocumentStore {
         self.oc_groups.remove(&doc_id);
         self.oc_visibility.remove(&doc_id);
         self.image_caches.remove(&doc_id);
+        self.display_list_cache.retain(|e| e.doc_id != doc_id);
         self.render_cache.remove_document(doc_id);
     }
 
@@ -1687,8 +1799,31 @@ impl DocumentStore {
                 .insert(id, visible);
 
             // Invalidate the render cache for this document across all workers.
+            self.display_list_cache.retain(|e| e.doc_id != doc_id);
             self.render_cache.invalidate_document(doc_id);
         }
+    }
+
+    fn collect_attachments(doc: &PdfDocument) -> Vec<crate::models::AttachmentInfo> {
+        let mut all = doc.embedded_files();
+        all.extend(doc.associated_files());
+        for p_idx in 0..doc.page_count() {
+            if let Ok(page) = doc.page(p_idx) {
+                all.extend(doc.page_associated_files(&page));
+            }
+        }
+        let mut seen = std::collections::HashSet::new();
+        all.into_iter()
+            .filter(|ef| seen.insert((ef.stream.map(|id| (id.0, id.1)), ef.name.clone())))
+            .map(|ef| crate::models::AttachmentInfo {
+                name: ef.name,
+                description: ef.description,
+                size: ef.size,
+                creation_date: ef.creation_date,
+                mod_date: ef.mod_date,
+                object_id: ef.stream.map(|id| (id.0, id.1)),
+            })
+            .collect()
     }
 
     pub fn get_attachment_bytes(
@@ -1701,7 +1836,13 @@ impl DocumentStore {
             .get(&doc_id)
             .ok_or(PdfError::EngineError(EngineErrorKind::DocumentNotFound))?;
 
-        let efs = doc.embedded_files();
+        let mut efs = doc.embedded_files();
+        efs.extend(doc.associated_files());
+        for p_idx in 0..doc.page_count() {
+            if let Ok(page) = doc.page(p_idx) {
+                efs.extend(doc.page_associated_files(&page));
+            }
+        }
         let target_ef = efs
             .iter()
             .find(|ef| ef.stream.map(|id| (id.0, id.1)) == Some(object_id))
@@ -1739,7 +1880,12 @@ impl DocumentStore {
             let Ok(page) = doc.page(page_idx) else {
                 continue;
             };
-            let eff = page.effective_box();
+            let uu = if page.user_unit.is_finite() && page.user_unit > 0.0 {
+                page.user_unit as f32
+            } else {
+                1.0_f32
+            };
+            let eff = scaled_effective_box(page.effective_box(), page.user_unit);
             let (page_x0, page_y1) = (eff.x0 as f32, eff.y1 as f32);
 
             for &annot_id in &page.annots {
@@ -1771,10 +1917,10 @@ impl DocumentStore {
                     _ => continue,
                 };
 
-                let x = pdf_x0 - page_x0;
-                let w = (pdf_x1 - pdf_x0).abs();
-                let h = (pdf_y1 - pdf_y0).abs();
-                let y = page_y1 - pdf_y1;
+                let x = pdf_x0 * uu - page_x0;
+                let w = ((pdf_x1 - pdf_x0) * uu).abs();
+                let h = ((pdf_y1 - pdf_y0) * uu).abs();
+                let y = page_y1 - pdf_y1 * uu;
 
                 let color_str = dict
                     .get("C")
@@ -1942,6 +2088,11 @@ impl DocumentStore {
         is_thumbnail: bool,
     ) -> PdfResult<crate::models::RenderResult> {
         let rounded_scale = (options.scale * 100.0).round() as u32;
+        // `options.quality` is unused during rasterization, and `options.filter`
+        // is applied as a fast post-process on the unfiltered base bitmap.
+        // Canonicalizing both fields ensures thumbnails, quality levels, and
+        // colour filters (e.g. toggling Midnight mode) share one cached base
+        // bitmap instead of re-rasterizing and duplicating RAM.
         let cache_key = RenderKey {
             doc_id,
             page_num,
@@ -1952,18 +2103,8 @@ impl DocumentStore {
             } else {
                 options.auto_crop
             },
-            quality: if is_thumbnail {
-                RenderQuality::Low
-            } else {
-                options.quality
-            },
-            // Thumbnails are always colour-true, so they must not share a cache
-            // entry with a filtered full-page render.
-            filter: if is_thumbnail {
-                RenderFilter::None
-            } else {
-                options.filter
-            },
+            quality: RenderQuality::Low,
+            filter: RenderFilter::None,
         };
 
         // Capture the cache generation *before* rendering. If the document is
@@ -1985,105 +2126,186 @@ impl DocumentStore {
             });
         }
 
-        let doc = self
-            .documents
-            .get(&doc_id)
-            .ok_or(PdfError::EngineError(EngineErrorKind::DocumentNotFound))?;
-        let page = doc
-            .page(page_num)
-            .map_err(|_| PdfError::PageNotFound(page_num))?;
-
-        let mut fonts = doc.load_page_fonts(&page);
-        let images = self.image_caches.entry(doc_id).or_default();
-        let (content, _) = doc
-            .page_content_with_diagnostics(&page)
-            .map_err(|e| PdfError::RenderFailed(e.to_string()))?;
-        let page_rect = page.effective_box();
-
-        // Incorporate custom option rotation into the display list rotation.
-        //
-        // `with_image_cache_limit` is mandatory here: `ContentInterpreter::new`
-        // inherits `ParseLimits::default()`, whose `max_image_cache_bytes` is
-        // 1 GiB, and `images` below is the document-lifetime cache. Without
-        // this line the store silently retains up to a gigabyte of decoded
-        // pixels per open document.
-        let mut interp = ContentInterpreter::new(page_rect)
-            .with_image_cache_limit(self.image_cache_bytes)
-            .with_page_rotation(page.rotate + options.rotation)
-            .with_page_user_unit(page.user_unit)
-            .with_fonts(&mut fonts)
-            .with_shared_fonts(doc)
-            .with_document(doc.file(), &page.resources)
-            .with_images(images);
-
-        // Ask the CPU backend what scale it will actually rasterize this page
-        // at — `fit_raster` may reduce it to stay inside the page-pixel budget
-        // — and pre-filter every image the backend would box-filter on draw
-        // (an axis below 0.5x of its samples) down to that footprint. The
-        // backend applies the same rule and filter on draw, so the pixels are
-        // unchanged; what changes is that a scan is no longer retained in the
-        // document-lifetime cache above at its full decoded size when it is
-        // drawn thumbnail-small. See `DEFAULT_IMAGE_CACHE_BYTES` for why that
-        // retention is the binding constraint here.
-        //
-        // A bare `CpuRenderer::new()` is the correct oracle for the scale:
-        // `raster_scale` reads only the page-pixel budget, which `with_fonts`
-        // and `with_images` below do not affect, and the budget is derived from
-        // the pixel *count*, so passing the unrotated box is equivalent to what
-        // the rotated display list yields. If a `with_limits` call is ever added
-        // to the renderer below, it must be mirrored here or the two scale
-        // calculations will diverge.
-        if let Some(scale) = CpuRenderer::new().raster_scale(page_rect, options.scale) {
-            interp = interp.with_image_downscale(scale);
-        }
-
-        // Build optional-content config with user visibility overrides applied.
-        let oc_for_render: Option<zpdf::OcConfig> = self.oc_configs.get(&doc_id).map(|base_oc| {
-            if let Some(overrides) = self.oc_visibility.get(&doc_id)
-                && !overrides.is_empty()
-            {
-                apply_oc_overrides(
-                    base_oc,
-                    overrides,
-                    self.oc_groups
-                        .get(&doc_id)
-                        .map_or(&[][..], |v| v.as_slice()),
-                )
-            } else {
-                base_oc.clone()
+        let oc_hash = {
+            use std::hash::{Hash, Hasher};
+            let mut hasher = std::collections::hash_map::DefaultHasher::new();
+            if let Some(overrides) = self.oc_visibility.get(&doc_id) {
+                let mut pairs: Vec<(u32, u16, bool)> =
+                    overrides.iter().map(|(id, &v)| (id.0, id.1, v)).collect();
+                pairs.sort_unstable();
+                pairs.hash(&mut hasher);
             }
-        });
+            hasher.finish()
+        };
 
-        if let Some(ref oc) = oc_for_render {
-            interp = interp.with_optional_content(oc);
-        }
+        let page_img = if !is_thumbnail
+            && let Some(cached_dl) = self.display_list_cache.iter().find(|e| {
+                e.doc_id == doc_id
+                    && e.page_num == page_num
+                    && e.rotation == options.rotation
+                    && e.oc_hash == oc_hash
+                    && options.scale <= e.interpreted_scale * 1.05
+            }) {
+            let images = self.image_caches.entry(doc_id).or_default();
+            CpuRenderer::new()
+                .with_fonts(&cached_dl.fonts)
+                .with_images(images)
+                .with_stage_timing(tracing::enabled!(tracing::Level::DEBUG))
+                .render_display_list(&cached_dl.display_list, options.scale)
+                .map_err(|e| PdfError::RenderFailed(e.to_string()))?
+        } else {
+            let doc = self
+                .documents
+                .get(&doc_id)
+                .ok_or(PdfError::EngineError(EngineErrorKind::DocumentNotFound))?;
+            let page = doc
+                .page(page_num)
+                .map_err(|_| PdfError::PageNotFound(page_num))?;
 
-        let display_list = interp.interpret(&content);
+            let mut fonts = doc.load_page_fonts(&page);
+            let images = self.image_caches.entry(doc_id).or_default();
+            let (content, _) = doc
+                .page_content_with_diagnostics(&page)
+                .map_err(|e| PdfError::RenderFailed(e.to_string()))?;
+            let page_rect = page.effective_box();
 
-        let mut renderer = CpuRenderer::new()
-            .with_fonts(&fonts)
-            .with_images(images)
-            .with_stage_timing(true);
-        let page_img = renderer
-            .render_display_list(&display_list, options.scale)
-            .map_err(|e| PdfError::RenderFailed(e.to_string()))?;
-        if let Some(stats) = renderer.stage_stats() {
-            tracing::debug!(
-                page = page_num,
-                total_ms = stats.total_ns / 1_000_000,
-                glyphs = stats.glyphs,
-                glyph_ms = stats.glyph_ns() / 1_000_000,
-                fills = stats.fills,
-                fill_ms = stats.fill_ns / 1_000_000,
-                strokes = stats.strokes,
-                stroke_ms = stats.stroke_ns / 1_000_000,
-                images = stats.images,
-                image_ms = stats.image_ns / 1_000_000,
-                masks = stats.soft_mask_planes,
-                mask_ms = stats.soft_mask_ns / 1_000_000,
-                "Page render stage diagnostics"
+            // Incorporate custom option rotation into the display list rotation.
+            //
+            // `with_image_cache_limit` is mandatory here: `ContentInterpreter::new`
+            // inherits `ParseLimits::default()`, whose `max_image_cache_bytes` is
+            // 1 GiB, and `images` below is the document-lifetime cache. Without
+            // this line the store silently retains up to a gigabyte of decoded
+            // pixels per open document.
+            let pdfbull_rects: Vec<[f64; 4]> = page
+                .annots
+                .iter()
+                .filter_map(|&id| {
+                    let obj = doc.file().resolve(id).ok()?;
+                    if !is_pdfbull_annotation(&obj) {
+                        return None;
+                    }
+                    let arr = obj.as_dict().ok()?.get("Rect")?.as_array().ok()?;
+                    match arr {
+                        [a, b, c, d] => Some([
+                            a.as_f64().ok()?,
+                            b.as_f64().ok()?,
+                            c.as_f64().ok()?,
+                            d.as_f64().ok()?,
+                        ]),
+                        _ => None,
+                    }
+                })
+                .collect();
+            let external_annotations: Vec<zpdf::Annotation> = doc
+                .page_annotations(&page)
+                .into_iter()
+                .filter(|a| {
+                    !pdfbull_rects.iter().any(|r| {
+                        (a.rect.x0 - r[0]).abs() < 0.01
+                            && (a.rect.y0 - r[1]).abs() < 0.01
+                            && (a.rect.x1 - r[2]).abs() < 0.01
+                            && (a.rect.y1 - r[3]).abs() < 0.01
+                    })
+                })
+                .collect();
+
+            let output_intent = zpdf::output_intent_cmyk_profile(
+                doc.file(),
+                doc.page_output_intents(&page),
+                &doc.output_intents(),
+                &mut self.icc_cache,
             );
-        }
+
+            let mut interp = ContentInterpreter::new(page_rect)
+                .with_image_cache_limit(self.image_cache_bytes)
+                .with_page_rotation(page.rotate + options.rotation)
+                .with_page_user_unit(page.user_unit)
+                .with_fonts(&mut fonts)
+                .with_shared_fonts(doc)
+                .with_document(doc.file(), &page.resources)
+                .with_images(images)
+                .with_colors(&mut self.icc_cache)
+                .with_annotations(&external_annotations);
+
+            if let Some(profile) = output_intent {
+                interp = interp.with_output_intent_cmyk(profile);
+            }
+
+            if let Some(scale) = CpuRenderer::new().raster_scale(page_rect, options.scale) {
+                interp = interp
+                    .with_image_downscale(scale)
+                    .with_clip_elision_scale(scale);
+            }
+
+            // Build optional-content config with user visibility overrides applied.
+            let oc_for_render: Option<zpdf::OcConfig> =
+                self.oc_configs.get(&doc_id).map(|base_oc| {
+                    if let Some(overrides) = self.oc_visibility.get(&doc_id)
+                        && !overrides.is_empty()
+                    {
+                        apply_oc_overrides(
+                            base_oc,
+                            overrides,
+                            self.oc_groups
+                                .get(&doc_id)
+                                .map_or(&[][..], |v| v.as_slice()),
+                        )
+                    } else {
+                        base_oc.clone()
+                    }
+                });
+
+            if let Some(ref oc) = oc_for_render {
+                interp = interp.with_optional_content(oc);
+            }
+
+            let display_list = interp.interpret(&content);
+
+            let mut renderer = CpuRenderer::new()
+                .with_fonts(&fonts)
+                .with_images(images)
+                .with_stage_timing(tracing::enabled!(tracing::Level::DEBUG));
+            let rendered = renderer
+                .render_display_list(&display_list, options.scale)
+                .map_err(|e| PdfError::RenderFailed(e.to_string()))?;
+            if let Some(stats) = renderer.stage_stats() {
+                tracing::debug!(
+                    page = page_num,
+                    total_ms = stats.total_ns / 1_000_000,
+                    glyphs = stats.glyphs,
+                    glyph_ms = stats.glyph_ns() / 1_000_000,
+                    fills = stats.fills,
+                    fill_ms = stats.fill_ns / 1_000_000,
+                    strokes = stats.strokes,
+                    stroke_ms = stats.stroke_ns / 1_000_000,
+                    images = stats.images,
+                    image_ms = stats.image_ns / 1_000_000,
+                    masks = stats.soft_mask_planes,
+                    mask_ms = stats.soft_mask_ns / 1_000_000,
+                    "Page render stage diagnostics"
+                );
+            }
+            if !is_thumbnail {
+                self.display_list_cache.retain(|e| {
+                    !(e.doc_id == doc_id
+                        && e.page_num == page_num
+                        && e.rotation == options.rotation)
+                });
+                if self.display_list_cache.len() >= 4 {
+                    self.display_list_cache.remove(0);
+                }
+                self.display_list_cache.push(DisplayListCacheEntry {
+                    doc_id,
+                    page_num,
+                    rotation: options.rotation,
+                    oc_hash,
+                    interpreted_scale: options.scale,
+                    display_list,
+                    fonts,
+                });
+            }
+            rendered
+        };
         let w = page_img.width;
         let h = page_img.height;
 
@@ -2166,11 +2388,17 @@ impl DocumentStore {
 
         let mut spans = Vec::new();
         {
-            let interp = ContentInterpreter::new(page.effective_box())
+            let mut interp = ContentInterpreter::new(page.effective_box())
                 .with_page_user_unit(page.user_unit)
                 .with_fonts(&mut fonts)
+                .with_shared_fonts(doc)
                 .with_document(doc.file(), &page.resources)
+                .with_skip_images(true)
+                .with_skip_type3_painting(true)
                 .with_text_sink(&mut spans);
+            if let Some(oc) = self.oc_configs.get(&doc_id) {
+                interp = interp.with_optional_content(oc);
+            }
             let _ = interp.interpret(&content);
         }
         let text = if doc.is_tagged() {
@@ -2204,12 +2432,18 @@ impl DocumentStore {
 
         let mut spans = Vec::new();
         {
-            let interp = ContentInterpreter::new(page.effective_box())
+            let mut interp = ContentInterpreter::new(page.effective_box())
                 .with_page_user_unit(page.user_unit)
                 .with_fonts(&mut fonts)
+                .with_shared_fonts(doc)
                 .with_document(doc.file(), &page.resources)
+                .with_skip_images(true)
+                .with_skip_type3_painting(true)
                 .with_text_sink(&mut spans)
                 .with_text_geometry(true);
+            if let Some(oc) = self.oc_configs.get(&doc_id) {
+                interp = interp.with_optional_content(oc);
+            }
             let (_, stats) = interp.interpret_with_stats(&content);
             if stats.text_geometry_omitted {
                 tracing::debug!(
@@ -2418,17 +2652,23 @@ impl DocumentStore {
         let mut spans = Vec::new();
         let mut rules = Vec::new();
         {
-            let interp = ContentInterpreter::new(page.effective_box())
+            let mut interp = ContentInterpreter::new(page.effective_box())
                 .with_page_user_unit(page.user_unit)
                 .with_fonts(&mut fonts)
+                .with_shared_fonts(doc)
                 .with_document(doc.file(), &page.resources)
+                .with_skip_images(true)
+                .with_skip_type3_painting(true)
                 .with_text_sink(&mut spans)
                 .with_rule_sink(&mut rules);
+            if let Some(oc) = self.oc_configs.get(&doc_id) {
+                interp = interp.with_optional_content(oc);
+            }
             let _ = interp.interpret(&content);
         }
 
         let tables = detect_tables_with_rules(&spans, &rules);
-        let eff_box = page.effective_box();
+        let eff_box = scaled_effective_box(page.effective_box(), page.user_unit);
 
         let detected = tables
             .into_iter()
@@ -2545,11 +2785,18 @@ impl DocumentStore {
             // real box is unknown puts the annotation in the wrong place, and
             // for a redaction that means burning the wrong region. Refuse
             // instead of guessing.
-            let page_box = self
+            let (page_box, uu) = self
                 .documents
                 .get(&doc_id)
                 .and_then(|d| d.page(ann.page).ok())
-                .map(|p| p.effective_box())
+                .map(|p| {
+                    let u = if p.user_unit.is_finite() && p.user_unit > 0.0 {
+                        p.user_unit
+                    } else {
+                        1.0
+                    };
+                    (scaled_effective_box(p.effective_box(), p.user_unit), u)
+                })
                 .ok_or_else(|| {
                     PdfError::EngineError(EngineErrorKind::Generic(format!(
                         "cannot place annotation: page {} of the document is not loaded",
@@ -2557,11 +2804,11 @@ impl DocumentStore {
                     )))
                 })?;
 
-            let pdf_x = ann.x as f64 + page_box.x0;
-            let pdf_w = ann.width as f64;
-            let pdf_h = ann.height as f64;
+            let pdf_x = (ann.x as f64 + page_box.x0) / uu;
+            let pdf_w = (ann.width as f64) / uu;
+            let pdf_h = (ann.height as f64) / uu;
             // Convert from screen top-left to PDF bottom-left origin.
-            let pdf_y = page_box.y1 - ann.y as f64 - pdf_h;
+            let pdf_y = (page_box.y1 - ann.y as f64) / uu - pdf_h;
 
             let rect = ZpdfRect {
                 x0: pdf_x,
@@ -2784,6 +3031,16 @@ impl DocumentStore {
         page_num: usize,
         scale: f32,
     ) -> PdfResult<Vec<u8>> {
+        self.export_page_as_image_with_options(doc_id, page_num, scale, false)
+    }
+
+    pub fn export_page_as_image_with_options(
+        &self,
+        doc_id: DocumentId,
+        page_num: usize,
+        scale: f32,
+        use_zopfli: bool,
+    ) -> PdfResult<Vec<u8>> {
         let doc = self
             .documents
             .get(&doc_id)
@@ -2813,7 +3070,7 @@ impl DocumentStore {
         let mut renderer = CpuRenderer::new()
             .with_fonts(&fonts)
             .with_images(&images)
-            .with_stage_timing(true);
+            .with_stage_timing(tracing::enabled!(tracing::Level::DEBUG));
         let page_img = renderer
             .render_display_list(&display_list, scale)
             .map_err(|e| PdfError::RenderFailed(e.to_string()))?;
@@ -2838,7 +3095,66 @@ impl DocumentStore {
             .write_to_vec(ImageFormat::PNG)
             .map_err(|e| PdfError::RenderFailed(format!("{e:?}")))?;
 
+        if use_zopfli {
+            return Self::optimize_png_lossless(&out_buf, true);
+        }
         Ok(out_buf)
+    }
+
+    /// Extract all decoded raster images from `doc_id` using `ConversionMode::Rich`
+    /// and save them as PNG files in `output_dir`. Returns the count of exported images.
+    pub fn extract_all_images(&self, doc_id: DocumentId, output_dir: &str) -> PdfResult<usize> {
+        let doc = self
+            .documents
+            .get(&doc_id)
+            .ok_or(PdfError::EngineError(EngineErrorKind::DocumentNotFound))?;
+        let out_path = std::path::Path::new(output_dir);
+        if !out_path.is_dir() {
+            return Err(PdfError::IoError(
+                "Output directory does not exist".to_string(),
+            ));
+        }
+        let page_indices: Vec<usize> = (0..doc.page_count()).collect();
+        let opts = zpdf::ConversionOptions {
+            mode: zpdf::ConversionMode::Rich,
+            use_structure: false,
+        };
+        let converted = zpdf::convert_pdf(doc, &page_indices, opts).map_err(|e| {
+            PdfError::EngineError(EngineErrorKind::Generic(format!(
+                "Image extraction failed: {e:?}"
+            )))
+        })?;
+        let mut count = 0usize;
+        for page in &converted.pages {
+            for (img_idx, c_img) in page.images.iter().enumerate() {
+                let decoded = &c_img.image;
+                let image = Image::from_u8(
+                    &decoded.data,
+                    decoded.width as usize,
+                    decoded.height as usize,
+                    zune_core::colorspace::ColorSpace::RGBA,
+                );
+                if let Ok(png_bytes) = image.write_to_vec(ImageFormat::PNG) {
+                    let file_path =
+                        out_path.join(format!("page_{}_img_{}.png", page.index + 1, img_idx + 1));
+                    std::fs::write(&file_path, &png_bytes)
+                        .map_err(|e| PdfError::IoError(e.to_string()))?;
+                    count += 1;
+                }
+            }
+        }
+        Ok(count)
+    }
+
+    /// Losslessly optimize an exported PNG image using `oxipng` (with optional
+    /// Zopfli maximum compression).
+    pub fn optimize_png_lossless(png_bytes: &[u8], use_zopfli: bool) -> PdfResult<Vec<u8>> {
+        let mut opts = oxipng::Options::from_preset(if use_zopfli { 6 } else { 2 });
+        if use_zopfli {
+            opts.deflater = oxipng::Deflater::Zopfli(oxipng::ZopfliOptions::default());
+        }
+        oxipng::optimize_from_memory(png_bytes, &opts)
+            .map_err(|e| PdfError::RenderFailed(format!("PNG optimization failed: {e}")))
     }
 
     fn flatten_outline(items: &[zpdf::OutlineItem], out: &mut Vec<Bookmark>, depth: usize) {
@@ -2846,10 +3162,12 @@ impl DocumentStore {
             return;
         }
         for item in items {
-            let page_idx = item.dest.as_ref().and_then(|d| d.page).unwrap_or(0);
+            let page_idx = item.dest.as_ref().and_then(|d| d.page);
             out.push(Bookmark {
                 title: item.title.clone(),
                 page_index: page_idx,
+                uri: item.uri.clone(),
+                depth,
             });
             Self::flatten_outline(&item.children, out, depth + 1);
         }
@@ -2959,12 +3277,18 @@ impl DocumentStore {
             let mut spans: Vec<zpdf::TextSpan> = Vec::new();
             let eff_box = scaled_effective_box(page.effective_box(), page.user_unit);
             {
-                let interp = ContentInterpreter::new(page.effective_box())
+                let mut interp = ContentInterpreter::new(page.effective_box())
                     .with_page_user_unit(page.user_unit)
                     .with_fonts(&mut fonts)
+                    .with_shared_fonts(doc)
                     .with_document(doc.file(), &page.resources)
+                    .with_skip_images(true)
+                    .with_skip_type3_painting(true)
                     .with_text_sink(&mut spans)
                     .with_text_geometry(true);
+                if let Some(oc) = self.oc_configs.get(&doc_id) {
+                    interp = interp.with_optional_content(oc);
+                }
                 let _ = interp.interpret(&content);
             }
 
@@ -3114,16 +3438,22 @@ impl DocumentStore {
 
         let mut spans = Vec::new();
         {
-            let interp = ContentInterpreter::new(page.effective_box())
+            let mut interp = ContentInterpreter::new(page.effective_box())
                 .with_page_user_unit(page.user_unit)
                 .with_fonts(&mut fonts)
+                .with_shared_fonts(doc)
                 .with_document(doc.file(), &page.resources)
+                .with_skip_images(true)
+                .with_skip_type3_painting(true)
                 .with_text_sink(&mut spans);
+            if let Some(oc) = self.oc_configs.get(&doc_id) {
+                interp = interp.with_optional_content(oc);
+            }
             let _ = interp.interpret(&content);
         }
 
         let tables = detect_tables(&spans);
-        let eff_box = page.effective_box();
+        let eff_box = scaled_effective_box(page.effective_box(), page.user_unit);
         Ok(tables
             .into_iter()
             .map(|t| {
@@ -3348,17 +3678,42 @@ impl DocumentStore {
                 .map_err(|e| PdfError::OpenFailed(e.to_string()))?
         };
 
+        let preserve_encrypt = (staged_pdf.is_encrypted() && !pass.is_empty())
+            .then(|| std::str::from_utf8(pass).ok())
+            .flatten()
+            .map(|p| zpdf_writer::EncryptionConfig::aes256(p, p));
         let opts = RewriteOptions {
             compress_uncompressed: true,
             // The image pass above handles downsampling at a DPI the document
             // actually implies, which is strictly better than a fixed pixel cap
             // on images of unknown placement.
             max_image_dimension: None,
+            encrypt: preserve_encrypt,
             ..Default::default()
         };
         let out_bytes =
             rewrite_pdf(&staged_pdf, &opts).map_err(|e| PdfError::IoError(e.to_string()))?;
         drop(staged_pdf);
+        write_pdf_output(output_path, &out_bytes)?;
+        Ok(output_path.to_string())
+    }
+
+    pub fn decrypt_pdf(
+        input_path: &str,
+        output_path: &str,
+        password: Option<&str>,
+    ) -> PdfResult<String> {
+        let data = read_input_capped(input_path)?;
+        let file = zpdf::PdfFile::parse_with_password(data, password.unwrap_or("").as_bytes())
+            .map_err(|e| PdfError::OpenFailed(e.to_string()))?;
+        let out_bytes = rewrite_pdf(
+            &file,
+            &RewriteOptions {
+                encrypt: None,
+                ..Default::default()
+            },
+        )
+        .map_err(|e| PdfError::IoError(e.to_string()))?;
         write_pdf_output(output_path, &out_bytes)?;
         Ok(output_path.to_string())
     }
@@ -3399,8 +3754,27 @@ impl DocumentStore {
         let mut writer = IncrementalWriter::new_with_password(data, pass)
             .map_err(|e| PdfError::OpenFailed(e.to_string()))?;
         for (id, replacement) in replacements {
+            let mut dict = replacement.dict.clone();
+            if let Some(globals) = &replacement.global_data {
+                let globals_stream = zpdf::PdfObject::Stream(zpdf::PdfStream {
+                    dict: zpdf::PdfDict::new(),
+                    data: globals.clone().into(),
+                });
+                let (obj_num, gen_num) = writer
+                    .try_add_object(&globals_stream)
+                    .map_err(|e| PdfError::EngineError(e.to_string().into()))?;
+                let mut decode_parms = zpdf::PdfDict::new();
+                decode_parms.insert(
+                    zpdf::PdfName::new("JBIG2Globals"),
+                    zpdf::PdfObject::Ref(zpdf::ObjectId(obj_num, gen_num as u16)),
+                );
+                dict.insert(
+                    zpdf::PdfName::new("DecodeParms"),
+                    zpdf::PdfObject::Dict(decode_parms),
+                );
+            }
             let stream = zpdf::PdfObject::Stream(zpdf::PdfStream {
-                dict: replacement.dict.clone(),
+                dict,
                 data: replacement.data.clone().into(),
             });
             writer.overwrite_object(*id, stream);
@@ -3420,17 +3794,71 @@ impl DocumentStore {
         owner_pass: &str,
         algorithm: &str,
     ) -> PdfResult<String> {
+        self.encrypt_pdf_with_permissions(
+            input_path,
+            output_path,
+            user_pass,
+            owner_pass,
+            algorithm,
+            crate::models::EncryptionPermissions::default(),
+        )
+    }
+
+    pub fn encrypt_pdf_with_permissions(
+        &self,
+        input_path: &str,
+        output_path: &str,
+        user_pass: &str,
+        owner_pass: &str,
+        algorithm: &str,
+        permissions: crate::models::EncryptionPermissions,
+    ) -> PdfResult<String> {
         let data = read_input_capped(input_path)?;
         let pass = self.password_for_path(input_path);
         let pdf = zpdf::PdfFile::parse_with_password(data, pass)
             .map_err(|e| PdfError::OpenFailed(e.to_string()))?;
-        let enc_config = if algorithm.eq_ignore_ascii_case("rc4") {
+        let mut enc_config = if algorithm.eq_ignore_ascii_case("rc4") {
             zpdf_writer::EncryptionConfig::rc4_128(user_pass, owner_pass)
         } else {
             zpdf_writer::EncryptionConfig::aes256(user_pass, owner_pass)
         };
+        enc_config.permissions = zpdf_writer::Permissions {
+            print: permissions.print,
+            modify: permissions.modify,
+            copy: permissions.copy,
+            annotate: permissions.annotate,
+        };
         let opts = RewriteOptions {
             encrypt: Some(enc_config),
+            ..Default::default()
+        };
+        let out_bytes = rewrite_pdf(&pdf, &opts).map_err(|e| PdfError::IoError(e.to_string()))?;
+        write_pdf_output(output_path, &out_bytes)?;
+        Ok(output_path.to_string())
+    }
+
+    /// Convert a PDF to PDF/A-1b, 2b, or 3b archival conformance using `zpdf_writer::PdfaConvertConfig`.
+    pub fn convert_to_pdfa(
+        &self,
+        input_path: &str,
+        output_path: &str,
+        profile_str: &str,
+    ) -> PdfResult<String> {
+        let profile = match profile_str.to_ascii_lowercase().as_str() {
+            "a1b" | "pdfa-1b" | "1b" => zpdf_writer::PdfaProfile::A1b,
+            "a3b" | "pdfa-3b" | "3b" => zpdf_writer::PdfaProfile::A3b,
+            _ => zpdf_writer::PdfaProfile::A2b,
+        };
+        let data = read_input_capped(input_path)?;
+        let pass = self.password_for_path(input_path);
+        let pdf = zpdf::PdfFile::parse_with_password(data, pass)
+            .map_err(|e| PdfError::OpenFailed(e.to_string()))?;
+        let opts = RewriteOptions {
+            pdfa: Some(zpdf_writer::PdfaConvertConfig {
+                profile,
+                icc: None,
+                fallback_font: None,
+            }),
             ..Default::default()
         };
         let out_bytes = rewrite_pdf(&pdf, &opts).map_err(|e| PdfError::IoError(e.to_string()))?;
@@ -4108,21 +4536,22 @@ impl DocumentStore {
         // so feed each call the previous call's output. Pages are visited in
         // ascending order (BTreeMap) so the result does not depend on the
         // annotation collection's map iteration order.
-        let mut by_page: std::collections::BTreeMap<usize, Vec<ZpdfRect>> = Default::default();
+        type PageRedactions = (Vec<ZpdfRect>, Option<(f64, f64, f64)>);
+        let mut by_page: std::collections::BTreeMap<usize, PageRedactions> = Default::default();
         for ann in annotations {
-            if let AnnotationStyle::Redact { .. } = &ann.style {
-                // Convert from screen (top-left, box-relative) coords back to PDF
-                // (bottom-left, box-absolute) coords, mirroring
-                // `save_annotations`. Using the box *height* here and dropping
-                // its own `x0`/`y1` burned the wrong region on every page whose
-                // box does not start at the origin: a `CropBox` with a non-zero
-                // left edge redacted an area shifted by exactly that edge.
-                // A guessed box would burn the wrong region — refuse.
-                let page_box = self
+            if let AnnotationStyle::Redact { color } = &ann.style {
+                let (page_box, uu) = self
                     .documents
                     .get(&doc_id)
                     .and_then(|d| d.page(ann.page).ok())
-                    .map(|p| p.effective_box())
+                    .map(|p| {
+                        let u = if p.user_unit.is_finite() && p.user_unit > 0.0 {
+                            p.user_unit
+                        } else {
+                            1.0
+                        };
+                        (scaled_effective_box(p.effective_box(), p.user_unit), u)
+                    })
                     .ok_or_else(|| {
                         PdfError::EngineError(EngineErrorKind::Generic(format!(
                             "cannot redact: page {} of the document is not loaded",
@@ -4130,15 +4559,21 @@ impl DocumentStore {
                         )))
                     })?;
 
-                let pdf_x = ann.x as f64 + page_box.x0;
-                let pdf_y = page_box.y1 - ann.y as f64 - ann.height as f64;
+                let pdf_x = (ann.x as f64 + page_box.x0) / uu;
+                let pdf_w = (ann.width as f64) / uu;
+                let pdf_h = (ann.height as f64) / uu;
+                let pdf_y = (page_box.y1 - ann.y as f64) / uu - pdf_h;
                 let rect = ZpdfRect {
                     x0: pdf_x,
                     y0: pdf_y,
-                    x1: pdf_x + ann.width as f64,
-                    y1: pdf_y + ann.height as f64,
+                    x1: pdf_x + pdf_w,
+                    y1: pdf_y + pdf_h,
                 };
-                by_page.entry(ann.page).or_default().push(rect);
+                let (r, g, b) = hex_to_rgb(color);
+                let entry = by_page
+                    .entry(ann.page)
+                    .or_insert_with(|| (Vec::new(), Some((r as f64, g as f64, b as f64))));
+                entry.0.push(rect);
             }
         }
 
@@ -4167,9 +4602,9 @@ impl DocumentStore {
         let pass = self.password_for_doc(doc_id);
         let mut writer = IncrementalWriter::new_with_password(data, pass)
             .map_err(|e| PdfError::OpenFailed(e.to_string()))?;
-        for (page_idx, rects) in by_page {
+        for (page_idx, (rects, fill)) in by_page {
             writer
-                .redact_page(page_idx, &rects, &RedactOptions::default())
+                .redact_page(page_idx, &rects, &zpdf_writer::RedactOptions { fill })
                 .map_err(|e| PdfError::IoError(e.to_string()))?;
         }
         let mut updated = std::io::Cursor::new(Vec::new());
@@ -4181,8 +4616,18 @@ impl DocumentStore {
         // original file prefix (and every superseded revision in it) is dropped.
         let doc = PdfDocument::open_with_password(updated.into_inner(), pass)
             .map_err(|e| PdfError::OpenFailed(e.to_string()))?;
-        let out_bytes = rewrite_pdf(doc.file(), &RewriteOptions::default())
-            .map_err(|e| PdfError::IoError(e.to_string()))?;
+        let preserve_encrypt = (doc.file().is_encrypted() && !pass.is_empty())
+            .then(|| std::str::from_utf8(pass).ok())
+            .flatten()
+            .map(|p| zpdf_writer::EncryptionConfig::aes256(p, p));
+        let out_bytes = rewrite_pdf(
+            doc.file(),
+            &RewriteOptions {
+                encrypt: preserve_encrypt,
+                ..Default::default()
+            },
+        )
+        .map_err(|e| PdfError::IoError(e.to_string()))?;
 
         write_pdf_output(&final_path, &out_bytes)?;
 
@@ -4448,32 +4893,82 @@ impl DocumentStore {
 
     #[cfg(windows)]
     pub fn print_document(path: &str, printer_name: Option<&str>) -> PdfResult<()> {
-        use winprint::printer::{FilePrinter, PrinterDevice, WinPdfPrinter};
+        Self::print_document_with_options(path, printer_name, &PrintJobOptions::default())
+    }
 
-        let all_devices = PrinterDevice::all()
-            .map_err(|e| PdfError::IoError(format!("Failed to list printers: {e}")))?;
+    #[cfg(windows)]
+    pub fn print_document_with_options(
+        path: &str,
+        printer_name: Option<&str>,
+        opts: &PrintJobOptions,
+    ) -> PdfResult<()> {
+        use winprint::printer::{FilePrinter, WinPdfPrinter};
+        use winprint::ticket::{PrintTicket, PrintTicketBuilder};
 
-        let device = if let Some(name) = printer_name {
-            all_devices
-                .into_iter()
-                .find(|d| d.name() == name)
-                .ok_or_else(|| PdfError::IoError(format!("Printer '{name}' not found")))?
+        let device = resolve_printer_device(printer_name)?;
+        let ticket = if opts.is_default() {
+            PrintTicket::default()
         } else {
-            all_devices
-                .into_iter()
-                .next()
-                .ok_or_else(|| PdfError::IoError("No printers found".into()))?
+            let mut builder = PrintTicketBuilder::new(&device)
+                .map_err(|e| PdfError::IoError(format!("PrintTicketBuilder init failed: {e}")))?;
+            let delta = opts.to_print_ticket_xml();
+            if !delta.is_empty() {
+                builder
+                    .merge(PrintTicket::from_xml(delta))
+                    .map_err(|e| PdfError::IoError(format!("Invalid print options: {e}")))?;
+            }
+            builder
+                .build()
+                .map_err(|e| PdfError::IoError(format!("PrintTicket build failed: {e}")))?
         };
 
         let printer = WinPdfPrinter::new(device);
         printer
-            .print(std::path::Path::new(path), Default::default())
+            .print(std::path::Path::new(path), ticket)
             .map_err(|e| PdfError::IoError(format!("Print failed: {e}")))?;
         Ok(())
     }
 
+    #[cfg(windows)]
+    pub fn get_printer_capabilities(
+        printer_name: Option<&str>,
+    ) -> PdfResult<PrinterCapabilitiesInfo> {
+        use winprint::ticket::PrintCapabilities;
+
+        let device = resolve_printer_device(printer_name)?;
+        let caps = PrintCapabilities::fetch(&device)
+            .map_err(|e| PdfError::IoError(format!("Failed to query print capabilities: {e}")))?;
+        Ok(PrinterCapabilitiesInfo {
+            printer_name: device.name().to_string(),
+            max_copies: caps.max_copies().map(|c| c.0).unwrap_or(99),
+            duplex_options: caps.duplexes().map(|d| format!("{d:?}")).collect(),
+            media_sizes: caps.page_media_sizes().map(|m| format!("{m:?}")).collect(),
+            orientations: caps.page_orientations().map(|o| format!("{o:?}")).collect(),
+        })
+    }
+
     #[cfg(not(windows))]
     pub fn print_document(_path: &str, _printer_name: Option<&str>) -> PdfResult<()> {
+        Err(PdfError::IoError(
+            "Printing is only supported on Windows".into(),
+        ))
+    }
+
+    #[cfg(not(windows))]
+    pub fn print_document_with_options(
+        _path: &str,
+        _printer_name: Option<&str>,
+        _opts: &PrintJobOptions,
+    ) -> PdfResult<()> {
+        Err(PdfError::IoError(
+            "Printing is only supported on Windows".into(),
+        ))
+    }
+
+    #[cfg(not(windows))]
+    pub fn get_printer_capabilities(
+        _printer_name: Option<&str>,
+    ) -> PdfResult<PrinterCapabilitiesInfo> {
         Err(PdfError::IoError(
             "Printing is only supported on Windows".into(),
         ))
@@ -4518,17 +5013,30 @@ impl DocumentStore {
         Ok(zpdf::ObjectId(obj_num, gen_num as u16))
     }
 
+    fn push_pdf_literal_str(out: &mut Vec<u8>, bytes: &[u8]) {
+        out.push(b'(');
+        for &b in bytes {
+            match b {
+                b'\\' | b'(' | b')' => {
+                    out.push(b'\\');
+                    out.push(b);
+                }
+                b'\r' => out.extend_from_slice(b"\\r"),
+                b'\n' => out.extend_from_slice(b"\\n"),
+                _ => out.push(b),
+            }
+        }
+        out.push(b')');
+    }
+
     fn append_overlay_stream(
         writer: &mut IncrementalWriter,
         page_id: zpdf::ObjectId,
+        bbox: [f64; 4],
         stream_bytes: &[u8],
         font_ref_id: zpdf::ObjectId,
         gstate_ref_id: Option<zpdf::ObjectId>,
     ) -> PdfResult<()> {
-        let (stream_obj, stream_gen) = writer
-            .try_add_flate_stream(&zpdf::PdfDict::new(), stream_bytes)
-            .map_err(|e| PdfError::EngineError(e.to_string().into()))?;
-        let stream_id = zpdf::ObjectId(stream_obj, stream_gen as u16);
         let page_obj = writer
             .resolve_current(page_id)
             .map_err(|e| PdfError::EngineError(e.to_string().into()))?;
@@ -4537,12 +5045,11 @@ impl DocumentStore {
             .map_err(|_| PdfError::EngineError("Invalid page object".into()))?
             .clone();
 
-        let mut all_contents = match page_dict.get("Contents") {
+        let orig_contents = match page_dict.get("Contents") {
             Some(zpdf::PdfObject::Ref(r)) => vec![zpdf::PdfObject::Ref(*r)],
             Some(zpdf::PdfObject::Array(arr)) => arr.clone(),
             _ => Vec::new(),
         };
-        all_contents.push(zpdf::PdfObject::Ref(stream_id));
 
         let deref_dict = |w: &IncrementalWriter, obj: &zpdf::PdfObject| -> Option<zpdf::PdfDict> {
             match obj {
@@ -4555,58 +5062,105 @@ impl DocumentStore {
             }
         };
 
-        let existing_res = page_dict.get("Resources").cloned();
-        let merged_res_id = match existing_res {
-            Some(ref res_obj) => {
-                let Some(mut res_dict) = deref_dict(writer, res_obj) else {
+        // Merge only a collision-free Form XObject name into the page's
+        // `/Resources /XObject` dictionary, keeping `/Font` (such as `/F1`)
+        // and `/ExtGState` on the page untouched.
+        let mut res_dict = match page_dict.get("Resources") {
+            Some(res_obj) => {
+                let Some(d) = deref_dict(writer, res_obj) else {
                     tracing::warn!(
                         "Overlay: page {page_id:?} has unresolvable /Resources; leaving it unchanged"
                     );
                     return Ok(());
                 };
-                let mut font_dict = res_dict
-                    .get("Font")
-                    .and_then(|f| deref_dict(writer, f))
-                    .unwrap_or_default();
-                font_dict.insert(zpdf::PdfName::new("F1"), zpdf::PdfObject::Ref(font_ref_id));
-                res_dict.insert(zpdf::PdfName::new("Font"), zpdf::PdfObject::Dict(font_dict));
-
-                if let Some(gs_id) = gstate_ref_id {
-                    let mut gs_dict = res_dict
-                        .get("ExtGState")
-                        .and_then(|g| deref_dict(writer, g))
-                        .unwrap_or_default();
-                    gs_dict.insert(zpdf::PdfName::new("GS_WM"), zpdf::PdfObject::Ref(gs_id));
-                    res_dict.insert(
-                        zpdf::PdfName::new("ExtGState"),
-                        zpdf::PdfObject::Dict(gs_dict),
-                    );
-                }
-
-                let (id_num, id_gen) = writer
-                    .try_add_object(&zpdf::PdfObject::Dict(res_dict))
-                    .map_err(|e| PdfError::EngineError(e.to_string().into()))?;
-                zpdf::ObjectId(id_num, id_gen as u16)
+                d
             }
-            None => {
-                let mut res_dict = zpdf::PdfDict::new();
-                let mut font_dict = zpdf::PdfDict::new();
-                font_dict.insert(zpdf::PdfName::new("F1"), zpdf::PdfObject::Ref(font_ref_id));
-                res_dict.insert(zpdf::PdfName::new("Font"), zpdf::PdfObject::Dict(font_dict));
-                if let Some(gs_id) = gstate_ref_id {
-                    let mut gs_dict = zpdf::PdfDict::new();
-                    gs_dict.insert(zpdf::PdfName::new("GS_WM"), zpdf::PdfObject::Ref(gs_id));
-                    res_dict.insert(
-                        zpdf::PdfName::new("ExtGState"),
-                        zpdf::PdfObject::Dict(gs_dict),
-                    );
-                }
-                let (id_num, id_gen) = writer
-                    .try_add_object(&zpdf::PdfObject::Dict(res_dict))
-                    .map_err(|e| PdfError::EngineError(e.to_string().into()))?;
-                zpdf::ObjectId(id_num, id_gen as u16)
-            }
+            None => zpdf::PdfDict::new(),
         };
+
+        let mut xobj_dict = res_dict
+            .get("XObject")
+            .and_then(|x| deref_dict(writer, x))
+            .unwrap_or_default();
+
+        // Build an isolated Form XObject for the overlay with its own
+        // `/Resources` so `/F1` and `/GS_WM` can never collide with page fonts.
+        let mut form_font = zpdf::PdfDict::new();
+        form_font.insert(zpdf::PdfName::new("F1"), zpdf::PdfObject::Ref(font_ref_id));
+        let mut form_res = zpdf::PdfDict::new();
+        form_res.insert(zpdf::PdfName::new("Font"), zpdf::PdfObject::Dict(form_font));
+        if let Some(gs_id) = gstate_ref_id {
+            let mut form_gs = zpdf::PdfDict::new();
+            form_gs.insert(zpdf::PdfName::new("GS_WM"), zpdf::PdfObject::Ref(gs_id));
+            form_res.insert(
+                zpdf::PdfName::new("ExtGState"),
+                zpdf::PdfObject::Dict(form_gs),
+            );
+        }
+
+        let mut form_dict = zpdf::PdfDict::new();
+        form_dict.insert(
+            zpdf::PdfName::new("Type"),
+            zpdf::PdfObject::Name(zpdf::PdfName::new("XObject")),
+        );
+        form_dict.insert(
+            zpdf::PdfName::new("Subtype"),
+            zpdf::PdfObject::Name(zpdf::PdfName::new("Form")),
+        );
+        form_dict.insert(zpdf::PdfName::new("FormType"), zpdf::PdfObject::Integer(1));
+        form_dict.insert(
+            zpdf::PdfName::new("BBox"),
+            zpdf::PdfObject::Array(bbox.into_iter().map(zpdf::PdfObject::Real).collect()),
+        );
+        form_dict.insert(
+            zpdf::PdfName::new("Resources"),
+            zpdf::PdfObject::Dict(form_res),
+        );
+
+        let (form_obj, form_gen) = writer
+            .try_add_flate_stream(&form_dict, stream_bytes)
+            .map_err(|e| PdfError::EngineError(e.to_string().into()))?;
+        let form_id = zpdf::ObjectId(form_obj, form_gen as u16);
+
+        let mut suffix = form_obj;
+        let overlay_name = loop {
+            let candidate = format!("PDFBullOverlay{suffix}");
+            if !xobj_dict.0.contains_key(&zpdf::PdfName::new(&candidate)) {
+                break candidate;
+            }
+            suffix += 1;
+        };
+        xobj_dict.insert(
+            zpdf::PdfName::new(&overlay_name),
+            zpdf::PdfObject::Ref(form_id),
+        );
+        res_dict.insert(
+            zpdf::PdfName::new("XObject"),
+            zpdf::PdfObject::Dict(xobj_dict),
+        );
+
+        let (res_obj_num, res_obj_gen) = writer
+            .try_add_object(&zpdf::PdfObject::Dict(res_dict))
+            .map_err(|e| PdfError::EngineError(e.to_string().into()))?;
+        let merged_res_id = zpdf::ObjectId(res_obj_num, res_obj_gen as u16);
+
+        // Wrap existing streams in `q`...`Q` so unbalanced CTM/clip state
+        // from the original page cannot distort the overlay Form XObject.
+        let (q_obj, q_gen) = writer
+            .try_add_flate_stream(&zpdf::PdfDict::new(), b"q\n")
+            .map_err(|e| PdfError::EngineError(e.to_string().into()))?;
+        let tail = format!("\nQ\nq /{overlay_name} Do Q\n");
+        let (tail_obj, tail_gen) = writer
+            .try_add_flate_stream(&zpdf::PdfDict::new(), tail.as_bytes())
+            .map_err(|e| PdfError::EngineError(e.to_string().into()))?;
+
+        let mut all_contents = Vec::with_capacity(orig_contents.len() + 2);
+        all_contents.push(zpdf::PdfObject::Ref(zpdf::ObjectId(q_obj, q_gen as u16)));
+        all_contents.extend(orig_contents);
+        all_contents.push(zpdf::PdfObject::Ref(zpdf::ObjectId(
+            tail_obj,
+            tail_gen as u16,
+        )));
 
         page_dict.insert(
             zpdf::PdfName::new("Contents"),
@@ -4621,9 +5175,19 @@ impl DocumentStore {
     }
 
     pub fn add_watermark(input_path: &str, text: &str, output_path: &str) -> PdfResult<String> {
+        Self::add_watermark_with_password(input_path, text, output_path, None)
+    }
+
+    pub fn add_watermark_with_password(
+        input_path: &str,
+        text: &str,
+        output_path: &str,
+        password: Option<&str>,
+    ) -> PdfResult<String> {
         let input = read_document_bytes_shared(input_path)?;
-        let mut writer = IncrementalWriter::from_shared(input)
-            .map_err(|e| PdfError::OpenFailed(e.to_string()))?;
+        let mut writer =
+            IncrementalWriter::from_shared_with_password(input, password.unwrap_or("").as_bytes())
+                .map_err(|e| PdfError::OpenFailed(e.to_string()))?;
 
         let page_count = writer.page_count();
         let font_ref_id = Self::add_helvetica_font(&mut writer)?;
@@ -4642,11 +5206,7 @@ impl DocumentStore {
 
         let (text_bytes, unmappable) = encode_pdf_text(text);
         if unmappable > 0 {
-            tracing::warn!(
-                "Watermark text has {unmappable} character(s) outside WinAnsiEncoding \
-                 (e.g. CJK or emoji); substituted '?' because the non-embedded \
-                 Helvetica font cannot draw them"
-            );
+            writer.set_font_provider(shared_font_provider());
         }
 
         for page_idx in 0..page_count {
@@ -4668,44 +5228,62 @@ impl DocumentStore {
             };
             let (page_w, page_h) = (x1 - x0, y1 - y0);
 
-            let mut content = pdf_writer::Content::new();
-            content.save_state();
-            content.set_parameters(pdf_writer::Name(b"GS_WM"));
-            content.begin_text();
             let font_size = 48.0_f32.min((page_w / 12.0).max(12.0));
-            content.set_font(pdf_writer::Name(b"F1"), font_size);
-            content.set_fill_rgb(0.5, 0.5, 0.5);
+            if unmappable > 0 {
+                let estimated_w = (text.chars().count() as f32) * font_size * 0.6;
+                let x = (x0 + (page_w - estimated_w) / 2.0).max(x0 + 10.0);
+                let y = (y0 + page_h / 2.0).max(y0 + 10.0);
+                let stamp = StampItem::Text {
+                    text: text.to_string(),
+                    x: x as f64,
+                    y: y as f64,
+                    font: "Helvetica".to_string(),
+                    size: font_size as f64,
+                    color: (0.5, 0.5, 0.5),
+                };
+                writer
+                    .stamp_page(page_idx, &[stamp])
+                    .map_err(|e| PdfError::EngineError(e.to_string().into()))?;
+                continue;
+            }
             let estimated_w = (text_bytes.len() as f32) * font_size * 0.6;
-            match rot {
+            let [a, b, c, d, tx, ty] = match rot {
                 90 => {
                     let x = (x0 + page_w / 2.0).max(x0 + 10.0);
                     let y = (y0 + (page_h - estimated_w) / 2.0).max(y0 + 10.0);
-                    content.set_text_matrix([0.0, 1.0, -1.0, 0.0, x, y]);
+                    [0.0, 1.0, -1.0, 0.0, x, y]
                 }
                 180 => {
                     let x = (x0 + (page_w + estimated_w) / 2.0).min(x1 - 10.0);
                     let y = (y0 + page_h / 2.0).max(y0 + 10.0);
-                    content.set_text_matrix([-1.0, 0.0, 0.0, -1.0, x, y]);
+                    [-1.0, 0.0, 0.0, -1.0, x, y]
                 }
                 270 => {
                     let x = (x0 + page_w / 2.0).max(x0 + 10.0);
                     let y = (y0 + (page_h + estimated_w) / 2.0).min(y1 - 10.0);
-                    content.set_text_matrix([0.0, -1.0, 1.0, 0.0, x, y]);
+                    [0.0, -1.0, 1.0, 0.0, x, y]
                 }
                 _ => {
                     let x = (x0 + (page_w - estimated_w) / 2.0).max(x0 + 10.0);
                     let y = (y0 + page_h / 2.0).max(y0 + 10.0);
-                    content.set_text_matrix([1.0, 0.0, 0.0, 1.0, x, y]);
+                    [1.0, 0.0, 0.0, 1.0, x, y]
                 }
-            }
-            content.show(pdf_writer::Str(&text_bytes));
-            content.end_text();
-            content.restore_state();
+            };
+
+            let mut stream = Vec::with_capacity(128 + text_bytes.len());
+            use std::io::Write as _;
+            let _ = write!(
+                stream,
+                "q\n/GS_WM gs\nBT\n/F1 {font_size} Tf\n0.5 0.5 0.5 rg\n{a} {b} {c} {d} {tx} {ty} Tm\n"
+            );
+            Self::push_pdf_literal_str(&mut stream, &text_bytes);
+            stream.extend_from_slice(b" Tj\nET\nQ\n");
 
             Self::append_overlay_stream(
                 &mut writer,
                 page_id,
-                &content.finish(),
+                [x0 as f64, y0 as f64, x1 as f64, y1 as f64],
+                &stream,
                 font_ref_id,
                 Some(gstate_id),
             )?;
@@ -4734,12 +5312,35 @@ impl DocumentStore {
         footer_format: &str,
         output_path: &str,
     ) -> PdfResult<String> {
+        Self::add_header_footer_with_password(
+            input_path,
+            header_text,
+            footer_format,
+            output_path,
+            None,
+        )
+    }
+
+    #[allow(clippy::literal_string_with_formatting_args)]
+    pub fn add_header_footer_with_password(
+        input_path: &str,
+        header_text: &str,
+        footer_format: &str,
+        output_path: &str,
+        password: Option<&str>,
+    ) -> PdfResult<String> {
         let input = read_document_bytes_shared(input_path)?;
-        let mut writer = IncrementalWriter::from_shared(input)
-            .map_err(|e| PdfError::OpenFailed(e.to_string()))?;
+        let mut writer =
+            IncrementalWriter::from_shared_with_password(input, password.unwrap_or("").as_bytes())
+                .map_err(|e| PdfError::OpenFailed(e.to_string()))?;
 
         let page_count = writer.page_count();
         let font_ref_id = Self::add_helvetica_font(&mut writer)?;
+        let header_unicode = encode_pdf_text(header_text).1 > 0;
+        let footer_unicode = encode_pdf_text(footer_format).1 > 0;
+        if header_unicode || footer_unicode {
+            writer.set_font_provider(shared_font_provider());
+        }
 
         for page_idx in 0..page_count {
             let page_num = page_idx + 1;
@@ -4766,125 +5367,141 @@ impl DocumentStore {
             let (page_w, page_h) = (x1 - x0, y1 - y0);
             let margin = 36.0_f32.min(page_w / 8.0);
 
-            let mut content = pdf_writer::Content::new();
-            content.save_state();
-            content.begin_text();
-            content.set_font(pdf_writer::Name(b"F1"), 10.0);
-            content.set_fill_rgb(0.2, 0.2, 0.2);
+            let (header_bytes, h_unmappable) = encode_pdf_text(header_text);
+            let (footer_bytes, f_unmappable) = encode_pdf_text(&formatted_footer);
+            if h_unmappable > 0 || f_unmappable > 0 {
+                let mut stamps = Vec::new();
+                if !header_text.is_empty() {
+                    stamps.push(StampItem::Text {
+                        text: header_text.to_string(),
+                        x: (x0 + margin) as f64,
+                        y: (y0 + page_h - margin - 10.0).max(y0 + 10.0) as f64,
+                        font: "Helvetica".to_string(),
+                        size: 10.0,
+                        color: (0.2, 0.2, 0.2),
+                    });
+                }
+                if !formatted_footer.is_empty() {
+                    stamps.push(StampItem::Text {
+                        text: formatted_footer,
+                        x: (x0 + margin) as f64,
+                        y: (y0 + margin).max(y0 + 10.0) as f64,
+                        font: "Helvetica".to_string(),
+                        size: 10.0,
+                        color: (0.2, 0.2, 0.2),
+                    });
+                }
+                writer
+                    .stamp_page(page_idx, &stamps)
+                    .map_err(|e| PdfError::EngineError(e.to_string().into()))?;
+                continue;
+            }
+
+            let mut stream = Vec::with_capacity(256);
+            use std::io::Write as _;
+            stream.extend_from_slice(b"q\nBT\n/F1 10 Tf\n0.2 0.2 0.2 rg\n");
 
             if !header_text.is_empty() {
-                match rot {
-                    90 => {
-                        content.set_text_matrix([
-                            0.0,
-                            1.0,
-                            -1.0,
-                            0.0,
-                            (x1 - margin - 10.0).max(x0 + 10.0),
-                            y0 + margin,
-                        ]);
-                    }
-                    180 => {
-                        content.set_text_matrix([
-                            -1.0,
-                            0.0,
-                            0.0,
-                            -1.0,
-                            x1 - margin,
-                            (y0 + margin + 10.0).min(y1 - 10.0),
-                        ]);
-                    }
-                    270 => {
-                        content.set_text_matrix([
-                            0.0,
-                            -1.0,
-                            1.0,
-                            0.0,
-                            x0 + margin,
-                            (y1 - margin - 10.0).max(y0 + 10.0),
-                        ]);
-                    }
-                    _ => {
-                        content.set_text_matrix([
-                            1.0,
-                            0.0,
-                            0.0,
-                            1.0,
-                            x0 + margin,
-                            (y0 + page_h - margin - 10.0).max(y0 + 10.0),
-                        ]);
-                    }
-                }
-                let (bytes, unmappable) = encode_pdf_text(header_text);
-                if unmappable > 0 {
+                let [a, b, c, d, tx, ty] = match rot {
+                    90 => [
+                        0.0,
+                        1.0,
+                        -1.0,
+                        0.0,
+                        (x1 - margin - 10.0).max(x0 + 10.0),
+                        y0 + margin,
+                    ],
+                    180 => [
+                        -1.0,
+                        0.0,
+                        0.0,
+                        -1.0,
+                        x1 - margin,
+                        (y0 + margin + 10.0).min(y1 - 10.0),
+                    ],
+                    270 => [
+                        0.0,
+                        -1.0,
+                        1.0,
+                        0.0,
+                        x0 + margin,
+                        (y1 - margin - 10.0).max(y0 + 10.0),
+                    ],
+                    _ => [
+                        1.0,
+                        0.0,
+                        0.0,
+                        1.0,
+                        x0 + margin,
+                        (y0 + page_h - margin - 10.0).max(y0 + 10.0),
+                    ],
+                };
+                if h_unmappable > 0 {
                     tracing::warn!(
-                        "Header has {unmappable} character(s) outside WinAnsiEncoding; \
-                         substituted '?'"
+                        "Header has {h_unmappable} character(s) outside WinAnsiEncoding \
+                         on rotated page {}; substituted '?'",
+                        page_num
                     );
                 }
-                content.show(pdf_writer::Str(&bytes));
+                let _ = writeln!(stream, "{a} {b} {c} {d} {tx} {ty} Tm");
+                Self::push_pdf_literal_str(&mut stream, &header_bytes);
+                stream.extend_from_slice(b" Tj\n");
             }
 
             if !formatted_footer.is_empty() {
-                match rot {
-                    90 => {
-                        content.set_text_matrix([
-                            0.0,
-                            1.0,
-                            -1.0,
-                            0.0,
-                            (x0 + margin).min(x1 - 10.0),
-                            y0 + margin,
-                        ]);
-                    }
-                    180 => {
-                        content.set_text_matrix([
-                            -1.0,
-                            0.0,
-                            0.0,
-                            -1.0,
-                            x1 - margin,
-                            (y1 - margin - 10.0).max(y0 + 10.0),
-                        ]);
-                    }
-                    270 => {
-                        content.set_text_matrix([
-                            0.0,
-                            -1.0,
-                            1.0,
-                            0.0,
-                            (x1 - margin).max(x0 + 10.0),
-                            (y1 - margin - 10.0).max(y0 + 10.0),
-                        ]);
-                    }
-                    _ => {
-                        content.set_text_matrix([
-                            1.0,
-                            0.0,
-                            0.0,
-                            1.0,
-                            x0 + margin,
-                            (y0 + margin).max(y0 + 10.0),
-                        ]);
-                    }
-                }
-                let (bytes, unmappable) = encode_pdf_text(&formatted_footer);
-                if unmappable > 0 {
+                let [a, b, c, d, tx, ty] = match rot {
+                    90 => [
+                        0.0,
+                        1.0,
+                        -1.0,
+                        0.0,
+                        (x0 + margin).min(x1 - 10.0),
+                        y0 + margin,
+                    ],
+                    180 => [
+                        -1.0,
+                        0.0,
+                        0.0,
+                        -1.0,
+                        x1 - margin,
+                        (y1 - margin - 10.0).max(y0 + 10.0),
+                    ],
+                    270 => [
+                        0.0,
+                        -1.0,
+                        1.0,
+                        0.0,
+                        (x1 - margin).max(x0 + 10.0),
+                        (y1 - margin - 10.0).max(y0 + 10.0),
+                    ],
+                    _ => [
+                        1.0,
+                        0.0,
+                        0.0,
+                        1.0,
+                        x0 + margin,
+                        (y0 + margin).max(y0 + 10.0),
+                    ],
+                };
+                if f_unmappable > 0 {
                     tracing::warn!(
-                        "Footer has {unmappable} character(s) outside WinAnsiEncoding; \
-                         substituted '?'"
+                        "Footer has {f_unmappable} character(s) outside WinAnsiEncoding \
+                         on rotated page {}; substituted '?'",
+                        page_num
                     );
                 }
-                content.show(pdf_writer::Str(&bytes));
+                let _ = writeln!(stream, "{a} {b} {c} {d} {tx} {ty} Tm");
+                Self::push_pdf_literal_str(&mut stream, &footer_bytes);
+                stream.extend_from_slice(b" Tj\n");
             }
 
-            content.end_text();
-            content.restore_state();
+            stream.extend_from_slice(b"ET\nQ\n");
 
             Self::append_overlay_stream(
                 &mut writer,
                 page_id,
-                &content.finish(),
+                [x0 as f64, y0 as f64, x1 as f64, y1 as f64],
+                &stream,
                 font_ref_id,
                 None,
             )?;
@@ -4942,26 +5559,26 @@ impl DocumentStore {
         cert_path: &str,
         output_path: &str,
     ) -> PdfResult<String> {
+        self.sign_with_certificate_options(doc_id, cert_path, output_path, true, None, None, None)
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub fn sign_with_certificate_options(
+        &self,
+        doc_id: DocumentId,
+        cert_path: &str,
+        output_path: &str,
+        visible: bool,
+        reason: Option<&str>,
+        location: Option<&str>,
+        tsa_url: Option<&str>,
+    ) -> PdfResult<String> {
         let path = self
             .paths
             .get(&doc_id)
             .ok_or(PdfError::EngineError(EngineErrorKind::DocumentPathNotFound))?;
         let doc_bytes = read_document_bytes_shared(path)?;
-        // Expect cert_path to be the PKCS#8 private key DER, and
-        // cert_path with ".x509" extension to be the DER-encoded X.509 cert.
         let key_bytes = std::fs::read(cert_path).map_err(|e| PdfError::IoError(e.to_string()))?;
-
-        // The certificate must be a real X.509 DER blob. The previous code fell
-        // back to `key_bytes` when no `.x509` sidecar was found, on the premise
-        // that a self-signed key doubles as its own certificate. It does not: a
-        // PKCS#8 private key and an X.509 certificate are distinct DER
-        // structures, and even a self-signed certificate ships as its own file.
-        //
-        // Handing `sign()` the private key as the certificate either errors or,
-        // worse, produces a signature carrying a certificate no verifier can
-        // ever validate -- while `sign_with_certificate` returned `Ok` and the UI
-        // reported a successful signature. A missing sidecar is a user error
-        // that must be named, not papered over.
         let cert_der_path = std::path::Path::new(cert_path).with_extension("x509");
         let cert_der_bytes = std::fs::read(&cert_der_path).map_err(|e| {
             PdfError::IoError(format!(
@@ -4973,20 +5590,74 @@ impl DocumentStore {
 
         let key =
             SigningKey::from_pkcs8_der(&key_bytes).map_err(|e| PdfError::IoError(e.to_string()))?;
+        let timestamp: Option<Box<dyn zpdf_writer::sign::TimestampRequester>> = tsa_url
+            .filter(|u| !u.trim().is_empty())
+            .map(|u| Box::new(UreqTimestampRequester::new(u.trim().to_string())) as _);
         let opts = SignatureOptions {
-            reason: Some("Signed with PDFbull".to_string()),
-            location: Some("PDFbull Desktop Application".to_string()),
+            reason: Some(reason.unwrap_or("Signed with PDFbull").to_string()),
+            location: Some(
+                location
+                    .unwrap_or("PDFbull Desktop Application")
+                    .to_string(),
+            ),
+            appearance: if visible {
+                Some(AppearanceSpec::default())
+            } else {
+                None
+            },
+            timestamp,
             ..SignatureOptions::default()
         };
         let pass = self.password_for_doc(doc_id);
         let writer = IncrementalWriter::from_shared_with_password(doc_bytes, pass)
             .map_err(|e| PdfError::IoError(e.to_string()))?;
-        // sign() consumes the writer and returns the final signed bytes
         let signed_bytes = writer
             .sign(&cert_der_bytes, &key, &opts)
             .map_err(|e| PdfError::IoError(e.to_string()))?;
         write_pdf_output(output_path, &signed_bytes)?;
         tracing::info!("Signed document {} -> {}", path, output_path);
+        Ok(output_path.to_string())
+    }
+
+    /// Incrementally update an existing annotation object's rect, color, and/or
+    /// contents in-place with automatic `/AP` regeneration.
+    pub fn update_annotation_in_place(
+        &self,
+        doc_id: DocumentId,
+        annot_id: zpdf::ObjectId,
+        rect: Option<[f64; 4]>,
+        color: Option<(f64, f64, f64)>,
+        contents: Option<&str>,
+        output_path: &str,
+    ) -> PdfResult<String> {
+        let path = self
+            .paths
+            .get(&doc_id)
+            .ok_or(PdfError::EngineError(EngineErrorKind::DocumentPathNotFound))?;
+        let doc_bytes = read_document_bytes_shared(path)?;
+        let pass = self.password_for_doc(doc_id);
+        let mut writer = IncrementalWriter::from_shared_with_password(doc_bytes, pass)
+            .map_err(|e| PdfError::IoError(e.to_string()))?;
+        if let Some([x0, y0, x1, y1]) = rect {
+            writer
+                .update_annotation_rect(annot_id, zpdf::Rect::new(x0, y0, x1, y1))
+                .map_err(|e| PdfError::IoError(e.to_string()))?;
+        }
+        if let Some((r, g, b)) = color {
+            writer
+                .update_annotation_color(annot_id, (r, g, b))
+                .map_err(|e| PdfError::IoError(e.to_string()))?;
+        }
+        if let Some(text) = contents {
+            writer
+                .update_annotation_contents(annot_id, text)
+                .map_err(|e| PdfError::IoError(e.to_string()))?;
+        }
+        let mut buf = std::io::Cursor::new(Vec::new());
+        writer
+            .write(&mut buf)
+            .map_err(|e| PdfError::IoError(e.to_string()))?;
+        write_pdf_output(output_path, &buf.into_inner())?;
         Ok(output_path.to_string())
     }
 
@@ -5338,7 +6009,9 @@ pub fn create_render_cache(cache_size: u64, max_memory_mb: u64) -> SharedRenderC
 #[derive(Clone, Debug)]
 pub struct Bookmark {
     pub title: String,
-    pub page_index: usize,
+    pub page_index: Option<usize>,
+    pub uri: Option<String>,
+    pub depth: usize,
 }
 
 #[cfg(test)]
@@ -6163,7 +6836,7 @@ mod tests {
         assert_eq!(store.password_for_path(path), b"");
 
         store.paths.insert(doc_id, path.to_string());
-        store.passwords.insert(doc_id, pw.to_string());
+        store.passwords.insert(doc_id, pw.to_string().into());
 
         assert_eq!(store.password_for_doc(doc_id), pw.as_bytes());
         assert_eq!(store.password_for_path(path), pw.as_bytes());

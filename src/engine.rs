@@ -33,12 +33,12 @@ pub type SharedPathMap = Arc<RwLock<HashMap<crate::models::DocumentId, DocPathEn
 /// worker for a document's password. Looking it up here means an encrypted
 /// document that the user already unlocked stays usable for those operations
 /// instead of failing with an opaque parse error.
-fn password_for_path(paths: &SharedPathMap, path: &str) -> Option<String> {
+fn password_for_path(paths: &SharedPathMap, path: &str) -> Option<zeroize::Zeroizing<String>> {
     let guard = paths.read().ok()?;
     guard
         .values()
         .find(|entry| crate::models::paths_equal(&entry.path, path))
-        .and_then(|entry| entry.password.as_ref().map(|p| p.to_string()))
+        .and_then(|entry| entry.password.clone())
 }
 
 /// Re-open a document from its remembered path and password when this worker's
@@ -269,16 +269,11 @@ pub fn spawn_engine_thread(cache_size: u64, max_memory_mb: u64) -> EngineState {
                     };
 
                     match cmd {
-                        PdfCommand::Open(path, mut password, doc_id, tx) => {
+                        PdfCommand::Open(path, password, doc_id, tx) => {
                             tracing::info!("Engine worker: opening {:?}", path);
                             let mut store_ref = std::panic::AssertUnwindSafe(&mut store);
                             let path_clone = path.clone();
-                            // Keep the password in a `Zeroizing` buffer for its whole
-                            // lifetime here; a plain `Option<String>` clone would leave
-                            // the secret in freed heap memory.
-                            let pass_for_open = password
-                                .as_ref()
-                                .map(|p| zeroize::Zeroizing::new(p.clone()));
+                            let pass_for_open = password.clone();
                             let res = catch_worker_panic("open", move || {
                                 store_ref.open_document_for_view(
                                     &path_clone,
@@ -301,7 +296,7 @@ pub fn spawn_engine_thread(cache_size: u64, max_memory_mb: u64) -> EngineState {
                                         doc_id,
                                         DocPathEntry {
                                             path,
-                                            password: password.map(zeroize::Zeroizing::new),
+                                            password,
                                             generation,
                                         },
                                     );
@@ -309,9 +304,6 @@ pub fn spawn_engine_thread(cache_size: u64, max_memory_mb: u64) -> EngineState {
                                 store.set_loaded_generation(doc_id, generation);
                             } else {
                                 tracing::error!("Engine worker: open failed: {:?}", res);
-                                if let Some(ref mut p) = password {
-                                    crate::models::zeroize_string(p);
-                                }
                             }
                             let _ = tx.send(res);
                         }
@@ -496,6 +488,30 @@ pub fn spawn_engine_thread(cache_size: u64, max_memory_mb: u64) -> EngineState {
                             });
                             let _ = tx.send(res);
                         }
+                        PdfCommand::ExportImageWithOptions {
+                            doc_id,
+                            page_num,
+                            scale,
+                            use_zopfli,
+                            tx,
+                        } => {
+                            reload_if_needed(&mut store, &paths, doc_id);
+                            let store_ref = std::panic::AssertUnwindSafe(&store);
+                            let res = catch_worker_panic("export_image_with_options", move || {
+                                store_ref.export_page_as_image_with_options(
+                                    doc_id, page_num, scale, use_zopfli,
+                                )
+                            });
+                            let _ = tx.send(res);
+                        }
+                        PdfCommand::ExtractAllImages(doc_id, out_dir, tx) => {
+                            reload_if_needed(&mut store, &paths, doc_id);
+                            let store_ref = std::panic::AssertUnwindSafe(&store);
+                            let res = catch_worker_panic("extract_all_images", move || {
+                                store_ref.extract_all_images(doc_id, &out_dir)
+                            });
+                            let _ = tx.send(res);
+                        }
                         PdfCommand::ExportImages(doc_id, pages, scale, out_dir, tx) => {
                             reload_if_needed(&mut store, &paths, doc_id);
                             let out_path = std::path::Path::new(&out_dir);
@@ -598,7 +614,8 @@ pub fn spawn_engine_thread(cache_size: u64, max_memory_mb: u64) -> EngineState {
                             let documents = paths_list
                                 .into_iter()
                                 .map(|path| {
-                                    let password = password_for_path(&paths, &path);
+                                    let password =
+                                        password_for_path(&paths, &path).map(|p| p.to_string());
                                     (path, password)
                                 })
                                 .collect();
@@ -612,7 +629,12 @@ pub fn spawn_engine_thread(cache_size: u64, max_memory_mb: u64) -> EngineState {
                             let password = password_for_path(&paths, &path);
                             let store_ref = std::panic::AssertUnwindSafe(&store);
                             let res = catch_worker_panic("split", move || {
-                                store_ref.split_pdf(&path, pages, out, password.as_deref())
+                                store_ref.split_pdf(
+                                    &path,
+                                    pages,
+                                    out,
+                                    password.as_deref().map(String::as_str),
+                                )
                             });
                             let _ = tx.send(res);
                         }
@@ -627,7 +649,12 @@ pub fn spawn_engine_thread(cache_size: u64, max_memory_mb: u64) -> EngineState {
                             let password = password_for_path(&paths, &path);
                             let mut store_ref = std::panic::AssertUnwindSafe(&mut store);
                             let res = catch_worker_panic("fill_form", move || {
-                                store_ref.fill_form(&path, fields, out, password.as_deref())
+                                store_ref.fill_form(
+                                    &path,
+                                    fields,
+                                    out,
+                                    password.as_deref().map(String::as_str),
+                                )
                             });
                             let _ = tx.send(res);
                         }
@@ -647,17 +674,26 @@ pub fn spawn_engine_thread(cache_size: u64, max_memory_mb: u64) -> EngineState {
                             let _ = tx.send(res);
                         }
                         PdfCommand::AddWatermark(input, text, output, tx) => {
+                            let password = password_for_path(&paths, &input);
                             let res = catch_worker_panic("add_watermark", move || {
-                                crate::pdf_engine::DocumentStore::add_watermark(
-                                    &input, &text, &output,
+                                crate::pdf_engine::DocumentStore::add_watermark_with_password(
+                                    &input,
+                                    &text,
+                                    &output,
+                                    password.as_deref().map(String::as_str),
                                 )
                             });
                             let _ = tx.send(res);
                         }
                         PdfCommand::AddHeaderFooter(input, header, footer, output, tx) => {
+                            let password = password_for_path(&paths, &input);
                             let res = catch_worker_panic("add_header_footer", move || {
-                                crate::pdf_engine::DocumentStore::add_header_footer(
-                                    &input, &header, &footer, &output,
+                                crate::pdf_engine::DocumentStore::add_header_footer_with_password(
+                                    &input,
+                                    &header,
+                                    &footer,
+                                    &output,
+                                    password.as_deref().map(String::as_str),
                                 )
                             });
                             let _ = tx.send(res);
@@ -677,7 +713,7 @@ pub fn spawn_engine_thread(cache_size: u64, max_memory_mb: u64) -> EngineState {
                                     &input,
                                     &page_order,
                                     &output,
-                                    password.as_deref(),
+                                    password.as_deref().map(String::as_str),
                                 )
                             });
                             let _ = tx.send(res);
@@ -690,7 +726,7 @@ pub fn spawn_engine_thread(cache_size: u64, max_memory_mb: u64) -> EngineState {
                                     &input,
                                     &rotations,
                                     &output,
-                                    password.as_deref(),
+                                    password.as_deref().map(String::as_str),
                                 )
                             });
                             let _ = tx.send(res);
@@ -703,7 +739,7 @@ pub fn spawn_engine_thread(cache_size: u64, max_memory_mb: u64) -> EngineState {
                                     &input,
                                     &page_indices,
                                     &output,
-                                    password.as_deref(),
+                                    password.as_deref().map(String::as_str),
                                 )
                             });
                             let _ = tx.send(res);
@@ -721,14 +757,15 @@ pub fn spawn_engine_thread(cache_size: u64, max_memory_mb: u64) -> EngineState {
                                 .read()
                                 .ok()
                                 .and_then(|guard| {
-                                    guard
-                                        .get(&doc_id)
-                                        .and_then(|e| e.password.as_ref().map(|p| p.to_string()))
+                                    guard.get(&doc_id).and_then(|e| e.password.clone())
                                 })
                                 .or_else(|| password_for_path(&paths, &path));
                             let store_ref = std::panic::AssertUnwindSafe(&store);
                             let res = catch_worker_panic("load_annotations", move || {
-                                store_ref.load_annotations_with_password(&path, pass.as_deref())
+                                store_ref.load_annotations_with_password(
+                                    &path,
+                                    pass.as_deref().map(String::as_str),
+                                )
                             });
                             let _ = tx.send(res);
                         }
@@ -803,6 +840,52 @@ pub fn spawn_engine_thread(cache_size: u64, max_memory_mb: u64) -> EngineState {
                             });
                             let _ = tx.send(res);
                         }
+                        PdfCommand::EncryptPdfWithPermissions {
+                            input_path,
+                            output_path,
+                            user_pass,
+                            owner_pass,
+                            algorithm,
+                            permissions,
+                            tx,
+                        } => {
+                            let store_ref = std::panic::AssertUnwindSafe(&store);
+                            let res =
+                                catch_worker_panic("encrypt_pdf_with_permissions", move || {
+                                    store_ref.encrypt_pdf_with_permissions(
+                                        &input_path,
+                                        &output_path,
+                                        &user_pass,
+                                        &owner_pass,
+                                        &algorithm,
+                                        permissions,
+                                    )
+                                });
+                            let _ = tx.send(res);
+                        }
+                        PdfCommand::ConvertToPdfa {
+                            input_path,
+                            output_path,
+                            profile,
+                            tx,
+                        } => {
+                            let store_ref = std::panic::AssertUnwindSafe(&store);
+                            let res = catch_worker_panic("convert_to_pdfa", move || {
+                                store_ref.convert_to_pdfa(&input_path, &output_path, &profile)
+                            });
+                            let _ = tx.send(res);
+                        }
+                        PdfCommand::DecryptPdf(input, output, tx) => {
+                            let password = password_for_path(&paths, &input);
+                            let res = catch_worker_panic("decrypt_pdf", move || {
+                                crate::pdf_engine::DocumentStore::decrypt_pdf(
+                                    &input,
+                                    &output,
+                                    password.as_deref().map(String::as_str),
+                                )
+                            });
+                            let _ = tx.send(res);
+                        }
                         PdfCommand::LinearizePdf(input, output, tx) => {
                             let store_ref = std::panic::AssertUnwindSafe(&store);
                             let res = catch_worker_panic("linearize_pdf", move || {
@@ -847,6 +930,32 @@ pub fn spawn_engine_thread(cache_size: u64, max_memory_mb: u64) -> EngineState {
                             let res = catch_worker_panic("sign_with_certificate", move || {
                                 store_ref.sign_with_certificate(doc_id, &cert_path, &output_path)
                             });
+                            let _ = tx.send(res);
+                        }
+                        PdfCommand::SignDocumentWithOptions {
+                            doc_id,
+                            cert_path,
+                            output_path,
+                            visible,
+                            reason,
+                            location,
+                            tsa_url,
+                            tx,
+                        } => {
+                            reload_if_needed(&mut store, &paths, doc_id);
+                            let store_ref = std::panic::AssertUnwindSafe(&store);
+                            let res =
+                                catch_worker_panic("sign_with_certificate_options", move || {
+                                    store_ref.sign_with_certificate_options(
+                                        doc_id,
+                                        &cert_path,
+                                        &output_path,
+                                        visible,
+                                        reason.as_deref(),
+                                        location.as_deref(),
+                                        tsa_url.as_deref(),
+                                    )
+                                });
                             let _ = tx.send(res);
                         }
                         PdfCommand::ApplyStamp(doc_id, page_num, label, output_path, tx) => {

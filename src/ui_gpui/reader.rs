@@ -71,6 +71,10 @@ pub enum ReaderCommand {
     CloseTab,
     ToggleLogs,
     CopyPageText,
+    CopyPageImage,
+    ExportPngZopfli,
+    ConvertToPdfa,
+    ExtractAllImages,
     Undo,
     Redo,
     Ribbon(RibbonAction),
@@ -208,6 +212,20 @@ pub fn palette_entries() -> Vec<PaletteEntry> {
         entry("Show bookmarks", "View", None, C::ShowBookmarks),
         entry("Show logs", "View", None, C::ToggleLogs),
         entry("Copy page text", "Edit", Some("Ctrl+A"), C::CopyPageText),
+        entry("Copy page as image", "Edit", None, C::CopyPageImage),
+        entry(
+            "Export page as lossless PNG (Zopfli)",
+            "Export",
+            None,
+            C::ExportPngZopfli,
+        ),
+        entry(
+            "Extract all embedded images…",
+            "Export",
+            None,
+            C::ExtractAllImages,
+        ),
+        entry("Convert to PDF/A-2b…", "Tools", None, C::ConvertToPdfa),
         entry(
             "Select / pointer",
             "Annotate",
@@ -317,12 +335,15 @@ pub fn palette_entries() -> Vec<PaletteEntry> {
 
 /// Indices into `entries` that match `query`, best match first. An empty query
 /// keeps the original order.
-pub fn filter_entries(query: &str, entries: &[PaletteEntry]) -> Vec<usize> {
+pub fn filter_entries_with_matcher(
+    query: &str,
+    entries: &[PaletteEntry],
+    matcher: &mut nucleo_matcher::Matcher,
+) -> Vec<usize> {
     let query = query.trim();
     if query.is_empty() {
         return (0..entries.len()).collect();
     }
-    let mut matcher = nucleo_matcher::Matcher::default();
     let mut pattern_buf = Vec::new();
     let pattern = nucleo_matcher::Utf32Str::new(query, &mut pattern_buf);
     let mut target_buf = Vec::new();
@@ -337,6 +358,11 @@ pub fn filter_entries(query: &str, entries: &[PaletteEntry]) -> Vec<usize> {
         .collect();
     scored.sort_by_key(|(score, i)| (std::cmp::Reverse(*score), *i));
     scored.into_iter().map(|(_, i)| i).collect()
+}
+
+pub fn filter_entries(query: &str, entries: &[PaletteEntry]) -> Vec<usize> {
+    let mut matcher = nucleo_matcher::Matcher::default();
+    filter_entries_with_matcher(query, entries, &mut matcher)
 }
 
 /// Zoom that fits `pages_across` pages of `page` points (side by side, `gap`
@@ -454,6 +480,7 @@ pub struct ReaderState {
     pub goto_open: bool,
     pub goto_input: Option<Entity<InputState>>,
     pub entries: Vec<PaletteEntry>,
+    matcher: std::cell::RefCell<nucleo_matcher::Matcher>,
     /// From the command line: page to show once the document has opened.
     pub start_page: Option<usize>,
     /// From the command line: presentation or full screen once open.
@@ -497,6 +524,7 @@ impl ReaderState {
             goto_open: false,
             goto_input: None,
             entries: palette_entries(),
+            matcher: std::cell::RefCell::new(nucleo_matcher::Matcher::default()),
             start_page: None,
             start_mode: None,
             start_ready: false,
@@ -543,7 +571,8 @@ impl ReaderState {
             .as_ref()
             .map(|i| i.read(cx).value().to_string())
             .unwrap_or_default();
-        filter_entries(&query, &self.entries)
+        let mut matcher = self.matcher.borrow_mut();
+        filter_entries_with_matcher(&query, &self.entries, &mut matcher)
     }
 
     /// The command palette overlay, or `None` when it is closed.
@@ -609,17 +638,21 @@ impl ReaderState {
                             .child(div().text_sm().text_color(fg).truncate().child(e.title)),
                     )
                     .when_some(e.shortcut, |el, sc| {
-                        el.child(
-                            div()
-                                .flex_none()
-                                .text_xs()
-                                .px_1p5()
-                                .rounded_sm()
-                                .border_1()
-                                .border_color(border)
-                                .text_color(muted_fg)
-                                .child(sc),
-                        )
+                        if let Ok(ks) = gpui_kit::Keystroke::parse(sc) {
+                            el.child(gpui_kit::component::kbd::Kbd::new(ks))
+                        } else {
+                            el.child(
+                                div()
+                                    .flex_none()
+                                    .text_xs()
+                                    .px_1p5()
+                                    .rounded_sm()
+                                    .border_1()
+                                    .border_color(border)
+                                    .text_color(muted_fg)
+                                    .child(sc),
+                            )
+                        }
                     })
                     .into_any_element()
             })

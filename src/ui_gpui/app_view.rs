@@ -87,6 +87,17 @@ pub struct PdfbullView {
     /// Documents whose saved position has been applied to the viewport, so
     /// the viewport's page and zoom are really theirs and may be remembered.
     positioned_docs: std::collections::HashSet<crate::models::DocumentId>,
+    /// Main window handle for creating `gpui-fast` dynamic GPU page textures.
+    window_handle: Option<gpui_kit::AnyWindowHandle>,
+    /// Last observed canvas scroll Y offset for detecting scrollbar thumb drags.
+    last_canvas_scroll_y: f32,
+    /// Last observed thumbnail sidebar scroll Y offset for lazy thumbnail loading.
+    last_thumb_scroll_y: f32,
+    /// Child `Entity` views for `gpui-fast` retained subtree caching across panels.
+    ribbon_strip_view: gpui_kit::Entity<RibbonStripView>,
+    sidebar_view: gpui_kit::Entity<SidebarView>,
+    canvas_view: gpui_kit::Entity<CanvasView>,
+    log_console_view: gpui_kit::Entity<LogConsoleView>,
     /// Keeps `sidebar.search_query` in sync with the sidebar's search editor.
     _search_sub: Option<Subscription>,
     /// Enter in the go-to-page box and the command palette.
@@ -157,6 +168,38 @@ fn page_size_name(width: f32, height: f32) -> String {
     format!("{name}{orientation}")
 }
 
+fn parent_file_dialog(
+    dlg: rfd::AsyncFileDialog,
+    wh: Option<gpui_kit::AnyWindowHandle>,
+    cx: &mut gpui_kit::AsyncApp,
+) -> rfd::AsyncFileDialog {
+    let mut slot = Some(dlg);
+    if let Some(wh) = wh {
+        let _ = wh.update(cx, |_, window, _| {
+            if let Some(d) = slot.take() {
+                slot = Some(d.set_parent(window));
+            }
+        });
+    }
+    slot.expect("dialog")
+}
+
+fn parent_msg_dialog(
+    dlg: rfd::AsyncMessageDialog,
+    wh: Option<gpui_kit::AnyWindowHandle>,
+    cx: &mut gpui_kit::AsyncApp,
+) -> rfd::AsyncMessageDialog {
+    let mut slot = Some(dlg);
+    if let Some(wh) = wh {
+        let _ = wh.update(cx, |_, window, _| {
+            if let Some(d) = slot.take() {
+                slot = Some(d.set_parent(window));
+            }
+        });
+    }
+    slot.expect("dialog")
+}
+
 impl PdfbullView {
     pub fn set_layout_mode(&mut self, mode: PageLayoutMode, cx: &mut Context<Self>) {
         self.ribbon.layout_mode = mode;
@@ -185,18 +228,25 @@ impl PdfbullView {
         });
 
         let settings = crate::storage::load_settings();
-        let theme_mode = match settings.theme {
-            crate::models::AppTheme::Light => gpui_kit::component::ThemeMode::Light,
-            crate::models::AppTheme::Dark => gpui_kit::component::ThemeMode::Dark,
-            crate::models::AppTheme::System => {
-                if crate::platform::is_system_dark_mode() {
-                    gpui_kit::component::ThemeMode::Dark
-                } else {
-                    gpui_kit::component::ThemeMode::Light
-                }
+        match settings.theme {
+            crate::models::AppTheme::Light => {
+                gpui_kit::component::Theme::change(
+                    gpui_kit::component::ThemeMode::Light,
+                    Some(_window),
+                    _cx,
+                );
             }
-        };
-        gpui_kit::component::Theme::change(theme_mode, None, _cx);
+            crate::models::AppTheme::Dark => {
+                gpui_kit::component::Theme::change(
+                    gpui_kit::component::ThemeMode::Dark,
+                    Some(_window),
+                    _cx,
+                );
+            }
+            crate::models::AppTheme::System => {
+                gpui_kit::component::Theme::sync_system_appearance(Some(_window), _cx);
+            }
+        }
 
         let mut viewport = DocumentViewport::new();
         if settings.default_zoom >= 0.25 && settings.default_zoom <= 5.0 {
@@ -208,7 +258,7 @@ impl PdfbullView {
             log_console.is_open = true;
         }
 
-        let mut ribbon = RibbonState::new();
+        let mut ribbon = RibbonState::new_in(_window, _cx);
         if matches!(
             settings.default_filter,
             crate::pdf_engine::RenderFilter::Inverted
@@ -269,6 +319,34 @@ impl PdfbullView {
                 },
             ));
         }
+        if let Some(cp) = ribbon.color_picker.as_ref() {
+            _reader_subs.push(_cx.subscribe_in(
+                cp,
+                _window,
+                |this, _, ev: &gpui_kit::component::color_picker::ColorPickerEvent, _window, cx| {
+                    if let gpui_kit::component::color_picker::ColorPickerEvent::Change(Some(
+                        color,
+                    )) = ev
+                    {
+                        let rgba: gpui_kit::Rgba = (*color).into();
+                        this.ribbon.active_color = [rgba.r, rgba.g, rgba.b, rgba.a];
+                        this.viewport.highlight_color = Some(*color);
+                        cx.notify();
+                    }
+                },
+            ));
+        }
+        _reader_subs.push(_cx.observe_window_bounds(_window, |this, _, cx| {
+            if this.reader.zoom_mode != ZoomMode::Manual && !this.tabs.tabs.is_empty() {
+                this.refit_if_needed(cx);
+            }
+        }));
+        _reader_subs.push(_cx.observe_window_appearance(_window, |this, window, cx| {
+            if this.dialogs.settings.theme == crate::models::AppTheme::System {
+                gpui_kit::component::Theme::sync_system_appearance(Some(window), cx);
+                cx.notify();
+            }
+        }));
         // Closing the window or quitting must not lose the page each open
         // file was on.
         _reader_subs.push(_cx.on_app_quit(|this, _| {
@@ -276,6 +354,58 @@ impl PdfbullView {
             async {}
         }));
         _reader_subs.push(_cx.on_release(|this, _| this.save_reading_state()));
+
+        let dialogs = DialogsState::new_in(_window, _cx);
+        if let Some(cache_input) = dialogs.cache_memory_input.as_ref() {
+            _reader_subs.push(_cx.subscribe_in(
+                cache_input,
+                _window,
+                |this, input, ev: &gpui_kit::component::input::NumberInputEvent, window, cx| {
+                    let gpui_kit::component::input::NumberInputEvent::Step(step) = ev;
+                    let cur = this.dialogs.settings.max_cache_memory;
+                    let next = match step {
+                        gpui_kit::component::input::StepAction::Increment => (cur + 64).min(4096),
+                        gpui_kit::component::input::StepAction::Decrement => {
+                            cur.saturating_sub(64).max(64)
+                        }
+                    };
+                    this.dialogs.settings.max_cache_memory = next;
+                    crate::storage::save_settings(&this.dialogs.settings);
+                    input.update(cx, |s, cx| s.set_value(next.to_string(), window, cx));
+                    cx.notify();
+                },
+            ));
+        }
+        let parent_weak = _cx.entity().downgrade();
+        let ribbon_strip_view = _cx.new(|_| RibbonStripView {
+            parent: parent_weak.clone(),
+        });
+        let sidebar_view = _cx.new(|_| SidebarView {
+            parent: parent_weak.clone(),
+        });
+        let canvas_view = _cx.new(|_| CanvasView {
+            parent: parent_weak.clone(),
+        });
+        let log_console_view = _cx.new(|_| LogConsoleView {
+            parent: parent_weak,
+        });
+        if let Some(pw_input) = dialogs.password_input_state.as_ref() {
+            _reader_subs.push(_cx.subscribe_in(
+                pw_input,
+                _window,
+                |this, input, ev: &InputEvent, _window, cx| {
+                    if matches!(ev, InputEvent::PressEnter { .. })
+                        && matches!(this.dialogs.active, Some(ActiveDialog::Password))
+                    {
+                        let pw = input.read(cx).value().to_string();
+                        this.apply_password(&pw, cx);
+                    }
+                },
+            ));
+        }
+
+        // Focus the root view at startup so Ctrl+O, Ctrl+K, etc. work on the Welcome screen.
+        _window.focus(&focus_handle, _cx);
 
         Self {
             engine: crate::engine::spawn_engine_thread(64, settings.max_cache_memory as u64),
@@ -285,7 +415,7 @@ impl PdfbullView {
             tabs: TabsState::new(),
             sidebar,
             viewport,
-            dialogs: DialogsState::new_in(_window, _cx),
+            dialogs,
             doc_metadata: std::collections::HashMap::new(),
             welcome,
             log_console,
@@ -301,8 +431,27 @@ impl PdfbullView {
             file_positions: crate::storage::load_file_positions(),
             opened_docs: std::collections::HashSet::new(),
             positioned_docs: std::collections::HashSet::new(),
+            window_handle: Some(_window.window_handle()),
+            last_canvas_scroll_y: 0.0,
+            last_thumb_scroll_y: 0.0,
+            ribbon_strip_view,
+            sidebar_view,
+            canvas_view,
+            log_console_view,
             _search_sub,
             _reader_subs,
+        }
+    }
+
+    fn drop_all_rendered_pages(&mut self, cx: &mut Context<Self>) {
+        for (_, img) in self.viewport.rendered_pages.drain() {
+            cx.drop_image(img, None);
+        }
+    }
+
+    fn drop_all_thumbnails(&mut self, cx: &mut Context<Self>) {
+        for (_, img) in self.sidebar.thumbnails.drain() {
+            cx.drop_image(img, None);
         }
     }
 
@@ -399,6 +548,11 @@ impl PdfbullView {
     /// Persist current open tabs and active tab index to session.json when session restore is enabled.
     pub fn persist_session_if_enabled(&mut self) {
         if !self.dialogs.settings.restore_session {
+            // Clear any stale session file when session restore is disabled.
+            crate::storage::save_session(&crate::models::SessionData {
+                open_tabs: Vec::new(),
+                active_tab: 0,
+            });
             return;
         }
         self.remember_active_position();
@@ -593,6 +747,9 @@ impl PdfbullView {
         cx: &mut Context<Self>,
     ) {
         let path = std::path::PathBuf::from(path_str);
+        if path.is_file() {
+            cx.add_recent_document(&path);
+        }
 
         // If document is already open in a tab, reload it from disk instead of
         // silently switching to a stale in-memory copy.
@@ -622,8 +779,10 @@ impl PdfbullView {
         // parsing; the background engine worker updates with exact dimensions upon Open.
         let (page_count, page_width, page_height) = (1, 595.0, 842.0);
 
-        crate::storage::add_recent_file(source.as_deref().unwrap_or(&path));
-        self.welcome.refresh_recent_files();
+        if self.dialogs.settings.remember_last_file {
+            crate::storage::add_recent_file(source.as_deref().unwrap_or(&path));
+            self.welcome.refresh_recent_files();
+        }
 
         let doc_id = crate::models::next_doc_id();
         // Keep the outgoing document's annotations before `active_doc_id` is
@@ -663,13 +822,14 @@ impl PdfbullView {
         // page origins, annotations, and the scroll offset. Previously only the
         // first three were cleared, so opening B after A showed A's highlights
         // and A's text — and Ctrl+S then wrote A's annotations into B's file.
+        self.drop_all_rendered_pages(cx);
         self.viewport.reset_for_document();
         self.viewport.page_width = page_width;
         self.viewport.page_height = page_height;
         self.viewport.total_pages = page_count;
         self.viewport.current_page = 0;
-        self.sidebar.thumbnails.clear();
-        self.sidebar.bookmarks.clear();
+        self.drop_all_thumbnails(cx);
+        self.sidebar.clear_bookmarks(cx);
         self.sidebar.attachments.clear();
         self.sidebar.layers.clear();
         // The links panel is per-document too. The tab-switch path already
@@ -688,7 +848,7 @@ impl PdfbullView {
             if let Err(e) = engine_tx
                 .send(crate::commands::PdfCommand::Open(
                     path_str_cloned.clone(),
-                    password.clone(),
+                    password.clone().map(zeroize::Zeroizing::new),
                     doc_id,
                     tx,
                 ))
@@ -819,7 +979,7 @@ impl PdfbullView {
                             if view.active_doc_id != Some(doc_id) {
                                 return;
                             }
-                            view.sidebar.bookmarks = meta.outline;
+                            view.sidebar.set_bookmarks(meta.outline, cx);
                             view.sidebar.attachments = meta.attachments;
                             view.sidebar.layers = meta.layers;
                             view.dialogs.signatures = meta.signatures;
@@ -901,17 +1061,22 @@ impl PdfbullView {
     }
 
     pub fn prompt_open_file(&self, cx: &mut Context<Self>) {
+        let wh = self.window_handle;
         cx.spawn(async move |this, cx| {
             let mut all_exts = vec!["pdf"];
             all_exts.extend_from_slice(crate::comic::COMIC_EXTENSIONS);
             all_exts.extend_from_slice(crate::comic::IMAGE_EXTENSIONS);
-            let files = rfd::AsyncFileDialog::new()
-                .add_filter("All supported (PDF, comics, pictures)", &all_exts)
-                .add_filter("PDF Documents (*.pdf)", &["pdf"])
-                .add_filter("Comic books (*.cbz)", crate::comic::COMIC_EXTENSIONS)
-                .add_filter("Pictures", crate::comic::IMAGE_EXTENSIONS)
-                .pick_files()
-                .await;
+            let files = parent_file_dialog(
+                rfd::AsyncFileDialog::new()
+                    .add_filter("All supported (PDF, comics, pictures)", &all_exts)
+                    .add_filter("PDF Documents (*.pdf)", &["pdf"])
+                    .add_filter("Comic books (*.cbz)", crate::comic::COMIC_EXTENSIONS)
+                    .add_filter("Pictures", crate::comic::IMAGE_EXTENSIONS),
+                wh,
+                cx,
+            )
+            .pick_files()
+            .await;
 
             if let Some(files) = files {
                 let paths: Vec<std::path::PathBuf> =
@@ -934,12 +1099,17 @@ impl PdfbullView {
 
     pub fn prompt_create_blank_document(&mut self, cx: &mut Context<Self>) {
         let cmd_tx = self.engine.cmd_tx.clone();
+        let wh = self.window_handle;
         cx.spawn(async move |this, cx| {
-            let save_file = rfd::AsyncFileDialog::new()
-                .add_filter("PDF Documents (*.pdf)", &["pdf"])
-                .set_file_name("Untitled.pdf")
-                .save_file()
-                .await;
+            let save_file = parent_file_dialog(
+                rfd::AsyncFileDialog::new()
+                    .add_filter("PDF Documents (*.pdf)", &["pdf"])
+                    .set_file_name("Untitled.pdf"),
+                wh,
+                cx,
+            )
+            .save_file()
+            .await;
             let Some(file_handle) = save_file else {
                 return;
             };
@@ -1088,14 +1258,35 @@ impl PdfbullView {
         // Detach from `self.tabs` up front: the work below mutates `self`, and
         // holding a borrow into the tab list across those calls will not
         // borrow-check.
-        let Some((doc_id, path)) = self
+        let Some((doc_id, path, tab_title)) = self
             .tabs
             .tabs
             .get(self.tabs.active_tab_index)
-            .map(|t| (t.doc_id, t.path.clone()))
+            .map(|t| (t.doc_id, t.path.clone(), t.title.clone()))
         else {
+            self.active_doc_id = None;
+            self.drop_all_rendered_pages(cx);
+            self.viewport.reset_for_document();
+            self.viewport.total_pages = 0;
+            self.drop_all_thumbnails(cx);
+            self.sidebar.clear_bookmarks(cx);
+            self.sidebar.attachments.clear();
+            self.sidebar.layers.clear();
+            self.sidebar.links.clear();
+            self.rendering_pages.clear();
+            if let Some(wh) = self.window_handle {
+                let _ = wh.update(cx, |_, window, _| {
+                    window.set_window_title("PDFbull");
+                });
+            }
             return;
         };
+        if let Some(wh) = self.window_handle {
+            let window_title = format!("{tab_title} — PDFbull");
+            let _ = wh.update(cx, |_, window, _| {
+                window.set_window_title(&window_title);
+            });
+        }
         let switched = self.active_doc_id != doc_id;
         if switched {
             // Remember where the outgoing document was, so coming back to
@@ -1112,9 +1303,10 @@ impl PdfbullView {
             // layer, search hits, page origins, scroll offset and — worst of
             // all — its annotations, which then got saved into the new
             // document's file.
+            self.drop_all_rendered_pages(cx);
             self.viewport.reset_for_document();
-            self.sidebar.thumbnails.clear();
-            self.sidebar.bookmarks.clear();
+            self.drop_all_thumbnails(cx);
+            self.sidebar.clear_bookmarks(cx);
             self.sidebar.attachments.clear();
             self.sidebar.layers.clear();
             self.sidebar.links.clear();
@@ -1256,6 +1448,7 @@ impl PdfbullView {
         let rotation = self.viewport.rotation as i32;
         let is_midnight = self.ribbon.midnight_mode;
         let quality = self.dialogs.settings.render_quality;
+        let window_handle = self.window_handle;
 
         cx.spawn(async move |this, cx| {
             let (resp_tx, resp_rx) = tokio::sync::oneshot::channel();
@@ -1294,20 +1487,42 @@ impl PdfbullView {
             match resp_rx.await {
                 Ok(Ok(render_res)) => {
                     crate::startup_report::mark("first page rendered");
-                    let mut raw_data = render_res.data.to_vec();
-                    crate::ui_gpui::canvas::convert_rgba_to_bgra(&mut raw_data);
+                    let (w, h, bgra) = cx
+                        .background_executor()
+                        .spawn(async move {
+                            let mut raw_data = render_res.data.to_vec();
+                            crate::ui_gpui::canvas::convert_rgba_to_bgra(&mut raw_data);
+                            (render_res.width, render_res.height, raw_data)
+                        })
+                        .await;
 
-                    if let Some(buf) =
-                        image::RgbaImage::from_raw(render_res.width, render_res.height, raw_data)
+                    let dyn_tex = if let Some(wh) = window_handle
+                        && w > 0
+                        && h > 0
                     {
-                        let frame = image::Frame::new(buf);
-                        let render_image = std::sync::Arc::new(RenderImage::new(vec![frame]));
+                        wh.update(cx, |_, window, _| {
+                            window
+                                .create_dynamic_texture(
+                                    gpui_kit::size(
+                                        gpui_kit::DevicePixels(w as i32),
+                                        gpui_kit::DevicePixels(h as i32),
+                                    ),
+                                    &bgra,
+                                    w * 4,
+                                )
+                                .ok()
+                        })
+                        .ok()
+                        .flatten()
+                    } else {
+                        None
+                    };
 
+                    if let Some(tex) = dyn_tex {
+                        let page_tex =
+                            std::sync::Arc::new(crate::ui_gpui::canvas::PageTexture { tex });
                         let _ = this.update(cx, |view, cx| {
                             if view.active_doc_id == Some(doc_id) {
-                                // Discard stale results whose zoom/rotation/filter
-                                // no longer match what is on screen, rather than
-                                // caching a bitmap that can never be corrected.
                                 if (view.viewport.zoom - zoom).abs() >= 0.01
                                     || view.viewport.rotation as i32 != rotation
                                     || view.ribbon.midnight_mode != is_midnight
@@ -1319,9 +1534,63 @@ impl PdfbullView {
                                 }
                                 view.rendering_pages.remove(&page_idx);
                                 view.viewport.failed_pages.remove(&page_idx);
+                                if let Some(prev) = view.viewport.rendered_pages.remove(&page_idx) {
+                                    cx.drop_image(prev, None);
+                                }
+                                view.viewport.dynamic_pages.insert(page_idx, page_tex);
+                                view.viewport.rendered_zoom.insert(page_idx, zoom);
+
+                                let cur = view.viewport.current_page;
+                                let radius = (view.dialogs.settings.cache_size / 20).clamp(2, 12);
+                                let keep_start = cur.saturating_sub(radius);
+                                let keep_end = cur + radius;
                                 view.viewport
+                                    .dynamic_pages
+                                    .retain(|&p, _| p >= keep_start && p <= keep_end);
+                                view.viewport
+                                    .rendered_zoom
+                                    .retain(|&p, _| p >= keep_start && p <= keep_end);
+                                cx.notify();
+                            }
+                        });
+                        return;
+                    }
+
+                    let render_image = cx
+                        .background_executor()
+                        .spawn(async move {
+                            image::RgbaImage::from_raw(w, h, bgra).map(|buf| {
+                                let frame = image::Frame::new(buf);
+                                std::sync::Arc::new(RenderImage::new(vec![frame]))
+                            })
+                        })
+                        .await;
+
+                    if let Some(render_image) = render_image {
+                        let _ = this.update(cx, |view, cx| {
+                            if view.active_doc_id == Some(doc_id) {
+                                // Discard stale results whose zoom/rotation/filter
+                                // no longer match what is on screen, rather than
+                                // caching a bitmap that can never be corrected.
+                                if (view.viewport.zoom - zoom).abs() >= 0.01
+                                    || view.viewport.rotation as i32 != rotation
+                                    || view.ribbon.midnight_mode != is_midnight
+                                {
+                                    cx.drop_image(render_image, None);
+                                    view.rendering_pages.remove(&page_idx);
+                                    view.request_render_page(doc_id, page_idx, cx);
+                                    cx.notify();
+                                    return;
+                                }
+                                view.rendering_pages.remove(&page_idx);
+                                view.viewport.failed_pages.remove(&page_idx);
+                                if let Some(prev) = view
+                                    .viewport
                                     .rendered_pages
-                                    .insert(page_idx, render_image.clone());
+                                    .insert(page_idx, render_image.clone())
+                                {
+                                    cx.drop_image(prev, None);
+                                }
                                 view.viewport.rendered_zoom.insert(page_idx, zoom);
 
                                 // Evict full-res page buffers outside the dynamic cache window
@@ -1330,9 +1599,18 @@ impl PdfbullView {
                                 let radius = (view.dialogs.settings.cache_size / 20).clamp(2, 12);
                                 let keep_start = cur.saturating_sub(radius);
                                 let keep_end = cur + radius;
-                                view.viewport
+                                let evicted_keys: Vec<usize> = view
+                                    .viewport
                                     .rendered_pages
-                                    .retain(|&p, _| p >= keep_start && p <= keep_end);
+                                    .keys()
+                                    .copied()
+                                    .filter(|&p| p < keep_start || p > keep_end)
+                                    .collect();
+                                for p in evicted_keys {
+                                    if let Some(img) = view.viewport.rendered_pages.remove(&p) {
+                                        cx.drop_image(img, None);
+                                    }
+                                }
                                 view.viewport
                                     .rendered_zoom
                                     .retain(|&p, _| p >= keep_start && p <= keep_end);
@@ -1505,17 +1783,27 @@ impl PdfbullView {
             }
 
             if let Ok(Ok(render_res)) = resp_rx.await {
-                let mut raw_data = render_res.data.to_vec();
-                crate::ui_gpui::canvas::convert_rgba_to_bgra(&mut raw_data);
-                if let Some(buf) =
-                    image::RgbaImage::from_raw(render_res.width, render_res.height, raw_data)
-                {
-                    let frame = image::Frame::new(buf);
-                    let thumb = std::sync::Arc::new(RenderImage::new(vec![frame]));
+                let thumb = cx
+                    .background_executor()
+                    .spawn(async move {
+                        let mut raw_data = render_res.data.to_vec();
+                        crate::ui_gpui::canvas::convert_rgba_to_bgra(&mut raw_data);
+                        image::RgbaImage::from_raw(render_res.width, render_res.height, raw_data)
+                            .map(|buf| {
+                                let frame = image::Frame::new(buf);
+                                std::sync::Arc::new(RenderImage::new(vec![frame]))
+                            })
+                    })
+                    .await;
+                if let Some(thumb) = thumb {
                     let _ = this.update(cx, |view, cx| {
                         if view.active_doc_id == Some(doc_id) {
-                            view.sidebar.thumbnails.insert(page_idx, thumb);
+                            if let Some(prev) = view.sidebar.thumbnails.insert(page_idx, thumb) {
+                                cx.drop_image(prev, None);
+                            }
                             cx.notify();
+                        } else {
+                            cx.drop_image(thumb, None);
                         }
                     });
                 }
@@ -1958,6 +2246,7 @@ impl PdfbullView {
             }
             let _ = this.update(cx, |view, cx| {
                 if view.active_doc_id == Some(doc_id) {
+                    view.drop_all_rendered_pages(cx);
                     view.viewport.invalidate_rendered_pages();
                     view.rendering_pages.clear();
                     view.render_needed_pages(cx);
@@ -2894,6 +3183,7 @@ impl PdfbullView {
                 view.viewport.annotations.clear();
                 view.viewport.reindex_annotations();
                 view.annotations_by_doc.remove(&doc_id);
+                view.drop_all_rendered_pages(cx);
                 view.viewport.invalidate_rendered_pages();
                 view.rendering_pages.clear();
                 view.render_needed_pages(cx);
@@ -3037,16 +3327,21 @@ impl PdfbullView {
 
         let cmd_tx = self.engine.cmd_tx.clone();
         let count = redactions.len();
+        let wh = self.window_handle;
         cx.spawn(async move |this, cx| {
-            let answer = rfd::AsyncMessageDialog::new()
-                .set_level(rfd::MessageLevel::Warning)
-                .set_title("Apply Redactions")
-                .set_description(format!(
-                    "Permanently remove the content under {count} redaction mark(s) in this file?\n\nThis rewrites the PDF and cannot be undone."
-                ))
-                .set_buttons(rfd::MessageButtons::OkCancel)
-                .show()
-                .await;
+            let answer = parent_msg_dialog(
+                rfd::AsyncMessageDialog::new()
+                    .set_level(rfd::MessageLevel::Warning)
+                    .set_title("Apply Redactions")
+                    .set_description(format!(
+                        "Permanently remove the content under {count} redaction mark(s) in this file?\n\nThis rewrites the PDF and cannot be undone."
+                    ))
+                    .set_buttons(rfd::MessageButtons::OkCancel),
+                wh,
+                cx,
+            )
+            .show()
+            .await;
             if !matches!(
                 answer,
                 rfd::MessageDialogResult::Ok | rfd::MessageDialogResult::Yes
@@ -3078,6 +3373,7 @@ impl PdfbullView {
                             view.viewport.reindex_annotations();
                             view.annotations_by_doc
                                 .insert(doc_id, view.viewport.annotations.clone());
+                            view.drop_all_rendered_pages(cx);
                             view.viewport.invalidate_rendered_pages();
                             view.rendering_pages.clear();
                         } else if let Some(cached) = view.annotations_by_doc.get_mut(&doc_id) {
@@ -3129,13 +3425,18 @@ impl PdfbullView {
         let default_name = tab.title.clone();
         let annotations = self.viewport.annotations.clone();
         let cmd_tx = self.engine.cmd_tx.clone();
+        let wh = self.window_handle;
 
         cx.spawn(async move |this, cx| {
-            let file = rfd::AsyncFileDialog::new()
-                .set_file_name(&default_name)
-                .add_filter("PDF files (*.pdf)", &["pdf"])
-                .save_file()
-                .await;
+            let file = parent_file_dialog(
+                rfd::AsyncFileDialog::new()
+                    .set_file_name(&default_name)
+                    .add_filter("PDF files (*.pdf)", &["pdf"]),
+                wh,
+                cx,
+            )
+            .save_file()
+            .await;
             let Some(file) = file else {
                 return;
             };
@@ -3341,13 +3642,18 @@ impl PdfbullView {
         let text_str = text.to_string();
         let path_str = path.to_string_lossy().to_string();
         let cmd_tx = self.engine.cmd_tx.clone();
+        let wh = self.window_handle;
 
         cx.spawn(async move |this, cx| {
-            let save_file = rfd::AsyncFileDialog::new()
-                .add_filter("PDF files (*.pdf)", &["pdf"])
-                .set_file_name("watermarked.pdf")
-                .save_file()
-                .await;
+            let save_file = parent_file_dialog(
+                rfd::AsyncFileDialog::new()
+                    .add_filter("PDF files (*.pdf)", &["pdf"])
+                    .set_file_name("watermarked.pdf"),
+                wh,
+                cx,
+            )
+            .save_file()
+            .await;
             let Some(save_file) = save_file else {
                 return;
             };
@@ -3404,13 +3710,18 @@ impl PdfbullView {
         let (h_str, f_str) = (header.to_string(), footer.to_string());
         let path_str = path.to_string_lossy().to_string();
         let cmd_tx = self.engine.cmd_tx.clone();
+        let wh = self.window_handle;
 
         cx.spawn(async move |this, cx| {
-            let save_file = rfd::AsyncFileDialog::new()
-                .add_filter("PDF files (*.pdf)", &["pdf"])
-                .set_file_name("header_footer.pdf")
-                .save_file()
-                .await;
+            let save_file = parent_file_dialog(
+                rfd::AsyncFileDialog::new()
+                    .add_filter("PDF files (*.pdf)", &["pdf"])
+                    .set_file_name("header_footer.pdf"),
+                wh,
+                cx,
+            )
+            .save_file()
+            .await;
             let Some(save_file) = save_file else {
                 return;
             };
@@ -3458,6 +3769,77 @@ impl PdfbullView {
         .detach();
     }
 
+    pub fn prompt_decrypt_document(&mut self, cx: &mut Context<Self>) {
+        let Some(tab) = self.tabs.tabs.get(self.tabs.active_tab_index) else {
+            return;
+        };
+        let Some(path) = tab.path.clone() else {
+            self.status_message = Some("Save or open a file on disk before decrypting.".into());
+            cx.notify();
+            return;
+        };
+        let path_str = path.to_string_lossy().to_string();
+        let default_name = path
+            .file_stem()
+            .and_then(|s| s.to_str())
+            .map(|s| format!("{s}_decrypted.pdf"))
+            .unwrap_or_else(|| "decrypted.pdf".to_string());
+        let parent_dir = path.parent().map(|p| p.to_path_buf());
+        let cmd_tx = self.engine.cmd_tx.clone();
+        let wh = self.window_handle;
+        self.status_message = Some("Choose destination for decrypted PDF...".into());
+        cx.notify();
+
+        cx.spawn(async move |this, cx| {
+            let mut dialog = rfd::AsyncFileDialog::new()
+                .add_filter("PDF Document", &["pdf"])
+                .set_file_name(&default_name);
+            if let Some(dir) = parent_dir {
+                dialog = dialog.set_directory(dir);
+            }
+            let Some(handle) = parent_file_dialog(dialog, wh, cx).save_file().await else {
+                return;
+            };
+            let out_path = handle.path().to_string_lossy().to_string();
+            let (tx, rx) = tokio::sync::oneshot::channel();
+            if let Err(e) = cmd_tx
+                .send(crate::commands::PdfCommand::DecryptPdf(
+                    path_str,
+                    out_path.clone(),
+                    tx,
+                ))
+                .await
+            {
+                tracing::error!("Failed to send DecryptPdf command: {e}");
+                let _ = this.update(cx, |view, cx| {
+                    view.report_engine_unavailable("Decrypting the PDF", cx);
+                });
+                return;
+            }
+            match rx.await {
+                Ok(Ok(_)) => {
+                    let _ = this.update(cx, |view, cx| {
+                        view.open_pdf_path(&out_path, None, cx);
+                        view.status_message = Some("Saved decrypted copy.".into());
+                        cx.notify();
+                    });
+                }
+                Ok(Err(e)) => {
+                    let _ = this.update(cx, |view, cx| {
+                        view.report_engine_error("Decrypting the PDF", &e, cx);
+                    });
+                }
+                Err(e) => {
+                    tracing::error!("DecryptPdf response dropped: {e}");
+                    let _ = this.update(cx, |view, cx| {
+                        view.report_engine_unavailable("Decrypting the PDF", cx);
+                    });
+                }
+            }
+        })
+        .detach();
+    }
+
     pub fn apply_security(&mut self, algo: &str, cx: &mut Context<Self>) {
         let Some(tab) = self.tabs.tabs.get(self.tabs.active_tab_index) else {
             return;
@@ -3483,12 +3865,23 @@ impl PdfbullView {
             .filter(|s| !s.is_empty())
             .unwrap_or_else(|| "owner".to_string());
 
+        let permissions = self.dialogs.security_permissions;
+        let wh = self.window_handle;
+
         cx.spawn(async move |this, cx| {
-            let save_file = rfd::AsyncFileDialog::new()
-                .add_filter("PDF files (*.pdf)", &["pdf"])
-                .set_file_name("encrypted.pdf")
-                .save_file()
-                .await;
+            let mut dlg_slot = Some(
+                rfd::AsyncFileDialog::new()
+                    .add_filter("PDF files (*.pdf)", &["pdf"])
+                    .set_file_name("encrypted.pdf"),
+            );
+            if let Some(wh) = wh {
+                let _ = wh.update(cx, |_, window, _| {
+                    if let Some(d) = dlg_slot.take() {
+                        dlg_slot = Some(d.set_parent(window));
+                    }
+                });
+            }
+            let save_file = dlg_slot.expect("dialog").save_file().await;
             let Some(save_file) = save_file else {
                 return;
             };
@@ -3496,14 +3889,15 @@ impl PdfbullView {
 
             let (tx, rx) = tokio::sync::oneshot::channel();
             if let Err(e) = cmd_tx
-                .send(crate::commands::PdfCommand::EncryptPdf(
-                    path_str,
-                    out_path.clone(),
-                    user_pw,
-                    owner_pw,
-                    algo_str,
+                .send(crate::commands::PdfCommand::EncryptPdfWithPermissions {
+                    input_path: path_str,
+                    output_path: out_path.clone(),
+                    user_pass: zeroize::Zeroizing::new(user_pw),
+                    owner_pass: zeroize::Zeroizing::new(owner_pw),
+                    algorithm: algo_str,
+                    permissions,
                     tx,
-                ))
+                })
                 .await
             {
                 tracing::error!("Failed to send EncryptPdf command: {e}");
@@ -3537,6 +3931,340 @@ impl PdfbullView {
         .detach();
     }
 
+    pub fn copy_current_page_image(&mut self, cx: &mut Context<Self>) {
+        let Some(doc_id) = self.active_doc_id else {
+            self.status_message = Some("Open a PDF first.".into());
+            return;
+        };
+        let page = self.viewport.current_page;
+        let opts = crate::pdf_engine::RenderOptions {
+            scale: 2.0,
+            rotation: self.viewport.rotation as i32,
+            filter: crate::pdf_engine::RenderFilter::None,
+            auto_crop: false,
+            quality: self.dialogs.settings.render_quality,
+        };
+        let cmd_tx = self.engine.cmd_tx.clone();
+        self.status_message = Some(format!("Rendering page {} for clipboard…", page + 1));
+        cx.spawn(async move |this, cx| {
+            let (tx, rx) = tokio::sync::oneshot::channel();
+            if cmd_tx
+                .send(crate::commands::PdfCommand::Render(doc_id, page, opts, tx))
+                .await
+                .is_err()
+            {
+                let _ = this.update(cx, |v, cx| {
+                    v.report_engine_unavailable("Copy page image", cx)
+                });
+                return;
+            }
+            match rx.await {
+                Ok(Ok(res)) => {
+                    let ok = arboard::Clipboard::new()
+                        .and_then(|mut cb| {
+                            cb.set_image(arboard::ImageData {
+                                width: res.width as usize,
+                                height: res.height as usize,
+                                bytes: std::borrow::Cow::Borrowed(&res.data),
+                            })
+                        })
+                        .is_ok();
+                    let _ = this.update(cx, |v, cx| {
+                        v.status_message = Some(if ok {
+                            format!("Copied page {} image to clipboard.", page + 1)
+                        } else {
+                            "Failed to write image to clipboard.".into()
+                        });
+                        cx.notify();
+                    });
+                }
+                Ok(Err(e)) => {
+                    let _ = this.update(cx, |v, cx| {
+                        v.report_engine_error("Copying page image", &e, cx);
+                    });
+                }
+                Err(_) => {
+                    let _ = this.update(cx, |v, cx| {
+                        v.report_engine_unavailable("Copy page image", cx);
+                    });
+                }
+            }
+        })
+        .detach();
+    }
+
+    pub fn export_current_page_png_zopfli(&mut self, cx: &mut Context<Self>) {
+        let Some(doc_id) = self.active_doc_id else {
+            self.status_message = Some("Open a PDF first.".into());
+            return;
+        };
+        let page = self.viewport.current_page;
+        let cmd_tx = self.engine.cmd_tx.clone();
+        let wh = self.window_handle;
+        cx.spawn(async move |this, cx| {
+            let mut dlg_slot = Some(
+                rfd::AsyncFileDialog::new()
+                    .add_filter("PNG image (*.png)", &["png"])
+                    .set_file_name(format!("page_{}.png", page + 1)),
+            );
+            if let Some(wh) = wh {
+                let _ = wh.update(cx, |_, window, _| {
+                    if let Some(d) = dlg_slot.take() {
+                        dlg_slot = Some(d.set_parent(window));
+                    }
+                });
+            }
+            let Some(save_file) = dlg_slot.expect("dialog").save_file().await else {
+                return;
+            };
+            let out_path = save_file.path().to_path_buf();
+            let (tx, rx) = tokio::sync::oneshot::channel();
+            if cmd_tx
+                .send(crate::commands::PdfCommand::ExportImageWithOptions {
+                    doc_id,
+                    page_num: page,
+                    scale: 2.0,
+                    use_zopfli: true,
+                    tx,
+                })
+                .await
+                .is_err()
+            {
+                let _ = this.update(cx, |v, cx| v.report_engine_unavailable("Export PNG", cx));
+                return;
+            }
+            match rx.await {
+                Ok(Ok(bytes)) => {
+                    let write_res = std::fs::write(&out_path, &bytes);
+                    let _ = this.update(cx, |v, cx| {
+                        match write_res {
+                            Ok(()) => {
+                                v.status_message = Some(format!(
+                                    "Saved lossless Zopfli PNG to {}.",
+                                    out_path.display()
+                                ));
+                            }
+                            Err(e) => {
+                                v.status_message = Some(format!("Failed to write PNG: {e}"));
+                            }
+                        }
+                        cx.notify();
+                    });
+                }
+                Ok(Err(e)) => {
+                    let _ = this.update(cx, |v, cx| v.report_engine_error("Exporting PNG", &e, cx));
+                }
+                Err(_) => {
+                    let _ = this.update(cx, |v, cx| v.report_engine_unavailable("Export PNG", cx));
+                }
+            }
+        })
+        .detach();
+    }
+
+    pub fn prompt_convert_to_pdfa(&mut self, cx: &mut Context<Self>) {
+        let Some(input_path) = self
+            .tabs
+            .tabs
+            .get(self.tabs.active_tab_index)
+            .and_then(|t| t.path.as_ref())
+            .map(|p| p.to_string_lossy().to_string())
+        else {
+            self.status_message = Some("Open a PDF first.".into());
+            return;
+        };
+        let cmd_tx = self.engine.cmd_tx.clone();
+        let wh = self.window_handle;
+        cx.spawn(async move |this, cx| {
+            let mut dlg_slot = Some(
+                rfd::AsyncFileDialog::new()
+                    .add_filter("PDF/A files (*.pdf)", &["pdf"])
+                    .set_file_name("archival_pdfa2b.pdf"),
+            );
+            if let Some(wh) = wh {
+                let _ = wh.update(cx, |_, window, _| {
+                    if let Some(d) = dlg_slot.take() {
+                        dlg_slot = Some(d.set_parent(window));
+                    }
+                });
+            }
+            let Some(save_file) = dlg_slot.expect("dialog").save_file().await else {
+                return;
+            };
+            let out_path = save_file.path().to_string_lossy().to_string();
+            let (tx, rx) = tokio::sync::oneshot::channel();
+            if cmd_tx
+                .send(crate::commands::PdfCommand::ConvertToPdfa {
+                    input_path,
+                    output_path: out_path.clone(),
+                    profile: "a2b".to_string(),
+                    tx,
+                })
+                .await
+                .is_err()
+            {
+                let _ = this.update(cx, |v, cx| {
+                    v.report_engine_unavailable("PDF/A conversion", cx)
+                });
+                return;
+            }
+            match rx.await {
+                Ok(Ok(_)) => {
+                    let _ = this.update(cx, |v, cx| {
+                        v.open_pdf_path(&out_path, None, cx);
+                        v.status_message = Some("Converted to PDF/A-2b.".into());
+                        cx.notify();
+                    });
+                }
+                Ok(Err(e)) => {
+                    let _ = this.update(cx, |v, cx| {
+                        v.report_engine_error("PDF/A conversion", &e, cx)
+                    });
+                }
+                Err(_) => {
+                    let _ = this.update(cx, |v, cx| {
+                        v.report_engine_unavailable("PDF/A conversion", cx)
+                    });
+                }
+            }
+        })
+        .detach();
+    }
+
+    pub fn prompt_extract_all_images(&mut self, cx: &mut Context<Self>) {
+        let Some(doc_id) = self.active_doc_id else {
+            self.status_message = Some("Open a PDF first.".into());
+            return;
+        };
+        let cmd_tx = self.engine.cmd_tx.clone();
+        let wh = self.window_handle;
+        cx.spawn(async move |this, cx| {
+            let mut dlg_slot = Some(rfd::AsyncFileDialog::new());
+            if let Some(wh) = wh {
+                let _ = wh.update(cx, |_, window, _| {
+                    if let Some(d) = dlg_slot.take() {
+                        dlg_slot = Some(d.set_parent(window));
+                    }
+                });
+            }
+            let Some(folder) = dlg_slot.expect("dialog").pick_folder().await else {
+                return;
+            };
+            let out_dir = folder.path().to_string_lossy().to_string();
+            let (tx, rx) = tokio::sync::oneshot::channel();
+            if cmd_tx
+                .send(crate::commands::PdfCommand::ExtractAllImages(
+                    doc_id, out_dir, tx,
+                ))
+                .await
+                .is_err()
+            {
+                let _ = this.update(cx, |v, cx| {
+                    v.report_engine_unavailable("Extract images", cx)
+                });
+                return;
+            }
+            match rx.await {
+                Ok(Ok(count)) => {
+                    let _ = this.update(cx, |v, cx| {
+                        v.status_message = Some(format!("Extracted {count} embedded image(s)."));
+                        cx.notify();
+                    });
+                }
+                Ok(Err(e)) => {
+                    let _ = this.update(cx, |v, cx| {
+                        v.report_engine_error("Extracting images", &e, cx)
+                    });
+                }
+                Err(_) => {
+                    let _ = this.update(cx, |v, cx| {
+                        v.report_engine_unavailable("Extract images", cx)
+                    });
+                }
+            }
+        })
+        .detach();
+    }
+
+    pub fn prompt_sign_document(&mut self, cx: &mut Context<Self>) {
+        let Some(doc_id) = self.active_doc_id else {
+            self.status_message = Some("Open a PDF first.".into());
+            return;
+        };
+        let visible = self.dialogs.sig_visible;
+        let tsa_url = self
+            .dialogs
+            .sig_tsa_input
+            .as_ref()
+            .map(|i| i.read(cx).value().trim().to_string())
+            .filter(|s| !s.is_empty());
+        let cmd_tx = self.engine.cmd_tx.clone();
+        let wh = self.window_handle;
+        cx.spawn(async move |this, cx| {
+            let key_file = parent_file_dialog(
+                rfd::AsyncFileDialog::new()
+                    .add_filter("PKCS#8 private key (*.der, *.key)", &["der", "key", "p8"]),
+                wh,
+                cx,
+            )
+            .pick_file()
+            .await;
+            let Some(key_file) = key_file else {
+                return;
+            };
+            let cert_path = key_file.path().to_string_lossy().to_string();
+
+            let save_file = parent_file_dialog(
+                rfd::AsyncFileDialog::new()
+                    .add_filter("PDF files (*.pdf)", &["pdf"])
+                    .set_file_name("signed.pdf"),
+                wh,
+                cx,
+            )
+            .save_file()
+            .await;
+            let Some(save_file) = save_file else {
+                return;
+            };
+            let out_path = save_file.path().to_string_lossy().to_string();
+
+            let (tx, rx) = tokio::sync::oneshot::channel();
+            if cmd_tx
+                .send(crate::commands::PdfCommand::SignDocumentWithOptions {
+                    doc_id,
+                    cert_path,
+                    output_path: out_path.clone(),
+                    visible,
+                    reason: None,
+                    location: None,
+                    tsa_url,
+                    tx,
+                })
+                .await
+                .is_err()
+            {
+                let _ = this.update(cx, |v, cx| v.report_engine_unavailable("Signing", cx));
+                return;
+            }
+            match rx.await {
+                Ok(Ok(_)) => {
+                    let _ = this.update(cx, |v, cx| {
+                        v.open_pdf_path(&out_path, None, cx);
+                        v.status_message = Some("Document digitally signed.".into());
+                        cx.notify();
+                    });
+                }
+                Ok(Err(e)) => {
+                    let _ = this.update(cx, |v, cx| v.report_engine_error("Signing", &e, cx));
+                }
+                Err(_) => {
+                    let _ = this.update(cx, |v, cx| v.report_engine_unavailable("Signing", cx));
+                }
+            }
+        })
+        .detach();
+    }
+
     pub fn rotate_active_pages(
         &mut self,
         pages: Option<Vec<usize>>,
@@ -3553,8 +4281,9 @@ impl PdfbullView {
         let Some(path) = tab.path.clone() else {
             // No file on disk: fall back to view-only rotation.
             self.viewport.rotation = (self.viewport.rotation as i32 + angle).rem_euclid(360) as u16;
+            self.drop_all_rendered_pages(cx);
             self.viewport.invalidate_rendered_pages();
-            self.sidebar.thumbnails.clear();
+            self.drop_all_thumbnails(cx);
             self.rendering_pages.clear();
             self.render_needed_pages(cx);
             self.status_message = Some(format!("Rotated by {} degrees.", angle));
@@ -3629,13 +4358,18 @@ impl PdfbullView {
         let remaining_pages: Vec<usize> = (0..total).filter(|&p| p != cur).collect();
         let path_str = path.to_string_lossy().to_string();
         let cmd_tx = self.engine.cmd_tx.clone();
+        let wh = self.window_handle;
 
         cx.spawn(async move |this, cx| {
-            let save_file = rfd::AsyncFileDialog::new()
-                .add_filter("PDF files (*.pdf)", &["pdf"])
-                .set_file_name("reordered.pdf")
-                .save_file()
-                .await;
+            let save_file = parent_file_dialog(
+                rfd::AsyncFileDialog::new()
+                    .add_filter("PDF files (*.pdf)", &["pdf"])
+                    .set_file_name("reordered.pdf"),
+                wh,
+                cx,
+            )
+            .save_file()
+            .await;
             let Some(save_file) = save_file else {
                 return;
             };
@@ -3684,12 +4418,17 @@ impl PdfbullView {
 
     pub fn prompt_merge_files(&mut self, cx: &mut Context<Self>) {
         let cmd_tx = self.engine.cmd_tx.clone();
+        let wh = self.window_handle;
         cx.spawn(async move |this, cx| {
-            let files = rfd::AsyncFileDialog::new()
-                .add_filter("PDF files (*.pdf)", &["pdf"])
-                .set_title("Select PDFs to Merge")
-                .pick_files()
-                .await;
+            let files = parent_file_dialog(
+                rfd::AsyncFileDialog::new()
+                    .add_filter("PDF files (*.pdf)", &["pdf"])
+                    .set_title("Select PDFs to Merge"),
+                wh,
+                cx,
+            )
+            .pick_files()
+            .await;
             let Some(files) = files else {
                 return;
             };
@@ -3701,12 +4440,16 @@ impl PdfbullView {
                 });
                 return;
             }
-            let save_file = rfd::AsyncFileDialog::new()
-                .add_filter("PDF files (*.pdf)", &["pdf"])
-                .set_title("Save Merged PDF As")
-                .set_file_name("merged.pdf")
-                .save_file()
-                .await;
+            let save_file = parent_file_dialog(
+                rfd::AsyncFileDialog::new()
+                    .add_filter("PDF files (*.pdf)", &["pdf"])
+                    .set_title("Save Merged PDF As")
+                    .set_file_name("merged.pdf"),
+                wh,
+                cx,
+            )
+            .save_file()
+            .await;
             let Some(save_file) = save_file else {
                 return;
             };
@@ -3766,12 +4509,16 @@ impl PdfbullView {
         let total_pages = self.viewport.total_pages;
         let path_str = path.to_string_lossy().to_string();
         let cmd_tx = self.engine.cmd_tx.clone();
+        let wh = self.window_handle;
 
         cx.spawn(async move |this, cx| {
-            let folder = rfd::AsyncFileDialog::new()
-                .set_title("Select Output Folder for Split Pages")
-                .pick_folder()
-                .await;
+            let folder = parent_file_dialog(
+                rfd::AsyncFileDialog::new().set_title("Select Output Folder for Split Pages"),
+                wh,
+                cx,
+            )
+            .pick_folder()
+            .await;
             let Some(folder) = folder else {
                 return;
             };
@@ -3831,13 +4578,18 @@ impl PdfbullView {
         };
         let path_str = path.to_string_lossy().to_string();
         let cmd_tx = self.engine.cmd_tx.clone();
+        let wh = self.window_handle;
 
         cx.spawn(async move |this, cx| {
-            let save_file = rfd::AsyncFileDialog::new()
-                .add_filter("PDF files (*.pdf)", &["pdf"])
-                .set_file_name("compressed.pdf")
-                .save_file()
-                .await;
+            let save_file = parent_file_dialog(
+                rfd::AsyncFileDialog::new()
+                    .add_filter("PDF files (*.pdf)", &["pdf"])
+                    .set_file_name("compressed.pdf"),
+                wh,
+                cx,
+            )
+            .save_file()
+            .await;
             let Some(save_file) = save_file else {
                 return;
             };
@@ -3953,13 +4705,18 @@ impl PdfbullView {
             return;
         };
         let cmd_tx = self.engine.cmd_tx.clone();
+        let wh = self.window_handle;
 
         cx.spawn(async move |this, cx| {
-            let save_file = rfd::AsyncFileDialog::new()
-                .add_filter(filter_name, &[ext])
-                .set_file_name(format!("document.{}", ext))
-                .save_file()
-                .await;
+            let save_file = parent_file_dialog(
+                rfd::AsyncFileDialog::new()
+                    .add_filter(filter_name, &[ext])
+                    .set_file_name(format!("document.{}", ext)),
+                wh,
+                cx,
+            )
+            .save_file()
+            .await;
             let Some(save_file) = save_file else {
                 return;
             };
@@ -4142,16 +4899,21 @@ impl PdfbullView {
                     return;
                 }
                 let url_for_prompt = url.clone();
+                let wh = self.window_handle;
                 cx.spawn(async move |this, cx| {
-                    let answer = rfd::AsyncMessageDialog::new()
-                        .set_level(rfd::MessageLevel::Warning)
-                        .set_title("Open external link")
-                        .set_description(format!(
-                            "Open this link in your default application?\n\n{url_for_prompt}"
-                        ))
-                        .set_buttons(rfd::MessageButtons::OkCancel)
-                        .show()
-                        .await;
+                    let answer = parent_msg_dialog(
+                        rfd::AsyncMessageDialog::new()
+                            .set_level(rfd::MessageLevel::Warning)
+                            .set_title("Open external link")
+                            .set_description(format!(
+                                "Open this link in your default application?\n\n{url_for_prompt}"
+                            ))
+                            .set_buttons(rfd::MessageButtons::OkCancel),
+                        wh,
+                        cx,
+                    )
+                    .show()
+                    .await;
                     if !matches!(
                         answer,
                         rfd::MessageDialogResult::Ok | rfd::MessageDialogResult::Yes
@@ -4159,17 +4921,9 @@ impl PdfbullView {
                         return;
                     }
                     let _ = this.update(cx, |view, cx| {
-                        match open::that_detached(&url_for_prompt) {
-                            Ok(()) => {
-                                view.status_message =
-                                    Some(format!("Opened {url_for_prompt} in your browser."));
-                            }
-                            Err(e) => {
-                                tracing::error!("Failed to open {url_for_prompt}: {e}");
-                                view.status_message =
-                                    Some(format!("Could not open {url_for_prompt}: {e}"));
-                            }
-                        }
+                        cx.open_url(&url_for_prompt);
+                        view.status_message =
+                            Some(format!("Opened {url_for_prompt} in your browser."));
                         cx.notify();
                     });
                 })
@@ -4512,13 +5266,18 @@ impl PdfbullView {
         };
         let page_idx = self.viewport.current_page;
         let cmd_tx = self.engine.cmd_tx.clone();
+        let wh = self.window_handle;
 
         cx.spawn(async move |this, cx| {
-            let save_file = rfd::AsyncFileDialog::new()
-                .add_filter("PDF files (*.pdf)", &["pdf"])
-                .set_file_name("extracted.pdf")
-                .save_file()
-                .await;
+            let save_file = parent_file_dialog(
+                rfd::AsyncFileDialog::new()
+                    .add_filter("PDF files (*.pdf)", &["pdf"])
+                    .set_file_name("extracted.pdf"),
+                wh,
+                cx,
+            )
+            .save_file()
+            .await;
             let Some(save_file) = save_file else {
                 return;
             };
@@ -4617,22 +5376,30 @@ impl PdfbullView {
         }
         if self.tabs.tabs[idx].is_modified {
             let title = self.tabs.tabs[idx].title.clone();
+            let tab_id = self.tabs.tabs[idx].id;
+            let wh = self.window_handle;
             cx.spawn(async move |this, cx| {
-                let answer = rfd::AsyncMessageDialog::new()
-                    .set_title("Unsaved changes")
-                    .set_description(format!(
-                        "Close '{}' without saving? Unsaved annotations will be lost.",
-                        title
-                    ))
-                    .set_buttons(rfd::MessageButtons::OkCancel)
-                    .show()
-                    .await;
+                let answer = parent_msg_dialog(
+                    rfd::AsyncMessageDialog::new()
+                        .set_title("Unsaved changes")
+                        .set_description(format!(
+                            "Close '{}' without saving? Unsaved annotations will be lost.",
+                            title
+                        ))
+                        .set_buttons(rfd::MessageButtons::OkCancel),
+                    wh,
+                    cx,
+                )
+                .show()
+                .await;
                 if matches!(
                     answer,
                     rfd::MessageDialogResult::Ok | rfd::MessageDialogResult::Yes
                 ) {
                     let _ = this.update(cx, |view, cx| {
-                        view.do_close_tab(idx, cx);
+                        if let Some(cur_idx) = view.tabs.tabs.iter().position(|t| t.id == tab_id) {
+                            view.do_close_tab(cur_idx, cx);
+                        }
                     });
                 }
             })
@@ -4640,6 +5407,53 @@ impl PdfbullView {
             return;
         }
         self.do_close_tab(idx, cx);
+    }
+
+    pub fn close_tab_ids_with_prompt(
+        &mut self,
+        target_ids: Vec<u64>,
+        dirty_count: usize,
+        cx: &mut Context<Self>,
+    ) {
+        if target_ids.is_empty() {
+            return;
+        }
+        if dirty_count == 0 {
+            for tab_id in target_ids {
+                if let Some(cur_idx) = self.tabs.tabs.iter().position(|t| t.id == tab_id) {
+                    self.do_close_tab(cur_idx, cx);
+                }
+            }
+            return;
+        }
+        let wh = self.window_handle;
+        cx.spawn(async move |this, cx| {
+            let answer = parent_msg_dialog(
+                rfd::AsyncMessageDialog::new()
+                    .set_title("Unsaved changes")
+                    .set_description(format!(
+                        "Close {dirty_count} unsaved tab(s) without saving? Unsaved annotations will be lost."
+                    ))
+                    .set_buttons(rfd::MessageButtons::OkCancel),
+                wh,
+                cx,
+            )
+            .show()
+            .await;
+            if matches!(
+                answer,
+                rfd::MessageDialogResult::Ok | rfd::MessageDialogResult::Yes
+            ) {
+                let _ = this.update(cx, |view, cx| {
+                    for tab_id in target_ids {
+                        if let Some(cur_idx) = view.tabs.tabs.iter().position(|t| t.id == tab_id) {
+                            view.do_close_tab(cur_idx, cx);
+                        }
+                    }
+                });
+            }
+        })
+        .detach();
     }
 
     pub fn apply_password(&mut self, password: &str, cx: &mut Context<Self>) {
@@ -4678,10 +5492,22 @@ impl PdfbullView {
                 self.prompt_open_file(cx);
             }
             RibbonAction::SaveFile => {
+                use gpui_kit::component::WindowExt as _;
                 self.save_active_document(cx);
+                window.push_notification(
+                    gpui_kit::component::notification::Notification::success("Document saved."),
+                    cx,
+                );
             }
             RibbonAction::Print => {
+                use gpui_kit::component::WindowExt as _;
                 self.print_active_document(cx);
+                window.push_notification(
+                    gpui_kit::component::notification::Notification::info(
+                        "Sent to printer spooler.",
+                    ),
+                    cx,
+                );
             }
             RibbonAction::Undo => {
                 self.undo_active_tab(cx);
@@ -4731,6 +5557,7 @@ impl PdfbullView {
                 // `request_render_page`, so the zoom map has to be cleared
                 // alongside the images or the toggle would blank every page
                 // permanently.
+                self.drop_all_rendered_pages(cx);
                 self.viewport.invalidate_rendered_pages();
                 self.rendering_pages.clear();
                 self.render_needed_pages(cx);
@@ -4746,12 +5573,13 @@ impl PdfbullView {
             }
             RibbonAction::SelectColor(color) => {
                 self.ribbon.active_color = color;
-                self.viewport.highlight_color = Some(hsla(
-                    color[0].clamp(0.0, 1.0),
-                    color[1].clamp(0.0, 1.0),
-                    color[2].clamp(0.0, 1.0),
-                    color[3].clamp(0.0, 1.0),
-                ));
+                let rgba = gpui_kit::Rgba {
+                    r: color[0].clamp(0.0, 1.0),
+                    g: color[1].clamp(0.0, 1.0),
+                    b: color[2].clamp(0.0, 1.0),
+                    a: color[3].clamp(0.0, 1.0),
+                };
+                self.viewport.highlight_color = Some(rgba.into());
             }
             RibbonAction::Watermark => {
                 self.dialogs.active = Some(ActiveDialog::Watermark);
@@ -4781,7 +5609,7 @@ impl PdfbullView {
                 self.apply_redactions(cx);
             }
             RibbonAction::Decrypt => {
-                self.dialogs.active = Some(ActiveDialog::Password);
+                self.prompt_decrypt_document(cx);
             }
             RibbonAction::Compress => {
                 self.prompt_compress_document(cx);
@@ -4828,9 +5656,13 @@ impl PdfbullView {
 
     // ── Keyboard-first reading ──────────────────────────────────────────────
 
-    /// True while the user is typing into a text box, so plain-letter
-    /// shortcuts (j, k, n, p, …) must not fire.
-    fn text_input_focused(&self, window: &Window, cx: &App) -> bool {
+    /// True while the user is typing into any text input (including dialogs),
+    /// so viewer shortcuts must not fire.
+    fn text_input_focused(&self, window: &mut Window, cx: &mut App) -> bool {
+        use gpui_kit::component::WindowExt as _;
+        if window.has_focused_input(cx) {
+            return true;
+        }
         let focused = |input: &Option<Entity<gpui_kit::component::input::InputState>>| {
             input
                 .as_ref()
@@ -5174,6 +6006,7 @@ impl PdfbullView {
 
     fn rotate_view(&mut self, degrees: i32, cx: &mut Context<Self>) {
         self.viewport.rotation = (self.viewport.rotation as i32 + degrees).rem_euclid(360) as u16;
+        self.drop_all_rendered_pages(cx);
         self.viewport.invalidate_rendered_pages();
         self.rendering_pages.clear();
         self.reader.last_fit_size = (0.0, 0.0);
@@ -5290,6 +6123,10 @@ impl PdfbullView {
                 self.status_message = Some("Reloaded from disk.".into());
             }
             ReaderCommand::CopyPageText => self.select_all_page_text(cx),
+            ReaderCommand::CopyPageImage => self.copy_current_page_image(cx),
+            ReaderCommand::ExportPngZopfli => self.export_current_page_png_zopfli(cx),
+            ReaderCommand::ConvertToPdfa => self.prompt_convert_to_pdfa(cx),
+            ReaderCommand::ExtractAllImages => self.prompt_extract_all_images(cx),
             ReaderCommand::Undo => self.undo_active_tab(cx),
             ReaderCommand::Redo => self.redo_active_tab(cx),
         }
@@ -5456,7 +6293,9 @@ impl PdfbullView {
             }
         }
 
-        self.handle_key_down_legacy(event, cx);
+        if !typing && self.dialogs.active.is_none() && !self.reader.palette_open {
+            self.handle_key_down_legacy(event, cx);
+        }
     }
 
     /// Shortcuts that predate the reader keymap (save, open, print, close,
@@ -5573,7 +6412,7 @@ impl PdfbullView {
 }
 
 impl Render for PdfbullView {
-    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let bg = cx.theme().background;
         let fg = cx.theme().foreground;
         let border = cx.theme().border;
@@ -5581,17 +6420,12 @@ impl Render for PdfbullView {
         let has_tabs = !self.tabs.tabs.is_empty();
         // Presentation and full screen show nothing but the pages.
         let chrome = !(self.reader.chrome_hidden() && has_tabs);
-        self.note_startup_milestones(_window, cx);
-        // Fit modes follow the canvas size: check again once this frame has
-        // been laid out (a resize, a sidebar toggle, entering full screen).
-        if self.reader.zoom_mode != ZoomMode::Manual {
-            cx.on_next_frame(_window, |this, _, cx| this.refit_if_needed(cx));
-        }
+        self.note_startup_milestones(window, cx);
         // A command-line `-presentation` / `-fullscreen` waits for the file.
         if self.reader.start_ready {
             self.reader.start_ready = false;
             if let Some(mode) = self.reader.start_mode.take() {
-                cx.on_next_frame(_window, move |this, window, cx| match mode {
+                cx.on_next_frame(window, move |this, window, cx| match mode {
                     super::reader::StartMode::Presentation => this.toggle_presentation(window, cx),
                     super::reader::StartMode::Fullscreen => this.toggle_fullscreen(window, cx),
                 });
@@ -5670,11 +6504,8 @@ impl Render for PdfbullView {
                     ),
             );
 
-        // Ribbon Action Strip
-        let action_strip = self.ribbon.render_strip(cx, |this, action, window, cx| {
-            this.handle_ribbon_action(action, window, cx);
-            cx.notify();
-        });
+        // Ribbon Action Strip — rendered via child `Entity<RibbonStripView>`
+        let action_strip = self.ribbon_strip_view.clone();
 
         // Tabs Bar
         let tabs_bar = if has_tabs {
@@ -5689,7 +6520,11 @@ impl Render for PdfbullView {
                         if idx < this.tabs.tabs.len() {
                             let old_idx = this.tabs.active_tab_index;
                             if old_idx != idx && this.dialogs.settings.auto_save {
-                                let needs_save = this.tabs.tabs.get(old_idx).is_some_and(|t| t.is_modified && t.path.is_some());
+                                let needs_save = this
+                                    .tabs
+                                    .tabs
+                                    .get(old_idx)
+                                    .is_some_and(|t| t.is_modified && t.path.is_some());
                                 if needs_save {
                                     this.save_active_document(cx);
                                 }
@@ -5709,58 +6544,33 @@ impl Render for PdfbullView {
                     }
                     TabAction::CloseOthers(keep_idx) => {
                         if keep_idx < this.tabs.tabs.len() {
-                            let kept = this.tabs.tabs[keep_idx].clone();
-                            for (i, tab) in this.tabs.tabs.iter().enumerate() {
-                                if i != keep_idx
-                                    && let Some(doc_id) = tab.doc_id
-                                {
-                                    this.annotations_by_doc.remove(&doc_id);
-                                    this.doc_geometry.remove(&doc_id);
-                                    this.doc_metadata.remove(&doc_id);
-                                    if let Err(e) = this
-                                        .engine
-                                        .cmd_tx
-                                        .try_send(crate::commands::PdfCommand::Close(doc_id))
-                                    {
-                                        tracing::error!(
-                                            "Failed to release document {doc_id:?} to the engine: {e}"
-                                        );
-                                    }
-                                }
-                            }
-                            this.tabs.tabs = vec![kept];
-                            this.tabs.active_tab_index = 0;
-                            this.sync_viewport_to_active_tab(cx);
+                            let target_ids: Vec<u64> = this
+                                .tabs
+                                .tabs
+                                .iter()
+                                .enumerate()
+                                .filter(|(i, _)| *i != keep_idx)
+                                .map(|(_, t)| t.id)
+                                .collect();
+                            let dirty_count = this
+                                .tabs
+                                .tabs
+                                .iter()
+                                .enumerate()
+                                .filter(|(i, t)| *i != keep_idx && t.is_modified)
+                                .count();
+                            this.close_tab_ids_with_prompt(target_ids, dirty_count, cx);
                         }
                     }
                     TabAction::CloseToRight(idx) => {
-                        // `Vec::drain` panics when the start of the range is
-                        // past the end of the vector. Neither sibling arm
-                        // (`CloseTab`, `CloseOthers`) bounds-checks, so a
-                        // stale index here crashed the app; clamp instead.
                         let keep = idx.saturating_add(1).min(this.tabs.tabs.len());
-                        for tab in this.tabs.tabs.drain(keep..) {
-                            if let Some(doc_id) = tab.doc_id {
-                                this.annotations_by_doc.remove(&doc_id);
-                                this.doc_geometry.remove(&doc_id);
-                                this.doc_metadata.remove(&doc_id);
-                                if let Err(e) = this
-                                    .engine
-                                    .cmd_tx
-                                    .try_send(crate::commands::PdfCommand::Close(doc_id))
-                                {
-                                    tracing::error!(
-                                        "Failed to release document {doc_id:?} to the engine: {e}"
-                                    );
-                                }
-                            }
-                        }
-                        if this.tabs.tabs.is_empty() {
-                            this.tabs.active_tab_index = 0;
-                        } else if this.tabs.active_tab_index >= this.tabs.tabs.len() {
-                            this.tabs.active_tab_index = this.tabs.tabs.len() - 1;
-                        }
-                        this.sync_viewport_to_active_tab(cx);
+                        let target_ids: Vec<u64> =
+                            this.tabs.tabs[keep..].iter().map(|t| t.id).collect();
+                        let dirty_count = this.tabs.tabs[keep..]
+                            .iter()
+                            .filter(|t| t.is_modified)
+                            .count();
+                        this.close_tab_ids_with_prompt(target_ids, dirty_count, cx);
                     }
                 }
                 cx.notify();
@@ -5780,6 +6590,40 @@ impl Render for PdfbullView {
         // `sync_viewport_to_active_tab`; if the offset moved without an event
         // (e.g. a scrollbar drag), only an explicit `cx.notify()` is issued
         // and the follow-up `on_window_event` pass does the work.
+        let canvas_scroll_y: f32 = self.viewport.scroll_handle.offset().y.into();
+        let thumb_scroll_y: f32 = self.sidebar.thumb_scroll.offset().y.into();
+        if (canvas_scroll_y - self.last_canvas_scroll_y).abs() > 2.0
+            || (thumb_scroll_y - self.last_thumb_scroll_y).abs() > 2.0
+        {
+            cx.on_next_frame(window, |this, _, cx| {
+                let cur_canvas_y: f32 = this.viewport.scroll_handle.offset().y.into();
+                if (cur_canvas_y - this.last_canvas_scroll_y).abs() > 2.0 {
+                    this.last_canvas_scroll_y = cur_canvas_y;
+                    let vis = this.viewport.calculate_visible_page_continuous();
+                    if vis != this.viewport.current_page {
+                        this.viewport.current_page = vis;
+                        this.render_needed_pages(cx);
+                    }
+                    cx.notify();
+                }
+                let cur_thumb_y: f32 = this.sidebar.thumb_scroll.offset().y.into();
+                if (cur_thumb_y - this.last_thumb_scroll_y).abs() > 2.0 {
+                    this.last_thumb_scroll_y = cur_thumb_y;
+                    if this.sidebar.is_open
+                        && this.sidebar.mode == super::sidebar::SidebarMode::Thumbnails
+                        && let Some(doc_id) = this.active_doc_id
+                    {
+                        let (start, end) = this.sidebar.thumbnail_window(this.viewport.total_pages);
+                        for p in start..end {
+                            if !this.sidebar.thumbnails.contains_key(&p) {
+                                this.request_thumbnail(doc_id, p, cx);
+                            }
+                        }
+                    }
+                    cx.notify();
+                }
+            });
+        }
         let center_area: AnyElement = if has_tabs {
             let visible_page = self.viewport.calculate_visible_page_continuous();
             if visible_page != self.viewport.current_page {
@@ -5788,151 +6632,50 @@ impl Render for PdfbullView {
                     self.viewport.current_page
                 );
             }
-            let total = self.viewport.total_pages;
-            let current = self.viewport.current_page;
 
-            let sidebar = self.sidebar.render(
-                cx,
-                total,
-                current,
-                &self.viewport.annotations,
-                |this, action, window, cx| {
-                    match action {
-                        SidebarAction::ToggleOpen => {
-                            this.sidebar.is_open = !this.sidebar.is_open;
-                            this.reader.last_fit_size = (0.0, 0.0);
-                            // When the sidebar becomes visible, lazily pre-load
-                            // thumbnails for pages near the current view.
-                            if this.sidebar.is_open
-                                && this.sidebar.mode == super::sidebar::SidebarMode::Thumbnails
-                                && let Some(doc_id) = this.active_doc_id
-                            {
-                                let cur = this.viewport.current_page;
-                                let total = this.viewport.total_pages;
-                                let start = cur.saturating_sub(5);
-                                let end = (cur + 5).min(total.saturating_sub(1));
-                                for p in start..=end {
-                                    this.request_thumbnail(doc_id, p, cx);
-                                }
-                            }
-                        }
-                        SidebarAction::SelectMode(mode) => {
-                            this.sidebar.mode = mode;
-                        }
-                        SidebarAction::SelectPage(page_idx) => {
-                            this.viewport.scroll_to_page(page_idx);
-                            this.render_needed_pages(cx);
-                        }
-                        SidebarAction::SearchQuery(q) => {
-                            // The search editor is the source of truth; keep it in
-                            // sync so the two can never disagree.
-                            this.sidebar.search_query = q.clone();
-                            if let Some(input) = this.sidebar.search_input.clone() {
-                                input.update(cx, |input, cx| input.set_value(q, window, cx));
-                            }
-                        }
-                        SidebarAction::ExecuteSearch => {
-                            let q = this.sidebar.search_query.clone();
-                            this.execute_search(&q, cx);
-                        }
-                        SidebarAction::ClearSearch => {
-                            this.sidebar.clear_search(window, cx);
-                            this.sidebar.search_results.clear();
-                            this.viewport.search_highlights.clear();
-                            this.sidebar.is_searching = false;
-                        }
-                        SidebarAction::SelectSearchResult(page, ..) => {
-                            this.reader.record_jump(this.viewport.current_page, page);
-                            this.viewport.scroll_to_page(page);
-                            this.sidebar
-                                .scroll_thumbnails_to(page, this.viewport.total_pages);
-                            this.render_needed_pages(cx);
-                        }
-                        SidebarAction::DeleteAnnotation(id) => {
-                            // Remove exactly one match. `retain(|a| a.id != id)`
-                            // dropped every annotation sharing the id, so a single
-                            // click could remove two notes.
-                            if let Some(pos) =
-                                this.viewport.annotations.iter().position(|a| a.id == id)
-                            {
-                                let removed = this.viewport.annotations.remove(pos);
-                                this.viewport.reindex_annotations();
-                                if let Some(tab) =
-                                    this.tabs.tabs.get_mut(this.tabs.active_tab_index)
-                                {
-                                    tab.undo_stack.push(
-                                        crate::models::UndoableAction::DeleteAnnotation(
-                                            pos, removed,
-                                        ),
-                                    );
-                                    tab.redo_stack.clear();
-                                    tab.is_modified = true;
-                                }
-                            }
-                        }
-                        SidebarAction::SelectBookmark(page) => {
-                            this.reader.record_jump(this.viewport.current_page, page);
-                            this.viewport.scroll_to_page(page);
-                            this.sidebar
-                                .scroll_thumbnails_to(page, this.viewport.total_pages);
-                            this.render_needed_pages(cx);
-                        }
-                        SidebarAction::FollowLink(link) => {
-                            this.follow_link(&link, cx);
-                        }
-                        SidebarAction::ToggleLayer(idx, visible) => {
-                            this.set_layer_visibility(idx, visible, cx);
-                        }
-                    }
-                    cx.notify();
-                },
-            );
+            let sidebar = self.sidebar_view.clone();
+            let canvas = self.canvas_view.clone();
 
-            let canvas = self.viewport.render(
-                cx,
-                |this, page_idx, pos, click_count, window, cx| {
-                    this.start_drag_selection(page_idx, pos, click_count, window, cx);
-                },
-                |this, _page_idx, pos, pressed_button, window, cx| {
-                    this.update_drag_selection(pos, pressed_button, window, cx);
-                },
-                |this, _page_idx, pos, window, cx| {
-                    Self::finish_drag_selection(this, pos, window, cx);
-                },
-                |this, event, _, cx| {
-                    this.handle_canvas_scroll_wheel(event, cx);
-                },
-            );
-
-            div()
+            let canvas_pane = div()
                 .flex()
-                .flex_row()
+                .flex_col()
                 .flex_1()
-                .w_full()
+                .h_full()
+                .min_w_0()
                 .min_h_0()
                 .overflow_hidden()
-                .when(chrome, |el| el.child(sidebar))
                 .child(
                     div()
                         .flex()
                         .flex_col()
                         .flex_1()
-                        .h_full()
-                        .min_w_0()
+                        .w_full()
                         .min_h_0()
                         .overflow_hidden()
-                        .child(
-                            div()
-                                .flex()
-                                .flex_col()
-                                .flex_1()
-                                .w_full()
-                                .min_h_0()
-                                .overflow_hidden()
-                                .child(canvas),
-                        ),
-                )
-                .into_any_element()
+                        .child(canvas),
+                );
+
+            if chrome && self.sidebar.is_open {
+                gpui_kit::component::h_resizable("workspace-split")
+                    .child(
+                        gpui_kit::component::resizable_panel()
+                            .size(px(self.sidebar.width))
+                            .size_range(px(180.0)..px(520.0))
+                            .child(sidebar),
+                    )
+                    .child(gpui_kit::component::resizable_panel().child(canvas_pane))
+                    .into_any_element()
+            } else {
+                div()
+                    .flex()
+                    .flex_row()
+                    .flex_1()
+                    .w_full()
+                    .min_h_0()
+                    .overflow_hidden()
+                    .child(canvas_pane)
+                    .into_any_element()
+            }
         } else {
             self.welcome
                 .render(cx, |this, action, _, cx| {
@@ -5994,30 +6737,15 @@ impl Render for PdfbullView {
         // screen and the document workspace share it.
         let status_bar = self.render_status_bar(cx);
 
-        // Log Console Drawer (if open)
-        let log_drawer = self.log_console.render(cx, |this, action, _, cx| {
-            match action {
-                LogAction::ToggleOpen => {
-                    this.log_console.is_open = !this.log_console.is_open;
-                }
-                LogAction::Clear => {
-                    this.log_console.entries.clear();
-                }
-                LogAction::CopyAll => {
-                    let text = this.log_console.as_text();
-                    cx.write_to_clipboard(ClipboardItem::new_string(text));
-                    this.status_message = Some("Logs copied to clipboard.".into());
-                }
-                LogAction::SetFilter(lvl) => {
-                    if lvl == "all" {
-                        this.log_console.filter_level = None;
-                    } else {
-                        this.log_console.filter_level = Some(lvl);
-                    }
-                }
-            }
-            cx.notify();
-        });
+        // Log Console Drawer (if open) — rendered via child `Entity<LogConsoleView>`
+        if self.log_console.is_open {
+            self.log_console.sync_from_logging();
+        }
+        let log_drawer: Option<AnyElement> = if self.log_console.is_open {
+            Some(self.log_console_view.clone().into_any_element())
+        } else {
+            None
+        };
 
         // Dialog Overlay (if active)
         let dialog_overlay = self.dialogs.render_overlay(
@@ -6038,6 +6766,8 @@ impl Render for PdfbullView {
                     DialogAction::SelectWatermark(_)
                         | DialogAction::RotatePages(_)
                         | DialogAction::SelectSecurityAlgorithm(_)
+                        | DialogAction::ToggleSecurityPerm(_)
+                        | DialogAction::ToggleSignatureVisible
                         | DialogAction::SetSettingsTheme(_)
                         | DialogAction::SetSettingsZoom(_)
                         | DialogAction::SetSettingsQuality(_)
@@ -6063,21 +6793,18 @@ impl Render for PdfbullView {
                         this.apply_watermark(&text, cx);
                     }
                     DialogAction::SetHeaderFooter(h, f) => {
-                        // Read the editors when they exist; the fields are
-                        // editable now rather than being static text.
+                        // Read the editors when they exist; allow clearing either field to empty.
                         let h = this
                             .dialogs
                             .header_input
                             .as_ref()
                             .map(|i| i.read(cx).value().to_string())
-                            .filter(|v| !v.is_empty() && v != &h)
                             .unwrap_or(h);
                         let f = this
                             .dialogs
                             .footer_input
                             .as_ref()
                             .map(|i| i.read(cx).value().to_string())
-                            .filter(|v| !v.is_empty() && v != &f)
                             .unwrap_or(f);
                         this.apply_header_footer(&h, &f, cx);
                     }
@@ -6103,6 +6830,22 @@ impl Render for PdfbullView {
                     }
                     DialogAction::ApplySecurity(algo) => {
                         this.apply_security(&algo, cx);
+                    }
+                    DialogAction::ToggleSecurityPerm(perm) => {
+                        let p = &mut this.dialogs.security_permissions;
+                        match perm {
+                            "print" => p.print = !p.print,
+                            "modify" => p.modify = !p.modify,
+                            "copy" => p.copy = !p.copy,
+                            "annotate" => p.annotate = !p.annotate,
+                            _ => {}
+                        }
+                    }
+                    DialogAction::ToggleSignatureVisible => {
+                        this.dialogs.sig_visible = !this.dialogs.sig_visible;
+                    }
+                    DialogAction::SignDocument => {
+                        this.prompt_sign_document(cx);
                     }
                     DialogAction::ApplyMetadata {
                         title,
@@ -6232,7 +6975,7 @@ impl Render for PdfbullView {
                         this.status_message = Some("Settings reset to defaults.".into());
                     }
                     DialogAction::OpenGitHub => {
-                        let _ = open::that("https://github.com/SV-stark/PDFbull");
+                        cx.open_url("https://github.com/SV-stark/PDFbull");
                     }
                 }
                 cx.notify();
@@ -6314,7 +7057,28 @@ impl Render for PdfbullView {
             .when(chrome, |el| el.child(header_bar))
             .when(has_tabs && chrome, |el| el.child(action_strip))
             .when(chrome, |el| el.children(tabs_bar))
-            .child(
+            .child(if let (true, Some(drawer)) = (chrome, log_drawer) {
+                gpui_kit::component::v_resizable("main-log-split")
+                    .child(
+                        gpui_kit::component::resizable_panel().child(
+                            div()
+                                .flex_1()
+                                .size_full()
+                                .min_h_0()
+                                .flex()
+                                .flex_col()
+                                .overflow_hidden()
+                                .child(center_area),
+                        ),
+                    )
+                    .child(
+                        gpui_kit::component::resizable_panel()
+                            .size(px(self.log_console.height))
+                            .size_range(px(120.0)..px(480.0))
+                            .child(drawer),
+                    )
+                    .into_any_element()
+            } else {
                 div()
                     .flex_1()
                     .w_full()
@@ -6322,12 +7086,234 @@ impl Render for PdfbullView {
                     .flex()
                     .flex_col()
                     .overflow_hidden()
-                    .child(center_area),
-            )
-            .when(chrome, |el| el.children(log_drawer))
+                    .child(center_area)
+                    .into_any_element()
+            })
             .when(chrome, |el| el.child(status_bar))
             .children(dialog_overlay)
             .children(goto_overlay)
             .children(palette_overlay)
+    }
+}
+
+/// Child `Entity` view for the Log Console drawer so `gpui-fast` caches its
+/// subtree independently of the main document canvas.
+pub struct LogConsoleView {
+    parent: gpui_kit::WeakEntity<PdfbullView>,
+}
+
+impl Render for LogConsoleView {
+    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let Some(parent) = self.parent.upgrade() else {
+            return div().into_any_element();
+        };
+        let log_console = parent.read(cx).log_console.clone();
+        log_console
+            .render(cx, |view, action, _, cx| {
+                let _ = view.parent.update(cx, |this, cx| {
+                    match action {
+                        LogAction::ToggleOpen => {
+                            this.log_console.is_open = !this.log_console.is_open;
+                            if this.log_console.is_open {
+                                this.log_console.sync_from_logging();
+                            }
+                        }
+                        LogAction::Clear => {
+                            crate::logging::clear_logs();
+                            this.log_console.entries.clear();
+                        }
+                        LogAction::CopyAll => {
+                            let text = this.log_console.as_text();
+                            cx.write_to_clipboard(ClipboardItem::new_string(text));
+                            this.status_message = Some("Logs copied to clipboard.".into());
+                        }
+                        LogAction::SetFilter(lvl) => {
+                            if lvl == "all" {
+                                this.log_console.filter_level = None;
+                            } else {
+                                this.log_console.filter_level = Some(lvl);
+                            }
+                        }
+                    }
+                    cx.notify();
+                });
+            })
+            .unwrap_or_else(|| div().into_any_element())
+    }
+}
+
+impl PdfbullView {
+    pub fn handle_sidebar_action(
+        &mut self,
+        action: SidebarAction,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        match action {
+            SidebarAction::ToggleOpen => {
+                self.sidebar.is_open = !self.sidebar.is_open;
+                self.reader.last_fit_size = (0.0, 0.0);
+                if self.sidebar.is_open
+                    && self.sidebar.mode == super::sidebar::SidebarMode::Thumbnails
+                    && let Some(doc_id) = self.active_doc_id
+                {
+                    let cur = self.viewport.current_page;
+                    let total = self.viewport.total_pages;
+                    let start = cur.saturating_sub(5);
+                    let end = (cur + 5).min(total.saturating_sub(1));
+                    for p in start..=end {
+                        self.request_thumbnail(doc_id, p, cx);
+                    }
+                }
+            }
+            SidebarAction::SelectMode(mode) => {
+                self.sidebar.mode = mode;
+            }
+            SidebarAction::SelectPage(page_idx) => {
+                self.viewport.scroll_to_page(page_idx);
+                self.render_needed_pages(cx);
+            }
+            SidebarAction::SearchQuery(q) => {
+                self.sidebar.search_query = q.clone();
+                if let Some(input) = self.sidebar.search_input.clone() {
+                    input.update(cx, |input, cx| input.set_value(q, window, cx));
+                }
+            }
+            SidebarAction::ExecuteSearch => {
+                let q = self.sidebar.search_query.clone();
+                self.execute_search(&q, cx);
+            }
+            SidebarAction::ClearSearch => {
+                self.sidebar.clear_search(window, cx);
+                self.sidebar.search_results.clear();
+                self.viewport.search_highlights.clear();
+                self.sidebar.is_searching = false;
+            }
+            SidebarAction::SelectSearchResult(page, ..) => {
+                self.reader.record_jump(self.viewport.current_page, page);
+                self.viewport.scroll_to_page(page);
+                self.sidebar
+                    .scroll_thumbnails_to(page, self.viewport.total_pages);
+                self.render_needed_pages(cx);
+            }
+            SidebarAction::DeleteAnnotation(id) => {
+                if let Some(pos) = self.viewport.annotations.iter().position(|a| a.id == id) {
+                    let removed = self.viewport.annotations.remove(pos);
+                    self.viewport.reindex_annotations();
+                    if let Some(tab) = self.tabs.tabs.get_mut(self.tabs.active_tab_index) {
+                        tab.undo_stack
+                            .push(crate::models::UndoableAction::DeleteAnnotation(
+                                pos, removed,
+                            ));
+                        tab.redo_stack.clear();
+                        tab.is_modified = true;
+                    }
+                }
+            }
+            SidebarAction::SelectBookmark(page) => {
+                self.reader.record_jump(self.viewport.current_page, page);
+                self.viewport.scroll_to_page(page);
+                self.sidebar
+                    .scroll_thumbnails_to(page, self.viewport.total_pages);
+                self.render_needed_pages(cx);
+            }
+            SidebarAction::FollowLink(link) => {
+                self.follow_link(&link, cx);
+            }
+            SidebarAction::ToggleLayer(idx, visible) => {
+                self.set_layer_visibility(idx, visible, cx);
+            }
+        }
+        cx.notify();
+    }
+}
+
+/// Child `Entity` view for the Ribbon action strip (`gpui-fast` retained subtree).
+pub struct RibbonStripView {
+    parent: gpui_kit::WeakEntity<PdfbullView>,
+}
+
+impl Render for RibbonStripView {
+    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let Some(parent) = self.parent.upgrade() else {
+            return div().into_any_element();
+        };
+        let ribbon = parent.read(cx).ribbon.clone();
+        ribbon.render_strip(cx, |view, action, window, cx| {
+            let _ = view.parent.update(cx, |this, cx| {
+                this.handle_ribbon_action(action, window, cx);
+                cx.notify();
+            });
+        })
+    }
+}
+
+/// Child `Entity` view for the left Sidebar (`gpui-fast` retained subtree).
+pub struct SidebarView {
+    parent: gpui_kit::WeakEntity<PdfbullView>,
+}
+
+impl Render for SidebarView {
+    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let Some(parent) = self.parent.upgrade() else {
+            return div().into_any_element();
+        };
+        let (sidebar, total, current, annotations) = {
+            let p = parent.read(cx);
+            (
+                p.sidebar.clone(),
+                p.viewport.total_pages,
+                p.viewport.current_page,
+                p.viewport.annotations.clone(),
+            )
+        };
+        sidebar.render(
+            cx,
+            total,
+            current,
+            &annotations,
+            |view, action, window, cx| {
+                let _ = view.parent.update(cx, |this, cx| {
+                    this.handle_sidebar_action(action, window, cx)
+                });
+            },
+        )
+    }
+}
+
+/// Child `Entity` view for the document Canvas (`gpui-fast` retained subtree).
+pub struct CanvasView {
+    parent: gpui_kit::WeakEntity<PdfbullView>,
+}
+
+impl Render for CanvasView {
+    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let Some(parent) = self.parent.upgrade() else {
+            return div().into_any_element();
+        };
+        let viewport = parent.read(cx).viewport.clone();
+        viewport.render(
+            cx,
+            |view, page_idx, pos, click_count, window, cx| {
+                let _ = view.parent.update(cx, |this, cx| {
+                    this.start_drag_selection(page_idx, pos, click_count, window, cx);
+                });
+            },
+            |view, _page_idx, pos, pressed_button, window, cx| {
+                let _ = view.parent.update(cx, |this, cx| {
+                    this.update_drag_selection(pos, pressed_button, window, cx);
+                });
+            },
+            |view, _page_idx, pos, window, cx| {
+                let _ = view.parent.update(cx, |this, cx| {
+                    PdfbullView::finish_drag_selection(this, pos, window, cx);
+                });
+            },
+            |view, event, _, cx| {
+                let _ = view.parent.update(cx, |this, cx| {
+                    this.handle_canvas_scroll_wheel(event, cx);
+                });
+            },
+        )
     }
 }

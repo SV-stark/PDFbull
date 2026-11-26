@@ -1,11 +1,48 @@
 use gpui_kit::component::button::{Button, ButtonVariants};
 use gpui_kit::component::input::{Input, InputState};
+use gpui_kit::component::list::ListItem;
 use gpui_kit::component::scroll::{ScrollableElement, Scrollbar, ScrollbarMode};
+use gpui_kit::component::tree::{TreeItem, TreeState, tree};
+use gpui_kit::component::v_virtual_list;
 use gpui_kit::component::{
     ActiveTheme, Disableable as _, Icon, IconName, Selectable as _, Sizable,
 };
 use gpui_kit::prelude::FluentBuilder;
 use gpui_kit::*;
+
+fn build_bookmark_tree_items(bookmarks: &[crate::pdf_engine::Bookmark]) -> Vec<TreeItem> {
+    let mut roots: Vec<TreeItem> = Vec::new();
+    let mut stack: Vec<(usize, TreeItem)> = Vec::new();
+    for (idx, bm) in bookmarks.iter().enumerate() {
+        while let Some(&(top_depth, _)) = stack.last() {
+            if top_depth < bm.depth {
+                break;
+            }
+            let (_, finished) = stack.pop().unwrap();
+            if let Some(parent) = stack.last_mut() {
+                let placeholder = TreeItem::new("", "");
+                parent.1 = std::mem::replace(&mut parent.1, placeholder).child(finished);
+            } else {
+                roots.push(finished);
+            }
+        }
+        let id = match (bm.page_index, bm.uri.as_deref()) {
+            (Some(p), _) => SharedString::from(format!("bm:page:{p}:{idx}")),
+            (None, Some(uri)) => SharedString::from(format!("bm:uri:{idx}:{uri}")),
+            (None, None) => SharedString::from(format!("bm:hdr:{idx}")),
+        };
+        stack.push((bm.depth, TreeItem::new(id, bm.title.clone())));
+    }
+    while let Some((_, finished)) = stack.pop() {
+        if let Some(parent) = stack.last_mut() {
+            let placeholder = TreeItem::new("", "");
+            parent.1 = std::mem::replace(&mut parent.1, placeholder).child(finished);
+        } else {
+            roots.push(finished);
+        }
+    }
+    roots
+}
 
 /// Format a byte count the way a file manager does.
 ///
@@ -107,6 +144,7 @@ pub enum SidebarAction {
     ToggleLayer(usize, bool),
 }
 
+#[derive(Clone)]
 pub struct SidebarState {
     pub is_open: bool,
     pub mode: SidebarMode,
@@ -125,6 +163,7 @@ pub struct SidebarState {
     pub search_results: Vec<crate::models::SearchResultItem>,
     pub is_searching: bool,
     pub bookmarks: Vec<crate::pdf_engine::Bookmark>,
+    pub bookmark_tree: Option<Entity<TreeState>>,
     pub attachments: Vec<crate::models::AttachmentInfo>,
     pub layers: Vec<crate::models::LayerInfo>,
     /// Every link annotation in the document, with resolved destinations.
@@ -162,6 +201,7 @@ impl SidebarState {
     pub fn new<O: 'static>(window: &mut Window, owner: &mut Context<O>) -> Self {
         Self {
             search_input: Some(owner.new(|cx| InputState::new(window, cx))),
+            bookmark_tree: Some(owner.new(|cx| TreeState::new(cx))),
             ..Self::new_for_test()
         }
     }
@@ -181,9 +221,30 @@ impl SidebarState {
             search_results: Vec::new(),
             is_searching: false,
             bookmarks: Vec::new(),
+            bookmark_tree: None,
             attachments: Vec::new(),
             layers: Vec::new(),
             links: Vec::new(),
+        }
+    }
+
+    pub fn set_bookmarks(&mut self, bookmarks: Vec<crate::pdf_engine::Bookmark>, cx: &mut App) {
+        self.bookmarks = bookmarks;
+        if let Some(tree_state) = self.bookmark_tree.clone() {
+            let tree_items = build_bookmark_tree_items(&self.bookmarks);
+            tree_state.update(cx, |state, cx| {
+                state.set_items(tree_items, cx);
+            });
+        }
+    }
+
+    /// Clear bookmarks and reset the hierarchical tree.
+    pub fn clear_bookmarks(&mut self, cx: &mut App) {
+        self.bookmarks.clear();
+        if let Some(tree_state) = self.bookmark_tree.clone() {
+            tree_state.update(cx, |state, cx| {
+                state.set_items(Vec::<TreeItem>::new(), cx);
+            });
         }
     }
 
@@ -295,7 +356,7 @@ impl SidebarState {
             .set_offset(Point::new(px(0.0), target.clamp(min, px(0.0))));
     }
 
-    pub fn render<V: 'static>(
+    pub fn render<V: 'static + gpui_kit::Render>(
         &self,
         cx: &mut Context<V>,
         total_pages: usize,
@@ -530,28 +591,127 @@ impl SidebarState {
                         .text_color(muted_fg)
                         .child("No bookmarks in this document.")
                         .into_any_element()
+                } else if let Some(tree_state) = self.bookmark_tree.as_ref() {
+                    let owner = cx.entity().clone();
+                    div()
+                        .flex_1()
+                        .size_full()
+                        .p_2()
+                        .child(tree(tree_state, move |ix, entry, selected, _window, cx| {
+                            let id_str = entry.item().id.as_ref();
+                            let target_page = id_str
+                                .strip_prefix("bm:page:")
+                                .and_then(|rest| rest.split(':').next())
+                                .and_then(|p| p.parse::<usize>().ok());
+                            let target_uri = id_str
+                                .strip_prefix("bm:uri:")
+                                .and_then(|rest| rest.split_once(':').map(|(_, u)| u.to_string()));
+                            let indent = px(12.0 * entry.depth() as f32 + 6.0);
+                            let title = entry.item().label.clone();
+                            let is_folder = entry.is_folder();
+                            let is_expanded = entry.is_expanded();
+                            let owner = owner.clone();
+                            let muted = cx.theme().muted;
+                            let muted_fg = cx.theme().muted_foreground;
+                            let fg = cx.theme().foreground;
+                            let badge = if let Some(p) = target_page {
+                                Some(format!("p. {}", p + 1))
+                            } else if target_uri.is_some() {
+                                Some("URL".to_string())
+                            } else {
+                                None
+                            };
+                            ListItem::new(ix)
+                                .selected(selected)
+                                .pl(indent)
+                                .on_click(move |_, window, cx| {
+                                    if let Some(p) = target_page {
+                                        owner.update(cx, |v, cx| {
+                                            on_action(
+                                                v,
+                                                SidebarAction::SelectBookmark(p),
+                                                window,
+                                                cx,
+                                            )
+                                        });
+                                    } else if let Some(ref uri) = target_uri {
+                                        cx.open_url(uri);
+                                    }
+                                })
+                                .child(
+                                    div()
+                                        .flex()
+                                        .flex_row()
+                                        .items_center()
+                                        .justify_between()
+                                        .w_full()
+                                        .gap_2()
+                                        .child(
+                                            div()
+                                                .flex()
+                                                .flex_row()
+                                                .items_center()
+                                                .gap_1()
+                                                .flex_1()
+                                                .overflow_hidden()
+                                                .when(is_folder, |el| {
+                                                    el.child(
+                                                        Icon::new(if is_expanded {
+                                                            IconName::ChevronDown
+                                                        } else {
+                                                            IconName::ChevronRight
+                                                        })
+                                                        .xsmall(),
+                                                    )
+                                                })
+                                                .child(
+                                                    div()
+                                                        .text_xs()
+                                                        .text_color(fg)
+                                                        .overflow_hidden()
+                                                        .child(title),
+                                                ),
+                                        )
+                                        .when_some(badge, |el, label| {
+                                            el.child(
+                                                div()
+                                                    .px_1p5()
+                                                    .py_0p5()
+                                                    .bg(muted)
+                                                    .rounded_sm()
+                                                    .text_xs()
+                                                    .text_color(muted_fg)
+                                                    .child(label),
+                                            )
+                                        }),
+                                )
+                        }))
+                        .into_any_element()
                 } else {
                     let mut items = Vec::new();
-                    for bm in self.bookmarks.iter() {
+                    for (idx, bm) in self.bookmarks.iter().enumerate() {
                         let target_page = bm.page_index;
+                        let uri = bm.uri.clone();
                         let title = bm.title.clone();
-                        // Keyed on the bookmark's target and title rather than
-                        // its list position. These lists are rebuilt from
-                        // scratch on every document switch, so position-based
-                        // ids handed document A's row *n* retained hover state
-                        // to document B's row *n*.
+                        let badge = match target_page {
+                            Some(p) => format!("p. {}", p + 1),
+                            None if uri.is_some() => "URL".to_string(),
+                            None => String::new(),
+                        };
+                        let id_suffix = target_page.map_or_else(
+                            || {
+                                if uri.is_some() {
+                                    "uri".to_string()
+                                } else {
+                                    "hdr".to_string()
+                                }
+                            },
+                            |p| p.to_string(),
+                        );
                         items.push(
                             div()
-                                // Keyed on the bookmark's target and its *title*,
-                                // not the title's length: two same-length titles
-                                // on one target page produced identical ids and
-                                // shared hover state. Lists are rebuilt from
-                                // scratch on every document switch, so
-                                // position-based ids handed document A's row *n*
-                                // retained hover state to document B's row *n*.
                                 .id(SharedString::from(format!(
-                                    "bm-item-{}-{}",
-                                    target_page, title
+                                    "bm-item-{idx}-{id_suffix}-{title}"
                                 )))
                                 .flex()
                                 .flex_row()
@@ -562,7 +722,11 @@ impl SidebarState {
                                 .rounded_md()
                                 .hover(|s| s.bg(accent))
                                 .on_click(cx.listener(move |v, _, w, cx| {
-                                    on_action(v, SidebarAction::SelectBookmark(target_page), w, cx)
+                                    if let Some(p) = target_page {
+                                        on_action(v, SidebarAction::SelectBookmark(p), w, cx);
+                                    } else if let Some(ref u) = uri {
+                                        cx.open_url(u);
+                                    }
                                 }))
                                 .child(
                                     div()
@@ -572,16 +736,18 @@ impl SidebarState {
                                         .overflow_hidden()
                                         .child(title),
                                 )
-                                .child(
-                                    div()
-                                        .px_1p5()
-                                        .py_0p5()
-                                        .bg(muted)
-                                        .rounded_sm()
-                                        .text_xs()
-                                        .text_color(muted_fg)
-                                        .child(format!("p. {}", target_page + 1)),
-                                ),
+                                .when(!badge.is_empty(), |el| {
+                                    el.child(
+                                        div()
+                                            .px_1p5()
+                                            .py_0p5()
+                                            .bg(muted)
+                                            .rounded_sm()
+                                            .text_xs()
+                                            .text_color(muted_fg)
+                                            .child(badge),
+                                    )
+                                }),
                         );
                     }
                     div()
@@ -774,52 +940,66 @@ impl SidebarState {
                         "Type a query, then press Search.".to_string()
                     }));
 
-                let mut result_items = Vec::new();
-                for item in self.search_results.iter() {
-                    let page = item.page_index;
-                    let snippet = item.text.clone();
-                    let (x, y, w, h) = (item.x, item.y, item.width, item.height);
-                    // Keyed on the hit's position rather than its list index: a
-                    // new search replaces the whole list, and index-keyed ids
-                    // made every row inherit the previous search's element state.
-                    let res_id = format!("search-res-{page}-{:.0}-{:.0}", x, y);
-
-                    result_items.push(
-                        div()
-                            .id(SharedString::from(res_id))
-                            .flex()
-                            .flex_col()
-                            .p_2()
-                            .rounded_md()
-                            .border_1()
-                            .border_color(border)
-                            .bg(background)
-                            .hover(|s| s.bg(accent))
-                            .on_click(cx.listener(move |v, _, win, cx| {
-                                on_action(
-                                    v,
-                                    SidebarAction::SelectSearchResult(page, x, y, w, h),
-                                    win,
-                                    cx,
-                                )
-                            }))
-                            .child(
-                                div().flex().flex_row().justify_between().child(
-                                    div()
-                                        .text_xs()
-                                        .text_color(primary)
-                                        .child(format!("Page {}", page + 1)),
-                                ),
-                            )
-                            .child(
+                let search_results: std::rc::Rc<Vec<crate::models::SearchResultItem>> =
+                    std::rc::Rc::new(self.search_results.clone());
+                let item_sizes = std::rc::Rc::new(vec![
+                    gpui_kit::size(px(260.0), px(58.0));
+                    search_results.len()
+                ]);
+                let results_for_list = search_results.clone();
+                let search_vlist = v_virtual_list(
+                    cx.entity().clone(),
+                    "sidebar-search-vlist",
+                    item_sizes,
+                    move |_view, range, _window, cx| {
+                        range
+                            .map(|idx| {
+                                let item = &results_for_list[idx];
+                                let page = item.page_index;
+                                let snippet = item.text.clone();
+                                let (x, y, w, h) = (item.x, item.y, item.width, item.height);
+                                let res_id = format!("search-res-{idx}-{page}-{:.0}-{:.0}", x, y);
                                 div()
-                                    .text_xs()
-                                    .text_color(fg)
-                                    .overflow_hidden()
-                                    .child(snippet),
-                            ),
-                    );
-                }
+                                    .id(SharedString::from(res_id))
+                                    .h(px(54.0))
+                                    .mb(px(4.0))
+                                    .flex()
+                                    .flex_col()
+                                    .p_2()
+                                    .rounded_md()
+                                    .border_1()
+                                    .border_color(border)
+                                    .bg(background)
+                                    .hover(|s| s.bg(accent))
+                                    .on_click(cx.listener(move |v, _, win, cx| {
+                                        on_action(
+                                            v,
+                                            SidebarAction::SelectSearchResult(page, x, y, w, h),
+                                            win,
+                                            cx,
+                                        )
+                                    }))
+                                    .child(
+                                        div().flex().flex_row().justify_between().child(
+                                            div()
+                                                .text_xs()
+                                                .text_color(primary)
+                                                .child(format!("Page {}", page + 1)),
+                                        ),
+                                    )
+                                    .child(
+                                        div()
+                                            .text_xs()
+                                            .text_color(fg)
+                                            .overflow_hidden()
+                                            .truncate()
+                                            .child(snippet),
+                                    )
+                                    .into_any_element()
+                            })
+                            .collect()
+                    },
+                );
 
                 div()
                     .flex()
@@ -831,12 +1011,8 @@ impl SidebarState {
                             .id("sidebar-search-results-scroll")
                             .flex_1()
                             .min_h_0()
-                            .flex()
-                            .flex_col()
-                            .gap_1p5()
                             .p_2()
-                            .overflow_y_scrollbar()
-                            .children(result_items),
+                            .child(search_vlist),
                     )
                     .into_any_element()
             }
@@ -989,19 +1165,14 @@ impl SidebarState {
                         .into_any_element()
                 } else {
                     let mut items = Vec::new();
-                    for link in self.links.iter() {
+                    for (idx, link) in self.links.iter().enumerate() {
                         let info = link.clone();
-                        // Keyed on page + target *identity* rather than list
-                        // position: the list is rebuilt on every document
-                        // switch, so a position-based id would hand document A's
-                        // row *n* hover state to document B's row *n*. Mapping
-                        // every external link to the same `usize::MAX`
-                        // placeholder collapsed all of a page's external links
-                        // onto one id, so they shared selection and hover state.
                         let key = match (link.target_page, link.url.as_deref()) {
-                            (Some(target), _) => format!("link-{}-page-{}", link.page, target),
-                            (None, Some(url)) => format!("link-{}-url-{}", link.page, url),
-                            (None, None) => format!("link-{}-none", link.page),
+                            (Some(target), _) => {
+                                format!("link-{idx}-{}-page-{}", link.page, target)
+                            }
+                            (None, Some(url)) => format!("link-{idx}-{}-url-{}", link.page, url),
+                            (None, None) => format!("link-{idx}-{}-none", link.page),
                         };
                         let is_external = link.kind == crate::models::LinkKind::External;
                         let (badge, badge_fg) = if is_external {

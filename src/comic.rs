@@ -12,7 +12,7 @@
 //! "deflate" ZIPs, so only those two methods are supported. ZIP64 archives,
 //! encrypted entries and RAR-based `.cbr` files are refused with a clear error.
 
-use std::io::{Read, Write};
+use std::io::Read;
 use std::path::{Path, PathBuf};
 
 /// Picture formats that can be opened directly, one page per file.
@@ -243,6 +243,110 @@ struct PageImage {
     bytes: Vec<u8>,
 }
 
+/// Read the EXIF Orientation tag (`0x0112`, values `1..=8`) from a JPEG's
+/// `APP1` segment, returning `1` when absent or unreadable.
+fn jpeg_exif_orientation(data: &[u8]) -> u16 {
+    if data.len() < 12 || data[0] != 0xFF || data[1] != 0xD8 {
+        return 1;
+    }
+    let mut i = 2usize;
+    while i + 4 <= data.len() {
+        if data[i] != 0xFF {
+            break;
+        }
+        let marker = data[i + 1];
+        if marker == 0xFF {
+            i += 1;
+            continue;
+        }
+        if marker == 0xD9 || marker == 0xDA {
+            break;
+        }
+        let seg_len = u16::from_be_bytes([data[i + 2], data[i + 3]]) as usize;
+        if seg_len < 2 || i + 2 + seg_len > data.len() {
+            break;
+        }
+        if marker == 0xE1 && seg_len >= 14 && &data[i + 4..i + 10] == b"Exif\0\0" {
+            let tiff = &data[i + 10..i + 2 + seg_len];
+            let le = match tiff.get(0..2) {
+                Some(b"II") => true,
+                Some(b"MM") => false,
+                _ => return 1,
+            };
+            let read_u16 = |off: usize| -> Option<u16> {
+                let b = tiff.get(off..off + 2)?;
+                Some(if le {
+                    u16::from_le_bytes([b[0], b[1]])
+                } else {
+                    u16::from_be_bytes([b[0], b[1]])
+                })
+            };
+            let read_u32 = |off: usize| -> Option<u32> {
+                let b = tiff.get(off..off + 4)?;
+                Some(if le {
+                    u32::from_le_bytes([b[0], b[1], b[2], b[3]])
+                } else {
+                    u32::from_be_bytes([b[0], b[1], b[2], b[3]])
+                })
+            };
+            let Some(ifd_off) = read_u32(4).map(|v| v as usize) else {
+                return 1;
+            };
+            let Some(count) = read_u16(ifd_off) else {
+                return 1;
+            };
+            for idx in 0..count as usize {
+                let entry = ifd_off + 2 + idx * 12;
+                if read_u16(entry) == Some(0x0112) {
+                    return read_u16(entry + 8).unwrap_or(1);
+                }
+            }
+            return 1;
+        }
+        i += 2 + seg_len;
+    }
+    1
+}
+
+fn rotate_rgb_by_exif(rgb: &[u8], w: usize, h: usize, orientation: u16) -> (usize, usize, Vec<u8>) {
+    match orientation {
+        3 => {
+            let mut out = vec![0u8; w * h * 3];
+            for y in 0..h {
+                for x in 0..w {
+                    let src = (y * w + x) * 3;
+                    let dst = ((h - 1 - y) * w + (w - 1 - x)) * 3;
+                    out[dst..dst + 3].copy_from_slice(&rgb[src..src + 3]);
+                }
+            }
+            (w, h, out)
+        }
+        6 => {
+            let mut out = vec![0u8; w * h * 3];
+            for y in 0..h {
+                for x in 0..w {
+                    let src = (y * w + x) * 3;
+                    let dst = (x * h + (h - 1 - y)) * 3;
+                    out[dst..dst + 3].copy_from_slice(&rgb[src..src + 3]);
+                }
+            }
+            (h, w, out)
+        }
+        8 => {
+            let mut out = vec![0u8; w * h * 3];
+            for y in 0..h {
+                for x in 0..w {
+                    let src = (y * w + x) * 3;
+                    let dst = ((w - 1 - x) * h + y) * 3;
+                    out[dst..dst + 3].copy_from_slice(&rgb[src..src + 3]);
+                }
+            }
+            (h, w, out)
+        }
+        _ => (w, h, rgb.to_vec()),
+    }
+}
+
 /// Width, height and component count of a baseline/progressive JPEG.
 fn jpeg_info(data: &[u8]) -> Option<(u32, u32, u8)> {
     if data.get(0..2)? != [0xFF, 0xD8] {
@@ -277,8 +381,10 @@ fn jpeg_info(data: &[u8]) -> Option<(u32, u32, u8)> {
 }
 
 fn prepare_image(data: Vec<u8>) -> Result<PageImage, String> {
-    // JPEGs in gray or RGB are embedded verbatim.
-    if let Some((w, h, comps)) = jpeg_info(&data)
+    let exif_orientation = jpeg_exif_orientation(&data);
+    // Upright JPEGs in gray or RGB are embedded verbatim.
+    if exif_orientation == 1
+        && let Some((w, h, comps)) = jpeg_info(&data)
         && w > 0
         && h > 0
         && (comps == 1 || comps == 3)
@@ -328,15 +434,13 @@ fn prepare_image(data: Vec<u8>) -> Result<PageImage, String> {
             rgb.push(((c as u32 * a + 255 * (255 - a)) / 255) as u8);
         }
     }
-    let mut enc = flate2::write::ZlibEncoder::new(Vec::new(), flate2::Compression::default());
-    enc.write_all(&rgb).map_err(|e| e.to_string())?;
-    let bytes = enc.finish().map_err(|e| e.to_string())?;
+    let (out_w, out_h, oriented_rgb) = rotate_rgb_by_exif(&rgb, w, h, exif_orientation);
     Ok(PageImage {
-        width: w as u32,
-        height: h as u32,
+        width: out_w as u32,
+        height: out_h as u32,
         components: 3,
         is_jpeg: false,
-        bytes,
+        bytes: oriented_rgb,
     })
 }
 
@@ -353,64 +457,32 @@ fn page_size_for(w: u32, h: u32) -> (f32, f32) {
     (pw.max(1.0), ph.max(1.0))
 }
 
-fn images_to_pdf(images: &[PageImage]) -> Vec<u8> {
-    use pdf_writer::{Filter, Finish, Name, Pdf, Rect, Ref};
+fn images_to_pdf(images: &[PageImage]) -> Result<Vec<u8>, String> {
+    use zpdf_writer::builder::{DocumentBuilder, ImageData};
 
-    let mut pdf = Pdf::new();
-    let catalog_id = Ref::new(1);
-    let pages_id = Ref::new(2);
-    let mut next = 3;
-    let mut alloc = || {
-        let r = Ref::new(next);
-        next += 1;
-        r
-    };
-
-    let mut page_ids = Vec::with_capacity(images.len());
+    let mut builder = DocumentBuilder::new();
     for img in images {
-        let page_id = alloc();
-        let image_id = alloc();
-        let content_id = alloc();
-        page_ids.push(page_id);
-
         let (pw, ph) = page_size_for(img.width, img.height);
-
-        let mut xobj = pdf.image_xobject(image_id, &img.bytes);
-        xobj.filter(if img.is_jpeg {
-            Filter::DctDecode
+        let page = builder.add_page(pw as f64, ph as f64);
+        let image_data = if img.is_jpeg {
+            ImageData::Jpeg {
+                data: img.bytes.clone(),
+                width: img.width,
+                height: img.height,
+                components: img.components,
+            }
         } else {
-            Filter::FlateDecode
-        });
-        xobj.width(img.width as i32);
-        xobj.height(img.height as i32);
-        if img.components == 1 {
-            xobj.color_space().device_gray();
-        } else {
-            xobj.color_space().device_rgb();
-        }
-        xobj.bits_per_component(8);
-        xobj.finish();
-
-        let mut content = pdf_writer::Content::new();
-        content.save_state();
-        content.transform([pw, 0.0, 0.0, ph, 0.0, 0.0]);
-        content.x_object(Name(b"Im0"));
-        content.restore_state();
-        pdf.stream(content_id, &content.finish());
-
-        let mut page = pdf.page(page_id);
-        page.media_box(Rect::new(0.0, 0.0, pw, ph));
-        page.parent(pages_id);
-        page.contents(content_id);
-        page.resources().x_objects().pair(Name(b"Im0"), image_id);
-        page.finish();
+            ImageData::Rgb8 {
+                width: img.width,
+                height: img.height,
+                pixels: img.bytes.clone(),
+            }
+        };
+        builder
+            .add_image(page, image_data, 0.0, 0.0, pw as f64, ph as f64)
+            .map_err(|e| e.to_string())?;
     }
-
-    pdf.pages(pages_id)
-        .kids(page_ids.iter().copied())
-        .count(page_ids.len() as i32);
-    pdf.catalog(catalog_id).pages(pages_id);
-    pdf.finish()
+    builder.build().map_err(|e| e.to_string())
 }
 
 /// Build an image-only PDF from a comic archive or a single picture.
@@ -447,7 +519,7 @@ pub fn convert_to_pdf(path: &Path) -> Result<Vec<u8>, String> {
             path.display()
         );
     }
-    Ok(images_to_pdf(&images))
+    images_to_pdf(&images)
 }
 
 /// Where the converted copy of `path` is kept. The name folds in the source's
@@ -475,6 +547,43 @@ pub fn cache_path_for(path: &Path) -> PathBuf {
         .join(format!("{stem}-{:016x}.pdf", hasher.finish()))
 }
 
+/// Maximum total bytes retained in the converted-comic/image PDF cache.
+const MAX_CONVERTED_CACHE_BYTES: u64 = 256 * 1024 * 1024;
+
+fn prune_converted_cache(dir: &Path, incoming_bytes: u64) {
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return;
+    };
+    let mut files: Vec<(PathBuf, u64, std::time::SystemTime)> = Vec::new();
+    let mut total: u64 = incoming_bytes;
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if path.extension().and_then(|e| e.to_str()) != Some("pdf") {
+            continue;
+        }
+        if let Ok(meta) = entry.metadata()
+            && meta.is_file()
+        {
+            let len = meta.len();
+            total = total.saturating_add(len);
+            let mtime = meta.modified().unwrap_or(std::time::UNIX_EPOCH);
+            files.push((path, len, mtime));
+        }
+    }
+    if total <= MAX_CONVERTED_CACHE_BYTES {
+        return;
+    }
+    files.sort_by_key(|(_, _, mtime)| *mtime);
+    for (path, len, _) in files {
+        if total <= MAX_CONVERTED_CACHE_BYTES {
+            break;
+        }
+        if std::fs::remove_file(&path).is_ok() {
+            total = total.saturating_sub(len);
+        }
+    }
+}
+
 /// Convert `path` once and return the cached PDF's location.
 pub fn ensure_converted(path: &Path) -> Result<PathBuf, String> {
     let out = cache_path_for(path);
@@ -484,6 +593,7 @@ pub fn ensure_converted(path: &Path) -> Result<PathBuf, String> {
     let pdf = convert_to_pdf(path)?;
     if let Some(dir) = out.parent() {
         std::fs::create_dir_all(dir).map_err(|e| e.to_string())?;
+        prune_converted_cache(dir, pdf.len() as u64);
     }
     crate::storage::atomic_write_bytes(&out, &pdf).map_err(|e| e.to_string())?;
     Ok(out)
