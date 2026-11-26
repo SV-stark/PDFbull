@@ -33,45 +33,56 @@ fn main() {
 
 fn ensure_ocr_models() {
     let models_dir = std::path::Path::new("models");
-    let _ = std::fs::create_dir_all(models_dir);
+    let out_dir = std::path::PathBuf::from(
+        std::env::var_os("OUT_DIR").expect("OUT_DIR must be set by Cargo"),
+    );
 
     let models = [
         (
+            "PDFBULL_DET_MODEL",
             "PP-OCRv6_small_det.onnx",
             "https://raw.githubusercontent.com/ShareX/ShareX/develop/ShareX.OCR/Models/PP-OCRv6_small_det/inference.onnx",
             1_000_000,
         ),
         (
+            "PDFBULL_REC_MODEL",
             "PP-OCRv6_small_rec.onnx",
             "https://raw.githubusercontent.com/ShareX/ShareX/develop/ShareX.OCR/Models/PP-OCRv6_small_rec/inference.onnx",
             1_000_000,
         ),
     ];
 
-    for (name, url, min_size) in models {
-        let dest = models_dir.join(name);
-        let needs_download = match std::fs::metadata(&dest) {
-            Ok(meta) => meta.len() < min_size,
-            Err(_) => true,
-        };
+    for (env_var, name, url, min_size) in models {
+        let local_src = models_dir.join(name);
+        let resolved = if std::fs::metadata(&local_src).is_ok_and(|m| m.len() >= min_size) {
+            std::fs::canonicalize(&local_src).unwrap_or(local_src)
+        } else {
+            let dest = out_dir.join(name);
+            let needs_download = match std::fs::metadata(&dest) {
+                Ok(meta) => meta.len() < min_size,
+                Err(_) => true,
+            };
 
-        if needs_download {
-            println!("cargo:warning=Downloading missing OCR model '{name}'...");
-            let curl_cmd = if cfg!(windows) { "curl.exe" } else { "curl" };
-            let status = std::process::Command::new(curl_cmd)
-                .arg("-sSL")
-                .arg("-o")
-                .arg(&dest)
-                .arg(url)
-                .status();
+            if needs_download {
+                println!("cargo:warning=Downloading missing OCR model '{name}'...");
+                let curl_cmd = if cfg!(windows) { "curl.exe" } else { "curl" };
+                let status = std::process::Command::new(curl_cmd)
+                    .arg("-sSL")
+                    .arg("-o")
+                    .arg(&dest)
+                    .arg(url)
+                    .status();
 
-            if let Ok(st) = status {
-                if !st.success() {
-                    println!("cargo:warning=Failed to download '{name}' from {url}");
+                if let Ok(st) = status {
+                    if !st.success() {
+                        println!("cargo:warning=Failed to download '{name}' from {url}");
+                    }
+                } else {
+                    println!("cargo:warning=Could not execute curl to download '{name}'");
                 }
-            } else {
-                println!("cargo:warning=Could not execute curl to download '{name}'");
             }
-        }
+            std::fs::canonicalize(&dest).unwrap_or(dest)
+        };
+        println!("cargo:rustc-env={env_var}={}", resolved.display());
     }
 }
